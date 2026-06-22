@@ -359,6 +359,102 @@ def test_opencode_task_child_attaches_by_parent_provider_alias(tmp_path):
         assert edge.metadata_json["child_provider_session_id"] == "ses_child"
 
 
+def test_opencode_nested_task_child_attaches_to_subagent_parent_thread(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            _root_payload(
+                session_id=OPENCODE_PARENT_ID,
+                provider="opencode",
+                provider_session_id="ses_parent",
+                project="longhouse",
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=OPENCODE_CHILD_ID,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_child",
+                is_sidechain=True,
+                parent_provider_session_id="ses_parent",
+                subagent_id="general",
+                subagent_tool_use_id="call_task",
+                attribution_agent="general",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="opencode child work",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_child",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        nested_id = UUID("019ee600-0000-7000-8000-000000000005")
+        store.ingest_session(
+            SessionIngest(
+                id=nested_id,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_nested",
+                is_sidechain=True,
+                parent_provider_session_id="ses_child",
+                subagent_id="explore",
+                subagent_tool_use_id="call_nested",
+                attribution_agent="explore",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="opencode nested child work",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_nested",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        assert db.query(AgentSession).count() == 1
+        child_thread = (
+            db.query(SessionThread)
+            .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+            .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+            .filter(SessionThreadAlias.alias_value == "ses_child")
+            .one()
+        )
+        nested_thread = (
+            db.query(SessionThread)
+            .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+            .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+            .filter(SessionThreadAlias.alias_value == "ses_nested")
+            .one()
+        )
+        assert child_thread.parent_thread_id is not None
+        assert nested_thread.session_id == OPENCODE_PARENT_ID
+        assert nested_thread.parent_thread_id == child_thread.id
+        nested_event = db.query(AgentEvent).filter(AgentEvent.content_text == "opencode nested child work").one()
+        assert nested_event.session_id == OPENCODE_PARENT_ID
+        assert nested_event.thread_id == nested_thread.id
+
+        edges = _edge_rows(db)
+        assert [edge.edge_kind for edge in edges] == ["task_child", "task_child"]
+        nested_edges = [edge for edge in edges if edge.target_thread_id == nested_thread.id]
+        assert len(nested_edges) == 1
+        assert nested_edges[0].source_thread_id == child_thread.id
+        assert nested_edges[0].provider_edge_id == "call_nested"
+
+
 def test_unresolved_opencode_task_child_is_hidden_from_default_timeline(tmp_path):
     SessionLocal = _session_factory(tmp_path)
     with SessionLocal() as db:

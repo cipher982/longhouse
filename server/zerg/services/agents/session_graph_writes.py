@@ -140,21 +140,42 @@ def resolve_primary_thread_by_provider_session_id(
 ) -> SessionThread | None:
     """Resolve provider root/session evidence to a primary thread."""
 
+    return resolve_thread_by_provider_session_id(
+        db,
+        provider=provider,
+        provider_session_id=provider_session_id,
+        primary_only=True,
+    )
+
+
+def resolve_thread_by_provider_session_id(
+    db: Session,
+    *,
+    provider: str,
+    provider_session_id: str | None,
+    primary_only: bool = False,
+) -> SessionThread | None:
+    """Resolve provider session evidence to any materialized thread.
+
+    OpenCode subagents can delegate to other subagents and resume prior task
+    sessions, so child-session parentage cannot be limited to primary threads.
+    """
+
     provider_session_id = str(provider_session_id or "").strip()
     if not provider_session_id:
         return None
 
-    return (
+    query = (
         db.query(SessionThread)
         .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
         .filter(SessionThread.provider == provider)
-        .filter(SessionThread.is_primary == 1)
         .filter(SessionThreadAlias.provider == provider)
         .filter(SessionThreadAlias.alias_kind == "provider_session_id")
         .filter(SessionThreadAlias.alias_value == provider_session_id)
-        .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
-        .first()
     )
+    if primary_only:
+        query = query.filter(SessionThread.is_primary == 1)
+    return query.order_by(SessionThread.is_primary.desc(), SessionThread.created_at.asc(), SessionThread.id.asc()).first()
 
 
 def ensure_subagent_thread(

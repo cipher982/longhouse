@@ -90,6 +90,7 @@ SCENARIOS = (
     "parse_ingest_project",
     "db_ingest_project",
     "opencode_lineage_projection",
+    "opencode_orchestration_projection",
     "orchestration_capability_matrix",
     "session_projection",
     "timeline_projection",
@@ -6187,6 +6188,268 @@ def opencode_lineage_projection(package: EvidencePackage) -> dict[str, Any]:
     return payload
 
 
+def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any]:
+    os.environ.setdefault("TESTING", "1")
+    os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
+
+    from zerg.database import initialize_database
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+    from zerg.models.agents import AgentEvent
+    from zerg.models.agents import AgentSession
+    from zerg.models.agents import SessionEdge
+    from zerg.models.agents import SessionThread
+    from zerg.models.agents import SessionThreadAlias
+    from zerg.services.agents import AgentsStore
+    from zerg.services.agents import EventIngest
+    from zerg.services.agents import SessionIngest
+    from zerg.services.session_graph_projection import build_session_graph_projection
+
+    db_path = package.path("longhouse", "opencode-orchestration.sqlite")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    engine = make_engine(f"sqlite:///{db_path}")
+    initialize_database(engine)
+    session_factory = make_sessionmaker(engine)
+    started_at = datetime(2026, 6, 21, 12, 0, tzinfo=UTC)
+    parent_id = uuid5(NAMESPACE_URL, f"{package.root}:opencode-orchestration-parent")
+    child_id = uuid5(NAMESPACE_URL, f"{package.root}:opencode-orchestration-child")
+    child_resume_id = uuid5(NAMESPACE_URL, f"{package.root}:opencode-orchestration-child-resume")
+    nested_id = uuid5(NAMESPACE_URL, f"{package.root}:opencode-orchestration-nested")
+    fork_id = uuid5(NAMESPACE_URL, f"{package.root}:opencode-orchestration-fork")
+
+    def event(text: str, session: str, offset: int, *, task_id: str | None = None) -> EventIngest:
+        raw = {"provider": "opencode", "session_id": session, "text": text}
+        if task_id:
+            raw["task_id"] = task_id
+        return EventIngest(
+            role="user",
+            content_text=text,
+            timestamp=started_at + timedelta(seconds=offset),
+            source_path=f"{package.path('raw', 'opencode.db')}#opencode:{session}",
+            source_offset=offset,
+            raw_json=json.dumps(raw, sort_keys=True),
+        )
+
+    with session_factory() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            SessionIngest(
+                id=parent_id,
+                provider="opencode",
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=started_at,
+                provider_session_id="ses_parent",
+                events=[event("opencode primary build work", "ses_parent", 0)],
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=child_id,
+                provider="opencode",
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=started_at,
+                provider_session_id="ses_child",
+                is_sidechain=True,
+                parent_provider_session_id="ses_parent",
+                subagent_id="general",
+                subagent_tool_use_id="task_general",
+                workflow_run_id="wave-1",
+                attribution_agent="general",
+                events=[event("opencode general subagent work", "ses_child", 1, task_id="task_general")],
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=child_resume_id,
+                provider="opencode",
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=started_at,
+                provider_session_id="ses_child",
+                is_sidechain=True,
+                parent_provider_session_id="ses_parent",
+                subagent_id="general",
+                subagent_tool_use_id="task_general",
+                workflow_run_id="wave-1",
+                attribution_agent="general",
+                events=[event("opencode resumed general subagent work", "ses_child", 2, task_id="task_general")],
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=nested_id,
+                provider="opencode",
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=started_at,
+                provider_session_id="ses_nested",
+                is_sidechain=True,
+                parent_provider_session_id="ses_child",
+                subagent_id="explore",
+                subagent_tool_use_id="task_nested",
+                workflow_run_id="wave-1",
+                attribution_agent="explore",
+                events=[event("opencode nested explore subagent work", "ses_nested", 3, task_id="task_nested")],
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=fork_id,
+                provider="opencode",
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=started_at,
+                provider_session_id="ses_fork",
+                parent_provider_session_id="ses_parent",
+                lineage_kind="fork",
+                events=[event("opencode forked branch work", "ses_fork", 4)],
+            )
+        )
+        db.commit()
+
+        def thread_for_provider_session(provider_session_id: str) -> SessionThread:
+            return (
+                db.query(SessionThread)
+                .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+                .filter(SessionThreadAlias.provider == "opencode")
+                .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+                .filter(SessionThreadAlias.alias_value == provider_session_id)
+                .one()
+            )
+
+        parent_thread = thread_for_provider_session("ses_parent")
+        child_thread = thread_for_provider_session("ses_child")
+        nested_thread = thread_for_provider_session("ses_nested")
+        fork_thread = thread_for_provider_session("ses_fork")
+        child_events = db.query(AgentEvent).filter(AgentEvent.content_text.like("opencode%general subagent work")).all()
+        nested_event = db.query(AgentEvent).filter(AgentEvent.content_text == "opencode nested explore subagent work").one()
+        sessions = db.query(AgentSession).order_by(AgentSession.started_at.asc(), AgentSession.id.asc()).all()
+        threads = db.query(SessionThread).order_by(SessionThread.created_at.asc(), SessionThread.id.asc()).all()
+        aliases = db.query(SessionThreadAlias).all()
+        edges = db.query(SessionEdge).order_by(SessionEdge.created_at.asc(), SessionEdge.id.asc()).all()
+        graph_projection = build_session_graph_projection(db, parent_id)
+        visible_total, visible_rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
+
+    opencode_matrix = provider_orchestration_capabilities("opencode")
+    capability_states = {capability: entry.get("state") for capability, entry in opencode_matrix.items()}
+    snapshot = {
+        "db_path": str(db_path),
+        "session_ids": [str(session.id) for session in sessions],
+        "thread_rows": [
+            {
+                "id": str(thread.id),
+                "session_id": str(thread.session_id),
+                "branch_kind": thread.branch_kind,
+                "is_primary": bool(thread.is_primary),
+                "parent_thread_id": str(thread.parent_thread_id) if thread.parent_thread_id else None,
+            }
+            for thread in threads
+        ],
+        "alias_rows": [
+            {
+                "thread_id": str(row.thread_id),
+                "alias_kind": row.alias_kind,
+                "alias_value": row.alias_value,
+            }
+            for row in aliases
+        ],
+        "edge_rows": [
+            {
+                "edge_kind": row.edge_kind,
+                "visibility": row.visibility,
+                "source_thread_id": str(row.source_thread_id) if row.source_thread_id else None,
+                "target_thread_id": str(row.target_thread_id) if row.target_thread_id else None,
+                "provider_edge_id": row.provider_edge_id,
+                "metadata_json": row.metadata_json,
+            }
+            for row in edges
+        ],
+        "graph_projection": graph_projection,
+        "visible_timeline_total": visible_total,
+        "visible_timeline_session_ids": [row[1] for row in visible_rows],
+        "capability_states": capability_states,
+    }
+    snapshot_path = package.write_json("longhouse/opencode-orchestration-projection.json", snapshot)
+    edge_lookup = {(row["source_thread_id"], row["target_thread_id"], row["edge_kind"]) for row in snapshot["edge_rows"]}
+    child_thread_id = str(child_thread.id)
+    nested_thread_id = str(nested_thread.id)
+    assertions = {
+        "task_child_attached_to_primary_parent": child_thread.parent_thread_id == parent_thread.id and child_thread.session_id == parent_id,
+        "task_id_resume_reused_child_thread": len(child_events) == 2 and {event.thread_id for event in child_events} == {child_thread.id},
+        "nested_subagent_attached_to_subagent_parent": nested_thread.parent_thread_id == child_thread.id
+        and nested_event.thread_id == nested_thread.id,
+        "nested_edge_preserves_subagent_parent_thread": (child_thread_id, nested_thread_id, "task_child") in edge_lookup,
+        "fork_remains_timeline_visible": fork_thread.is_primary == 1
+        and fork_thread.branch_kind == "fork"
+        and str(fork_id) in snapshot["visible_timeline_session_ids"],
+        "rich_capability_gaps_are_declared": capability_states.get("switch_actor") == "unknown"
+        and capability_states.get("background_task_status") == "experimental",
+    }
+    status = STATUS_PASS if all(assertions.values()) else STATUS_FAIL
+    operation_evidence = {
+        "opencode_subagent_projection": {
+            "status": STATUS_PASS if assertions["task_child_attached_to_primary_parent"] else STATUS_FAIL,
+            "level": "hermetic",
+            "canary": "universal_opencode_orchestration_projection",
+            "failure_code": None if assertions["task_child_attached_to_primary_parent"] else "opencode_subagent_projection_failed",
+        },
+        "opencode_task_id_resume_projection": {
+            "status": STATUS_PASS if assertions["task_id_resume_reused_child_thread"] else STATUS_FAIL,
+            "level": "hermetic",
+            "canary": "universal_opencode_orchestration_projection",
+            "failure_code": None if assertions["task_id_resume_reused_child_thread"] else "opencode_task_id_resume_projection_failed",
+        },
+        "opencode_nested_subagent_projection": {
+            "status": STATUS_PASS if assertions["nested_subagent_attached_to_subagent_parent"] else STATUS_FAIL,
+            "level": "hermetic",
+            "canary": "universal_opencode_orchestration_projection",
+            "failure_code": None
+            if assertions["nested_subagent_attached_to_subagent_parent"]
+            else "opencode_nested_subagent_projection_failed",
+        },
+        "opencode_fork_projection": {
+            "status": STATUS_PASS if assertions["fork_remains_timeline_visible"] else STATUS_FAIL,
+            "level": "hermetic",
+            "canary": "universal_opencode_orchestration_projection",
+            "failure_code": None if assertions["fork_remains_timeline_visible"] else "opencode_fork_projection_failed",
+        },
+        "opencode_rich_gap_manifest": {
+            "status": STATUS_PASS if assertions["rich_capability_gaps_are_declared"] else STATUS_FAIL,
+            "level": "manifest",
+            "canary": "provider_orchestration_capabilities",
+            "failure_code": None if assertions["rich_capability_gaps_are_declared"] else "opencode_rich_gap_manifest_failed",
+            "switch_actor_state": capability_states.get("switch_actor"),
+            "background_task_status_state": capability_states.get("background_task_status"),
+        },
+    }
+    payload = {
+        "status": status,
+        "scenario": "opencode_orchestration_projection",
+        "provider": "opencode",
+        "projection_path": str(snapshot_path),
+        "assertions": assertions,
+        "capability_states": capability_states,
+        "operation_evidence": operation_evidence,
+    }
+    if status != STATUS_PASS:
+        payload["failure_code"] = "opencode_orchestration_projection_failed"
+        payload["message"] = "OpenCode orchestration projection assertions failed."
+    package.write_json("assertions/opencode_orchestration_projection.json", payload)
+    return payload
+
+
 def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> dict[str, Any]:
     table = provider_orchestration_capabilities(provider)
     if not table:
@@ -7666,6 +7929,42 @@ def run_opencode_lineage_projection(adapter: AgentHarnessAdapter, package: Evide
     )
 
 
+def run_opencode_orchestration_projection(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    if adapter.config.provider != "opencode":
+        payload = {
+            "status": STATUS_NOT_APPLICABLE,
+            "scenario": "opencode_orchestration_projection",
+            "failure_code": "opencode_orchestration_projection_provider_not_applicable",
+            "message": "OpenCode orchestration projection only applies to the OpenCode provider.",
+            "operation_evidence": {
+                "opencode_orchestration_projection": {
+                    "status": STATUS_NOT_APPLICABLE,
+                    "level": "none",
+                    "canary": "universal_opencode_orchestration_projection",
+                    "failure_code": "opencode_orchestration_projection_provider_not_applicable",
+                }
+            },
+        }
+        package.write_json("assertions/opencode_orchestration_projection.json", payload)
+        adapter.cleanup(package)
+        return scenario_result(
+            provider=adapter.config.provider,
+            scenario="opencode_orchestration_projection",
+            package=package,
+            payload=payload,
+        )
+
+    payload = opencode_orchestration_projection(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="opencode_orchestration_projection",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_orchestration_capability_matrix(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = orchestration_capability_matrix(package, adapter.config.provider)
@@ -8152,6 +8451,7 @@ SCENARIO_RUNNERS = {
     "parse_ingest_project": run_parse_ingest_project,
     "db_ingest_project": run_db_ingest_project,
     "opencode_lineage_projection": run_opencode_lineage_projection,
+    "opencode_orchestration_projection": run_opencode_orchestration_projection,
     "orchestration_capability_matrix": run_orchestration_capability_matrix,
     "session_projection": run_session_projection,
     "timeline_projection": run_timeline_projection,

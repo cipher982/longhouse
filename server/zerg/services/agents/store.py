@@ -47,7 +47,7 @@ from zerg.services.agents.session_graph_writes import ensure_primary_thread
 from zerg.services.agents.session_graph_writes import ensure_subagent_thread
 from zerg.services.agents.session_graph_writes import record_session_edge
 from zerg.services.agents.session_graph_writes import record_thread_alias
-from zerg.services.agents.session_graph_writes import resolve_primary_thread_by_provider_session_id
+from zerg.services.agents.session_graph_writes import resolve_thread_by_provider_session_id
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.internal_sessions import internal_canary_session_clause
@@ -1700,7 +1700,7 @@ class AgentsStore:
         parent_thread = None
         parent_provider_session_id = observed_lineage.parent_provider_session_id if observed_lineage else None
         if parent_provider_session_id:
-            parent_thread = resolve_primary_thread_by_provider_session_id(
+            parent_thread = resolve_thread_by_provider_session_id(
                 self.db,
                 provider=data.provider,
                 provider_session_id=parent_provider_session_id,
