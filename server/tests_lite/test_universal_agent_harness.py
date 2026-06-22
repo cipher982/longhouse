@@ -898,6 +898,7 @@ def test_old_new_release_diff_compares_explicit_proof_artifacts(tmp_path: Path) 
     assert operation["level"] == "artifact_diff"
 
 
+@pytest.mark.timeout(30)
 def test_full_action_suite_uses_provider_scoped_old_new_artifacts(tmp_path: Path, monkeypatch) -> None:
     from zerg.qa import codex_provider_release_canary
 

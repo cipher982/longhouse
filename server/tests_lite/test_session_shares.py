@@ -15,7 +15,7 @@ from cryptography.fernet import Fernet
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
-os.environ.setdefault("JWT_SECRET", "lh-share-tests-secret")
+os.environ["JWT_SECRET"] = "lh-share-tests-secret"
 os.environ.setdefault("INTERNAL_API_SECRET", "lh-test-internal")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "lh-test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", "lh-test-google-client")
@@ -37,6 +37,9 @@ from zerg.models.session_share import SessionShareEvent
 from zerg.services.session_shares import SessionShareMisconfigured
 from zerg.services.session_shares import create_session_share
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+
+# Share-token signing reads this legacy export; keep it immune to local .env values.
+auth_deps.JWT_SECRET = "lh-share-tests-secret"
 
 
 def _make_db(tmp_path):
