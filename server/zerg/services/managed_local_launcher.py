@@ -16,6 +16,7 @@ from zerg.models.agents import AgentSession
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_connection
 from zerg.services.agents.kernel_writes import record_run
+from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.managed_provider_contracts import managed_provider_names
@@ -178,6 +179,7 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         _require_runner_ready(runner, owner_id=params.owner_id)
     source_name = str(getattr(runner, "name", "") or params.runner_target).strip()
     session_uuid = uuid4()
+    provider_session_id = str(uuid4()) if provider == "claude" else None
     project = _derive_project(cwd, params.project)
     display_name = (params.display_name or project).strip() or project
     contract = require_contract_for_provider(provider)
@@ -205,6 +207,14 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
 
     # Phase 2 dual-write: materialize kernel rows alongside legacy launch path.
     primary_thread = ensure_primary_thread(db, session)
+    if provider_session_id:
+        record_thread_alias(
+            db,
+            thread=primary_thread,
+            provider=provider,
+            alias_kind="provider_session_id",
+            alias_value=provider_session_id,
+        )
     run = record_run(
         db,
         thread=primary_thread,

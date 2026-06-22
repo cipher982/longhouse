@@ -28,6 +28,7 @@ from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.managed_local_launcher import _derive_project
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
@@ -444,7 +445,11 @@ def test_this_device_launch_creates_native_claude_session(monkeypatch, tmp_path)
     assert payload["source_runner_id"] == runner.id
     assert payload["source_runner_name"] == "cinder"
     assert payload["managed_session_name"] == "Demo-session"
-    assert payload["attach_command"] == ""
+    assert payload["provider_session_id"]
+    assert payload["provider_session_id"] != payload["session_id"]
+    assert project_provider_session_id(db, session) == payload["provider_session_id"]
+    assert f"--session-id {payload['provider_session_id']}" in payload["attach_command"]
+    assert f"LONGHOUSE_PROVIDER_SESSION_ID={payload['provider_session_id']}" in payload["attach_command"]
     capabilities, control = _project_control(db, session)
     assert capabilities.managed_transport.value == "claude_channel_bridge"
     assert control.source_runner_id == runner.id
