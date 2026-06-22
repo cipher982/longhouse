@@ -80,6 +80,17 @@ ACTION_QUESTIONS: tuple[ActionQuestion, ...] = (
     ),
 )
 
+_OPERATION_EVIDENCE_PROOFS: Mapping[str, tuple[ProofRef, ...]] = {
+    "opencode_subagent_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "task_child_attached_to_primary_parent"),),
+    "universal_opencode_subagent_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "task_child_attached_to_primary_parent"),),
+    "opencode_nested_subagent_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "nested_subagent_attached_to_subagent_parent"),),
+    "universal_opencode_nested_subagent_projection": (
+        ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "nested_subagent_attached_to_subagent_parent"),
+    ),
+    "opencode_fork_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "fork_remains_timeline_visible"),),
+    "universal_opencode_fork_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "fork_remains_timeline_visible"),),
+}
+
 
 def derive_provider_action_coverage(
     provider: str,
@@ -140,6 +151,45 @@ def derive_provider_action_coverage(
     return coverage
 
 
+def derive_provider_action_coverage_from_artifact(
+    artifact: Mapping[str, Any],
+    *,
+    provider: str | None = None,
+) -> dict[str, ActionCoverage]:
+    """Derive coverage from a provider proof or universal-harness artifact."""
+
+    return derive_provider_action_coverage(
+        provider or _artifact_provider(artifact),
+        proof_results=provider_action_proof_results_from_artifact(artifact),
+    )
+
+
+def provider_action_proof_results_from_artifact(
+    artifact: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Extract scenario proof assertions from existing proof artifact shapes.
+
+    Supported inputs are intentionally artifact-shaped, not path-shaped:
+    universal harness run payloads, individual scenario payloads, and normalized
+    provider-release-proof payloads with ``operation_evidence``. Callers own
+    loading JSON from disk or object storage before entering this pure seam.
+    """
+
+    proofs: dict[str, dict[str, Any]] = {}
+    _merge_scenario_payload_if_present(proofs, artifact)
+    _merge_universal_results(proofs, artifact.get("results"))
+    _merge_operation_evidence(proofs, artifact.get("operation_evidence"))
+
+    for nested_key in ("normalized", "universal_harness"):
+        nested = artifact.get(nested_key)
+        if isinstance(nested, Mapping):
+            _merge_scenario_payload_if_present(proofs, nested)
+            _merge_universal_results(proofs, nested.get("results"))
+            _merge_operation_evidence(proofs, nested.get("operation_evidence"))
+
+    return proofs
+
+
 def _state_from_contract_operation(*, provider: str, operation: str) -> tuple[ActionCoverageState, str]:
     contract = contract_for_provider(provider)
     if contract is None:
@@ -164,3 +214,64 @@ def _proof_passes(ref: ProofRef, proofs: Mapping[str, Mapping[str, Any]]) -> boo
         # provider-shaped partials all stay unproven.
         return assertions.get(ref.assertion) is True
     return payload.get(ref.assertion) is True
+
+
+def _artifact_provider(artifact: Mapping[str, Any]) -> str:
+    provider = artifact.get("provider")
+    if provider:
+        return str(provider)
+    normalized = artifact.get("normalized")
+    if isinstance(normalized, Mapping) and normalized.get("provider"):
+        return str(normalized["provider"])
+    return ""
+
+
+def _merge_universal_results(proofs: dict[str, dict[str, Any]], results: Any) -> None:
+    if not isinstance(results, list):
+        return
+    for result in results:
+        if not isinstance(result, Mapping):
+            continue
+        data = result.get("data")
+        if isinstance(data, Mapping):
+            _merge_scenario_payload_if_present(proofs, data, fallback_scenario=result.get("scenario"))
+            _merge_operation_evidence(proofs, data.get("operation_evidence"))
+
+
+def _merge_scenario_payload_if_present(
+    proofs: dict[str, dict[str, Any]],
+    payload: Mapping[str, Any],
+    *,
+    fallback_scenario: Any = None,
+) -> None:
+    scenario = str(payload.get("scenario") or fallback_scenario or "").strip()
+    if not scenario:
+        return
+    scenario_payload = dict(proofs.get(scenario) or {})
+    assertions = dict(scenario_payload.get("assertions") or {})
+    if isinstance(payload.get("assertions"), Mapping):
+        assertions.update(dict(payload["assertions"]))
+    scenario_payload.update(dict(payload))
+    if assertions:
+        scenario_payload["assertions"] = assertions
+    proofs[scenario] = scenario_payload
+
+
+def _merge_operation_evidence(proofs: dict[str, dict[str, Any]], operation_evidence: Any) -> None:
+    if not isinstance(operation_evidence, Mapping):
+        return
+    for operation, evidence in operation_evidence.items():
+        refs = _OPERATION_EVIDENCE_PROOFS.get(str(operation))
+        if refs is None or not isinstance(evidence, Mapping):
+            continue
+        passed = _status_passes(evidence.get("status"))
+        for ref in refs:
+            scenario_payload = dict(proofs.get(ref.scenario) or {})
+            assertions = dict(scenario_payload.get("assertions") or {})
+            assertions[ref.assertion] = passed
+            scenario_payload["assertions"] = assertions
+            proofs[ref.scenario] = scenario_payload
+
+
+def _status_passes(status: Any) -> bool:
+    return str(status or "").strip().lower() == "pass"

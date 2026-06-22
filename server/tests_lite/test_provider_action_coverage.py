@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from zerg.services.provider_action_coverage import ActionCoverageState
 from zerg.services.provider_action_coverage import OPENCODE_ORCHESTRATION_PROJECTION
+from zerg.services.provider_action_coverage import ActionCoverageState
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
+from zerg.services.provider_action_coverage import derive_provider_action_coverage_from_artifact
+from zerg.services.provider_action_coverage import provider_action_proof_results_from_artifact
 
 
 def test_contract_operations_are_derived_from_managed_provider_contracts():
@@ -76,4 +78,81 @@ def test_observed_fork_without_control_derives_read_only():
         },
     )
 
+    assert coverage["fork"].state == ActionCoverageState.READ_ONLY
+
+
+def test_universal_harness_artifact_results_feed_derived_coverage():
+    artifact = {
+        "artifact_kind": "universal_agent_harness_run",
+        "provider": "opencode",
+        "results": [
+            {
+                "provider": "opencode",
+                "scenario": OPENCODE_ORCHESTRATION_PROJECTION,
+                "status": "pass",
+                "data": {
+                    "scenario": OPENCODE_ORCHESTRATION_PROJECTION,
+                    "assertions": {
+                        "task_child_attached_to_primary_parent": True,
+                        "nested_subagent_attached_to_subagent_parent": True,
+                        "fork_remains_timeline_visible": True,
+                    },
+                },
+            }
+        ],
+    }
+
+    coverage = derive_provider_action_coverage_from_artifact(artifact)
+
+    assert coverage["classify_subagents"].state == ActionCoverageState.SUPPORTED
+    assert coverage["fork"].state == ActionCoverageState.READ_ONLY
+
+
+def test_release_proof_operation_evidence_feeds_derived_coverage():
+    artifact = {
+        "artifact_kind": "provider_release_proof",
+        "provider": "opencode",
+        "operation_evidence": {
+            "universal_opencode_subagent_projection": {"status": "pass", "level": "hermetic"},
+            "universal_opencode_nested_subagent_projection": {"status": "pass", "level": "hermetic"},
+            "universal_opencode_fork_projection": {"status": "pass", "level": "hermetic"},
+        },
+    }
+
+    coverage = derive_provider_action_coverage_from_artifact(artifact)
+
+    assert coverage["classify_subagents"].state == ActionCoverageState.SUPPORTED
+    assert coverage["fork"].state == ActionCoverageState.READ_ONLY
+
+
+def test_failed_release_proof_operation_evidence_stays_unknown():
+    artifact = {
+        "artifact_kind": "provider_release_proof",
+        "provider": "opencode",
+        "operation_evidence": {
+            "universal_opencode_subagent_projection": {"status": "pass", "level": "hermetic"},
+            "universal_opencode_nested_subagent_projection": {"status": "fail", "level": "hermetic"},
+        },
+    }
+
+    coverage = derive_provider_action_coverage_from_artifact(artifact)
+
+    assert coverage["classify_subagents"].state == ActionCoverageState.UNKNOWN
+
+
+def test_nested_normalized_operation_evidence_is_accepted_without_file_io():
+    artifact = {
+        "artifact_kind": "provider_release_proof",
+        "provider": "opencode",
+        "normalized": {
+            "operation_evidence": {
+                "universal_opencode_fork_projection": {"status": "pass", "level": "hermetic"},
+            }
+        },
+    }
+
+    proofs = provider_action_proof_results_from_artifact(artifact)
+    coverage = derive_provider_action_coverage_from_artifact(artifact)
+
+    assert proofs[OPENCODE_ORCHESTRATION_PROJECTION]["assertions"]["fork_remains_timeline_visible"] is True
     assert coverage["fork"].state == ActionCoverageState.READ_ONLY

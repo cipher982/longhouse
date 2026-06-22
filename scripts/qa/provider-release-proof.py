@@ -26,6 +26,13 @@ from provider_release_proof_rollups import finalize_execution_bucket
 from provider_release_proof_rollups import new_execution_bucket
 from provider_release_proof_rollups import record_execution_cell
 
+_SCRIPT_REPO_ROOT = Path(__file__).resolve().parents[2]
+_SERVER_PATH = str(_SCRIPT_REPO_ROOT / "server")
+if _SERVER_PATH not in sys.path:
+    sys.path.insert(0, _SERVER_PATH)
+
+from zerg.services.provider_action_coverage import derive_provider_action_coverage_from_artifact  # noqa: E402
+
 SCHEMA_VERSION = 1
 SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
 LIVE_CANARY_PROVIDERS = frozenset({"claude", "opencode", "antigravity"})
@@ -377,6 +384,39 @@ def _session_projection_artifact(
         "provider_version": provider_version,
         "status": "not_captured",
         "reason": "source canary did not emit a normalized session projection artifact",
+    }
+
+
+def _provider_action_coverage_artifact(
+    *,
+    provider: str,
+    provider_version: str | None,
+    source_artifact: dict[str, Any],
+) -> dict[str, Any]:
+    coverage = derive_provider_action_coverage_from_artifact(
+        source_artifact,
+        provider=provider,
+    )
+    return {
+        "artifact_kind": "provider_release_proof_provider_action_coverage",
+        "provider": provider,
+        "provider_version": provider_version,
+        "actions": {
+            action_id: {
+                "id": item.id,
+                "product_label": item.product_label,
+                "state": item.state.value,
+                "reason": item.reason,
+                "proof_refs": [
+                    {
+                        "scenario": ref.scenario,
+                        "assertion": ref.assertion,
+                    }
+                    for ref in item.proof_refs
+                ],
+            }
+            for action_id, item in sorted(coverage.items())
+        },
     }
 
 
@@ -2106,6 +2146,7 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     session_projection_path = normalized_dir / "session_projection.json"
     action_matrix_path = normalized_dir / "action_matrix.json"
     control_surface_path = normalized_dir / "control_surface.json"
+    provider_action_coverage_path = normalized_dir / "provider_action_coverage.json"
     provider_support_matrix_path = normalized_dir / "provider_support_matrix.json"
     provider_execution_coverage_matrix_path = (
         normalized_dir / "provider_execution_coverage_matrix.json"
@@ -2123,6 +2164,11 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         "operation_evidence": normalized.get("operation_evidence") or {},
     }
     session_projection = _session_projection_artifact(
+        provider=args.provider,
+        provider_version=provider_version,
+        source_artifact=source_artifact,
+    )
+    provider_action_coverage = _provider_action_coverage_artifact(
         provider=args.provider,
         provider_version=provider_version,
         source_artifact=source_artifact,
@@ -2176,6 +2222,7 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     _write_json(provider_contract_path, provider_contract)
     _write_json(operation_evidence_path, operation_evidence_artifact)
     _write_json(session_projection_path, session_projection)
+    _write_json(provider_action_coverage_path, provider_action_coverage)
     _write_json(action_matrix_path, action_matrix_artifact)
     _write_json(control_surface_path, control_surface_artifact)
     _write_json(provider_support_matrix_path, provider_support_matrix_artifact)
@@ -2210,6 +2257,7 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
             }
         },
         "operation_evidence": normalized.get("operation_evidence") or {},
+        "provider_action_coverage": provider_action_coverage["actions"],
         "action_matrix": source_artifact.get("action_matrix"),
         "control_surface": source_artifact.get("control_surface"),
         "provider_support_matrix": source_artifact.get("provider_support_matrix"),
@@ -2224,6 +2272,7 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
             "provider_contract": str(provider_contract_path),
             "operation_evidence": str(operation_evidence_path),
             "session_projection": str(session_projection_path),
+            "provider_action_coverage": str(provider_action_coverage_path),
             "action_matrix": str(action_matrix_path),
             "control_surface": str(control_surface_path),
             "provider_support_matrix": str(provider_support_matrix_path),
