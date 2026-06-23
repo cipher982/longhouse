@@ -43,6 +43,7 @@ from zerg.services.agents.identity_resolver import ObservedSession
 from zerg.services.agents.identity_resolver import observed_lineage_from_evidence
 from zerg.services.agents.identity_resolver import resolve_session_projection
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.agents.session_graph_writes import ProviderSessionAliasConflict
 from zerg.services.agents.session_graph_writes import ensure_primary_thread
 from zerg.services.agents.session_graph_writes import ensure_subagent_thread
 from zerg.services.agents.session_graph_writes import record_session_edge
@@ -63,7 +64,10 @@ from zerg.services.session_graph_projection import workflow_runs_for_session
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_observation_reducers import ProviderEventReduction
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
+from zerg.services.session_observations import OBS_KIND_PROVIDER_BINDING_CONFLICT
+from zerg.services.session_observations import SOURCE_DOMAIN_SERVER
 from zerg.services.session_observations import record_provider_event_observation
+from zerg.services.session_observations import record_session_observation
 from zerg.services.session_observations import record_source_line_observation
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import is_generic_environment_label
@@ -1133,6 +1137,60 @@ class AgentsStore:
             metadata={key: value for key, value in metadata.items() if value},
         )
 
+    def _record_provider_binding_conflict(
+        self,
+        *,
+        conflict: ProviderSessionAliasConflict,
+        data: SessionIngest,
+        session_id: UUID | None,
+        thread_id: UUID | None = None,
+    ) -> None:
+        provider_session_id = str(conflict.provider_session_id or data.provider_session_id or "").strip()
+        observed_at = datetime.now(timezone.utc)
+        record_session_observation(
+            self.db,
+            observation_id=(
+                "server:provider_binding_conflict:"
+                f"{conflict.provider}:{provider_session_id}:{conflict.existing_thread_id}:{conflict.requested_thread_id}"
+            ),
+            session_id=session_id,
+            thread_id=thread_id,
+            runtime_key=None,
+            provider=conflict.provider or data.provider,
+            device_id=data.device_id,
+            source_domain=SOURCE_DOMAIN_SERVER,
+            source="ingest",
+            kind=OBS_KIND_PROVIDER_BINDING_CONFLICT,
+            observed_at=observed_at,
+            load_observation=False,
+            payload={
+                "reason": "provider_binding_conflict",
+                "provider": conflict.provider,
+                "provider_session_id": provider_session_id,
+                "ingest_session_id": str(data.id) if data.id else None,
+                "existing_thread_id": str(conflict.existing_thread_id),
+                "requested_thread_id": str(conflict.requested_thread_id),
+                "parent_provider_session_id": data.parent_provider_session_id,
+                "lineage_kind": data.lineage_kind,
+            },
+        )
+
+    def _resolve_conflict_session(
+        self,
+        *,
+        provider: str,
+        provider_session_id: str | None,
+    ) -> tuple[AgentSession | None, SessionThread | None]:
+        thread = resolve_thread_by_provider_session_id(
+            self.db,
+            provider=provider,
+            provider_session_id=provider_session_id,
+        )
+        if thread is None:
+            return None, None
+        session = self.db.query(AgentSession).filter(AgentSession.id == thread.session_id).first()
+        return session, thread
+
     def _get_head_branch(self, session_id: UUID) -> AgentSessionBranch | None:
         """Return the current head branch for a session."""
         return (
@@ -1714,22 +1772,63 @@ class AgentsStore:
             parent_session = self.db.query(AgentSession).filter(AgentSession.id == parent_thread.session_id).first()
             if parent_session is not None:
                 existing = parent_session
-                resolved_child_thread = ensure_subagent_thread(
-                    self.db,
-                    parent_thread=parent_thread,
-                    provider=data.provider,
-                    source_path=primary_source_path,
-                    child_longhouse_session_id=str(session_id),
-                    child_provider_session_id=data.provider_session_id,
-                    subagent_id=data.subagent_id,
-                    subagent_prompt_id=data.subagent_prompt_id,
-                    subagent_tool_use_id=data.subagent_tool_use_id,
-                    workflow_run_id=data.workflow_run_id,
-                    attribution_agent=data.attribution_agent,
-                    attribution_skill=data.attribution_skill,
-                    parent_provider_session_id=data.parent_provider_session_id,
-                )
-                session_id = parent_session.id
+                if data.provider_session_id:
+                    preexisting_child_thread = resolve_thread_by_provider_session_id(
+                        self.db,
+                        provider=data.provider,
+                        provider_session_id=data.provider_session_id,
+                    )
+                    if preexisting_child_thread is not None and preexisting_child_thread.session_id != parent_thread.session_id:
+                        from zerg.services.agents.kernel_backfill import relink_orphan_subagents_for_parent
+
+                        relink_orphan_subagents_for_parent(
+                            self.db,
+                            provider=data.provider,
+                            parent_provider_session_id=parent_provider_session_id,
+                        )
+                try:
+                    resolved_child_thread = ensure_subagent_thread(
+                        self.db,
+                        parent_thread=parent_thread,
+                        provider=data.provider,
+                        source_path=primary_source_path,
+                        child_longhouse_session_id=str(session_id),
+                        child_provider_session_id=data.provider_session_id,
+                        subagent_id=data.subagent_id,
+                        subagent_prompt_id=data.subagent_prompt_id,
+                        subagent_tool_use_id=data.subagent_tool_use_id,
+                        workflow_run_id=data.workflow_run_id,
+                        attribution_agent=data.attribution_agent,
+                        attribution_skill=data.attribution_skill,
+                        parent_provider_session_id=data.parent_provider_session_id,
+                    )
+                    session_id = parent_session.id
+                except ProviderSessionAliasConflict as exc:
+                    conflict_session, conflict_thread = self._resolve_conflict_session(
+                        provider=data.provider,
+                        provider_session_id=data.provider_session_id,
+                    )
+                    self._record_provider_binding_conflict(
+                        conflict=exc,
+                        data=data,
+                        session_id=conflict_session.id if conflict_session is not None else parent_session.id,
+                        thread_id=conflict_thread.id if conflict_thread is not None else parent_thread.id,
+                    )
+                    logger.warning(
+                        "Provider session binding conflict during child ingest: "
+                        "provider=%s provider_session_id=%s existing_thread_id=%s requested_thread_id=%s",
+                        exc.provider,
+                        exc.provider_session_id,
+                        exc.existing_thread_id,
+                        exc.requested_thread_id,
+                    )
+                    if conflict_session is not None and conflict_thread is not None:
+                        existing = conflict_session
+                        resolved_provider_thread = conflict_thread
+                        session_id = conflict_session.id
+                    else:
+                        resolved_child_thread = None
+                        session_id = parent_session.id
 
         if existing is None and data.provider_session_id:
             resolved_provider_thread = resolve_thread_by_provider_session_id(
@@ -1895,13 +1994,38 @@ class AgentsStore:
                 data=data,
             )
         if data.provider_session_id:
-            record_thread_alias(
-                self.db,
-                thread=thread,
-                provider=existing.provider,
-                alias_kind="provider_session_id",
-                alias_value=str(data.provider_session_id),
-            )
+            try:
+                record_thread_alias(
+                    self.db,
+                    thread=thread,
+                    provider=existing.provider,
+                    alias_kind="provider_session_id",
+                    alias_value=str(data.provider_session_id),
+                )
+            except ProviderSessionAliasConflict as exc:
+                conflict_session, conflict_thread = self._resolve_conflict_session(
+                    provider=existing.provider,
+                    provider_session_id=data.provider_session_id,
+                )
+                self._record_provider_binding_conflict(
+                    conflict=exc,
+                    data=data,
+                    session_id=conflict_session.id if conflict_session is not None else existing.id,
+                    thread_id=conflict_thread.id if conflict_thread is not None else thread.id,
+                )
+                logger.warning(
+                    "Provider session binding conflict during ingest alias write: "
+                    "provider=%s provider_session_id=%s existing_thread_id=%s requested_thread_id=%s",
+                    exc.provider,
+                    exc.provider_session_id,
+                    exc.existing_thread_id,
+                    exc.requested_thread_id,
+                )
+                if conflict_session is not None and conflict_thread is not None and not session_created:
+                    existing = conflict_session
+                    session_id = conflict_session.id
+                    thread = conflict_thread
+                    thread_id = conflict_thread.id
         self.db.flush()
         _record_stage("session_setup", stage_started)
 

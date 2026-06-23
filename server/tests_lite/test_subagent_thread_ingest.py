@@ -28,6 +28,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionEdge
 from zerg.models.agents import SessionEmbedding
+from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTask
 from zerg.models.agents import SessionThread
@@ -166,7 +167,9 @@ def test_root_ingest_without_provider_session_id_does_not_create_provider_alias(
             )
         )
 
-        primary = db.query(SessionThread).filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1).one()
+        primary = (
+            db.query(SessionThread).filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1).one()
+        )
         aliases = _thread_alias_values(db, primary.id)
         assert ("longhouse_session_id", str(PARENT_ID)) in aliases
         assert ("provider_session_id", str(PARENT_ID)) not in aliases
@@ -564,6 +567,163 @@ def test_opencode_task_child_relinks_when_parent_arrives_later(tmp_path):
         assert edges[0].source_thread_id is not None
         assert edges[0].target_thread_id == child_thread.id
         assert edges[0].metadata_json["child_provider_session_id"] == "ses_child"
+
+
+def test_task_child_ingest_relinks_preexisting_orphan_when_parent_known(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            _root_payload(
+                session_id=OPENCODE_PARENT_ID,
+                provider="opencode",
+                provider_session_id="ses_parent",
+                project="longhouse",
+            )
+        )
+
+        orphan = AgentSession(
+            id=OPENCODE_CHILD_ID,
+            provider="opencode",
+            environment="production",
+            project="longhouse",
+            device_id="cinder",
+            cwd="/Users/davidrose/git/zerg/longhouse",
+            started_at=NOW,
+        )
+        db.add(orphan)
+        db.flush()
+        orphan_thread = SessionThread(
+            session_id=orphan.id,
+            provider="opencode",
+            branch_kind="subagent",
+            is_primary=1,
+        )
+        db.add(orphan_thread)
+        db.flush()
+        db.add_all(
+            [
+                SessionThreadAlias(
+                    thread_id=orphan_thread.id,
+                    provider="opencode",
+                    alias_kind="provider_session_id",
+                    alias_value="ses_child",
+                ),
+                SessionThreadAlias(
+                    thread_id=orphan_thread.id,
+                    provider="opencode",
+                    alias_kind="forked_from_provider_session_id",
+                    alias_value="ses_parent",
+                ),
+            ]
+        )
+        db.commit()
+
+        result = store.ingest_session(
+            SessionIngest(
+                id=OPENCODE_CHILD_ID,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_child",
+                is_sidechain=True,
+                parent_provider_session_id="ses_parent",
+                subagent_id="explore",
+                attribution_agent="explore",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="preexisting orphan relinked",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_child",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        assert result.session_id == OPENCODE_PARENT_ID
+        assert db.query(AgentSession).count() == 1
+        child_thread = db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").one()
+        assert child_thread.session_id == OPENCODE_PARENT_ID
+        assert ("provider_session_id", "ses_child") in _thread_alias_values(db, child_thread.id)
+
+
+def test_unrelatable_provider_binding_conflict_records_diagnostic_without_third_session(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            _root_payload(
+                session_id=OPENCODE_PARENT_ID,
+                provider="opencode",
+                provider_session_id="ses_parent",
+                project="longhouse",
+            )
+        )
+
+        foreign = AgentSession(
+            id=OPENCODE_CHILD_ID,
+            provider="opencode",
+            environment="production",
+            project="other",
+            device_id="cinder",
+            cwd="/tmp/other",
+            started_at=NOW,
+        )
+        db.add(foreign)
+        db.flush()
+        foreign_thread = SessionThread(
+            session_id=foreign.id,
+            provider="opencode",
+            branch_kind="root",
+            is_primary=1,
+        )
+        db.add(foreign_thread)
+        db.flush()
+        db.add(
+            SessionThreadAlias(
+                thread_id=foreign_thread.id,
+                provider="opencode",
+                alias_kind="provider_session_id",
+                alias_value="ses_child",
+            )
+        )
+        db.commit()
+
+        result = store.ingest_session(
+            SessionIngest(
+                id=UUID("019ee600-0000-7000-8000-000000000099"),
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_child",
+                is_sidechain=True,
+                parent_provider_session_id="ses_parent",
+                subagent_id="explore",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="conflicting provider child",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_child",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        assert result.session_id == OPENCODE_CHILD_ID
+        assert db.query(AgentSession).count() == 2
+        diagnostic = db.query(SessionObservation).filter(SessionObservation.kind == "provider_binding_conflict").one()
+        assert diagnostic.session_id == OPENCODE_CHILD_ID
+        assert "ses_child" in (diagnostic.payload_json or "")
 
 
 def test_opencode_fork_parentage_stays_visible_with_fork_thread_alias(tmp_path):

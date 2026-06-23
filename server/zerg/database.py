@@ -1765,7 +1765,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
             )
             conn.commit()
     except Exception:
-        logger.debug("session identity kernel index migration skipped", exc_info=True)
+        logger.warning("session identity kernel index migration failed", exc_info=True)
 
     # Historical session identity stamping rewrites large archive tables
     # (events/source_lines/observations). Keep it out of startup; explicit
