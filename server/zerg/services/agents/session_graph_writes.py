@@ -97,7 +97,7 @@ def record_thread_alias(
             SessionThreadAlias.alias_kind == alias_kind,
             SessionThreadAlias.alias_value == alias_value,
         )
-        .first()
+        .one_or_none()
     )
     if existing is not None:
         return
@@ -145,7 +145,7 @@ def record_thread_alias(
                 SessionThreadAlias.alias_kind == alias_kind,
                 SessionThreadAlias.alias_value == alias_value,
             )
-            .first()
+            .one_or_none()
         )
         if existing is not None:
             return

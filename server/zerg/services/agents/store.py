@@ -65,6 +65,7 @@ from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_observation_reducers import ProviderEventReduction
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
 from zerg.services.session_observations import OBS_KIND_PROVIDER_BINDING_CONFLICT
+from zerg.services.session_observations import OBS_KIND_PROVIDER_BINDING_MISSING
 from zerg.services.session_observations import SOURCE_DOMAIN_SERVER
 from zerg.services.session_observations import record_provider_event_observation
 from zerg.services.session_observations import record_session_observation
@@ -118,6 +119,18 @@ def _is_managed_codex_ingest(
         caps = project_session_capabilities(db, session_id=session.id)
         return bool(caps.live_control_available or caps.host_reattach_available)
     return False
+
+
+def _has_managed_binding_evidence(
+    db: Session,
+    session: AgentSession,
+    data: SessionIngest,
+) -> bool:
+    incoming_execution_home = _infer_execution_home_from_ingest(data)
+    if incoming_execution_home == SessionExecutionHome.MANAGED_LOCAL:
+        return True
+    caps = project_session_capabilities(db, session_id=session.id)
+    return bool(caps.live_control_available or caps.host_reattach_available)
 
 
 def _is_opencode_provider_live_test_ingest(data: SessionIngest, incoming_environment: str) -> bool:
@@ -1175,6 +1188,40 @@ class AgentsStore:
             },
         )
 
+    def _record_provider_binding_missing(
+        self,
+        *,
+        data: SessionIngest,
+        session: AgentSession,
+        thread_id: UUID | None = None,
+    ) -> None:
+        provider_session_id = str(data.provider_session_id or "").strip()
+        if not provider_session_id:
+            return
+        observed_at = datetime.now(timezone.utc)
+        record_session_observation(
+            self.db,
+            observation_id=f"server:provider_binding_missing:{data.provider}:{provider_session_id}:{session.id}",
+            session_id=session.id,
+            thread_id=thread_id,
+            runtime_key=None,
+            provider=data.provider or session.provider,
+            device_id=data.device_id,
+            source_domain=SOURCE_DOMAIN_SERVER,
+            source="ingest",
+            kind=OBS_KIND_PROVIDER_BINDING_MISSING,
+            observed_at=observed_at,
+            load_observation=False,
+            payload={
+                "reason": "provider_binding_missing",
+                "provider": data.provider,
+                "provider_session_id": provider_session_id,
+                "ingest_session_id": str(data.id) if data.id else None,
+                "resolved_session_id": str(session.id),
+                "lineage_kind": data.lineage_kind,
+            },
+        )
+
     def _resolve_conflict_session(
         self,
         *,
@@ -1855,6 +1902,8 @@ class AgentsStore:
 
         if existing is None:
             existing = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
+            if existing is not None and data.provider_session_id and _has_managed_binding_evidence(self.db, existing, data):
+                self._record_provider_binding_missing(data=data, session=existing)
         session_created = False
 
         if existing:

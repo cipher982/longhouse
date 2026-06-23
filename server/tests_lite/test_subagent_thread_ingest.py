@@ -14,6 +14,7 @@ os.environ.setdefault("TESTING", "1")
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
 from zerg.database import Base
 from zerg.database import get_db
@@ -724,6 +725,54 @@ def test_unrelatable_provider_binding_conflict_records_diagnostic_without_third_
         diagnostic = db.query(SessionObservation).filter(SessionObservation.kind == "provider_binding_conflict").one()
         assert diagnostic.session_id == OPENCODE_CHILD_ID
         assert "ses_child" in (diagnostic.payload_json or "")
+
+
+def test_managed_longhouse_id_ingest_records_missing_binding_diagnostic(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        session = AgentSession(
+            id=OPENCODE_PARENT_ID,
+            provider="opencode",
+            environment="production",
+            project="longhouse",
+            device_id="cinder",
+            cwd="/Users/davidrose/git/zerg/longhouse",
+            started_at=NOW,
+        )
+        db.add(session)
+        db.flush()
+        seed_managed_kernel_rows(db, session, control_plane="opencode_server", host_id="cinder")
+        db.commit()
+
+        result = AgentsStore(db).ingest_session(
+            SessionIngest(
+                id=OPENCODE_PARENT_ID,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_native",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="managed id arrived before provider alias",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_native",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        assert result.session_id == OPENCODE_PARENT_ID
+        assert db.query(AgentSession).count() == 1
+        primary = db.query(SessionThread).filter(SessionThread.session_id == OPENCODE_PARENT_ID, SessionThread.is_primary == 1).one()
+        assert ("provider_session_id", "ses_native") in _thread_alias_values(db, primary.id)
+        diagnostic = db.query(SessionObservation).filter(SessionObservation.kind == "provider_binding_missing").one()
+        assert diagnostic.session_id == OPENCODE_PARENT_ID
+        assert "ses_native" in (diagnostic.payload_json or "")
 
 
 def test_opencode_fork_parentage_stays_visible_with_fork_thread_alias(tmp_path):
