@@ -3329,6 +3329,7 @@ mod tests {
     use super::*;
     use crate::config::ShipperConfig;
     use crate::state::db::open_db;
+    use base64::{engine::general_purpose, Engine as _};
     use flate2::read::GzDecoder;
     use std::io::{Read, Write};
     use std::net::TcpListener;
@@ -3470,6 +3471,12 @@ mod tests {
             .unwrap_or(0)
     }
 
+    fn expects_continue(headers: &[u8]) -> bool {
+        String::from_utf8_lossy(headers)
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case("expect: 100-continue"))
+    }
+
     fn read_request_body(stream: &mut std::net::TcpStream) -> Vec<u8> {
         let mut buf = Vec::new();
         let mut chunk = [0_u8; 4096];
@@ -3483,6 +3490,9 @@ mod tests {
             if let Some(header_end) = find_header_end(&buf) {
                 let body_start = header_end + 4;
                 let content_length = parse_content_length(&buf[..body_start]);
+                if expects_continue(&buf[..body_start]) {
+                    stream.write_all(b"HTTP/1.1 100 Continue\r\n\r\n").unwrap();
+                }
                 while buf.len() < body_start + content_length {
                     let n = stream.read(&mut chunk).unwrap();
                     if n == 0 {
@@ -3684,6 +3694,34 @@ mod tests {
         .unwrap();
     }
 
+    fn insert_opencode_large_image_part(path: &Path, image_data: &str) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "prt_large_image",
+                "msg_user",
+                "ses_test",
+                1_779_100_000_012_i64,
+                1_779_100_000_012_i64,
+                json!({
+                    "type": "file",
+                    "mime": "image/png",
+                    "filename": "large-screenshot",
+                    "url": format!("data:image/png;base64,{image_data}"),
+                    "source": {
+                        "type": "file",
+                        "path": "large-screenshot",
+                        "text": {"value": "[Image 1]", "start": 0, "end": 9}
+                    }
+                })
+                .to_string(),
+            ],
+        )
+        .unwrap();
+    }
+
     fn decode_payload(compressed: &[u8]) -> serde_json::Value {
         let mut decoder = GzDecoder::new(compressed);
         let mut json_str = String::new();
@@ -3741,6 +3779,64 @@ mod tests {
         .await
         .unwrap();
         assert_eq!((skipped_sessions, skipped_events), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn test_ship_opencode_database_uploads_large_inline_image_before_small_ingest() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_opencode_fixture_db(&db_path);
+        let image_bytes = vec![17u8; 1024 * 1024];
+        let image_data = general_purpose::STANDARD.encode(&image_bytes);
+        let image_sha256 = format!("{:x}", Sha256::digest(&image_bytes));
+        insert_opencode_large_image_part(&db_path, &image_data);
+        let (_state_file, conn) = make_db();
+        let claim_body = format!(
+            r#"{{"needed":["{}"],"present":[],"rejected":[]}}"#,
+            image_sha256
+        );
+        let (url, captured, handle) = spawn_http_sequence_server(&[
+            ("200 OK", &claim_body),
+            ("200 OK", "{}"),
+            ("200 OK", "{}"),
+        ]);
+        let client = make_test_client(&url);
+
+        let (sessions, events) = ship_opencode_database(
+            &db_path,
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(sessions, 1);
+        assert_eq!(events, 3);
+        handle.join().unwrap();
+        let bodies = captured.lock().unwrap();
+        assert_eq!(bodies.len(), 3);
+
+        let claim: serde_json::Value = serde_json::from_slice(&bodies[0]).unwrap();
+        assert_eq!(claim["items"][0]["sha256"], image_sha256);
+        assert_eq!(claim["items"][0]["mime_type"], "image/png");
+        assert_eq!(claim["items"][0]["byte_size"], image_bytes.len());
+        assert_eq!(claim["items"][0]["provider"], "opencode");
+        assert_eq!(bodies[1], image_bytes);
+
+        let mut decoder = GzDecoder::new(&bodies[2][..]);
+        let mut ingest_json = String::new();
+        decoder.read_to_string(&mut ingest_json).unwrap();
+        assert!(ingest_json.contains("longhouse_media_ref:sha256="));
+        assert!(!ingest_json.contains(&image_data));
+        assert!(
+            ingest_json.len() < 8_000,
+            "redacted OpenCode ingest body should stay small, got {} bytes",
+            ingest_json.len()
+        );
     }
 
     #[tokio::test]
@@ -6745,7 +6841,8 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (_tmp, conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
-        let image_data = "A".repeat(4096);
+        let image_bytes = vec![9u8; 1024 * 1024];
+        let image_data = general_purpose::STANDARD.encode(&image_bytes);
         let line = format!(
             r#"{{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{{"type":"message","role":"user","content":[{{"type":"input_image","image_url":"data:image/png;base64,{image_data}"}}]}}}}"#
         );
@@ -6759,23 +6856,38 @@ mod tests {
             "codex",
             CompressionAlgo::Gzip,
             &conn,
-            512 * 1024,
+            10_000_000,
             None,
         )
         .unwrap()
         .expect("prepared media ship item");
-        let media = match &prepared.actions[0] {
+        let (media, source_line_ref) = match &prepared.actions[0] {
             PreparedAction::Ship(item) => {
                 assert_eq!(item.media_objects.len(), 1);
-                item.media_objects[0].clone()
+                assert_eq!(item.source_line_refs.len(), 1);
+                (
+                    item.media_objects[0].clone(),
+                    item.source_line_refs[0].clone(),
+                )
             }
             _ => panic!("expected ship action"),
         };
+        let source_claim_missing = json!({
+            "present": [],
+            "missing": [{
+                "source_path": path.to_string_lossy(),
+                "source_offset": source_line_ref.source_offset,
+                "line_hash": source_line_ref.line_hash,
+            }],
+            "rejected": [],
+        })
+        .to_string();
         let claim_body = format!(
             r#"{{"needed":["{}"],"present":[],"rejected":[]}}"#,
             media.sha256
         );
         let (url, captured, handle) = spawn_http_sequence_server(&[
+            ("200 OK", &source_claim_missing),
             ("200 OK", &claim_body),
             ("200 OK", "{}"),
             ("200 OK", "{}"),
@@ -6790,19 +6902,25 @@ mod tests {
         assert!(outcome.fully_processed);
 
         let bodies = captured.lock().unwrap();
-        assert_eq!(bodies.len(), 3);
-        let claim: serde_json::Value = serde_json::from_slice(&bodies[0]).unwrap();
+        assert_eq!(bodies.len(), 4);
+        let claim: serde_json::Value = serde_json::from_slice(&bodies[1]).unwrap();
         assert_eq!(claim["items"][0]["sha256"], media.sha256);
         assert_eq!(claim["items"][0]["mime_type"], "image/png");
         assert_eq!(claim["items"][0]["source_offset"], 0);
         assert_eq!(claim["items"][0]["provider"], "codex");
-        assert_eq!(bodies[1], media.bytes);
+        assert_eq!(bodies[2], image_bytes);
+        assert_eq!(bodies[2], media.bytes);
 
-        let mut decoder = GzDecoder::new(&bodies[2][..]);
+        let mut decoder = GzDecoder::new(&bodies[3][..]);
         let mut ingest_json = String::new();
         decoder.read_to_string(&mut ingest_json).unwrap();
         assert!(ingest_json.contains("longhouse_media_ref:sha256="));
         assert!(!ingest_json.contains(&image_data));
+        assert!(
+            ingest_json.len() < 8_000,
+            "redacted Codex ingest body should stay small, got {} bytes",
+            ingest_json.len()
+        );
     }
 
     #[test]

@@ -1128,6 +1128,7 @@ fn timestamp_from_ms(ms: i64) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose, Engine as _};
 
     fn create_fixture_db(path: &Path) {
         let conn = Connection::open(path).unwrap();
@@ -1493,11 +1494,74 @@ mod tests {
             .contains("\"url_original_chars\":922"));
         assert!(!file_source_line.raw_line.contains(&"A".repeat(900)));
         assert_eq!(result.media_objects.len(), 1);
-        assert_eq!(result.media_objects[0].source_offset, file_source_line.source_offset);
+        assert_eq!(
+            result.media_objects[0].source_offset,
+            file_source_line.source_offset
+        );
         assert_eq!(result.media_objects[0].mime_type, "image/png");
         assert_eq!(result.media_objects[0].byte_size, 675);
         assert_eq!(result.media_objects[0].original_chars, 922);
         assert_eq!(result.media_objects[0].bytes, vec![0u8; 675]);
+    }
+
+    #[test]
+    fn parse_opencode_large_inline_image_source_line_is_redacted() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_fixture_db(&db_path);
+        let image_bytes = vec![42u8; 1024 * 1024];
+        let image_data = general_purpose::STANDARD.encode(&image_bytes);
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                "prt_large_file",
+                "msg_user",
+                "ses_test",
+                1_779_000_000_401_i64,
+                1_779_000_000_401_i64,
+                json!({
+                    "type": "file",
+                    "mime": "image/png",
+                    "filename": "large-screenshot",
+                    "url": format!("data:image/png;base64,{image_data}"),
+                    "source": {
+                        "type": "file",
+                        "path": "large-screenshot",
+                        "text": {"value": "[Image 2]", "start": 0, "end": 9}
+                    }
+                })
+                .to_string(),
+            ],
+        )
+        .unwrap();
+
+        let result = parse_opencode_session(&db_path, "ses_test").unwrap();
+        let file_source_line = result
+            .source_lines
+            .iter()
+            .find(|line| line.raw_line.contains("\"part_id\":\"prt_large_file\""))
+            .unwrap();
+
+        assert!(file_source_line
+            .raw_line
+            .contains("longhouse_media_ref:sha256="));
+        assert!(file_source_line.raw_line.contains("\"url_truncated\":true"));
+        assert!(!file_source_line.raw_line.contains(&image_data));
+        assert!(
+            file_source_line.raw_line.len() < 2_000,
+            "redacted OpenCode source line should stay small, got {} bytes",
+            file_source_line.raw_line.len()
+        );
+        let media = result
+            .media_objects
+            .iter()
+            .find(|media| media.source_offset == file_source_line.source_offset)
+            .unwrap();
+        assert_eq!(media.mime_type, "image/png");
+        assert_eq!(media.byte_size, image_bytes.len());
+        assert_eq!(media.bytes, image_bytes);
     }
 
     #[test]
