@@ -622,3 +622,54 @@ def backfill_compaction_kind_command(
         return
     status = "dry-run" if dry_run else "ok"
     typer.echo(f"{status}: scanned={total_scanned} updated={total_updated} batches={batches} last_id={last_id}")
+
+
+@app.command("scan-orphan-tool-results")
+def scan_orphan_tool_results_command(
+    database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override."),
+    session_id: str | None = typer.Option(None, "--session-id", help="Limit scan to one session UUID."),
+    limit: int = typer.Option(500, "--limit", min=1, help="Maximum orphan calls to classify."),
+    max_source_lines_per_call: int = typer.Option(
+        500,
+        "--max-source-lines-per-call",
+        min=1,
+        help="Maximum source_lines rows to inspect after each orphaned call.",
+    ),
+    archive_root: Path | None = typer.Option(None, "--archive-root", help="Archive root override for slim source_lines rows."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Classify orphaned tool calls before any historical repair is attempted."""
+
+    settings = get_settings()
+    effective_database_url = database_url or settings.database_url
+
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+    from zerg.services.tool_result_repair import scan_orphan_tool_results
+
+    engine = make_engine(effective_database_url)
+    SessionLocal = make_sessionmaker(engine)
+    archive_store = FilesystemArchiveStore(archive_root) if archive_root is not None else None
+    try:
+        with SessionLocal() as db:
+            result = scan_orphan_tool_results(
+                db,
+                session_id=session_id,
+                limit=limit,
+                max_source_lines_per_call=max_source_lines_per_call,
+                archive_store=archive_store,
+            )
+    finally:
+        engine.dispose()
+
+    payload = asdict(result)
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    typer.echo(
+        "orphan tool-result scan: "
+        f"scanned={result.scanned_orphan_calls} recoverable={result.recoverable} "
+        f"no_source={result.no_source_evidence} no_result={result.no_result_in_source} "
+        f"unparseable={result.unparseable_result}"
+    )
