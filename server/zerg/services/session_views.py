@@ -1278,12 +1278,31 @@ class BackfillEmbeddingsProgressResponse(BaseModel):
     total: int = 0
 
 
+class MediaBackfillInlineDataUrlsResponse(BaseModel):
+    """Response for guarded legacy inline media backfill."""
+
+    dry_run: bool
+    scanned_source_lines: int = 0
+    candidate_refs: int = 0
+    decoded_bytes: int = 0
+    stored_objects: int = 0
+    refs_upserted: int = 0
+    skipped_existing_refs: int = 0
+    skipped_budget: int = 0
+    skipped_disk_floor: int = 0
+    rejected: int = 0
+    last_source_line_id: Optional[int] = None
+    message: str = ""
+
+
 class IngestHealthResponse(UTCBaseModel):
     status: str  # "ok" | "stale" | "unknown"
     last_session_at: Optional[datetime] = None
     gap_hours: Optional[float] = None
     threshold_hours: float
     session_count: int
+    media_repair_refs: int = 0
+    media_repair_bytes: int = 0
 
 
 class UsageStatsByProvider(BaseModel):

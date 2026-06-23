@@ -30,6 +30,7 @@ from zerg.services.session_views import BackfillEmbeddingsResponse
 from zerg.services.session_views import BackfillProgressResponse
 from zerg.services.session_views import BackfillSummariesResponse
 from zerg.services.session_views import IngestHealthResponse
+from zerg.services.session_views import MediaBackfillInlineDataUrlsResponse
 from zerg.services.session_views import UsageStatsByProvider
 from zerg.services.session_views import UsageStatsResponse
 
@@ -226,7 +227,9 @@ async def backfill_embeddings(
     from zerg.models_config import get_embedding_config
 
     if _embedding_backfill_state["running"]:
-        message = "Embedding backfill in progress: " f"{_embedding_backfill_state['embedded']}/{_embedding_backfill_state['total']} done"
+        embedded = _embedding_backfill_state["embedded"]
+        total_running = _embedding_backfill_state["total"]
+        message = f"Embedding backfill in progress: {embedded}/{total_running} done"
         return BackfillEmbeddingsResponse(
             status="already_running",
             total=_embedding_backfill_state["total"],
@@ -384,6 +387,49 @@ async def _run_embedding_backfill(
         )
 
 
+@router.post("/media/backfill-inline-data-urls", response_model=MediaBackfillInlineDataUrlsResponse)
+async def backfill_inline_data_url_media(
+    dry_run: bool = Query(True, description="When true, scan and report without writing media rows or blobs"),
+    max_rows: int = Query(100, ge=1, le=1000, description="Maximum source_lines rows to scan in this batch"),
+    max_bytes: int = Query(10 * 1024 * 1024, ge=1, le=50 * 1024 * 1024, description="Decoded byte budget"),
+    after_id: int = Query(0, ge=0, description="Only scan source_lines rows with id greater than this value"),
+    confirmed_backup_gate: bool = Query(False, description="Required when dry_run=false"),
+    disk_floor_bytes: int = Query(
+        1024 * 1024 * 1024,
+        ge=0,
+        description="Minimum free bytes to leave on the media filesystem when writing",
+    ),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> MediaBackfillInlineDataUrlsResponse:
+    """Opportunistically backfill legacy inline image data URLs into media objects."""
+
+    from zerg.services.media_backfill import backfill_inline_data_url_media as run_backfill
+
+    try:
+        result = run_backfill(
+            db,
+            dry_run=dry_run,
+            max_rows=max_rows,
+            max_bytes=max_bytes,
+            after_id=after_id,
+            confirmed_backup_gate=confirmed_backup_gate,
+            disk_floor_bytes=disk_floor_bytes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    mode = "dry run" if result.dry_run else "write"
+    candidates = result.candidate_refs
+    scanned = result.scanned_source_lines
+    message = f"Inline media backfill {mode}: {candidates} candidate refs in {scanned} source lines"
+    return MediaBackfillInlineDataUrlsResponse(
+        **result.__dict__,
+        message=message,
+    )
+
+
 @router.get("/ingest-health", response_model=IngestHealthResponse)
 async def get_ingest_health(
     db: Session = Depends(get_db),
@@ -392,8 +438,10 @@ async def get_ingest_health(
 ) -> IngestHealthResponse:
     """Check ingest freshness -- detects if sessions have stopped shipping."""
     from zerg.services.ingest_health import compute_ingest_health
+    from zerg.services.media_backfill import compute_media_repair_health
 
     result = compute_ingest_health(db)
+    result.update(compute_media_repair_health(db))
     return IngestHealthResponse(**result)
 
 
@@ -425,7 +473,14 @@ async def get_usage_stats(
         {"since": since.isoformat()},
     ).fetchall()
 
-    by_provider = [UsageStatsByProvider(provider=r.provider, sessions=r.sessions, messages=r.messages or 0) for r in rows]
+    by_provider = []
+    for row in rows:
+        stats = UsageStatsByProvider(
+            provider=row.provider,
+            sessions=row.sessions,
+            messages=row.messages or 0,
+        )
+        by_provider.append(stats)
 
     return UsageStatsResponse(
         total_sessions=sum(r.sessions for r in by_provider),
