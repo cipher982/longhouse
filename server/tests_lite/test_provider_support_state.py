@@ -151,7 +151,7 @@ def test_support_state_uses_release_derived_action_coverage() -> None:
     assert opencode["action_coverage"]["classify_subagents"]["state"] == "supported"
     assert "classify_subagents" in opencode["capabilities"]["supported_actions"]
     assert "send_prompt" in opencode["capabilities"]["supported_actions"]
-    assert opencode["capabilities"]["read_only_actions"] == ["fork"]
+    assert opencode["capabilities"]["read_only_actions"] == ["structured_question", "fork"]
 
 
 def _opencode_release_info_with_coverage(**applicability) -> dict:
@@ -213,7 +213,7 @@ def test_support_state_ignores_stale_release_action_coverage() -> None:
     assert opencode["action_coverage"]["classify_subagents"]["state"] == "unknown"
     assert opencode["action_coverage"]["fork"]["state"] == "unknown"
     assert "classify_subagents" not in opencode["capabilities"]["supported_actions"]
-    assert opencode["capabilities"]["read_only_actions"] == []
+    assert opencode["capabilities"]["read_only_actions"] == ["structured_question"]
 
 
 def test_support_state_ignores_version_mismatched_release_action_coverage() -> None:
@@ -228,7 +228,7 @@ def test_support_state_ignores_version_mismatched_release_action_coverage() -> N
     assert opencode["action_coverage"]["classify_subagents"]["state"] == "unknown"
     assert opencode["action_coverage"]["fork"]["state"] == "unknown"
     assert "classify_subagents" not in opencode["capabilities"]["supported_actions"]
-    assert opencode["capabilities"]["read_only_actions"] == []
+    assert opencode["capabilities"]["read_only_actions"] == ["structured_question"]
 
 
 def test_support_state_ignores_schema_mismatched_release_action_coverage() -> None:
@@ -261,7 +261,7 @@ def test_support_state_overlays_applicable_release_action_coverage() -> None:
     assert opencode["action_coverage"]["classify_subagents"]["state"] == "supported"
     assert opencode["action_coverage"]["fork"]["state"] == "read_only"
     assert "classify_subagents" in opencode["capabilities"]["supported_actions"]
-    assert opencode["capabilities"]["read_only_actions"] == ["fork"]
+    assert opencode["capabilities"]["read_only_actions"] == ["structured_question", "fork"]
 
 
 def test_support_state_keeps_one_shot_support_out_of_live_control_readiness() -> None:

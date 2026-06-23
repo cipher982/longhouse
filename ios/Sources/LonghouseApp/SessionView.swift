@@ -947,7 +947,7 @@ private struct SessionPauseRequestCard: View {
                         if isResponding {
                             ProgressView().controlSize(.mini)
                         } else {
-                            Label(isPermissionPrompt ? "Allow" : "Send answer", systemImage: "checkmark.circle")
+                            Label(primaryActionLabel, systemImage: "checkmark.circle")
                         }
                     }
                     .buttonStyle(.borderedProminent)
@@ -959,7 +959,7 @@ private struct SessionPauseRequestCard: View {
                 Button {
                     Task { await cancelRequest() }
                 } label: {
-                    Label(isPermissionPrompt ? "Deny" : "Cancel", systemImage: "xmark.circle")
+                    Label(secondaryActionLabel, systemImage: "xmark.circle")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -995,7 +995,9 @@ private struct SessionPauseRequestCard: View {
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if question.options.isEmpty {
+            if isPlanApproval {
+                EmptyView()
+            } else if question.options.isEmpty {
                 if pauseRequest.canRespond {
                     TextField("Answer", text: Binding(
                         get: { answers[key]?.first ?? "" },
@@ -1083,8 +1085,24 @@ private struct SessionPauseRequestCard: View {
         pauseRequest.kind == "permission_prompt"
     }
 
+    private var isPlanApproval: Bool {
+        pauseRequest.kind == "plan_approval"
+    }
+
+    private var primaryActionLabel: String {
+        if isPermissionPrompt { return "Allow" }
+        if isPlanApproval { return "Approve" }
+        return "Send answer"
+    }
+
+    private var secondaryActionLabel: String {
+        if isPermissionPrompt { return "Deny" }
+        if isPlanApproval { return "Reject" }
+        return "Cancel"
+    }
+
     private var canSubmitAnswer: Bool {
-        if isPermissionPrompt {
+        if isPermissionPrompt || isPlanApproval {
             return true
         }
         if pauseRequest.questions.isEmpty {

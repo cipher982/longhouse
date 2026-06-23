@@ -22,6 +22,9 @@ from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+from zerg.services.provider_action_coverage import ActionCoverageState
+from zerg.services.provider_action_coverage import derive_provider_action_coverage
 
 
 def _engine(tmp_path):
@@ -525,3 +528,34 @@ def test_imported_returns_full_payload_shape(db):
                   "search_only", "can_send_input", "can_interrupt", "can_terminate",
                   "can_tail_output", "can_resume"):
         assert isinstance(getattr(caps, field), bool)
+
+
+def test_live_session_capabilities_match_provider_action_coverage(db):
+    """Live affordance booleans must not contradict derived provider coverage."""
+
+    for contract in all_managed_provider_contracts():
+        s = _make_session(db, provider=contract.provider)
+        t = _make_thread(db, s)
+        r = _make_run(db, t)
+        _make_conn(
+            db,
+            r,
+            control_plane=contract.control_plane,
+            state="attached",
+            caps={
+                "send": int(contract.send_input),
+                "interrupt": int(contract.interrupt),
+                "terminate": int(contract.terminate),
+                "tail": int(contract.tail_output),
+                "resume": int(contract.can_resume),
+            },
+        )
+        db.commit()
+
+        caps = project_session_capabilities(db, session_id=s.id)
+        coverage = derive_provider_action_coverage(contract.provider)
+
+        assert caps.live_control_available is True
+        assert caps.can_send_input is (coverage["send_prompt"].state == ActionCoverageState.SUPPORTED)
+        assert caps.can_interrupt is (coverage["abort"].state == ActionCoverageState.SUPPORTED)
+        assert caps.can_tail_output is (coverage["observe_transcript"].state == ActionCoverageState.SUPPORTED)

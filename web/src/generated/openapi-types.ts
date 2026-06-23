@@ -4044,6 +4044,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/media/{sha256}/blob": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Browser Media Blob
+         * @description Fetch a browser-visible media blob by sha256.
+         */
+        get: operations["get_browser_media_blob_media__sha256__blob_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/media/{sha256}/thumb": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Browser Media Thumbnail
+         * @description Fetch a derived thumbnail for a browser-visible media object.
+         */
+        get: operations["get_browser_media_thumbnail_media__sha256__thumb_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/media/{sha256}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        /**
+         * Head Browser Media Blob
+         * @description Cheap browser integrity probe for a visible media blob.
+         */
+        head: operations["head_browser_media_blob_media__sha256__head"];
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/providers/action-coverage": {
         parameters: {
             query?: never;
@@ -4623,6 +4683,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/source-lines/claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Source Line Claims
+         * @description Return which source-line identities are already durable on this host.
+         */
+        post: operations["create_source_line_claims_agents_source_lines_claims_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/turns/slow": {
         parameters: {
             query?: never;
@@ -4705,6 +4785,26 @@ export interface paths {
          * @description Start backfilling missing embeddings as a background task.
          */
         post: operations["backfill_embeddings_agents_backfill_embeddings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/media/backfill-inline-data-urls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Backfill Inline Data Url Media
+         * @description Opportunistically backfill legacy inline image data URLs into media objects.
+         */
+        post: operations["backfill_inline_data_url_media_agents_media_backfill_inline_data_urls_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6463,6 +6563,62 @@ export interface components {
             one_liner_install_command: string;
         };
         /**
+         * EventMediaRefResponse
+         * @description Projected media reference for an event.
+         */
+        EventMediaRefResponse: {
+            /**
+             * Sha256
+             * @description Content-addressed media sha256
+             */
+            sha256: string;
+            /**
+             * Media State
+             * @description Media lifecycle state: pending|present|failed
+             */
+            media_state: string;
+            /**
+             * Mime Type
+             * @description Stored media MIME type when present
+             */
+            mime_type?: string | null;
+            /**
+             * Byte Size
+             * @description Stored media byte size when present
+             */
+            byte_size?: number | null;
+            /**
+             * Blob Url
+             * @description Browser/API blob URL
+             */
+            blob_url: string;
+            /**
+             * Thumb Url
+             * @description Browser/API thumbnail URL when a thumbnail exists
+             */
+            thumb_url?: string | null;
+            /**
+             * Source Path
+             * @description Provider source path that contained the media reference
+             */
+            source_path?: string | null;
+            /**
+             * Source Offset
+             * @description Provider source byte offset for the media reference
+             */
+            source_offset?: number | null;
+            /**
+             * Json Pointer
+             * @description JSON pointer to the redacted media field when known
+             */
+            json_pointer?: string | null;
+            /**
+             * Original Kind
+             * @description Original media source kind
+             */
+            original_kind: string;
+        };
+        /**
          * EventResponse
          * @description Response for a single event.
          */
@@ -6574,6 +6730,11 @@ export interface components {
             reconciled_event_id?: number | null;
             /** @description Lifecycle of an assistant tool call: running|completed|dropped. Set only on assistant events that have tool_name. Server-authoritative. */
             tool_call_state?: components["schemas"]["ToolCallState"] | null;
+            /**
+             * Media Refs
+             * @description Content-addressed media objects referenced by this event
+             */
+            media_refs?: components["schemas"]["EventMediaRefResponse"][];
         };
         /**
          * EventsListResponse
@@ -6839,6 +7000,16 @@ export interface components {
             threshold_hours: number;
             /** Session Count */
             session_count: number;
+            /**
+             * Media Repair Refs
+             * @default 0
+             */
+            media_repair_refs: number;
+            /**
+             * Media Repair Bytes
+             * @default 0
+             */
+            media_repair_bytes: number;
         };
         /**
          * IngestResponse
@@ -7595,6 +7766,66 @@ export interface components {
             summary: components["schemas"]["ManagedTurnSummaryResponse"];
             /** Providers */
             providers: components["schemas"]["ManagedTurnProviderSummaryResponse"][];
+        };
+        /**
+         * MediaBackfillInlineDataUrlsResponse
+         * @description Response for guarded legacy inline media backfill.
+         */
+        MediaBackfillInlineDataUrlsResponse: {
+            /** Dry Run */
+            dry_run: boolean;
+            /**
+             * Scanned Source Lines
+             * @default 0
+             */
+            scanned_source_lines: number;
+            /**
+             * Candidate Refs
+             * @default 0
+             */
+            candidate_refs: number;
+            /**
+             * Decoded Bytes
+             * @default 0
+             */
+            decoded_bytes: number;
+            /**
+             * Stored Objects
+             * @default 0
+             */
+            stored_objects: number;
+            /**
+             * Refs Upserted
+             * @default 0
+             */
+            refs_upserted: number;
+            /**
+             * Skipped Existing Refs
+             * @default 0
+             */
+            skipped_existing_refs: number;
+            /**
+             * Skipped Budget
+             * @default 0
+             */
+            skipped_budget: number;
+            /**
+             * Skipped Disk Floor
+             * @default 0
+             */
+            skipped_disk_floor: number;
+            /**
+             * Rejected
+             * @default 0
+             */
+            rejected: number;
+            /** Last Source Line Id */
+            last_source_line_id?: number | null;
+            /**
+             * Message
+             * @default
+             */
+            message: string;
         };
         /** MediaClaimItem */
         MediaClaimItem: {
@@ -10077,7 +10308,7 @@ export interface components {
              * @description Pause request kind
              * @enum {string}
              */
-            kind: "structured_question" | "permission_prompt";
+            kind: "structured_question" | "permission_prompt" | "plan_approval";
             /**
              * Status
              * @description Pause lifecycle status
@@ -11323,6 +11554,54 @@ export interface components {
             hours_back: number;
             /** Min Total Turn Time Ms */
             min_total_turn_time_ms: number;
+        };
+        /** SourceLineClaimItem */
+        SourceLineClaimItem: {
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /** Source Path */
+            source_path: string;
+            /** Source Offset */
+            source_offset: number;
+            /** Line Hash */
+            line_hash: string;
+        };
+        /** SourceLineClaimResponseItem */
+        SourceLineClaimResponseItem: {
+            /** Source Path */
+            source_path: string;
+            /** Source Offset */
+            source_offset: number;
+            /** Line Hash */
+            line_hash: string;
+        };
+        /** SourceLineClaimsRequest */
+        SourceLineClaimsRequest: {
+            /** Items */
+            items: components["schemas"]["SourceLineClaimItem"][];
+        };
+        /** SourceLineClaimsResponse */
+        SourceLineClaimsResponse: {
+            /** Present */
+            present: components["schemas"]["SourceLineClaimResponseItem"][];
+            /** Missing */
+            missing: components["schemas"]["SourceLineClaimResponseItem"][];
+            /** Rejected */
+            rejected: components["schemas"]["SourceLineRejectedItem"][];
+        };
+        /** SourceLineRejectedItem */
+        SourceLineRejectedItem: {
+            /** Source Path */
+            source_path?: string | null;
+            /** Source Offset */
+            source_offset?: number | null;
+            /** Line Hash */
+            line_hash?: string | null;
+            /** Reason */
+            reason: string;
         };
         /**
          * StartupContextItemResponse
@@ -19256,6 +19535,108 @@ export interface operations {
             };
         };
     };
+    get_browser_media_blob_media__sha256__blob_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_browser_media_thumbnail_media__sha256__thumb_get: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    head_browser_media_blob_media__sha256__head: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_provider_action_coverage_agents_providers_action_coverage_get: {
         parameters: {
             query?: {
@@ -20345,6 +20726,39 @@ export interface operations {
             };
         };
     };
+    create_source_line_claims_agents_source_lines_claims_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceLineClaimsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceLineClaimsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_slow_turns_agents_turns_slow_get: {
         parameters: {
             query?: {
@@ -20540,6 +20954,48 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BackfillEmbeddingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backfill_inline_data_url_media_agents_media_backfill_inline_data_urls_post: {
+        parameters: {
+            query?: {
+                /** @description When true, scan and report without writing media rows or blobs */
+                dry_run?: boolean;
+                /** @description Maximum source_lines rows to scan in this batch */
+                max_rows?: number;
+                /** @description Decoded byte budget */
+                max_bytes?: number;
+                /** @description Only scan source_lines rows with id greater than this value */
+                after_id?: number;
+                /** @description Required when dry_run=false */
+                confirmed_backup_gate?: boolean;
+                /** @description Minimum free bytes to leave on the media filesystem when writing */
+                disk_floor_bytes?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaBackfillInlineDataUrlsResponse"];
                 };
             };
             /** @description Validation Error */

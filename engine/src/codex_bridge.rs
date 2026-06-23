@@ -44,6 +44,7 @@ pub const LEGACY_LAUNCH_MODE_HEADLESS: &str = "headless";
 pub const PERSISTED_DETACHED_UI_LAUNCH_MODE: &str = LAUNCH_MODE_DETACHED_UI;
 const PAUSE_KIND_STRUCTURED_QUESTION: &str = "structured_question";
 const PAUSE_KIND_PERMISSION_PROMPT: &str = "permission_prompt";
+const PAUSE_KIND_PLAN_APPROVAL: &str = "plan_approval";
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "item/plan/delta",
     "item/reasoning/summaryTextDelta",
@@ -2677,7 +2678,9 @@ async fn handle_server_request(
         emit_runtime_updates(config, context, vec![update]).await;
     }
 
-    let pause_kind = if is_structured_pause_request_method(method) {
+    let pause_kind = if is_plan_approval_method(method) {
+        Some((PAUSE_KIND_PLAN_APPROVAL, config.hold_user_input_requests))
+    } else if is_structured_pause_request_method(method) {
         Some((PAUSE_KIND_STRUCTURED_QUESTION, config.hold_user_input_requests))
     } else if is_permission_approval_method(method) {
         Some((PAUSE_KIND_PERMISSION_PROMPT, config.hold_permission_requests))
@@ -2730,6 +2733,9 @@ async fn handle_server_request(
             "action": "decline",
             "content": Value::Null,
         }),
+        "item/plan/requestApproval" | "turn/plan/requestApproval" => json!({
+            "decision": if config.auto_approve { "accept" } else { "decline" }
+        }),
         "applyPatchApproval" | "execCommandApproval" => json!({
             "decision": if config.auto_approve { "Approved" } else { "Denied" }
         }),
@@ -2748,6 +2754,10 @@ fn is_structured_pause_request_method(method: &str) -> bool {
         method,
         "item/tool/requestUserInput" | "mcpServer/elicitation/request"
     )
+}
+
+fn is_plan_approval_method(method: &str) -> bool {
+    matches!(method, "item/plan/requestApproval" | "turn/plan/requestApproval")
 }
 
 fn is_permission_approval_method(method: &str) -> bool {
@@ -2793,6 +2803,9 @@ fn pause_request_title(method: &str, params: &Value) -> String {
         }
         return "Question waiting".to_string();
     }
+    if is_plan_approval_method(method) {
+        return "Plan approval required".to_string();
+    }
     if is_permission_approval_method(method) {
         return permission_approval_title(method, params);
     }
@@ -2820,6 +2833,9 @@ fn pause_request_summary(method: &str, params: &Value) -> String {
             return format!("{server} needs your answer before the agent can continue.");
         }
     }
+    if is_plan_approval_method(method) {
+        return "The agent needs approval before it can continue with this plan.".to_string();
+    }
     if is_permission_approval_method(method) {
         return "The agent needs your approval before it can continue.".to_string();
     }
@@ -2843,6 +2859,28 @@ fn pause_request_payload(method: &str, params: &Value) -> Value {
                 "changes": params.get("changes").cloned().unwrap_or(Value::Null),
                 "grantRoot": params.get("grantRoot").cloned().unwrap_or(Value::Null),
             },
+        });
+    }
+    if is_plan_approval_method(method) {
+        let question = extract_string(params, &["question"])
+            .or_else(|| extract_string(params, &["prompt"]))
+            .or_else(|| extract_string(params, &["plan"]))
+            .or_else(|| extract_string(params, &["proposal"]))
+            .unwrap_or_else(|| "Approve this plan?".to_string());
+        return json!({
+            "questions": [{
+                "id": "approval",
+                "question": question,
+                "options": [
+                    {"label": "Approve", "value": "approve"},
+                    {"label": "Reject", "value": "reject"}
+                ]
+            }],
+            "plan": params.get("plan").cloned().unwrap_or(Value::Null),
+            "steps": params.get("steps").cloned().unwrap_or(Value::Null),
+            "proposal": params.get("proposal").cloned().unwrap_or(Value::Null),
+            "turn_id": params.get("turnId").cloned().unwrap_or(Value::Null),
+            "item_id": params.get("itemId").cloned().unwrap_or(Value::Null),
         });
     }
     let mut question = serde_json::Map::new();
@@ -2959,6 +2997,13 @@ fn build_provider_pause_response(
                 Ok((json!({ "decision": "Approved" }), "resolved"))
             } else {
                 Ok((json!({ "decision": "Denied" }), "rejected"))
+            }
+        }
+        "item/plan/requestApproval" | "turn/plan/requestApproval" => {
+            if pause_decision_allows(decision) {
+                Ok((json!({ "decision": "accept" }), "resolved"))
+            } else {
+                Ok((json!({ "decision": "decline" }), "rejected"))
             }
         }
         other => bail!("unsupported pending pause request method: {other}"),
@@ -6958,6 +7003,33 @@ mod tests {
             "idle",
             None,
         );
+    }
+
+    #[test]
+    fn codex_plan_approval_payload_projects_binary_user_decision() {
+        let payload = pause_request_payload(
+            "item/plan/requestApproval",
+            &json!({
+                "plan": "1. Inspect the API. 2. Patch the handler. 3. Run tests.",
+                "turnId": "turn-1",
+                "itemId": "item-1"
+            }),
+        );
+
+        assert_eq!(payload["questions"][0]["id"], "approval");
+        assert_eq!(
+            payload["questions"][0]["question"],
+            "1. Inspect the API. 2. Patch the handler. 3. Run tests."
+        );
+        assert_eq!(
+            payload["questions"][0]["options"],
+            json!([
+                {"label": "Approve", "value": "approve"},
+                {"label": "Reject", "value": "reject"},
+            ])
+        );
+        assert_eq!(payload["turn_id"], "turn-1");
+        assert_eq!(payload["item_id"], "item-1");
     }
 
     #[test]

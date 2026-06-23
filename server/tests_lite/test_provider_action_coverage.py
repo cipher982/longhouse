@@ -19,6 +19,8 @@ def test_contract_operations_are_derived_from_managed_provider_contracts():
         "classify_subagents",
         "send_prompt",
         "send_async_prompt",
+        "structured_question",
+        "plan_approval",
         "abort",
         "reattach",
         "fork",
@@ -31,6 +33,33 @@ def test_contract_operations_are_derived_from_managed_provider_contracts():
     assert coverage["abort"].state == ActionCoverageState.SUPPORTED
     assert coverage["reattach"].state == ActionCoverageState.SUPPORTED
     assert coverage["send_async_prompt"].state == ActionCoverageState.UNKNOWN
+
+
+def test_provider_specific_pause_actions_are_derived_without_manual_matrix():
+    codex = derive_provider_action_coverage("codex")
+    opencode = derive_provider_action_coverage("opencode")
+    antigravity = derive_provider_action_coverage("antigravity")
+
+    assert codex["structured_question"].state == ActionCoverageState.SUPPORTED
+    assert codex["structured_question"].reason_code == ActionCoverageReasonCode.PROVIDER_PAUSE_ANSWER_SUPPORTED
+    assert codex["plan_approval"].state == ActionCoverageState.SUPPORTED
+    assert codex["plan_approval"].reason_code == ActionCoverageReasonCode.PROVIDER_PAUSE_ANSWER_SUPPORTED
+
+    assert opencode["structured_question"].state == ActionCoverageState.READ_ONLY
+    assert opencode["structured_question"].reason_code == ActionCoverageReasonCode.PROVIDER_PAUSE_DETECT_ONLY
+    assert antigravity["structured_question"].state == ActionCoverageState.READ_ONLY
+    assert antigravity["structured_question"].reason_code == ActionCoverageReasonCode.PROVIDER_PAUSE_DETECT_ONLY
+    assert opencode["plan_approval"].state == ActionCoverageState.UNKNOWN
+    assert opencode["plan_approval"].reason_code == ActionCoverageReasonCode.PROVIDER_SURFACE_UNPROVEN
+
+
+def test_declared_rich_provider_gaps_have_specific_reason_codes():
+    coverage = derive_provider_action_coverage("opencode")
+
+    assert coverage["switch_actor"].state == ActionCoverageState.UNKNOWN
+    assert coverage["switch_actor"].reason_code == ActionCoverageReasonCode.PROVIDER_GAP_DECLARED
+    assert coverage["background_task_status"].state == ActionCoverageState.UNKNOWN
+    assert coverage["background_task_status"].reason_code == ActionCoverageReasonCode.PROVIDER_GAP_DECLARED
 
 
 def test_contract_false_operation_derives_unsupported_without_manual_matrix_cell():

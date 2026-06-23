@@ -16,10 +16,11 @@ from zerg.utils.time import normalize_utc
 
 PAUSE_KIND_STRUCTURED_QUESTION = "structured_question"
 PAUSE_KIND_PERMISSION_PROMPT = "permission_prompt"
+PAUSE_KIND_PLAN_APPROVAL = "plan_approval"
 PENDING_STATUS = "pending"
 TERMINAL_STATUSES = {"resolved", "rejected", "failed", "expired"}
 ACTIVE_STATUSES = {PENDING_STATUS}
-QUESTION_PAYLOAD_KEYS = ("questions", "question", "prompt", "input", "schema")
+QUESTION_PAYLOAD_KEYS = ("questions", "question", "prompt", "input", "schema", "plan", "steps", "proposal")
 
 # How an answered pause request is delivered back to the provider. PULL = the
 # provider polls Longhouse for the resolved row (Claude PreToolUse hook); PUSH =
@@ -432,6 +433,23 @@ def _request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     explicit = _mapping(payload.get("request_payload") or payload.get("request_payload_json"))
     if explicit:
         return explicit
+    if _clean_str(payload.get("kind")) == PAUSE_KIND_PLAN_APPROVAL:
+        plan = payload.get("plan") or payload.get("proposal") or payload.get("summary") or payload.get("message")
+        question = _clean_str(payload.get("question") or payload.get("prompt") or plan) or "Approve this plan?"
+        return {
+            "questions": [
+                {
+                    "id": "approval",
+                    "question": question,
+                    "options": [
+                        {"label": "Approve", "value": "approve"},
+                        {"label": "Reject", "value": "reject"},
+                    ],
+                }
+            ],
+            "plan": plan,
+            "steps": payload.get("steps"),
+        }
     out: dict[str, Any] = {}
     for key in QUESTION_PAYLOAD_KEYS:
         if key in payload:

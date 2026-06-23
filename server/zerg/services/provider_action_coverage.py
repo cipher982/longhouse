@@ -28,7 +28,11 @@ class ActionCoverageReasonCode(StrEnum):
     CONTRACT_UNSUPPORTED = "contract_unsupported"
     CONTRACT_PROOF_MISSING = "contract_proof_missing"
     CONTRACT_PROVEN = "contract_proven"
+    PROVIDER_PAUSE_ANSWER_SUPPORTED = "provider_pause_answer_supported"
+    PROVIDER_PAUSE_DETECT_ONLY = "provider_pause_detect_only"
     PROVIDER_PROOF_UNDECLARED = "provider_proof_undeclared"
+    PROVIDER_SURFACE_UNPROVEN = "provider_surface_unproven"
+    PROVIDER_GAP_DECLARED = "provider_gap_declared"
     REQUIRED_PROOF_PASSED = "required_proof_passed"
     REQUIRED_PROOF_MISSING = "required_proof_missing"
     OBSERVATION_PROOF_UNDECLARED = "observation_proof_undeclared"
@@ -101,6 +105,14 @@ ACTION_QUESTIONS: tuple[ActionQuestion, ...] = (
         product_label="Send async prompt",
     ),
     ActionQuestion(
+        id="structured_question",
+        product_label="Structured question",
+    ),
+    ActionQuestion(
+        id="plan_approval",
+        product_label="Plan approval",
+    ),
+    ActionQuestion(
         id="abort",
         product_label="Interrupt turn",
         contract_operation="interrupt",
@@ -153,7 +165,11 @@ def derive_provider_action_coverage(
     proofs = dict(proof_results or {})
     coverage: dict[str, ActionCoverage] = {}
     for question in ACTION_QUESTIONS:
-        if question.contract_operation is not None:
+        provider_specific = _provider_specific_action_state(normalized_provider, question)
+        if provider_specific is not None:
+            state, reason_code, reason = provider_specific
+            proof_refs = ()
+        elif question.contract_operation is not None:
             state, reason_code, reason = _state_from_contract_operation(
                 provider=normalized_provider,
                 operation=question.contract_operation,
@@ -202,6 +218,60 @@ def derive_provider_action_coverage(
             reason=reason,
         )
     return coverage
+
+
+def _provider_specific_action_state(
+    provider: str,
+    question: ActionQuestion,
+) -> tuple[ActionCoverageState, ActionCoverageReasonCode, str] | None:
+    """Derive intentionally provider-shaped product actions.
+
+    These are still derived states, not a hand-maintained support matrix: the
+    branch exists only for action kinds whose meaning is provider-specific and
+    therefore cannot honestly be represented by a generic contract operation.
+    """
+
+    if question.id == "structured_question":
+        if provider == "codex":
+            return (
+                ActionCoverageState.SUPPORTED,
+                ActionCoverageReasonCode.PROVIDER_PAUSE_ANSWER_SUPPORTED,
+                "Codex structured question requests can be detected and answered through managed pause response.",
+            )
+        return (
+            ActionCoverageState.READ_ONLY,
+            ActionCoverageReasonCode.PROVIDER_PAUSE_DETECT_ONLY,
+            "Longhouse can detect structured questions for this provider, but answer delivery is not proven.",
+        )
+
+    if question.id == "plan_approval":
+        if provider == "codex":
+            return (
+                ActionCoverageState.SUPPORTED,
+                ActionCoverageReasonCode.PROVIDER_PAUSE_ANSWER_SUPPORTED,
+                "Codex plan approval requests use the managed pause-response path.",
+            )
+        return (
+            ActionCoverageState.UNKNOWN,
+            ActionCoverageReasonCode.PROVIDER_SURFACE_UNPROVEN,
+            "Plan approval semantics are not proven for this provider.",
+        )
+
+    if question.id == "switch_actor":
+        return (
+            ActionCoverageState.UNKNOWN,
+            ActionCoverageReasonCode.PROVIDER_GAP_DECLARED,
+            "Provider actor switching is not yet mapped to a Longhouse control contract.",
+        )
+
+    if question.id == "background_task_status":
+        return (
+            ActionCoverageState.UNKNOWN,
+            ActionCoverageReasonCode.PROVIDER_GAP_DECLARED,
+            "Background task status is not yet proven as a provider action surface.",
+        )
+
+    return None
 
 
 def derive_provider_action_coverage_from_artifact(

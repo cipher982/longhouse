@@ -16,6 +16,7 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.session_pause_requests import PAUSE_KIND_PLAN_APPROVAL
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
 from zerg.services.session_pause_requests import load_active_pause_request_map
 from zerg.services.session_pause_requests import serialize_pause_request_projection
@@ -96,6 +97,64 @@ def test_upsert_pause_request_serializes_structured_questions(tmp_path):
                 "options": [
                     {"label": "SQLite", "description": "Keep it local.", "value": "SQLite"},
                     {"label": "Postgres", "description": "Use a service.", "value": "Postgres"},
+                ],
+            }
+        ]
+    finally:
+        db.close()
+
+
+def test_runtime_plan_approval_event_projects_user_facing_approval_question(tmp_path):
+    factory = _make_db(tmp_path, "plan_approval_pause.db")
+    now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        session = _seed_session(db, started_at=now - timedelta(minutes=5))
+        runtime_key = f"codex:{session.id}"
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="pause_request",
+                    occurred_at=now,
+                    dedupe_key="plan-approval-1",
+                    payload={
+                        "kind": PAUSE_KIND_PLAN_APPROVAL,
+                        "provider_request_id": "plan-1",
+                        "request_key": f"codex:{session.id}:plan-1",
+                        "can_respond": True,
+                        "title": "Plan approval required",
+                        "summary": "The agent needs approval before it can continue with this plan.",
+                        "plan": "1. Inspect the API. 2. Patch the handler. 3. Run tests.",
+                    },
+                )
+            ],
+        )
+        db.commit()
+
+        row = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).one()
+        projection = serialize_pause_request_projection(row)
+
+        assert row.kind == PAUSE_KIND_PLAN_APPROVAL
+        assert projection is not None
+        assert projection["kind"] == PAUSE_KIND_PLAN_APPROVAL
+        assert projection["title"] == "Plan approval required"
+        assert projection["can_respond"] is True
+        assert projection["questions"] == [
+            {
+                "id": "approval",
+                "header": None,
+                "question": "1. Inspect the API. 2. Patch the handler. 3. Run tests.",
+                "multi_select": False,
+                "options": [
+                    {"label": "Approve", "description": None, "value": "approve"},
+                    {"label": "Reject", "description": None, "value": "reject"},
                 ],
             }
         ]

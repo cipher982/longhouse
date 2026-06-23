@@ -613,7 +613,7 @@ class SessionPauseRequestProjectionResponse(UTCBaseModel):
     id: str = Field(..., description="Pause request UUID")
     session_id: str = Field(..., description="Session UUID")
     runtime_key: str = Field(..., description="Runtime key that emitted this request")
-    kind: Literal["structured_question", "permission_prompt"] = Field(..., description="Pause request kind")
+    kind: Literal["structured_question", "permission_prompt", "plan_approval"] = Field(..., description="Pause request kind")
     status: Literal["pending", "resolved", "rejected", "failed", "expired"] = Field(..., description="Pause lifecycle status")
     provider: str = Field(..., description="Provider that emitted the request")
     can_respond: bool = Field(..., description="True when Longhouse can answer through a provider-native path")

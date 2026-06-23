@@ -301,6 +301,19 @@ struct APISessionThreadResponse: Codable, Hashable, Sendable {
     let sessions: [APISessionResponse]
 }
 
+struct APIEventMediaRefResponse: Codable, Hashable, Sendable {
+    let sha256: String
+    let mediaState: String
+    let mimeType: String?
+    let byteSize: Int?
+    let blobUrl: String
+    let thumbUrl: String?
+    let sourcePath: String?
+    let sourceOffset: Int?
+    let jsonPointer: String?
+    let originalKind: String
+}
+
 struct APIInputOriginResponse: Codable, Hashable, Sendable {
     let authoredVia: String
     let sessionInputId: Int?
@@ -335,6 +348,7 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let provisionalComplete: Bool?
     let reconciledEventId: Int?
     let toolCallState: APIToolCallState?
+    let mediaRefs: [APIEventMediaRefResponse]?
 }
 
 struct APISessionProjectionItemResponse: Codable, Hashable, Sendable {

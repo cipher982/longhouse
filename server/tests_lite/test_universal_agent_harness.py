@@ -1354,7 +1354,7 @@ def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path:
         assert all("verdict" in item for item in operation_evidence.values())
         assert all(item["canary"] == "provider_action_coverage" for item in operation_evidence.values())
         summary = result["data"]["summary"]
-        assert summary["green"] + summary["yellow"] + summary["red"] == 11
+        assert summary["green"] + summary["yellow"] + summary["red"] == len(operation_evidence)
 
 
 def test_projection_scenarios_emit_comparable_artifacts_for_all_providers(tmp_path: Path) -> None:

@@ -64,4 +64,31 @@ describe("SessionPauseRequestPanel — permission prompt", () => {
     expect(screen.getByText("Needs answer")).toBeInTheDocument();
     expect(screen.getByText("Send answer")).toBeInTheDocument();
   });
+
+  it("plan_approval renders approval language without a free-text box", () => {
+    const plan = permissionPrompt({
+      kind: "plan_approval",
+      title: "Plan approval required",
+      questions: [
+        {
+          id: "approval",
+          header: null,
+          question: "1. Inspect. 2. Patch. 3. Test.",
+          multi_select: false,
+          options: [
+            { label: "Approve", value: "approve", description: null },
+            { label: "Reject", value: "reject", description: null },
+          ],
+        },
+      ],
+    } as Partial<SessionPauseRequest>);
+
+    render(<SessionPauseRequestPanel pauseRequest={plan} onRespond={vi.fn()} />);
+
+    expect(screen.getByText("Plan approval")).toBeInTheDocument();
+    expect(screen.getByText("Approve")).toBeInTheDocument();
+    expect(screen.getByText("Reject")).toBeInTheDocument();
+    expect(screen.getByText("1. Inspect. 2. Patch. 3. Test.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Answer")).not.toBeInTheDocument();
+  });
 });

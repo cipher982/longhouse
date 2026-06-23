@@ -72,9 +72,10 @@ export function SessionPauseRequestPanel({
   onRespond,
 }: SessionPauseRequestPanelProps) {
   const questions = useMemo(() => pauseRequest.questions ?? [], [pauseRequest.questions]);
-  // Permission prompts (tool allow/deny) reuse this panel but read as Allow/Deny
-  // rather than Send answer/Cancel, and need no free-text answer.
+  // Binary provider gates reuse this panel but read as Allow/Deny or
+  // Approve/Reject rather than Send answer/Cancel.
   const isPermissionPrompt = pauseRequest.kind === "permission_prompt";
+  const isPlanApproval = pauseRequest.kind === "plan_approval";
   const [draft, setDraft] = useState<AnswerDraft>(() => initialDraft(questions));
   const [fallbackMessage, setFallbackMessage] = useState("");
   const [submitting, setSubmitting] = useState<"answer" | "reject" | null>(null);
@@ -92,8 +93,8 @@ export function SessionPauseRequestPanel({
   const canAnswer =
     pauseRequest.can_respond &&
     !submitted &&
-    // Permission prompts are pure allow/deny — no answer text required.
-    (isPermissionPrompt
+    // Permission prompts and plan approvals are structured decisions.
+    (isPermissionPrompt || isPlanApproval
       ? true
       : questions.length > 0
         ? questions.every((question, index) => answerHasValue(draft[questionKey(question, index)]))
@@ -171,8 +172,12 @@ export function SessionPauseRequestPanel({
       <div className="session-pause-panel__header">
         <MessageSquareIcon width={16} height={16} />
         <div className="session-pause-panel__title-block">
-          <span className="session-pause-panel__eyebrow">{isPermissionPrompt ? "Permission" : "Needs answer"}</span>
-          <h2>{pauseRequest.title?.trim() || (isPermissionPrompt ? "Tool permission" : "Provider question")}</h2>
+          <span className="session-pause-panel__eyebrow">
+            {isPermissionPrompt ? "Permission" : isPlanApproval ? "Plan approval" : "Needs answer"}
+          </span>
+          <h2>
+            {pauseRequest.title?.trim() || (isPermissionPrompt ? "Tool permission" : isPlanApproval ? "Plan approval" : "Provider question")}
+          </h2>
           <p>{detail}</p>
         </div>
       </div>
@@ -191,7 +196,7 @@ export function SessionPauseRequestPanel({
                   ) : null}
                   <span>{question.question}</span>
                 </legend>
-                {options.length > 0 ? (
+                {options.length > 0 && !isPlanApproval ? (
                   <div className="session-pause-options">
                     {options.map((option, optionIndex) => {
                       const value = optionValue(option);
@@ -225,7 +230,7 @@ export function SessionPauseRequestPanel({
                       );
                     })}
                   </div>
-                ) : pauseRequest.can_respond ? (
+                ) : pauseRequest.can_respond && !isPlanApproval ? (
                   <textarea
                     className="session-pause-freeform"
                     value={typeof currentValue === "string" ? currentValue : ""}
@@ -238,7 +243,7 @@ export function SessionPauseRequestPanel({
             );
           })}
         </div>
-      ) : pauseRequest.can_respond && !isPermissionPrompt ? (
+      ) : pauseRequest.can_respond && !isPermissionPrompt && !isPlanApproval ? (
         <textarea
           className="session-pause-freeform"
           value={fallbackMessage}
@@ -267,6 +272,10 @@ export function SessionPauseRequestPanel({
                   ? submitting === "answer"
                     ? "Allowing"
                     : "Allow"
+                  : isPlanApproval
+                    ? submitting === "answer"
+                      ? "Approving"
+                      : "Approve"
                   : submitting === "answer"
                     ? "Sending"
                     : "Send answer"}
@@ -285,6 +294,10 @@ export function SessionPauseRequestPanel({
                   ? submitting === "reject"
                     ? "Denying"
                     : "Deny"
+                  : isPlanApproval
+                    ? submitting === "reject"
+                      ? "Rejecting"
+                      : "Reject"
                   : submitting === "reject"
                     ? "Cancelling"
                     : "Cancel"}
