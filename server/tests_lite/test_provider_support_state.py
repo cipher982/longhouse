@@ -110,6 +110,11 @@ def test_support_state_uses_release_derived_action_coverage() -> None:
                 "opencode": {
                     "status": "ok",
                     "risk": "none",
+                    "schema_status": "ok",
+                    "artifact_kind_status": "ok",
+                    "artifact_provider_status": "ok",
+                    "freshness_status": "fresh",
+                    "local_version_matches": True,
                     "provider_action_coverage": {
                         "classify_subagents": {
                             "id": "classify_subagents",
@@ -146,6 +151,116 @@ def test_support_state_uses_release_derived_action_coverage() -> None:
     assert opencode["action_coverage"]["classify_subagents"]["state"] == "supported"
     assert "classify_subagents" in opencode["capabilities"]["supported_actions"]
     assert "send_prompt" in opencode["capabilities"]["supported_actions"]
+    assert opencode["capabilities"]["read_only_actions"] == ["fork"]
+
+
+def _opencode_release_info_with_coverage(**applicability) -> dict:
+    """An opencode release artifact that proves orchestration coverage green.
+
+    Callers override applicability fields (schema_status/freshness_status/
+    local_version_matches) to simulate stale or version-mismatched artifacts.
+    """
+    info = {
+        "status": "ok",
+        "risk": "none",
+        "schema_status": "ok",
+        "artifact_kind_status": "ok",
+        "artifact_provider_status": "ok",
+        "freshness_status": "fresh",
+        "local_version_matches": True,
+        "provider_action_coverage": {
+            "classify_subagents": {
+                "id": "classify_subagents",
+                "product_label": "Classify subagents",
+                "state": "supported",
+                "reason_code": "required_proof_passed",
+                "reason": "Required harness assertions passed.",
+                "proof_refs": [],
+            },
+            "fork": {
+                "id": "fork",
+                "product_label": "Create fork",
+                "state": "read_only",
+                "reason_code": "observation_proof_passed",
+                "reason": "Observation proof passed, but no Longhouse control contract exists.",
+                "proof_refs": [],
+            },
+        },
+    }
+    info.update(applicability)
+    return info
+
+
+def _collect_opencode_action_coverage(release_info: dict) -> dict:
+    support = collect_provider_support_state(
+        provider_clis={"opencode": {"path": "/opt/homebrew/bin/opencode", "source": "PATH"}},
+        provider_release_status={"statuses": {"opencode": release_info}},
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"opencode": ["send", "interrupt", "launch"]},
+        },
+    )
+    return support["providers"]["opencode"]
+
+
+def test_support_state_ignores_stale_release_action_coverage() -> None:
+    """A stale artifact must not paint orchestration coverage green."""
+    opencode = _collect_opencode_action_coverage(
+        _opencode_release_info_with_coverage(status="stale", freshness_status="stale")
+    )
+
+    # Local derivation, not the stale release proof: orchestration stays unknown.
+    assert opencode["action_coverage"]["classify_subagents"]["state"] == "unknown"
+    assert opencode["action_coverage"]["fork"]["state"] == "unknown"
+    assert "classify_subagents" not in opencode["capabilities"]["supported_actions"]
+    assert opencode["capabilities"]["read_only_actions"] == []
+
+
+def test_support_state_ignores_version_mismatched_release_action_coverage() -> None:
+    """An artifact generated for a different CLI version must not overlay."""
+    opencode = _collect_opencode_action_coverage(
+        _opencode_release_info_with_coverage(
+            status="candidate_newer_than_local",
+            local_version_matches=False,
+        )
+    )
+
+    assert opencode["action_coverage"]["classify_subagents"]["state"] == "unknown"
+    assert opencode["action_coverage"]["fork"]["state"] == "unknown"
+    assert "classify_subagents" not in opencode["capabilities"]["supported_actions"]
+    assert opencode["capabilities"]["read_only_actions"] == []
+
+
+def test_support_state_ignores_schema_mismatched_release_action_coverage() -> None:
+    """A schema-mismatched artifact must not overlay even if fresh and matching."""
+    opencode = _collect_opencode_action_coverage(
+        _opencode_release_info_with_coverage(status="schema_mismatch", schema_status="mismatch")
+    )
+
+    assert opencode["action_coverage"]["classify_subagents"]["state"] == "unknown"
+    assert opencode["action_coverage"]["fork"]["state"] == "unknown"
+
+
+def test_support_state_ignores_misidentified_release_action_coverage() -> None:
+    """A fresh, version-matched artifact for the wrong provider/kind must not overlay."""
+    opencode = _collect_opencode_action_coverage(
+        _opencode_release_info_with_coverage(
+            artifact_provider_status="mismatch",
+            artifact_kind_status="mismatch",
+        )
+    )
+
+    assert opencode["action_coverage"]["classify_subagents"]["state"] == "unknown"
+    assert opencode["action_coverage"]["fork"]["state"] == "unknown"
+
+
+def test_support_state_overlays_applicable_release_action_coverage() -> None:
+    """The positive control: a fresh, schema-ok, version-matched artifact overlays."""
+    opencode = _collect_opencode_action_coverage(_opencode_release_info_with_coverage())
+
+    assert opencode["action_coverage"]["classify_subagents"]["state"] == "supported"
+    assert opencode["action_coverage"]["fork"]["state"] == "read_only"
+    assert "classify_subagents" in opencode["capabilities"]["supported_actions"]
     assert opencode["capabilities"]["read_only_actions"] == ["fork"]
 
 

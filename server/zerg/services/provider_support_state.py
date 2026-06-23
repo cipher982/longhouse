@@ -285,11 +285,38 @@ def _operation_names_by_support(operations: Mapping[str, Mapping[str, Any]], *, 
     return [operation for operation, info in operations.items() if bool(info.get("supported")) == supported]
 
 
+def _release_action_coverage_applies(release_info: Mapping[str, Any]) -> bool:
+    """Whether a release artifact's action coverage applies to the installed CLI.
+
+    Mirrors the live-proof ``applies`` gate (provider_live_proof.py): release
+    proof is only trustworthy when its schema is current, its artifact kind and
+    provider identity match, it is fresh, and it was generated for the version of
+    the provider CLI actually installed. A stale, version-mismatched, or
+    misidentified artifact must NOT paint orchestration coverage green; the
+    surface falls back to local derivation (``unknown``) instead of inheriting a
+    stale supported/read_only cell.
+
+    Identity fields (artifact_kind_status / artifact_provider_status) are absent
+    on legacy/minimal release_info shapes; a missing identity status reads as
+    non-applicable, which under-trusts rather than over-trusts.
+    """
+
+    return (
+        str(release_info.get("schema_status") or "") == "ok"
+        and str(release_info.get("artifact_kind_status") or "") == "ok"
+        and str(release_info.get("artifact_provider_status") or "") == "ok"
+        and str(release_info.get("freshness_status") or "") == "fresh"
+        and release_info.get("local_version_matches") is True
+    )
+
+
 def _action_coverage(provider: str, *, release_info: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     coverage = serialize_provider_action_coverage(derive_provider_action_coverage(provider))
     raw = release_info.get("provider_action_coverage")
-    if isinstance(raw, Mapping):
-        # Release proof is the freshest evidence; local derivation keeps the full vocabulary present.
+    if isinstance(raw, Mapping) and _release_action_coverage_applies(release_info):
+        # Release proof is the freshest evidence, but only when it applies to the
+        # installed CLI version and is fresh. Local derivation keeps the full
+        # vocabulary present either way.
         coverage.update({str(action_id): dict(info) for action_id, info in raw.items() if isinstance(info, Mapping)})
     return coverage
 

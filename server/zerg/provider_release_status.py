@@ -30,6 +30,10 @@ PROVIDER_RELEASE_STATUS_URL_ENV = "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL"
 CODEX_RELEASE_STATUS_FILE_ENV = "LONGHOUSE_CODEX_RELEASE_STATUS_FILE"
 CODEX_RELEASE_STATUS_URL_ENV = "LONGHOUSE_CODEX_RELEASE_STATUS_URL"
 PROVIDER_STATUS_SCHEMA_VERSION = 1
+# The main release-proof artifact this status path is meant to classify. Mirrors
+# the live-proof artifact-kind gate: an artifact of a different kind (or for a
+# different provider) must not be trusted as this provider's release proof.
+RELEASE_PROOF_ARTIFACT_KIND = "provider_release_proof"
 DEFAULT_PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 _CONFIG_KEYS = (
@@ -314,6 +318,10 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
 
     schema_version = artifact.get("schema_version")
     schema_status = "ok" if schema_version == PROVIDER_STATUS_SCHEMA_VERSION else "mismatch"
+    artifact_kind = str(artifact.get("artifact_kind") or "").strip()
+    artifact_kind_status = "ok" if artifact_kind == RELEASE_PROOF_ARTIFACT_KIND else "mismatch"
+    artifact_provider = str(artifact.get("provider") or "").strip().lower()
+    artifact_provider_status = "ok" if artifact_provider == provider else "mismatch"
     generated_at = artifact.get("generated_at")
     generated_at_dt = _parse_rfc3339(generated_at)
     generated_at_age_seconds: int | None = None
@@ -373,6 +381,10 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
         "recommendation": artifact.get("recommendation"),
         "artifact_schema_version": schema_version,
         "schema_status": schema_status,
+        "artifact_kind": artifact_kind,
+        "artifact_kind_status": artifact_kind_status,
+        "artifact_provider": artifact_provider,
+        "artifact_provider_status": artifact_provider_status,
         "artifact_version": artifact_version,
         "current_version": current_version,
         "normalized_artifact_version": normalized_artifact,
