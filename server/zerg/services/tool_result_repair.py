@@ -7,6 +7,7 @@ that appear genuinely dropped or cannot be reconstructed.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Literal
 from uuid import UUID
@@ -22,6 +23,8 @@ from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.shipper.parser import parse_tool_result_events_from_raw_line
+
+_RECOVERED_OUTPUT_PREVIEW_CHARS = 500
 
 ToolResultFindingStatus = Literal[
     "recoverable",
@@ -71,15 +74,19 @@ def scan_orphan_tool_results(
     if max_source_lines_per_call < 1:
         raise ValueError("max_source_lines_per_call must be at least 1")
 
-    findings = [
-        _classify_orphan_call(
-            db,
-            call,
-            max_source_lines_per_call=max_source_lines_per_call,
-            archive_store=archive_store,
-        )
-        for call in _orphan_tool_calls(db, session_id=session_id, limit=limit)
-    ]
+    findings: list[OrphanToolResultFinding] = []
+    for call in _orphan_tool_calls(db, session_id=session_id, limit=limit):
+        try:
+            findings.append(
+                _classify_orphan_call(
+                    db,
+                    call,
+                    max_source_lines_per_call=max_source_lines_per_call,
+                    archive_store=archive_store,
+                )
+            )
+        except Exception as exc:
+            findings.append(_finding(call, "unparseable_result", f"classification failed: {type(exc).__name__}"))
     counts = {
         "recoverable": 0,
         "no_source_evidence": 0,
@@ -108,12 +115,15 @@ def _orphan_tool_calls(
     same_branch = or_(
         result.branch_id == AgentEvent.branch_id,
         and_(result.branch_id.is_(None), AgentEvent.branch_id.is_(None)),
+        result.branch_id.is_(None),
+        AgentEvent.branch_id.is_(None),
     )
     has_matching_result = (
         db.query(result.id)
         .filter(result.session_id == AgentEvent.session_id)
         .filter(result.role == "tool")
         .filter(result.tool_call_id == AgentEvent.tool_call_id)
+        .filter(result.event_origin == "durable")
         .filter(same_branch)
         .exists()
     )
@@ -122,6 +132,7 @@ def _orphan_tool_calls(
         .filter(AgentEvent.role == "assistant")
         .filter(AgentEvent.tool_name.isnot(None))
         .filter(AgentEvent.tool_call_id.isnot(None))
+        .filter(AgentEvent.event_origin == "durable")
         .filter(~has_matching_result)
     )
     if session_id is not None:
@@ -170,13 +181,14 @@ def _classify_orphan_call(
 def _candidate_source_lines(db: Session, call: AgentEvent, *, limit: int) -> list[AgentSourceLine]:
     if not call.source_path:
         return []
+    if call.branch_id is None:
+        return []
     query = (
         db.query(AgentSourceLine)
         .filter(AgentSourceLine.session_id == call.session_id)
         .filter(AgentSourceLine.source_path == call.source_path)
+        .filter(AgentSourceLine.branch_id == call.branch_id)
     )
-    if call.branch_id is not None:
-        query = query.filter(AgentSourceLine.branch_id == call.branch_id)
     if call.source_offset is not None:
         query = query.filter(AgentSourceLine.source_offset > int(call.source_offset))
     query = query.order_by(AgentSourceLine.source_offset.asc(), AgentSourceLine.revision.asc(), AgentSourceLine.id.asc()).limit(limit)
@@ -202,7 +214,19 @@ def _source_line_raw(
 def _raw_line_mentions_tool_result(raw: str, tool_call_id: str) -> bool:
     if not tool_call_id:
         return False
-    return '"tool_result"' in raw and tool_call_id in raw
+    try:
+        obj = json.loads(raw)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(obj, dict):
+        return False
+    content = obj.get("message", {}).get("content", [])
+    if not isinstance(content, list):
+        return False
+    return any(
+        isinstance(item, dict) and item.get("type") == "tool_result" and str(item.get("tool_use_id") or "") == tool_call_id
+        for item in content
+    )
 
 
 def _finding(
@@ -225,7 +249,15 @@ def _finding(
         status=status,
         reason=reason,
         recovered_event_uuid=recovered_event_uuid,
-        recovered_tool_output_text=recovered_tool_output_text,
+        recovered_tool_output_text=_preview(recovered_tool_output_text),
         recovered_source_path=recovered_source_path,
         recovered_source_offset=recovered_source_offset,
     )
+
+
+def _preview(value: str | None) -> str | None:
+    if value is None:
+        return None
+    if len(value) <= _RECOVERED_OUTPUT_PREVIEW_CHARS:
+        return value
+    return value[:_RECOVERED_OUTPUT_PREVIEW_CHARS]

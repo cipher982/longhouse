@@ -79,6 +79,22 @@ def test_scan_skips_already_paired_tool_call(tmp_path):
     assert result.recoverable == 0
 
 
+def test_scan_ignores_non_durable_streaming_tool_calls(tmp_path):
+    factory = _factory(tmp_path)
+    session_id = uuid4()
+    raw = _tool_result_raw("toolu_stream", [{"type": "image", "source": {"type": "base64", "data": "abc"}}])
+
+    with factory() as db:
+        _seed_session(db, session_id)
+        _seed_tool_call(db, session_id, tool_call_id="toolu_stream", event_origin="stream")
+        _seed_source_line(db, session_id, raw=raw, source_offset=100)
+        db.commit()
+
+        result = scan_orphan_tool_results(db, session_id=session_id)
+
+    assert result.scanned_orphan_calls == 0
+
+
 def test_scan_classifies_orphan_without_matching_source_result_as_genuine_gap(tmp_path):
     factory = _factory(tmp_path)
     session_id = uuid4()
@@ -112,6 +128,23 @@ def test_scan_classifies_matching_unparsed_result_separately(tmp_path):
     assert result.scanned_orphan_calls == 1
     assert result.unparseable_result == 1
     assert result.findings[0].status == "unparseable_result"
+
+
+def test_scan_contains_corrupt_source_line_without_aborting_batch(tmp_path):
+    factory = _factory(tmp_path)
+    session_id = uuid4()
+
+    with factory() as db:
+        _seed_session(db, session_id)
+        _seed_tool_call(db, session_id, tool_call_id="toolu_bad")
+        _seed_source_line(db, session_id, raw="", source_offset=100, raw_json_z=b"not-zstd", raw_json_codec=CODEC_ZSTD)
+        db.commit()
+
+        result = scan_orphan_tool_results(db, session_id=session_id)
+
+    assert result.scanned_orphan_calls == 1
+    assert result.unparseable_result == 1
+    assert result.findings[0].reason == "classification failed: ZstdError"
 
 
 def test_scan_reads_slim_source_line_from_archive(tmp_path):
@@ -189,6 +222,61 @@ def test_archive_scan_orphan_tool_results_cli_emits_json(tmp_path):
     assert payload["scanned_orphan_calls"] == 1
     assert payload["recoverable"] == 1
     assert payload["findings"][0]["status"] == "recoverable"
+    assert "source_path" not in payload["findings"][0]
+    assert "recovered_source_path" not in payload["findings"][0]
+    assert "recovered_tool_output_text" not in payload["findings"][0]
+
+
+def test_archive_scan_orphan_tool_results_cli_can_include_evidence(tmp_path):
+    db_path = tmp_path / "longhouse.db"
+    factory = _factory_for_db(db_path)
+    session_id = uuid4()
+    raw = _tool_result_raw("toolu_cli_evidence", [{"type": "image", "source": {"type": "base64", "data": "abc"}}])
+    with factory() as db:
+        _seed_session(db, session_id)
+        _seed_tool_call(db, session_id, tool_call_id="toolu_cli_evidence")
+        _seed_source_line(db, session_id, raw=raw, source_offset=100)
+        db.commit()
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "archive",
+            "scan-orphan-tool-results",
+            "--database-url",
+            f"sqlite:///{db_path}",
+            "--session-id",
+            str(session_id),
+            "--include-evidence",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["findings"][0]["source_path"] == _SOURCE_PATH
+    assert payload["findings"][0]["recovered_tool_output_text"] == "[image result]"
+
+
+def test_archive_scan_orphan_tool_results_cli_rejects_bad_session_id(tmp_path):
+    db_path = tmp_path / "longhouse.db"
+    _factory_for_db(db_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "archive",
+            "scan-orphan-tool-results",
+            "--database-url",
+            f"sqlite:///{db_path}",
+            "--session-id",
+            "not-a-uuid",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--session-id must be a valid UUID" in result.output
 
 
 _SOURCE_PATH = "/Users/davidrose/.claude/projects/longhouse/session.jsonl"
@@ -223,7 +311,7 @@ def _seed_session(db, session_id: UUID) -> AgentSession:
     return session
 
 
-def _seed_tool_call(db, session_id: UUID, *, tool_call_id: str) -> AgentEvent:
+def _seed_tool_call(db, session_id: UUID, *, tool_call_id: str, event_origin: str = "durable") -> AgentEvent:
     call = AgentEvent(
         session_id=session_id,
         branch_id=1,
@@ -235,6 +323,7 @@ def _seed_tool_call(db, session_id: UUID, *, tool_call_id: str) -> AgentEvent:
         source_path=_SOURCE_PATH,
         source_offset=0,
         event_uuid=f"call-{tool_call_id}",
+        event_origin=event_origin,
     )
     db.add(call)
     db.flush()
