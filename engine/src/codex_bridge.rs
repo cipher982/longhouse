@@ -44,6 +44,7 @@ pub const LEGACY_LAUNCH_MODE_HEADLESS: &str = "headless";
 pub const PERSISTED_DETACHED_UI_LAUNCH_MODE: &str = LAUNCH_MODE_DETACHED_UI;
 const PAUSE_KIND_STRUCTURED_QUESTION: &str = "structured_question";
 const PAUSE_KIND_PERMISSION_PROMPT: &str = "permission_prompt";
+const PAUSE_KIND_PLAN_APPROVAL: &str = "plan_approval";
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "item/plan/delta",
     "item/reasoning/summaryTextDelta",
@@ -2677,10 +2678,18 @@ async fn handle_server_request(
         emit_runtime_updates(config, context, vec![update]).await;
     }
 
-    let pause_kind = if is_structured_pause_request_method(method) {
-        Some((PAUSE_KIND_STRUCTURED_QUESTION, config.hold_user_input_requests))
+    let pause_kind = if is_plan_approval_request(method, &params) {
+        Some((PAUSE_KIND_PLAN_APPROVAL, config.hold_user_input_requests))
+    } else if is_structured_pause_request_method(method) {
+        Some((
+            PAUSE_KIND_STRUCTURED_QUESTION,
+            config.hold_user_input_requests,
+        ))
     } else if is_permission_approval_method(method) {
-        Some((PAUSE_KIND_PERMISSION_PROMPT, config.hold_permission_requests))
+        Some((
+            PAUSE_KIND_PERMISSION_PROMPT,
+            config.hold_permission_requests,
+        ))
     } else {
         None
     };
@@ -2694,7 +2703,9 @@ async fn handle_server_request(
             params: params.clone(),
         };
         let can_respond = hold_enabled && !config.auto_approve;
-        context.runtime.post_pause_request(&pending, kind, can_respond);
+        context
+            .runtime
+            .post_pause_request(&pending, kind, can_respond);
         Some((pending, can_respond))
     } else {
         None
@@ -2750,6 +2761,58 @@ fn is_structured_pause_request_method(method: &str) -> bool {
     )
 }
 
+fn is_plan_approval_request(method: &str, params: &Value) -> bool {
+    if method != "item/tool/requestUserInput" {
+        return false;
+    }
+    let Some(questions) = params.get("questions").and_then(Value::as_array) else {
+        return false;
+    };
+    if questions.len() != 1 {
+        return false;
+    }
+    let Some(question) = questions.first() else {
+        return false;
+    };
+    let question_text = [
+        extract_string(question, &["id"]),
+        extract_string(question, &["header"]),
+        extract_string(question, &["question"]),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_ascii_lowercase();
+    if !(question_text.contains("plan") || question_text.contains("proposal")) {
+        return false;
+    }
+
+    let option_labels: Vec<String> = question
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|options| {
+            options
+                .iter()
+                .filter_map(|option| extract_string(option, &["label"]))
+                .map(|label| label.to_ascii_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
+    let has_approve = option_labels.iter().any(|label| {
+        let trimmed = label.trim();
+        trimmed == "approve" || trimmed == "approved" || trimmed.contains("approve")
+    });
+    let has_reject = option_labels.iter().any(|label| {
+        let trimmed = label.trim();
+        trimmed == "reject"
+            || trimmed == "decline"
+            || trimmed == "deny"
+            || trimmed.contains("reject")
+    });
+    has_approve && has_reject
+}
+
 fn is_permission_approval_method(method: &str) -> bool {
     matches!(
         method,
@@ -2780,6 +2843,9 @@ fn codex_pause_request_key(session_id: &str, provider_request_id: &str) -> Strin
 
 fn pause_request_title(method: &str, params: &Value) -> String {
     if method == "item/tool/requestUserInput" {
+        if is_plan_approval_request(method, params) {
+            return "Plan approval required".to_string();
+        }
         if let Some(first) = params
             .get("questions")
             .and_then(Value::as_array)
@@ -2819,6 +2885,9 @@ fn pause_request_summary(method: &str, params: &Value) -> String {
         if let Some(server) = extract_string(params, &["serverName"]) {
             return format!("{server} needs your answer before the agent can continue.");
         }
+    }
+    if is_plan_approval_request(method, params) {
+        return "The agent needs approval before it can continue with this plan.".to_string();
     }
     if is_permission_approval_method(method) {
         return "The agent needs your approval before it can continue.".to_string();
@@ -4395,12 +4464,7 @@ impl BridgeRuntimeSink {
         })]);
     }
 
-    fn post_pause_request(
-        &self,
-        pending: &PendingProviderRequest,
-        kind: &str,
-        can_respond: bool,
-    ) {
+    fn post_pause_request(&self, pending: &PendingProviderRequest, kind: &str, can_respond: bool) {
         let observed_at = Utc::now();
         self.post_runtime_events_background(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
@@ -8447,6 +8511,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn plan_approval_detection_requires_plan_context_and_binary_decision() {
+        assert!(is_plan_approval_request(
+            "item/tool/requestUserInput",
+            &json!({
+                "questions": [{
+                    "id": "plan_decision",
+                    "header": "Plan approval",
+                    "question": "Approve this plan?",
+                    "options": [
+                        {"label": "Approve", "description": "Proceed"},
+                        {"label": "Reject", "description": "Revise"}
+                    ]
+                }]
+            }),
+        ));
+
+        assert!(!is_plan_approval_request(
+            "item/tool/requestUserInput",
+            &json!({
+                "questions": [{
+                    "id": "access",
+                    "header": "Approval",
+                    "question": "Approve shell access?",
+                    "options": [
+                        {"label": "Approve", "description": "Allow"},
+                        {"label": "Reject", "description": "Deny"}
+                    ]
+                }]
+            }),
+        ));
+
+        assert!(!is_plan_approval_request(
+            "mcpServer/elicitation/request",
+            &json!({"message": "Approve this plan?"}),
+        ));
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn held_user_input_request_can_be_answered_over_ipc_while_turn_start_waits() {
@@ -8574,6 +8676,148 @@ mod tests {
             pause_resolution["payload"]["response_payload"]
         );
         assert_eq!(ipc_response["response_text"], "Use red.");
+        ipc_task.await.unwrap().unwrap();
+
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": 1,
+                "result": {
+                    "turn": {"id": "turn-live", "status": "inProgress"}
+                }
+            })))
+            .unwrap();
+        let response = task.await.unwrap().unwrap();
+        assert_eq!(
+            extract_string(&response, &["turn", "id"]).as_deref(),
+            Some("turn-live")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn held_plan_approval_request_projects_distinct_kind_and_roundtrips() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
+        let temp = tempfile::tempdir().unwrap();
+
+        let client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx.clone()),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr_test".to_string());
+        context.runtime.thread_id = Some("thr_test".to_string());
+        context.runtime.runtime_tx = Some(runtime_tx);
+        let responder = PauseRequestResponder {
+            pending: context.pending_pause_requests.clone(),
+            outbound: outbound_tx,
+            runtime: context.runtime.clone(),
+        };
+        let mut config = make_test_run_config(&temp);
+        config.auto_approve = false;
+        config.hold_user_input_requests = true;
+
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": "srv-plan-1",
+                "method": "item/tool/requestUserInput",
+                "params": {
+                    "threadId": "thr_test",
+                    "turnId": "turn-live",
+                    "itemId": "plan-1",
+                    "questions": [{
+                        "id": "plan_decision",
+                        "header": "Plan approval",
+                        "question": "Approve this plan?",
+                        "options": [
+                            {"label": "Approve", "description": "Proceed with the plan"},
+                            {"label": "Reject", "description": "Revise the plan"}
+                        ]
+                    }]
+                }
+            })))
+            .unwrap();
+
+        let task = tokio::spawn(async move {
+            let mut client = client;
+            let mut context = context;
+            send_request_with_runtime(
+                &mut client,
+                "turn/start",
+                json!({
+                    "threadId": "thr_test",
+                    "input": [{"type": "text", "text": "continue"}],
+                }),
+                &config,
+                &mut context,
+            )
+            .await
+        });
+
+        let turn_start_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(turn_start_payload["method"], "turn/start");
+
+        let pause_event = recv_runtime_event_kind(&mut runtime_rx, "pause_request").await;
+        let request_key = pause_event["payload"]["request_key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(pause_event["payload"]["kind"], "plan_approval");
+        assert_eq!(pause_event["payload"]["can_respond"], true);
+        assert_eq!(pause_event["payload"]["title"], "Plan approval required");
+        assert_eq!(
+            pause_event["payload"]["summary"],
+            "The agent needs approval before it can continue with this plan."
+        );
+        assert_eq!(
+            pause_event["payload"]["request_payload"]["questions"][0]["id"],
+            "plan_decision"
+        );
+
+        let (mut ipc_client, ipc_server) = tokio::net::UnixStream::pair().unwrap();
+        let (ipc_tx, _ipc_rx) = mpsc::unbounded_channel();
+        let ipc_task = tokio::spawn(handle_ipc_connection(ipc_server, ipc_tx, Some(responder)));
+        let mut request = serde_json::to_vec(&json!({
+            "kind": "pause_response",
+            "request_key": request_key,
+            "decision": "answer",
+            "answers": {"plan_decision": ["Approve"]},
+            "message": "Approved."
+        }))
+        .unwrap();
+        request.push(b'\n');
+        ipc_client.write_all(&request).await.unwrap();
+        ipc_client.shutdown().await.unwrap();
+
+        let provider_response: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(provider_response["id"], "srv-plan-1");
+        assert_eq!(
+            provider_response["result"]["answers"]["plan_decision"]["answers"],
+            json!(["Approve"])
+        );
+
+        let pause_resolution = recv_runtime_event_kind(&mut runtime_rx, "pause_resolution").await;
+        assert_eq!(pause_resolution["payload"]["status"], "resolved");
+        assert_eq!(
+            pause_resolution["payload"]["provider_request_id"],
+            "srv-plan-1"
+        );
+
+        let mut ipc_response = Vec::new();
+        ipc_client.read_to_end(&mut ipc_response).await.unwrap();
+        let ipc_response: Value = serde_json::from_slice(&ipc_response).unwrap();
+        assert_eq!(ipc_response["ok"], true);
+        assert_eq!(ipc_response["status"], "resolved");
         ipc_task.await.unwrap().unwrap();
 
         events_tx
