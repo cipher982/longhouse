@@ -62,10 +62,15 @@ old artifacts.
 provider transcript continuity. Promote this alias kind to globally unique per
 provider:
 
-```sql
-CREATE UNIQUE INDEX ux_thread_aliases_provider_session_routing
-ON session_thread_aliases(provider, alias_value)
-WHERE alias_kind = 'provider_session_id';
+```python
+Index(
+    "ux_thread_aliases_provider_session_routing",
+    SessionThreadAlias.provider,
+    SessionThreadAlias.alias_value,
+    unique=True,
+    postgresql_where=(SessionThreadAlias.alias_kind == "provider_session_id"),
+    sqlite_where=(SessionThreadAlias.alias_kind == "provider_session_id"),
+)
 ```
 
 The existing per-thread unique index remains useful:
@@ -76,6 +81,12 @@ UNIQUE(thread_id, provider, alias_kind, alias_value)
 
 The new partial unique index adds the missing global guarantee for the one alias
 kind that must not split.
+
+This applies to every `provider_session_id` alias, including child/subagent
+threads. A provider-native id identifies one provider transcript continuity. If
+a root and child claim the same native id, they are the same thread from the
+provider's point of view and the graph resolver should attach new observations
+to the canonical thread instead of materializing a competing alias.
 
 ### The Core Resolves, Adapters Report
 
@@ -158,8 +169,9 @@ Rules:
 
 - normalize alias values before write
 - duplicate same-thread provider id is a no-op
-- duplicate different-thread provider id returns or records
-  `provider_binding_conflict`
+- duplicate different-thread provider id raises a typed
+  `ProviderSessionAliasConflict`; callers that can surface diagnostics catch it
+  and record `provider_binding_conflict`
 - callers must not swallow provider-id conflicts as ordinary idempotence
 
 ### `resolve_thread_by_provider_session_id`
@@ -192,6 +204,13 @@ Required order:
 4. Else create imported session/thread only when no managed ownership evidence
    blocks import.
 ```
+
+If steps 2 and 3 both match but point at different sessions, provider id wins
+for transcript routing and the mismatch is recorded as
+`provider_binding_conflict`. The ingest must not create a third row. The
+provider-native id is the durable transcript identity; `data.id` can be a local
+Longhouse routing hint, a deterministic imported fallback, or stale shipper
+state.
 
 This one ordering rule prevents the OpenCode split-row bug without a new table.
 
@@ -238,14 +257,18 @@ permanent yellow solely for missing binding.
 
 ## Migration Plan
 
-Phase 0: stop the split-row bug.
+Phase 0: stop the split-row bug and make the index safe.
 
 - Keep provider-specific compatibility lookups only as alias writers.
 - If old OpenCode/Codex/Claude state proves a native id maps to a Longhouse
   thread, write `provider_session_id` alias through `record_thread_alias`.
 - Change root ingest to resolve by provider id before creating a new session.
-- Add diagnostics for duplicate imported rows that share a provider-native id
-  with managed evidence.
+- Add diagnostics for duplicate imported rows that share provider-native id
+  evidence with managed sessions.
+- Before adding the unique index, clean or relink existing duplicate
+  `provider_session_id` aliases that would violate the index. Full historical
+  duplicate-session cleanup may be deferred, but index-blocking alias duplicates
+  may not.
 
 Phase 1: add the routing uniqueness guard.
 
@@ -279,7 +302,7 @@ Unit tests:
 
 - `provider_session_id` alias is globally unique per provider
 - duplicate same-thread provider id is idempotent
-- duplicate different-thread provider id records conflict
+- duplicate different-thread provider id raises `ProviderSessionAliasConflict`
 - resolver returns the existing thread for a root provider id
 - resolver returns `None` for missing provider id without synthetic fallback
 
@@ -343,7 +366,9 @@ This work is finished when the product invariant is observable at three levels:
 - No default timeline row is created solely because transcript ingest failed to
   find the managed thread.
 - Existing duplicate rows for the dogfood OpenCode incident are detected by a
-  diagnostic query or health check, even if full historical cleanup is deferred.
+  diagnostic query or health check. Any duplicate `provider_session_id` aliases
+  that would block the routing index are relinked or removed before index
+  creation.
 
 ### Behavior
 
