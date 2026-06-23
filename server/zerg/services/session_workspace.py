@@ -29,6 +29,7 @@ from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import SessionWorkspaceRevisionResponse
 from zerg.services.session_views import build_event_input_origin_map
+from zerg.services.session_views import build_event_media_ref_map
 from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_tool_call_state_map
@@ -438,6 +439,10 @@ def _build_projection_response(
         return head_branch_id_cache[current_session_id]
 
     projection_items: list[SessionProjectionItemResponse] = []
+    media_ref_map = build_event_media_ref_map(
+        store.db,
+        [item.event for item in projection.items if item.kind == "event" and item.event is not None],
+    )
     for item in projection.items:
         if item.kind == "event" and item.event is not None:
             projection_items.append(
@@ -452,6 +457,7 @@ def _build_projection_response(
                         head_branch_id=get_head_branch_id(item.session.id),
                         input_origin_map=input_origin_map,
                         tool_call_state_map=tool_call_state_map,
+                        media_ref_map=media_ref_map,
                         mobile_payload=mobile_payload,
                     ),
                 )

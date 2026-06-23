@@ -21,11 +21,14 @@ from typing import Optional
 from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy import and_
+from sqlalchemy import or_
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLaunchAttempt
+from zerg.models.agents import SessionMediaRef
 from zerg.models.agents import SessionTurn
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
@@ -1001,6 +1004,21 @@ class ToolCallState(str, Enum):
     DROPPED = "dropped"
 
 
+class EventMediaRefResponse(UTCBaseModel):
+    """Projected media reference for an event."""
+
+    sha256: str = Field(..., description="Content-addressed media sha256")
+    media_state: str = Field(..., description="Media lifecycle state: pending|present|failed")
+    mime_type: Optional[str] = Field(None, description="Stored media MIME type when present")
+    byte_size: Optional[int] = Field(None, description="Stored media byte size when present")
+    blob_url: str = Field(..., description="Browser/API blob URL")
+    thumb_url: Optional[str] = Field(None, description="Browser/API thumbnail URL when a thumbnail exists")
+    source_path: Optional[str] = Field(None, description="Provider source path that contained the media reference")
+    source_offset: Optional[int] = Field(None, description="Provider source byte offset for the media reference")
+    json_pointer: Optional[str] = Field(None, description="JSON pointer to the redacted media field when known")
+    original_kind: str = Field(..., description="Original media source kind")
+
+
 class EventResponse(UTCBaseModel):
     """Response for a single event."""
 
@@ -1039,6 +1057,10 @@ class EventResponse(UTCBaseModel):
             "Lifecycle of an assistant tool call: running|completed|dropped. "
             "Set only on assistant events that have tool_name. Server-authoritative."
         ),
+    )
+    media_refs: List[EventMediaRefResponse] = Field(
+        default_factory=list,
+        description="Content-addressed media objects referenced by this event",
     )
 
 
@@ -1728,6 +1750,7 @@ def build_event_response(
     head_branch_id: int | None,
     input_origin_map: dict[int, InputOriginResponse | None] | None = None,
     tool_call_state_map: dict[int, ToolCallState] | None = None,
+    media_ref_map: dict[int, list[EventMediaRefResponse]] | None = None,
     mobile_payload: bool = False,
 ) -> EventResponse:
     content_text = event.content_text
@@ -1770,6 +1793,80 @@ def build_event_response(
         provisional_complete=bool(event.provisional_complete),
         reconciled_event_id=event.reconciled_event_id,
         tool_call_state=tool_call_state,
+        media_refs=media_ref_map.get(int(event.id), []) if media_ref_map is not None else [],
+    )
+
+
+def build_event_media_ref_map(db, events: list[AgentEvent]) -> dict[int, list[EventMediaRefResponse]]:
+    """Return media refs keyed by AgentEvent id for a projected event page."""
+
+    if not events:
+        return {}
+
+    event_by_id = {int(event.id): event for event in events if getattr(event, "id", None) is not None}
+    event_ids = set(event_by_id)
+    session_ids = {event.session_id for event in events}
+    offsets = {int(event.source_offset) for event in events if event.source_offset is not None}
+    source_paths = {event.source_path for event in events if event.source_path}
+    if not event_ids and not (session_ids and offsets and source_paths):
+        return {}
+
+    filters = []
+    if event_ids:
+        filters.append(SessionMediaRef.event_id.in_(event_ids))
+    if session_ids and offsets and source_paths:
+        filters.append(
+            and_(
+                SessionMediaRef.session_id.in_(session_ids),
+                SessionMediaRef.source_offset.in_(offsets),
+                SessionMediaRef.source_path.in_(source_paths),
+            )
+        )
+    rows = (
+        db.query(SessionMediaRef, MediaObject)
+        .outerjoin(MediaObject, MediaObject.sha256 == SessionMediaRef.media_sha256)
+        .filter(or_(*filters))
+        .order_by(SessionMediaRef.id.asc())
+        .all()
+    )
+
+    result: dict[int, list[EventMediaRefResponse]] = {}
+    seen: set[tuple[int, str, int]] = set()
+    for ref, media in rows:
+        matched_ids: list[int] = []
+        if ref.event_id is not None and int(ref.event_id) in event_by_id:
+            matched_ids.append(int(ref.event_id))
+        for event_id, event in event_by_id.items():
+            if (
+                event.session_id == ref.session_id
+                and event.source_path == ref.source_path
+                and event.source_offset is not None
+                and ref.source_offset is not None
+                and int(event.source_offset) == int(ref.source_offset)
+            ):
+                matched_ids.append(event_id)
+
+        for event_id in sorted(set(matched_ids)):
+            key = (event_id, ref.media_sha256, int(ref.id))
+            if key in seen:
+                continue
+            seen.add(key)
+            result.setdefault(event_id, []).append(_event_media_ref_response(ref, media))
+    return result
+
+
+def _event_media_ref_response(ref: SessionMediaRef, media: MediaObject | None) -> EventMediaRefResponse:
+    return EventMediaRefResponse(
+        sha256=ref.media_sha256,
+        media_state=ref.media_state,
+        mime_type=media.mime_type if media is not None else None,
+        byte_size=int(media.byte_size) if media is not None and media.byte_size is not None else None,
+        blob_url=f"/api/media/{ref.media_sha256}/blob",
+        thumb_url=f"/api/media/{ref.media_sha256}/thumb" if media is not None and media.thumbnail_sha256 else None,
+        source_path=ref.source_path,
+        source_offset=int(ref.source_offset) if ref.source_offset is not None else None,
+        json_pointer=ref.json_pointer,
+        original_kind=ref.original_kind,
     )
 
 

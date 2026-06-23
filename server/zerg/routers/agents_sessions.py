@@ -83,6 +83,7 @@ from zerg.services.session_views import StartupContextResponse
 from zerg.services.session_views import WallResponse
 from zerg.services.session_views import build_active_session_response
 from zerg.services.session_views import build_event_input_origin_map
+from zerg.services.session_views import build_event_media_ref_map
 from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_session_turn_response
@@ -1011,6 +1012,7 @@ def get_session_events(
     boundary = store.get_active_context_boundary(session_id, branch_mode=branch_mode)
     head_branch_id = store.get_head_branch_id(session_id)
     input_origin_map = build_event_input_origin_map(store, events)
+    media_ref_map = build_event_media_ref_map(db, events)
     tool_call_state_map = build_tool_call_state_map(
         store.get_tool_call_pairing_events_for_page(
             session_id,
@@ -1052,6 +1054,7 @@ def get_session_events(
                 head_branch_id=head_branch_id,
                 input_origin_map=input_origin_map,
                 tool_call_state_map=tool_call_state_map,
+                media_ref_map=media_ref_map,
             )
             for e in events
         ],
@@ -1154,6 +1157,10 @@ def get_session_projection(
 
     with timing.span("build_response"):
         items: list[SessionProjectionItemResponse] = []
+        media_ref_map = build_event_media_ref_map(
+            db,
+            [item.event for item in projection.items if item.kind == "event" and item.event is not None],
+        )
         for item in projection.items:
             if item.kind == "event" and item.event is not None:
                 items.append(
@@ -1168,6 +1175,7 @@ def get_session_projection(
                             head_branch_id=get_head_branch_id(item.session.id),
                             input_origin_map=input_origin_map,
                             tool_call_state_map=tool_call_state_map,
+                            media_ref_map=media_ref_map,
                         ),
                     )
                 )

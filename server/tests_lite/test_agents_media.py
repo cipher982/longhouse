@@ -21,6 +21,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.main import api_app
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
@@ -336,6 +337,80 @@ def test_browser_media_thumbnail_streams_authorized_derivative(tmp_path, monkeyp
         assert fetched.content == thumb_payload
         assert fetched.headers["content-type"].startswith("image/webp")
         assert fetched.headers["x-media-sha256"] == thumb_digest
+    finally:
+        cleanup()
+
+
+def test_session_events_project_media_refs_from_source_coordinates(tmp_path, monkeypatch):
+    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    session_id = uuid4()
+    source_path = "/tmp/codex/session.jsonl"
+    source_offset = 123
+    payload = b"\x89PNG\r\nredacted-event-media"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    try:
+        with factory() as db:
+            _create_session(db, session_id)
+
+        claim = client.post(
+            "/agents/media/claims",
+            json={
+                "items": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "byte_size": len(payload),
+                        "session_id": str(session_id),
+                        "source_path": source_path,
+                        "source_offset": source_offset,
+                        "source_line_hash": hashlib.sha256(b"source-line").hexdigest(),
+                        "json_pointer": "/message/content/0/image_url",
+                        "provider": "codex",
+                        "original_kind": "inline_data_url",
+                    }
+                ]
+            },
+        )
+        assert claim.status_code == 200, claim.text
+
+        uploaded = client.put(f"/agents/media/{digest}", content=payload, headers={"Content-Type": "image/png"})
+        assert uploaded.status_code == 200, uploaded.text
+
+        with factory() as db:
+            event = AgentEvent(
+                session_id=session_id,
+                role="user",
+                content_text="[media redacted: image/png sha256=%s]" % digest,
+                timestamp=datetime.now(timezone.utc),
+                source_path=source_path,
+                source_offset=source_offset,
+                event_hash=hashlib.sha256(b"event").hexdigest(),
+            )
+            db.add(event)
+            db.commit()
+
+        response = client.get(f"/agents/sessions/{session_id}/events")
+        assert response.status_code == 200, response.text
+        events = response.json()["events"]
+        assert len(events) == 1
+
+        refs = events[0]["media_refs"]
+        assert refs == [
+            {
+                "sha256": digest,
+                "media_state": "present",
+                "mime_type": "image/png",
+                "byte_size": len(payload),
+                "blob_url": f"/api/media/{digest}/blob",
+                "thumb_url": None,
+                "source_path": source_path,
+                "source_offset": source_offset,
+                "json_pointer": "/message/content/0/image_url",
+                "original_kind": "inline_data_url",
+            }
+        ]
     finally:
         cleanup()
 
