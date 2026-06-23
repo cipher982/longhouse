@@ -364,10 +364,10 @@ fk = db.execute("PRAGMA foreign_key_check").fetchall()
 if fk:
     raise SystemExit(f"foreign_key_check failed: {fk[:10]}")
 
-integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
-print(f"integrity_check={integrity}", flush=True)
-if integrity != "ok":
-    raise SystemExit(f"integrity_check failed: {integrity}")
+quick = db.execute("PRAGMA quick_check").fetchone()[0]
+print(f"quick_check={quick}", flush=True)
+if quick != "ok":
+    raise SystemExit(f"quick_check failed: {quick}")
 
 db.execute(f"PRAGMA user_version={user_version}")
 db.commit()

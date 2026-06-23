@@ -17,14 +17,14 @@
 > only recent history, not the full corpus.
 >
 > **To do it right next time (do NOT just re-run this script as-is):**
-> 1. Replace `PRAGMA integrity_check` with `PRAGMA quick_check` in phase-e-build-slim
->    (integrity_check is pathological on FTS5+many-index DBs over this volume).
-> 2. Build the slim copy ONLINE against a snapshot, not in a multi-hour stopped
+> 1. Build the slim copy ONLINE against a snapshot, not in a multi-hour stopped
 >    window — stop only for a short delta + swap. (Removes the restart-collision and
 >    the long-outage problem entirely. This is the real fix; the restart-guard only
 >    detects the collision, doesn't avoid it.)
-> 3. Run Phase B export over the FULL history first, so the reclaim drops the whole
+> 2. Run Phase B export over the FULL history first, so the reclaim drops the whole
 >    ~60-88GB instead of ~30GB.
+> The pathological final `PRAGMA integrity_check` has been replaced with
+> `PRAGMA quick_check` in `phase-e-build-slim.py`; keep it that way.
 > The build/swap scripts (phase-e-reclaim.sh, phase-e-build-slim.py) + restart guard
 > + conditional owner-aware coverage all work and are committed — reusable once the
 > above are addressed. Related storage wins parked in docket: image dedup,

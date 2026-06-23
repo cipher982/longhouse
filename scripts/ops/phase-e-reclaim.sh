@@ -33,8 +33,8 @@ df -h /data "$BASE"
 ls -lh "$DB" "$DB"-wal "$DB"-shm "$BASE/archive" 2>/dev/null || true
 # NOTE: deliberately NO full-DB quick_check/integrity_check here. On this 117GB
 # tenant that scan runs multi-HOUR (the spec explicitly prohibits it) and adds no
-# safety the build does not already provide: build-slim runs integrity_check +
-# quick_check on the SLIM output (small, fast) and we keep the original DB as
+# safety the build does not already provide: build-slim runs quick_check on the
+# SLIM output (small, fast) and we keep the original DB as
 # rollback. Cheap instant diagnostics only.
 sqlite3 "$DB" 'PRAGMA journal_mode; PRAGMA page_count; PRAGMA freelist_count;'
 
