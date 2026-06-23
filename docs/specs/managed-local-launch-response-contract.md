@@ -95,7 +95,7 @@ Add a small helper near `_managed_local_launch_response`, for example:
 ```python
 def _validate_managed_local_launch_response_contract(
     *,
-    session: AgentSession,
+    session_id: str,
     response: ManagedLocalSessionLaunchResponse,
 ) -> None:
     ...
@@ -169,6 +169,11 @@ Suggested cases:
   <session_id>`
 - Antigravity: attach command empty, transport `antigravity_hook_inbox`
 
+The route should build and validate this response before publishing runtime
+state. If this impossible server-side contract fails after the launcher has
+committed rows, discard the just-created session and return the existing
+generic managed-launch 500 rather than leaving a phantom session in timeline.
+
 ## Acceptance Criteria
 
 - Managed-local launch responses are validated centrally before returning.
@@ -178,6 +183,8 @@ Suggested cases:
 - A transport response matrix test covers Claude, Codex, OpenCode, and
   Antigravity.
 - The managed-local launch route has explicit OpenCode response-shape coverage.
+- The managed-local launch route discards the just-created session and skips
+  timeline publish if response validation fails after the launcher commit.
 - The session-kernel projection comment explains synthetic provider ids in
   launch/control terms.
 

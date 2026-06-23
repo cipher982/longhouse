@@ -33,6 +33,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.services.managed_local_control import answer_pause_request_on_managed_local_session
@@ -1108,6 +1109,22 @@ async def launch_managed_local_this_device(
             detail="Managed local launch failed",
         )
 
+    try:
+        response = _managed_local_launch_response(db, result, owner_id=owner_id)
+    except Exception as exc:
+        logger.exception("Managed local launch response contract failed; discarding session")
+        try:
+            db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == result.session.id).delete(synchronize_session=False)
+            db.delete(result.session)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to discard invalid managed local launch session %s", getattr(result.session, "id", None))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Managed local launch failed",
+        ) from exc
+
     from zerg.services.session_pubsub import publish_session_runtime_update
 
     publish_session_runtime_update(
@@ -1116,7 +1133,7 @@ async def launch_managed_local_this_device(
         source="managed_local_launch",
     )
 
-    return _managed_local_launch_response(db, result, owner_id=owner_id)
+    return response
 
 
 @router.post("/launch", response_model=RemoteSessionLaunchResponse)

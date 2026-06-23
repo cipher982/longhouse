@@ -127,6 +127,48 @@ def test_managed_local_launch_response_contract_rejects_missing_claude_provider_
         )
 
 
+def test_this_device_launch_discards_session_when_response_contract_fails(monkeypatch, tmp_path):
+    from zerg.services import managed_local_launcher
+
+    reset_pubsub_for_test()
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        user, _runner = _seed_user_and_runner(db)
+        device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
+        client, api_app = _make_device_client(db, device_token)
+        timeline_seq = get_pubsub().peek_latest_seq(TOPIC_TIMELINE)
+        monkeypatch.setattr(
+            managed_local_launcher,
+            "get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda *_args: True),
+        )
+        monkeypatch.setattr(
+            managed_local_launcher,
+            "_initial_provider_session_id_for_spawn",
+            lambda _provider: None,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                json={
+                    "cwd": "/tmp/demo",
+                    "provider": "claude",
+                    "project": "demo",
+                    "native_claude_channels_available": True,
+                },
+            )
+        finally:
+            api_app.dependency_overrides = {}
+
+        assert response.status_code == 500, response.text
+        assert response.json()["detail"] == "Managed local launch failed"
+        assert db.query(AgentSession).count() == 0
+        assert db.query(SessionRuntimeState).count() == 0
+        assert get_pubsub().peek_latest_seq(TOPIC_TIMELINE) == timeline_seq
+
+
 def test_browser_managed_local_launch_route_is_absent():
     from zerg.main import app
 
