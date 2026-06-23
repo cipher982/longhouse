@@ -1109,10 +1109,9 @@ class SessionThread(AgentsBase):
 class SessionThreadAlias(AgentsBase):
     """Provider/source identity evidence for a thread.
 
-    Aliases are non-authoritative pointers used by ingest and adoption to
-    resolve which thread a new observation belongs to. They are NOT thread
-    identity. Multiple threads may share an alias value (e.g. copied
-    transcripts pre-divergence); resolver rules in Phase 2/4 handle that.
+    Aliases are provider/source evidence used by ingest and adoption to resolve
+    which thread a new observation belongs to. Provider session ids are routing
+    identity within a provider; compatibility/source aliases remain evidence.
     """
 
     __tablename__ = "session_thread_aliases"
@@ -1140,10 +1139,18 @@ class SessionThreadAlias(AgentsBase):
     __table_args__ = (
         Index("ix_thread_aliases_lookup", "provider", "alias_kind", "alias_value"),
         Index("ix_thread_aliases_thread_kind", "thread_id", "alias_kind"),
-        # Aliases are evidence, not identity, but a given thread shouldn't
-        # accumulate exact-duplicate alias rows. Globally the same alias may
-        # legitimately appear on multiple threads (copied transcripts before
-        # divergence) — this index intentionally scopes to thread.
+        # A provider's native session id is the stable routing key. If it points
+        # at two Longhouse threads, managed control can become read-only.
+        Index(
+            "ux_thread_aliases_provider_session_routing",
+            "provider",
+            "alias_value",
+            unique=True,
+            postgresql_where=text("alias_kind = 'provider_session_id'"),
+            sqlite_where=text("alias_kind = 'provider_session_id'"),
+        ),
+        # A given thread shouldn't accumulate exact-duplicate alias rows.
+        # Globally, non-provider-session aliases may still be shared.
         Index(
             "ux_thread_aliases_unique_per_thread",
             "thread_id",
@@ -1421,9 +1428,7 @@ class MachineControlOperation(AgentsBase):
             "provider",
             "command_type",
             unique=True,
-            sqlite_where=text("status IN ('queued', 'running') " "AND provider IS NOT NULL " "AND command_type = 'provider.live_proof'"),
-            postgresql_where=text(
-                "status IN ('queued', 'running') " "AND provider IS NOT NULL " "AND command_type = 'provider.live_proof'"
-            ),
+            sqlite_where=text("status IN ('queued', 'running') AND provider IS NOT NULL AND command_type = 'provider.live_proof'"),
+            postgresql_where=text("status IN ('queued', 'running') AND provider IS NOT NULL AND command_type = 'provider.live_proof'"),
         ),
     )

@@ -145,7 +145,20 @@ fn opencode_state_roots() -> Vec<PathBuf> {
     if let Some(root) = std::env::var_os("LONGHOUSE_OPENCODE_STATE_ROOT") {
         roots.push(PathBuf::from(root));
     }
+    if let Some(provider_home) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        roots.push(
+            PathBuf::from(provider_home)
+                .join("managed-local")
+                .join("opencode-server"),
+        );
+    }
     if let Some(home) = std::env::var_os("HOME") {
+        roots.push(
+            PathBuf::from(&home)
+                .join(".claude")
+                .join("managed-local")
+                .join("opencode-server"),
+        );
         roots.push(
             PathBuf::from(&home)
                 .join(".longhouse")
@@ -200,8 +213,13 @@ fn managed_longhouse_session_id_for_opencode_from_roots(
             if provider != "opencode" {
                 continue;
             }
-            if value.get("opencode_session_id").and_then(Value::as_str) != Some(provider_session_id)
-            {
+            let state_provider_session_id = value
+                .get("provider_session_id")
+                .or_else(|| value.get("opencode_session_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if state_provider_session_id != Some(provider_session_id) {
                 continue;
             }
             let Some(longhouse_session_id) = value
@@ -1811,6 +1829,38 @@ mod tests {
         assert_eq!(
             managed_longhouse_session_id_for_opencode_from_roots("ses_native", &[state_root])
                 .as_deref(),
+            Some(longhouse_session_id)
+        );
+    }
+
+    #[test]
+    fn managed_server_state_maps_provider_session_id_to_longhouse_session_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_root = temp.path().join("managed-local").join("opencode-server");
+        std::fs::create_dir_all(&state_root).unwrap();
+        let longhouse_session_id = "22222222-2222-4222-8222-222222222222";
+        std::fs::write(
+            state_root.join("22222222-2222-4222-8222-222222222222.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "session_id": longhouse_session_id,
+                "provider_session_id": "ses_native_server",
+                "server_url": "http://127.0.0.1:12345",
+                "pid": 12345,
+                "cwd": "/tmp/project",
+                "started_at": "2026-06-23T12:00:00Z",
+                "updated_at": "2026-06-23T12:00:01Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            managed_longhouse_session_id_for_opencode_from_roots(
+                "ses_native_server",
+                &[state_root]
+            )
+            .as_deref(),
             Some(longhouse_session_id)
         );
     }

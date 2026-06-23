@@ -407,10 +407,10 @@ def test_duplicate_ingest_replaces_managed_local_placeholder_provider_session_id
             cwd="/tmp/zerg",
             started_at=base_time,
             ended_at=base_time,
-                                                                                    user_messages=0,
+            user_messages=0,
             assistant_messages=0,
             tool_calls=0,
-                                )
+        )
         db.add(launched)
         db.commit()
 
@@ -468,7 +468,8 @@ def test_duplicate_ingest_replaces_managed_local_placeholder_provider_session_id
         # Session-identity-kernel cleanup: ``provider_session_id`` is no
         # longer a column. The native provider session id is recorded as a
         # ``session_thread_aliases`` row scoped to the primary thread.
-        from zerg.models.agents import SessionThread, SessionThreadAlias
+        from zerg.models.agents import SessionThread
+        from zerg.models.agents import SessionThreadAlias
 
         alias_values = {
             row[0]
@@ -479,6 +480,71 @@ def test_duplicate_ingest_replaces_managed_local_placeholder_provider_session_id
             .all()
         }
         assert native_provider_session_id in alias_values
+
+
+def test_ingest_provider_session_id_attaches_before_longhouse_id(tmp_path):
+    db_path = tmp_path / "provider_session_binding_precedes_longhouse_id.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    Base.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        base_time = datetime(2026, 6, 23, 12, 0, 0, tzinfo=timezone.utc)
+        managed_id = uuid4()
+        duplicate_id = uuid4()
+
+        first = store.ingest_session(
+            SessionIngest(
+                id=managed_id,
+                provider="opencode",
+                environment="development",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/tmp/zerg",
+                started_at=base_time,
+                provider_session_id="ses_native_shared",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="managed launch",
+                        timestamp=base_time,
+                        source_path="/tmp/opencode.db#ses_native_shared",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        assert first.session_id == managed_id
+        assert first.session_created is True
+
+        second = store.ingest_session(
+            SessionIngest(
+                id=duplicate_id,
+                provider="opencode",
+                environment="development",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/tmp/zerg",
+                started_at=base_time,
+                provider_session_id="ses_native_shared",
+                events=[
+                    EventIngest(
+                        role="assistant",
+                        content_text="native transcript append",
+                        timestamp=base_time,
+                        source_path="/tmp/opencode.db#ses_native_shared",
+                        source_offset=1,
+                    )
+                ],
+            )
+        )
+
+        assert second.session_id == managed_id
+        assert second.session_created is False
+        assert db.query(AgentSession).count() == 1
+        assert db.query(AgentSession).filter(AgentSession.id == duplicate_id).first() is None
 
 
 def test_duplicate_ingest_keeps_machine_label_when_generic_environment_arrives_later(tmp_path):

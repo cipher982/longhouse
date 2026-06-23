@@ -83,7 +83,7 @@ def test_kernel_roundtrip_minimal(tmp_path):
             project="zerg",
             device_id="dev-machine",
             started_at=now,
-                    )
+        )
         db.add(session)
         db.flush()
 
@@ -201,6 +201,7 @@ def test_alias_lookup_index(tmp_path):
     insp = inspect(engine)
     indexes = {idx["name"] for idx in insp.get_indexes("session_thread_aliases")}
     assert "ix_thread_aliases_lookup" in indexes
+    assert "ux_thread_aliases_provider_session_routing" in indexes
 
 
 def test_edge_lookup_indexes(tmp_path):
@@ -229,8 +230,7 @@ def test_launch_attempt_idempotency_index(tmp_path):
     # check is the persisted index SQL.
     with engine.connect() as conn:
         rows = conn.exec_driver_sql(
-            "SELECT sql FROM sqlite_master WHERE type='index' "
-            "AND name='ix_launch_attempts_session_client_request'"
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name='ix_launch_attempts_session_client_request'"
         ).fetchall()
     assert rows, "idempotency index not persisted"
     sql = (rows[0][0] or "").lower()
@@ -289,8 +289,7 @@ def test_one_primary_thread_per_session_enforced(tmp_path):
 def test_thread_alias_unique_per_thread_enforced(tmp_path):
     """Same alias tuple on the same thread must not duplicate.
 
-    Globally the same alias may appear on multiple threads (e.g. copied
-    transcripts pre-divergence) — the constraint scopes to thread.
+    Provider session ids additionally route globally within a provider.
     """
     from sqlalchemy.exc import IntegrityError
 
@@ -335,7 +334,7 @@ def test_thread_alias_unique_per_thread_enforced(tmp_path):
         else:
             raise AssertionError("expected IntegrityError on duplicate alias")
 
-    # Same alias on a *different* thread is allowed (evidence, not identity).
+    # The same provider_session_id on a different thread is rejected.
     with SessionLocal() as db:
         s = AgentSession(
             provider="codex",
@@ -367,4 +366,9 @@ def test_thread_alias_unique_per_thread_enforced(tmp_path):
                 alias_value="shared-codex",
             )
         )
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+        else:
+            raise AssertionError("expected IntegrityError on duplicate provider session alias")

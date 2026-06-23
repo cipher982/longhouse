@@ -34,6 +34,8 @@ OBS_KIND_RUNTIME_SIGNAL = "runtime_signal"
 OBS_KIND_BRIDGE_TRANSCRIPT_DELTA = "bridge_transcript_delta"
 OBS_KIND_CLIENT_RENDER = "client_render"
 OBS_KIND_SERVER_FANOUT = "server_fanout"
+OBS_KIND_PROVIDER_BINDING_CONFLICT = "provider_binding_conflict"
+OBS_KIND_PROVIDER_BINDING_MISSING = "provider_binding_missing"
 
 
 @dataclass(frozen=True)
