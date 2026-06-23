@@ -45,6 +45,7 @@ pub const PERSISTED_DETACHED_UI_LAUNCH_MODE: &str = LAUNCH_MODE_DETACHED_UI;
 const PAUSE_KIND_STRUCTURED_QUESTION: &str = "structured_question";
 const PAUSE_KIND_PERMISSION_PROMPT: &str = "permission_prompt";
 const PAUSE_KIND_PLAN_APPROVAL: &str = "plan_approval";
+const REPLY_TRANSPORT_MANAGED_PUSH: &str = "managed_push";
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "item/plan/delta",
     "item/reasoning/summaryTextDelta",
@@ -2953,6 +2954,7 @@ fn pause_provider_ref(pending: &PendingProviderRequest) -> Value {
     json!({
         "method": pending.method,
         "request_id": pending.request_id,
+        "reply_transport": REPLY_TRANSPORT_MANAGED_PUSH,
         "thread_id": extract_string(&pending.params, &["threadId"]),
         "turn_id": extract_string(&pending.params, &["turnId"]),
         "item_id": extract_string(&pending.params, &["itemId"]),
@@ -5566,6 +5568,23 @@ mod tests {
             resume_thread_path: None,
             launch_mode: BridgeLaunchMode::Tui,
         }
+    }
+
+    fn codex_plan_approval_params() -> Value {
+        json!({
+            "threadId": "thr_test",
+            "turnId": "turn-live",
+            "itemId": "plan-1",
+            "questions": [{
+                "id": "plan_decision",
+                "header": "Plan approval",
+                "question": "Approve this plan?",
+                "options": [
+                    {"label": "Approve", "description": "Proceed with the plan"},
+                    {"label": "Reject", "description": "Revise the plan"}
+                ]
+            }]
+        })
     }
 
     #[test]
@@ -8582,6 +8601,118 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn plan_approval_request_declines_immediately_without_hold() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (_events_tx, events_rx) = mpsc::unbounded_channel();
+        let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
+        let temp = tempfile::tempdir().unwrap();
+
+        let mut client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr_test".to_string());
+        context.runtime.thread_id = Some("thr_test".to_string());
+        context.runtime.runtime_tx = Some(runtime_tx);
+        let mut config = make_test_run_config(&temp);
+        config.auto_approve = false;
+        config.hold_user_input_requests = false;
+
+        handle_server_request(
+            &config,
+            json!({
+                "id": "srv-plan-1",
+                "method": "item/tool/requestUserInput",
+                "params": codex_plan_approval_params(),
+            }),
+            &mut client,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        let response_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(response_payload["id"], "srv-plan-1");
+        assert_eq!(
+            response_payload["result"]["answers"]["plan_decision"]["answers"],
+            json!([])
+        );
+        assert!(context.pending_pause_requests.lock().await.is_empty());
+
+        let pause_event = recv_runtime_event_kind(&mut runtime_rx, "pause_request").await;
+        assert_eq!(pause_event["payload"]["kind"], "plan_approval");
+        assert_eq!(pause_event["payload"]["can_respond"], false);
+        assert_eq!(
+            pause_event["payload"]["provider_ref"]["reply_transport"],
+            REPLY_TRANSPORT_MANAGED_PUSH
+        );
+    }
+
+    #[tokio::test]
+    async fn plan_approval_auto_answers_first_option_without_hold() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (_events_tx, events_rx) = mpsc::unbounded_channel();
+        let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
+        let temp = tempfile::tempdir().unwrap();
+
+        let mut client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr_test".to_string());
+        context.runtime.thread_id = Some("thr_test".to_string());
+        context.runtime.runtime_tx = Some(runtime_tx);
+        let config = make_test_run_config(&temp);
+
+        handle_server_request(
+            &config,
+            json!({
+                "id": "srv-plan-1",
+                "method": "item/tool/requestUserInput",
+                "params": codex_plan_approval_params(),
+            }),
+            &mut client,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        let response_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(response_payload["id"], "srv-plan-1");
+        assert_eq!(
+            response_payload["result"]["answers"]["plan_decision"]["answers"],
+            json!(["Approve"])
+        );
+        assert!(context.pending_pause_requests.lock().await.is_empty());
+
+        let pause_event = recv_runtime_event_kind(&mut runtime_rx, "pause_request").await;
+        assert_eq!(pause_event["payload"]["kind"], "plan_approval");
+        assert_eq!(pause_event["payload"]["can_respond"], false);
+        assert_eq!(
+            pause_event["payload"]["provider_ref"]["reply_transport"],
+            REPLY_TRANSPORT_MANAGED_PUSH
+        );
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn held_user_input_request_can_be_answered_over_ipc_while_turn_start_waits() {
@@ -8762,20 +8893,7 @@ mod tests {
             .send(StreamEvent::Rpc(json!({
                 "id": "srv-plan-1",
                 "method": "item/tool/requestUserInput",
-                "params": {
-                    "threadId": "thr_test",
-                    "turnId": "turn-live",
-                    "itemId": "plan-1",
-                    "questions": [{
-                        "id": "plan_decision",
-                        "header": "Plan approval",
-                        "question": "Approve this plan?",
-                        "options": [
-                            {"label": "Approve", "description": "Proceed with the plan"},
-                            {"label": "Reject", "description": "Revise the plan"}
-                        ]
-                    }]
-                }
+                "params": codex_plan_approval_params()
             })))
             .unwrap();
 
@@ -8806,6 +8924,10 @@ mod tests {
             .to_string();
         assert_eq!(pause_event["payload"]["kind"], "plan_approval");
         assert_eq!(pause_event["payload"]["can_respond"], true);
+        assert_eq!(
+            pause_event["payload"]["provider_ref"]["reply_transport"],
+            REPLY_TRANSPORT_MANAGED_PUSH
+        );
         assert_eq!(pause_event["payload"]["title"], "Plan approval required");
         assert_eq!(
             pause_event["payload"]["summary"],
