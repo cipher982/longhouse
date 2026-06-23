@@ -79,6 +79,80 @@ def test_scan_skips_already_paired_tool_call(tmp_path):
     assert result.recoverable == 0
 
 
+def test_scan_does_not_pair_branched_call_with_legacy_null_branch_result(tmp_path):
+    factory = _factory(tmp_path)
+    session_id = uuid4()
+    raw = _tool_result_raw("toolu_branch", "done on branch")
+
+    with factory() as db:
+        _seed_session(db, session_id)
+        _seed_tool_call(db, session_id, tool_call_id="toolu_branch", branch_id=1)
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                branch_id=None,
+                role="tool",
+                tool_output_text="legacy branchless result",
+                tool_call_id="toolu_branch",
+                timestamp=_ts(2),
+                source_path=_SOURCE_PATH,
+                source_offset=100,
+                event_origin="durable",
+            )
+        )
+        _seed_source_line(db, session_id, raw=raw, source_offset=100, branch_id=1)
+        db.commit()
+
+        result = scan_orphan_tool_results(db, session_id=session_id)
+
+    assert result.scanned_orphan_calls == 1
+    assert result.recoverable == 1
+    assert result.findings[0].recovered_tool_output_text == "done on branch"
+
+
+def test_scan_pairs_legacy_null_branch_call_with_null_branch_result(tmp_path):
+    factory = _factory(tmp_path)
+    session_id = uuid4()
+
+    with factory() as db:
+        _seed_session(db, session_id)
+        _seed_tool_call(db, session_id, tool_call_id="toolu_legacy", branch_id=None)
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                branch_id=None,
+                role="tool",
+                tool_output_text="legacy done",
+                tool_call_id="toolu_legacy",
+                timestamp=_ts(2),
+                source_path=_SOURCE_PATH,
+                source_offset=100,
+                event_origin="durable",
+            )
+        )
+        db.commit()
+
+        result = scan_orphan_tool_results(db, session_id=session_id)
+
+    assert result.scanned_orphan_calls == 0
+
+
+def test_scan_explains_unscannable_null_branch_call(tmp_path):
+    factory = _factory(tmp_path)
+    session_id = uuid4()
+
+    with factory() as db:
+        _seed_session(db, session_id)
+        _seed_tool_call(db, session_id, tool_call_id="toolu_no_branch", branch_id=None)
+        db.commit()
+
+        result = scan_orphan_tool_results(db, session_id=session_id)
+
+    assert result.scanned_orphan_calls == 1
+    assert result.no_source_evidence == 1
+    assert result.findings[0].reason == "tool call has no branch_id"
+
+
 def test_scan_ignores_non_durable_streaming_tool_calls(tmp_path):
     factory = _factory(tmp_path)
     session_id = uuid4()
@@ -191,6 +265,26 @@ def test_scan_reads_slim_source_line_from_archive(tmp_path):
     assert result.scanned_orphan_calls == 1
     assert result.recoverable == 1
     assert result.findings[0].recovered_tool_output_text == "[tool references: TaskCreate, TaskUpdate]"
+
+
+def test_scan_truncates_recovered_tool_output_preview(tmp_path):
+    factory = _factory(tmp_path)
+    session_id = uuid4()
+    output = "x" * 600
+    raw = _tool_result_raw("toolu_long", output)
+
+    with factory() as db:
+        _seed_session(db, session_id)
+        _seed_tool_call(db, session_id, tool_call_id="toolu_long")
+        _seed_source_line(db, session_id, raw=raw, source_offset=100)
+        db.commit()
+
+        result = scan_orphan_tool_results(db, session_id=session_id)
+
+    preview = result.findings[0].recovered_tool_output_text
+    assert preview is not None
+    assert len(preview) == 503
+    assert preview.endswith("...")
 
 
 def test_archive_scan_orphan_tool_results_cli_emits_json(tmp_path):
@@ -311,10 +405,17 @@ def _seed_session(db, session_id: UUID) -> AgentSession:
     return session
 
 
-def _seed_tool_call(db, session_id: UUID, *, tool_call_id: str, event_origin: str = "durable") -> AgentEvent:
+def _seed_tool_call(
+    db,
+    session_id: UUID,
+    *,
+    tool_call_id: str,
+    branch_id: int | None = 1,
+    event_origin: str = "durable",
+) -> AgentEvent:
     call = AgentEvent(
         session_id=session_id,
-        branch_id=1,
+        branch_id=branch_id,
         role="assistant",
         tool_name="Bash",
         tool_input_json={"command": "echo hi"},
@@ -339,13 +440,14 @@ def _seed_source_line(
     raw_json_z: bytes | None = None,
     raw_json_codec: int = CODEC_ZSTD,
     line_hash: str | None = None,
+    branch_id: int | None = 1,
 ) -> AgentSourceLine:
     row = AgentSourceLine(
         session_id=session_id,
         thread_id=None,
         source_path=_SOURCE_PATH,
         source_offset=source_offset,
-        branch_id=1,
+        branch_id=branch_id,
         revision=1,
         is_branch_copy=0,
         raw_json="" if raw_json_codec == CODEC_ZSTD else raw,

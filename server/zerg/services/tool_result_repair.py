@@ -115,8 +115,6 @@ def _orphan_tool_calls(
     same_branch = or_(
         result.branch_id == AgentEvent.branch_id,
         and_(result.branch_id.is_(None), AgentEvent.branch_id.is_(None)),
-        result.branch_id.is_(None),
-        AgentEvent.branch_id.is_(None),
     )
     has_matching_result = (
         db.query(result.id)
@@ -148,6 +146,11 @@ def _classify_orphan_call(
     max_source_lines_per_call: int,
     archive_store: FilesystemArchiveStore | None,
 ) -> OrphanToolResultFinding:
+    if not call.source_path:
+        return _finding(call, "no_source_evidence", "tool call has no source_path")
+    if call.branch_id is None:
+        return _finding(call, "no_source_evidence", "tool call has no branch_id")
+
     source_lines = _candidate_source_lines(db, call, limit=max_source_lines_per_call)
     if not source_lines:
         return _finding(call, "no_source_evidence", "no source_lines rows after the tool call")
@@ -179,10 +182,6 @@ def _classify_orphan_call(
 
 
 def _candidate_source_lines(db: Session, call: AgentEvent, *, limit: int) -> list[AgentSourceLine]:
-    if not call.source_path:
-        return []
-    if call.branch_id is None:
-        return []
     query = (
         db.query(AgentSourceLine)
         .filter(AgentSourceLine.session_id == call.session_id)
@@ -260,4 +259,4 @@ def _preview(value: str | None) -> str | None:
         return None
     if len(value) <= _RECOVERED_OUTPUT_PREVIEW_CHARS:
         return value
-    return value[:_RECOVERED_OUTPUT_PREVIEW_CHARS]
+    return f"{value[:_RECOVERED_OUTPUT_PREVIEW_CHARS]}..."
