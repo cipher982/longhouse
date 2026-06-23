@@ -1680,6 +1680,7 @@ class AgentsStore:
             )
 
         resolved_child_thread = None
+        resolved_provider_thread = None
         existing = None
         observed_lineage = observed_lineage_from_evidence(
             provider=data.provider,
@@ -1729,6 +1730,29 @@ class AgentsStore:
                     parent_provider_session_id=data.parent_provider_session_id,
                 )
                 session_id = parent_session.id
+
+        if existing is None and data.provider_session_id:
+            resolved_provider_thread = resolve_thread_by_provider_session_id(
+                self.db,
+                provider=data.provider,
+                provider_session_id=data.provider_session_id,
+            )
+            if resolved_provider_thread is not None:
+                provider_session = self.db.query(AgentSession).filter(AgentSession.id == resolved_provider_thread.session_id).first()
+                if provider_session is not None:
+                    if session_id != provider_session.id:
+                        logger.warning(
+                            "Provider session binding resolved mismatched ingest id: "
+                            "provider=%s provider_session_id=%s ingest_session_id=%s "
+                            "resolved_session_id=%s thread_id=%s",
+                            data.provider,
+                            data.provider_session_id,
+                            session_id,
+                            provider_session.id,
+                            resolved_provider_thread.id,
+                        )
+                    existing = provider_session
+                    session_id = provider_session.id
 
         if existing is None:
             existing = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -1859,7 +1883,7 @@ class AgentsStore:
                 alias_value=str(data.parent_provider_session_id),
             )
 
-        thread = resolved_child_thread or primary_thread
+        thread = resolved_child_thread or resolved_provider_thread or primary_thread
         thread_id = thread.id
         if resolved_child_thread is not None:
             self._record_lineage_edge_for_ingest(

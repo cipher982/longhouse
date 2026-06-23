@@ -1687,11 +1687,71 @@ def _migrate_agents_columns(engine: Engine) -> None:
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_thread_id ON events(thread_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_source_lines_thread_id ON source_lines(thread_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_observations_thread_id ON session_observations(thread_id)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_runtime_state_thread_id " "ON session_runtime_state(thread_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_runtime_state_thread_id ON session_runtime_state(thread_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_runtime_state_run_id ON session_runtime_state(run_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_turns_thread_id ON session_turns(thread_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_turns_run_id ON session_turns(run_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_inputs_thread_id ON session_inputs(thread_id)"))
+            # Provider native session ids are routing identity within a
+            # provider. Prefer an attached/control-capable alias when cleaning
+            # up historical duplicates so managed sessions keep their owner.
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM session_thread_aliases
+                    WHERE alias_kind = 'provider_session_id'
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM session_threads t
+                        WHERE t.id = session_thread_aliases.thread_id
+                      )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    DELETE FROM session_thread_aliases
+                    WHERE id IN (
+                        WITH ranked AS (
+                            SELECT
+                                a.id,
+                                ROW_NUMBER() OVER (
+                                    PARTITION BY a.provider, a.alias_value
+                                    ORDER BY
+                                        CASE
+                                            WHEN EXISTS (
+                                                SELECT 1
+                                                FROM session_runs r
+                                                JOIN session_connections c ON c.run_id = r.id
+                                                WHERE r.thread_id = a.thread_id
+                                                  AND (
+                                                    c.can_send_input = 1
+                                                    OR c.state IN ('attached', 'degraded')
+                                                  )
+                                            )
+                                            THEN 0 ELSE 1
+                                        END,
+                                        CASE WHEN t.is_primary = 1 THEN 0 ELSE 1 END,
+                                        t.created_at ASC,
+                                        a.id ASC
+                                ) AS rn
+                            FROM session_thread_aliases a
+                            JOIN session_threads t ON t.id = a.thread_id
+                            WHERE a.alias_kind = 'provider_session_id'
+                        )
+                        SELECT id FROM ranked WHERE rn > 1
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ux_thread_aliases_provider_session_routing "
+                    "ON session_thread_aliases(provider, alias_value) "
+                    "WHERE alias_kind = 'provider_session_id'"
+                )
+            )
             # One control attachment per (run, control_plane) — capability
             # projection invariant. Phase 2 upsert depends on this.
             conn.execute(
@@ -1819,7 +1879,7 @@ def _auto_add_missing_columns(
     for table_name, col_name, reason in skipped:
         if reason == "python_default_only_no_server_default":
             logger.info(
-                "auto-derive skip: %s.%s has Python default= but no server_default; " "leaving for imperative migrator",
+                "auto-derive skip: %s.%s has Python default= but no server_default; leaving for imperative migrator",
                 table_name,
                 col_name,
             )

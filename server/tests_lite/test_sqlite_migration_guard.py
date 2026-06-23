@@ -33,6 +33,8 @@ def _migrate_agents_columns(engine):
     _pre_migrate_session_inputs_identity_columns(engine)
     _auto_add_missing_columns(engine, Base.metadata, apply=True)
     _migrate_agents_columns_raw(engine)
+
+
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
@@ -123,6 +125,147 @@ def test_sqlite_migration_renames_session_input_request_identity(tmp_path):
     assert row.delivery_request_id is None
     assert any(index[1] == "ix_session_inputs_session_owner_client_request" for index in indexes)
     assert all(index[1] != "ix_session_inputs_session_owner_request" for index in indexes)
+
+
+def test_sqlite_migration_adds_provider_session_alias_unique_index(tmp_path):
+    db_path = tmp_path / "provider_session_alias_index_migration.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE sessions (
+                id VARCHAR(36) PRIMARY KEY,
+                provider VARCHAR(50) NOT NULL,
+                environment VARCHAR(20),
+                project VARCHAR(255),
+                device_id VARCHAR(255),
+                cwd TEXT,
+                started_at DATETIME NOT NULL,
+                user_messages INTEGER DEFAULT 0,
+                assistant_messages INTEGER DEFAULT 0,
+                tool_calls INTEGER DEFAULT 0,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE session_threads (
+                id VARCHAR(36) PRIMARY KEY,
+                session_id VARCHAR(36) NOT NULL,
+                provider VARCHAR(64) NOT NULL,
+                parent_thread_id VARCHAR(36),
+                branch_kind VARCHAR(32) NOT NULL,
+                is_primary INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME,
+                updated_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE session_thread_aliases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                thread_id VARCHAR(36) NOT NULL,
+                provider VARCHAR(64) NOT NULL,
+                alias_kind VARCHAR(48) NOT NULL,
+                alias_value VARCHAR(1024) NOT NULL,
+                first_seen_at DATETIME,
+                last_seen_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE session_runs (
+                id VARCHAR(36) PRIMARY KEY,
+                thread_id VARCHAR(36) NOT NULL,
+                provider VARCHAR(64) NOT NULL,
+                host_id VARCHAR(255),
+                started_at DATETIME
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE session_connections (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id VARCHAR(36) NOT NULL,
+                control_plane VARCHAR(64) NOT NULL,
+                acquisition_kind VARCHAR(32) NOT NULL,
+                state VARCHAR(32) NOT NULL,
+                can_send_input INTEGER
+            )
+            """
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO sessions (id, provider, environment, started_at)
+                VALUES
+                  ('session-old', 'opencode', 'development', '2026-06-23T12:00:00Z'),
+                  ('session-managed', 'opencode', 'development', '2026-06-23T12:00:00Z')
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO session_threads (id, session_id, provider, branch_kind, is_primary, created_at)
+                VALUES
+                  ('thread-old', 'session-old', 'opencode', 'root', 1, '2026-06-23T12:00:00Z'),
+                  ('thread-managed', 'session-managed', 'opencode', 'root', 1, '2026-06-23T12:00:01Z')
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO session_thread_aliases (thread_id, provider, alias_kind, alias_value)
+                VALUES
+                  ('thread-old', 'opencode', 'provider_session_id', 'ses-shared'),
+                  ('thread-managed', 'opencode', 'provider_session_id', 'ses-shared'),
+                  ('thread-missing', 'opencode', 'provider_session_id', 'ses-shared')
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO session_runs (id, thread_id, provider)
+                VALUES ('run-managed', 'thread-managed', 'opencode')
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO session_connections (run_id, control_plane, acquisition_kind, state, can_send_input)
+                VALUES ('run-managed', 'opencode_bridge', 'spawned_control', 'attached', 1)
+                """
+            )
+        )
+
+    _migrate_agents_columns(engine)
+
+    with engine.connect() as conn:
+        aliases = conn.execute(
+            text(
+                """
+                SELECT thread_id
+                FROM session_thread_aliases
+                WHERE provider = 'opencode'
+                  AND alias_kind = 'provider_session_id'
+                  AND alias_value = 'ses-shared'
+                """
+            )
+        ).fetchall()
+        indexes = conn.execute(text("PRAGMA index_list(session_thread_aliases)")).fetchall()
+
+    assert [row.thread_id for row in aliases] == ["thread-managed"]
+    assert any(index[1] == "ux_thread_aliases_provider_session_routing" for index in indexes)
 
 
 def test_sqlite_migration_adds_current_model_columns(tmp_path):
@@ -250,7 +393,9 @@ def test_sqlite_migration_adds_current_model_columns(tmp_path):
     assert not missing_event_columns, f"events migration missing columns: {missing_event_columns}"
     assert not missing_branch_columns, f"session_branches migration missing columns: {missing_branch_columns}"
     assert not missing_source_line_columns, f"source_lines migration missing columns: {missing_source_line_columns}"
-    assert not missing_observation_columns, f"session_observations migration missing columns: {missing_observation_columns}"
+    assert not missing_observation_columns, (
+        f"session_observations migration missing columns: {missing_observation_columns}"
+    )
     assert not missing_session_turn_columns, f"session_turns migration missing columns: {missing_session_turn_columns}"
 
     with engine.connect() as conn:
@@ -317,9 +462,7 @@ def test_sqlite_migration_backfills_launch_attempt_owner_id(tmp_path):
     assert "owner_id" in columns
 
     with engine.connect() as conn:
-        row = conn.execute(
-            text("SELECT owner_id FROM session_launch_attempts WHERE client_request_id = 'tap-1'")
-        ).one()
+        row = conn.execute(text("SELECT owner_id FROM session_launch_attempts WHERE client_request_id = 'tap-1'")).one()
         indexes = conn.execute(text("PRAGMA index_list(session_launch_attempts)")).fetchall()
 
     assert row.owner_id == 42

@@ -363,6 +363,12 @@ def _move_subagent_session_under_parent(
         "sessions_removed": 0,
     }
     old_thread_ids = [row.id for row in db.query(SessionThread.id).filter(SessionThread.session_id == child_session_id).all()]
+    if child_provider_id and old_thread_ids:
+        db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(old_thread_ids)).filter(
+            SessionThreadAlias.provider == child_session.provider
+        ).filter(SessionThreadAlias.alias_kind == "provider_session_id").filter(SessionThreadAlias.alias_value == child_provider_id).delete(
+            synchronize_session=False
+        )
 
     child_thread = ensure_subagent_thread(
         db,

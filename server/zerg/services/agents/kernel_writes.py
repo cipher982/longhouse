@@ -25,6 +25,7 @@ from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
+from zerg.services.agents.session_graph_writes import ProviderSessionAliasConflict
 from zerg.services.agents.session_graph_writes import ensure_primary_thread
 from zerg.services.agents.session_graph_writes import ensure_subagent_thread
 from zerg.services.agents.session_graph_writes import ensure_thread_id_for_session
@@ -38,6 +39,7 @@ __all__ = [
     "ensure_primary_thread",
     "ensure_subagent_thread",
     "ensure_thread_id_for_session",
+    "ProviderSessionAliasConflict",
     "record_session_edge",
     "record_thread_alias",
     "resolve_primary_thread_by_provider_session_id",

@@ -367,7 +367,6 @@ async def ship_session_to_zerg(
     payload = {
         "provider": provider,
         "environment": get_machine_name_label(),
-        "provider_session_id": provider_session_id,
         "project": metadata.project or workspace_path.name,
         "device_id": device_id,
         "cwd": metadata.cwd or str(workspace_path.absolute()),
@@ -379,6 +378,12 @@ async def ship_session_to_zerg(
         "continuation_kind": continuation_kind or "cloud",
         "origin_label": origin_label or "Cloud",
     }
+    if session_id:
+        # A prepared resume file is source evidence for the branch target. It
+        # must not claim the target owns the source provider's native session id.
+        payload["parent_provider_session_id"] = provider_session_id
+    else:
+        payload["provider_session_id"] = provider_session_id
     if (continuation_kind or "").strip().lower() == "cloud":
         payload["execution_home"] = SessionExecutionHome.CLOUD_TAKEOVER.value
     elif (continuation_kind or "").strip().lower() == "runner":

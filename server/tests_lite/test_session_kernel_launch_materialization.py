@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from datetime import timezone
 
+import pytest
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import Base
@@ -21,6 +22,7 @@ from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThreadAlias
+from zerg.services.agents.kernel_writes import ProviderSessionAliasConflict
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_connection
 from zerg.services.agents.kernel_writes import record_launch_attempt
@@ -52,10 +54,10 @@ def _make_session_row(db, *, provider="codex"):
         device_id="laptop-1",
         cwd="/tmp/proj",
         started_at=datetime.now(timezone.utc),
-                                user_messages=0,
+        user_messages=0,
         assistant_messages=0,
         tool_calls=0,
-                    )
+    )
     db.add(row)
     db.flush()
     return row
@@ -150,6 +152,56 @@ def test_record_thread_alias_is_idempotent(tmp_path):
     db.commit()
     rows = db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id == thread.id).all()
     assert len(rows) == 1
+
+
+def test_provider_session_alias_conflicts_across_threads(tmp_path):
+    db = _session(tmp_path)
+    first_session = _make_session_row(db, provider="codex")
+    second_session = _make_session_row(db, provider="codex")
+    first_thread = ensure_primary_thread(db, first_session)
+    second_thread = ensure_primary_thread(db, second_session)
+    record_thread_alias(
+        db,
+        thread=first_thread,
+        provider="codex",
+        alias_kind="provider_session_id",
+        alias_value="codex-native-1",
+    )
+
+    with pytest.raises(ProviderSessionAliasConflict):
+        record_thread_alias(
+            db,
+            thread=second_thread,
+            provider="codex",
+            alias_kind="provider_session_id",
+            alias_value="codex-native-1",
+        )
+
+
+def test_same_provider_session_alias_value_allowed_for_different_providers(tmp_path):
+    db = _session(tmp_path)
+    codex_session = _make_session_row(db, provider="codex")
+    claude_session = _make_session_row(db, provider="claude")
+    codex_thread = ensure_primary_thread(db, codex_session)
+    claude_thread = ensure_primary_thread(db, claude_session)
+
+    record_thread_alias(
+        db,
+        thread=codex_thread,
+        provider="codex",
+        alias_kind="provider_session_id",
+        alias_value="same-native-id",
+    )
+    record_thread_alias(
+        db,
+        thread=claude_thread,
+        provider="claude",
+        alias_kind="provider_session_id",
+        alias_value="same-native-id",
+    )
+    db.commit()
+
+    assert db.query(SessionThreadAlias).filter(SessionThreadAlias.alias_value == "same-native-id").count() == 2
 
 
 def test_upsert_connection_idempotent_per_run_and_plane(tmp_path):

@@ -20,6 +20,28 @@ from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 
 
+class ProviderSessionAliasConflict(RuntimeError):
+    """Raised when one provider session id is observed on two threads."""
+
+    def __init__(
+        self,
+        *,
+        provider: str,
+        provider_session_id: str,
+        existing_thread_id: object,
+        requested_thread_id: object,
+    ) -> None:
+        super().__init__(
+            "provider_session_id alias conflict: "
+            f"provider={provider} provider_session_id={provider_session_id} "
+            f"existing_thread_id={existing_thread_id} requested_thread_id={requested_thread_id}"
+        )
+        self.provider = provider
+        self.provider_session_id = provider_session_id
+        self.existing_thread_id = existing_thread_id
+        self.requested_thread_id = requested_thread_id
+
+
 def ensure_primary_thread(db: Session, session: AgentSession) -> SessionThread:
     """Return the primary thread for ``session``, creating it if needed."""
 
@@ -55,9 +77,16 @@ def record_thread_alias(
     alias_kind: str,
     alias_value: str,
 ) -> None:
-    """Record provider/source evidence for ``thread`` if it is not present."""
+    """Record provider/source evidence for ``thread`` if it is not present.
 
-    if not alias_value:
+    Uses a SAVEPOINT for idempotent inserts; callers should own the SQLAlchemy
+    session for the current request/write path.
+    """
+
+    provider = str(provider or "").strip()
+    alias_kind = str(alias_kind or "").strip()
+    alias_value = str(alias_value or "").strip()
+    if not provider or not alias_kind or not alias_value:
         return
 
     existing = (
@@ -68,10 +97,34 @@ def record_thread_alias(
             SessionThreadAlias.alias_kind == alias_kind,
             SessionThreadAlias.alias_value == alias_value,
         )
-        .one_or_none()
+        .first()
     )
     if existing is not None:
         return
+
+    def _conflicting_provider_session_alias() -> SessionThreadAlias | None:
+        if alias_kind != "provider_session_id":
+            return None
+        return (
+            db.query(SessionThreadAlias)
+            .filter(
+                SessionThreadAlias.provider == provider,
+                SessionThreadAlias.alias_kind == "provider_session_id",
+                SessionThreadAlias.alias_value == alias_value,
+                SessionThreadAlias.thread_id != thread.id,
+            )
+            .order_by(SessionThreadAlias.id.asc())
+            .first()
+        )
+
+    conflict = _conflicting_provider_session_alias()
+    if conflict is not None:
+        raise ProviderSessionAliasConflict(
+            provider=provider,
+            provider_session_id=alias_value,
+            existing_thread_id=conflict.thread_id,
+            requested_thread_id=thread.id,
+        )
 
     try:
         with db.begin_nested():
@@ -83,8 +136,28 @@ def record_thread_alias(
                     alias_value=alias_value,
                 )
             )
-    except IntegrityError:
-        pass
+    except IntegrityError as exc:
+        existing = (
+            db.query(SessionThreadAlias)
+            .filter(
+                SessionThreadAlias.thread_id == thread.id,
+                SessionThreadAlias.provider == provider,
+                SessionThreadAlias.alias_kind == alias_kind,
+                SessionThreadAlias.alias_value == alias_value,
+            )
+            .first()
+        )
+        if existing is not None:
+            return
+        conflict = _conflicting_provider_session_alias()
+        if conflict is not None:
+            raise ProviderSessionAliasConflict(
+                provider=provider,
+                provider_session_id=alias_value,
+                existing_thread_id=conflict.thread_id,
+                requested_thread_id=thread.id,
+            ) from exc
+        raise
 
 
 def record_session_edge(
@@ -218,6 +291,32 @@ def ensure_subagent_thread(
         if normalized:
             alias_pairs.append((kind, normalized))
 
+    thread: SessionThread | None = None
+    provider_session_id = str(child_provider_session_id or "").strip()
+    if provider_session_id:
+        provider_thread = resolve_thread_by_provider_session_id(
+            db,
+            provider=provider,
+            provider_session_id=provider_session_id,
+        )
+        if provider_thread is not None:
+            if provider_thread.session_id == parent_thread.session_id and provider_thread.id != parent_thread.id:
+                thread = provider_thread
+                if thread.parent_thread_id is None:
+                    thread.parent_thread_id = parent_thread.id
+                if thread.branch_kind != "subagent":
+                    thread.branch_kind = "subagent"
+                if thread.is_primary:
+                    thread.is_primary = 0
+                db.flush()
+            else:
+                raise ProviderSessionAliasConflict(
+                    provider=provider,
+                    provider_session_id=provider_session_id,
+                    existing_thread_id=provider_thread.id,
+                    requested_thread_id=f"parent:{parent_thread.id}",
+                )
+
     label_pairs: list[tuple[str, str]] = []
     for kind, value in (
         ("forked_from_provider_session_id", parent_provider_session_id),
@@ -229,23 +328,25 @@ def ensure_subagent_thread(
         if normalized:
             label_pairs.append((kind, normalized))
 
-    for alias_kind, alias_value in alias_pairs:
-        existing = (
-            db.query(SessionThread)
-            .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
-            .filter(SessionThread.session_id == parent_thread.session_id)
-            .filter(SessionThread.parent_thread_id == parent_thread.id)
-            .filter(SessionThread.branch_kind == "subagent")
-            .filter(SessionThreadAlias.provider == provider)
-            .filter(SessionThreadAlias.alias_kind == alias_kind)
-            .filter(SessionThreadAlias.alias_value == alias_value)
-            .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
-            .first()
-        )
-        if existing is not None:
-            thread = existing
-            break
-    else:
+    if thread is None:
+        for alias_kind, alias_value in alias_pairs:
+            existing = (
+                db.query(SessionThread)
+                .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+                .filter(SessionThread.session_id == parent_thread.session_id)
+                .filter(SessionThread.parent_thread_id == parent_thread.id)
+                .filter(SessionThread.branch_kind == "subagent")
+                .filter(SessionThreadAlias.provider == provider)
+                .filter(SessionThreadAlias.alias_kind == alias_kind)
+                .filter(SessionThreadAlias.alias_value == alias_value)
+                .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
+                .first()
+            )
+            if existing is not None:
+                thread = existing
+                break
+
+    if thread is None:
         identity_kind, identity_value = alias_pairs[0] if alias_pairs else ("generated", str(uuid5(NAMESPACE_URL, str(parent_thread.id))))
         thread_id = uuid5(
             NAMESPACE_URL,
