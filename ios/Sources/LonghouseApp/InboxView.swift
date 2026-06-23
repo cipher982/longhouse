@@ -493,6 +493,7 @@ final class TimelineViewModel: ObservableObject {
     private var loggedFirstPaint = false
     private var streamGeneration: UInt64 = 0
     private var hasReceivedFirstConnect = false
+    private var streamAuthRefreshAttempted = false
     private let apiFactory: (String) -> TimelineSessionsClient?
     private let streamFactory: (URL, Int) -> TimelineSessionsStreamSource
     private let enableRealtime: Bool
@@ -701,6 +702,7 @@ final class TimelineViewModel: ObservableObject {
             // covered by the `load()` REST bootstrap, so skip it. Don't
             // stamp data freshness on reconnects — wait until the bootstrap
             // actually lands so the banner doesn't lie.
+            streamAuthRefreshAttempted = false
             if hasReceivedFirstConnect {
                 applyConnectivity(.streamSignal(.reconnected), generation: generation)
                 logger.info("timeline stream reconnected — bootstrapping snapshot")
@@ -719,12 +721,31 @@ final class TimelineViewModel: ObservableObject {
             applyConnectivity(.streamSignal(.heartbeat), generation: generation)
         case .disconnected(let error):
             let reason = classifyStreamDisconnect(error)
-            applyConnectivity(.streamDisconnected(reason), generation: generation)
-            if let apiError = error as? LonghouseAPIError, case .notAuthenticated = apiError {
-                appState.handleExpiredSession()
+            if reason == .authFailure {
+                await handleStreamAuthFailure(generation: generation, appState: appState)
+            } else {
+                applyConnectivity(.streamDisconnected(reason), generation: generation)
             }
             logger.info("timeline stream disconnected reason=\(String(describing: reason), privacy: .public) error=\(error?.localizedDescription ?? "nil", privacy: .public)")
         }
+    }
+
+    private func handleStreamAuthFailure(generation: UInt64, appState: AppState) async {
+        guard generation == streamGeneration else { return }
+        guard !streamAuthRefreshAttempted else {
+            applyConnectivity(.streamDisconnected(.authFailure), generation: generation)
+            return
+        }
+        streamAuthRefreshAttempted = true
+
+        await refresh(using: appState, reloadWidget: true, force: true)
+        guard generation == streamGeneration,
+              appState.isAuthenticated,
+              connectivity.reachability == .reachable else { return }
+
+        streamTask = nil
+        stream = nil
+        startStream(using: appState)
     }
 
     private func applyConnectivity(
