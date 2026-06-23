@@ -183,20 +183,20 @@ Suggested cases:
 
 ## Test Plan
 
-Run the focused backend tests first:
-
-```bash
-cd server && ./run_backend_tests_lite.sh tests_lite/test_managed_local_launch.py tests_lite/test_managed_local_transport.py tests_lite/test_session_kernel_projection.py
-```
-
-Then run the supported backend tier:
+Run the supported backend tier:
 
 ```bash
 make test
 ```
 
-If only docs/tests/Python server helpers changed, `make test-ci` is optional
-before push but recommended because this boundary previously escaped CI.
+Before pushing this launch boundary, run the repo CI tier when practical:
+
+```bash
+make test-ci
+```
+
+For focused local debugging, narrow the relevant Make-backed tests rather than
+adding a second bespoke launch path.
 
 ## Non-Goals
 

@@ -186,6 +186,55 @@ def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> i
     return int(owner[0])
 
 
+def _validate_managed_local_launch_response_contract(
+    *,
+    session_id: str,
+    response: "ManagedLocalSessionLaunchResponse",
+) -> None:
+    sid = str(session_id or "").strip()
+    provider = str(response.provider or "").strip()
+    source_runner_name = str(response.source_runner_name or "").strip()
+    attach_command = str(response.attach_command or "")
+    transport = response.managed_transport
+    if not sid or str(response.session_id) != sid:
+        raise RuntimeError("Managed local launch response has mismatched session id")
+    if not provider:
+        raise RuntimeError("Managed local launch response is missing provider")
+    if transport is None:
+        raise RuntimeError("Managed local launch response is missing managed transport")
+    if not source_runner_name:
+        raise RuntimeError("Managed local launch response is missing source runner name")
+
+    if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
+        provider_sid = str(response.provider_session_id or "").strip()
+        if not provider_sid:
+            raise RuntimeError("Claude managed local launch response is missing provider_session_id")
+        if provider_sid == sid:
+            raise RuntimeError("Claude managed local launch response has synthetic provider_session_id")
+        if provider_sid not in attach_command:
+            raise RuntimeError("Claude managed local launch response attach_command does not target provider_session_id")
+        if "LONGHOUSE_PROVIDER_SESSION_ID" not in attach_command:
+            raise RuntimeError("Claude managed local launch response attach_command is missing provider id env")
+        return
+
+    if transport == ManagedSessionTransport.CODEX_APP_SERVER:
+        if "codex-bridge attach --session-id" not in attach_command or sid not in attach_command:
+            raise RuntimeError("Codex managed local launch response is missing codex bridge attach command")
+        return
+
+    if transport == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE:
+        if "opencode-channel attach --session-id" not in attach_command or sid not in attach_command:
+            raise RuntimeError("OpenCode managed local launch response is missing opencode channel attach command")
+        return
+
+    if transport == ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX:
+        if attach_command:
+            raise RuntimeError("Antigravity managed local launch response should not include an attach command")
+        return
+
+    raise RuntimeError(f"Unsupported managed local launch response transport: {transport}")
+
+
 def _managed_local_launch_response(db: Session, result, *, owner_id: int | None = None) -> ManagedLocalSessionLaunchResponse:
     session = result.session
     kernel_projection = project_session_kernel_fields(db, session)
@@ -212,7 +261,7 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
             project=getattr(session, "project", None),
             device_id=getattr(session, "device_id", None),
         )
-    return ManagedLocalSessionLaunchResponse(
+    response = ManagedLocalSessionLaunchResponse(
         session_id=str(session.id),
         provider=session.provider or "claude",
         provider_session_id=kernel_projection.provider_session_id,
@@ -226,6 +275,11 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
         permission_mode=permission_mode,
         hook_token=hook_token,
     )
+    _validate_managed_local_launch_response_contract(
+        session_id=str(session.id),
+        response=response,
+    )
+    return response
 
 
 def _event_content_for_draft(event: AgentEvent) -> str:

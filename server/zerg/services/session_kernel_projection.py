@@ -66,7 +66,11 @@ def session_lock_scope_id(session_id: UUID | str) -> str:
 
 
 def is_synthetic_provider_session_id(session: AgentSession, value: str | None) -> bool:
-    """Return true for known non-native provider ids left by old placeholders."""
+    """Return true for known non-native provider ids left by old placeholders.
+
+    A Longhouse session id is never enough to launch or resume a provider
+    process; write a provider-session alias first when a control path needs one.
+    """
 
     normalized = str(value or "").strip()
     return bool(normalized) and normalized == str(session.id)

@@ -27,6 +27,7 @@ from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.managed_local_launcher import _derive_project
+from zerg.services.managed_local_launcher import _initial_provider_session_id_for_spawn
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_kernel_projection import project_session_control_fields
@@ -89,6 +90,41 @@ def _project_control(db, session):
 def test_managed_local_derived_project_ignores_generic_workspace():
     assert _derive_project("/private/tmp/longhouse/workspace", None) == "managed-local"
     assert _derive_project("/private/tmp/longhouse/workspace", "explicit") == "explicit"
+
+
+def test_initial_provider_session_id_for_spawn_is_provider_specific():
+    claude_provider_id = _initial_provider_session_id_for_spawn("claude")
+    assert claude_provider_id
+    assert _initial_provider_session_id_for_spawn("codex") is None
+    assert _initial_provider_session_id_for_spawn("opencode") is None
+    assert _initial_provider_session_id_for_spawn("antigravity") is None
+
+
+def test_managed_local_launch_response_contract_rejects_missing_claude_provider_id():
+    from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
+    from zerg.services.session_chat_impl import _validate_managed_local_launch_response_contract
+    from zerg.session_execution_home import ManagedSessionTransport
+    from zerg.session_execution_home import SessionExecutionHome
+    from zerg.session_loop_mode import SessionLoopMode
+
+    response = ManagedLocalSessionLaunchResponse(
+        session_id="session-123",
+        provider="claude",
+        provider_session_id=None,
+        execution_home=SessionExecutionHome.MANAGED_LOCAL,
+        managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE,
+        loop_mode=SessionLoopMode.ASSIST,
+        source_runner_id=1,
+        source_runner_name="cinder",
+        managed_session_name="demo",
+        attach_command="",
+    )
+
+    with pytest.raises(RuntimeError, match="missing provider_session_id"):
+        _validate_managed_local_launch_response_contract(
+            session_id="session-123",
+            response=response,
+        )
 
 
 def test_browser_managed_local_launch_route_is_absent():
@@ -493,6 +529,72 @@ def test_this_device_launch_uses_token_device_id_for_runner_lookup(monkeypatch, 
     _capabilities, control = _project_control(db, session)
     assert control.source_runner_id == runner.id
     assert session.device_id == "cinder"
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected_transport"),
+    [
+        ("claude", "claude_channel_bridge"),
+        ("codex", "codex_app_server"),
+        ("opencode", "opencode_server_bridge"),
+        ("antigravity", "antigravity_hook_inbox"),
+    ],
+)
+def test_this_device_launch_response_contract_matrix(monkeypatch, tmp_path, provider, expected_transport):
+    from zerg.services import managed_local_launcher
+
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        user, _runner = _seed_user_and_runner(db)
+        device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
+        client, api_app = _make_device_client(db, device_token)
+        monkeypatch.setattr(
+            managed_local_launcher,
+            "get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda *_args: True),
+        )
+        request_payload = {
+            "cwd": "/tmp/demo",
+            "provider": provider,
+            "project": "demo",
+        }
+        if provider == "claude":
+            request_payload["native_claude_channels_available"] = True
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                json=request_payload,
+            )
+        finally:
+            api_app.dependency_overrides = {}
+
+        payload = response.json()
+        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+
+    assert response.status_code == 200, response.text
+    assert payload["managed_transport"] == expected_transport
+    assert payload["source_runner_name"] == "cinder"
+    assert payload["provider"] == provider
+
+    if provider == "claude":
+        assert payload["provider_session_id"]
+        assert payload["provider_session_id"] != payload["session_id"]
+        assert project_provider_session_id(db, session) == payload["provider_session_id"]
+        assert f"--session-id {payload['provider_session_id']}" in payload["attach_command"]
+        assert f"LONGHOUSE_PROVIDER_SESSION_ID={payload['provider_session_id']}" in payload["attach_command"]
+    elif provider == "codex":
+        assert payload["provider_session_id"] is None
+        assert "codex-bridge attach --session-id" in payload["attach_command"]
+        assert payload["session_id"] in payload["attach_command"]
+    elif provider == "opencode":
+        assert payload["provider_session_id"] is None
+        assert "opencode-channel attach --session-id" in payload["attach_command"]
+        assert payload["session_id"] in payload["attach_command"]
+    elif provider == "antigravity":
+        assert payload["provider_session_id"] is None
+        assert payload["attach_command"] == ""
 
 
 def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):

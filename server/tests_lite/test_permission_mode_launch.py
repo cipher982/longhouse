@@ -92,7 +92,13 @@ def test_launch_response_mints_scoped_hook_token_only_for_remote_approve():
         device_id="cinder",
         permission_mode="remote_approve",
     )
-    result = SimpleNamespace(session=session, attach_command="zsh -lc 'exec claude'")
+    result = SimpleNamespace(
+        session=session,
+        attach_command=(
+            "zsh -lc 'export LONGHOUSE_PROVIDER_SESSION_ID=prov-1; "
+            "exec claude --session-id prov-1 --dangerously-load-development-channels server:longhouse-channel'"
+        ),
+    )
 
     # The subject of this test is the hook_token minting logic. Stub the control
     # projections the response builder calls so we don't reproduce their internals.

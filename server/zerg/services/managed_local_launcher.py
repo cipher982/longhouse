@@ -152,6 +152,12 @@ def _build_managed_session_name(seed: str, *, fallback: str) -> str:
     return cleaned[:_MANAGED_LOCAL_NAME_MAX].rstrip("-")
 
 
+def _initial_provider_session_id_for_spawn(provider: str) -> str | None:
+    if provider == "claude":
+        return str(uuid4())
+    return None
+
+
 def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
     provider = params.provider or "claude"
     if provider not in _VALID_PROVIDERS:
@@ -179,7 +185,7 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         _require_runner_ready(runner, owner_id=params.owner_id)
     source_name = str(getattr(runner, "name", "") or params.runner_target).strip()
     session_uuid = uuid4()
-    provider_session_id = str(uuid4()) if provider == "claude" else None
+    provider_session_id = _initial_provider_session_id_for_spawn(provider)
     project = _derive_project(cwd, params.project)
     display_name = (params.display_name or project).strip() or project
     contract = require_contract_for_provider(provider)
