@@ -319,6 +319,8 @@ def _has_matching_tool_result(db: Session, call: AgentEvent) -> bool:
 
 
 def _compute_event_hash(parsed: ParsedEvent, *, raw_json: str | None) -> str:
+    # Keep in lockstep with AgentStore._compute_event_hash; repaired rows must
+    # dedupe exactly like the same source line would during normal ingest.
     payload: dict[str, Any] = {
         "role": parsed.role,
         "content_text": parsed.content_text,
@@ -336,6 +338,8 @@ def _compute_event_hash(parsed: ParsedEvent, *, raw_json: str | None) -> str:
 
 
 def _extract_event_lineage(raw_json: str | None) -> tuple[str | None, str | None]:
+    # Keep in lockstep with AgentStore._extract_event_lineage. ParsedEvent.uuid
+    # is synthetic for tool results and must not be stored as event_uuid.
     if not raw_json:
         return None, None
     try:
