@@ -16,6 +16,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
+from zerg.services.session_observations import decode_observation_payload_json
 from zerg.utils.time import normalize_utc
 
 EVENT_ORIGIN_DURABLE = "durable"
@@ -330,7 +331,7 @@ def _coerce_seq(value: Any) -> int | None:
 
 
 def _observation_payload(observation: SessionObservation) -> dict[str, Any]:
-    raw_json = observation.payload_json
+    raw_json = decode_observation_payload_json(observation)
     if not raw_json:
         return {}
     try:

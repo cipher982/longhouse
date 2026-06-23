@@ -30,6 +30,7 @@ from zerg.services.client_render_observations import list_client_render_observat
 from zerg.services.session_observations import OBS_KIND_PROVIDER_EVENT
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_observations import OBS_KIND_SERVER_FANOUT
+from zerg.services.session_observations import decode_observation_payload_json
 from zerg.utils.time import normalize_utc
 from zerg.utils.time import utc_now
 
@@ -713,7 +714,7 @@ def _redact_ship_trace_raw(ship_trace: dict[str, Any]) -> dict[str, Any]:
 
 def _decode_payload(row: SessionObservation) -> dict[str, Any]:
     try:
-        payload = json.loads(row.payload_json or "{}")
+        payload = json.loads(decode_observation_payload_json(row) or "{}")
     except json.JSONDecodeError:
         return {}
     return payload if isinstance(payload, dict) else {}

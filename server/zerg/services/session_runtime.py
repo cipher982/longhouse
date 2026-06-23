@@ -30,6 +30,7 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
 from zerg.services.session_live_previews import upsert_session_live_preview
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
+from zerg.services.session_observations import decode_observation_payload_json
 from zerg.services.session_observations import record_runtime_observation
 from zerg.services.session_title import freeze_anchor_title
 from zerg.utils.time import normalize_utc
@@ -691,7 +692,7 @@ def reduce_runtime_signal_observation(db: Session, observation) -> RuntimeEventA
 
 
 def _observation_payload(observation) -> dict[str, Any]:
-    raw = getattr(observation, "payload_json", None)
+    raw = decode_observation_payload_json(observation)
     if not raw:
         return {}
     try:

@@ -13,12 +13,12 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
-from zerg.services.agents.compaction import classify_compaction_kind
 from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.session_observations import OBS_KIND_PROVIDER_EVENT
 from zerg.services.session_observations import OBS_KIND_PROVIDER_SOURCE_LINE
+from zerg.services.session_observations import decode_observation_payload_json
 from zerg.utils.time import normalize_utc
 
 
@@ -127,6 +127,8 @@ def reduce_provider_event_observation(db: Session, observation: SessionObservati
     # predate the field. Never depends on stored raw at projection time.
     compaction_kind = payload.get("compaction_kind")
     if compaction_kind is None:
+        from zerg.services.agents.compaction import classify_compaction_kind
+
         compaction_kind = classify_compaction_kind(raw_json)
     stmt = (
         sqlite_insert(AgentEvent)
@@ -175,7 +177,7 @@ def reduce_provider_event_observation(db: Session, observation: SessionObservati
 
 
 def _observation_payload(observation: SessionObservation) -> dict:
-    raw = observation.payload_json
+    raw = decode_observation_payload_json(observation)
     if not raw:
         return {}
     try:

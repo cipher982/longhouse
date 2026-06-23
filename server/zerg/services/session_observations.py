@@ -21,6 +21,9 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import SessionObservation
 from zerg.services.raw_json_compression import CODEC_PLAIN
+from zerg.services.raw_json_compression import CODEC_ZSTD
+from zerg.services.raw_json_compression import compress_raw_json
+from zerg.services.raw_json_compression import decompress_raw_json
 from zerg.utils.time import normalize_utc
 
 SOURCE_DOMAIN_TRANSCRIPT = "transcript"
@@ -34,6 +37,11 @@ OBS_KIND_RUNTIME_SIGNAL = "runtime_signal"
 OBS_KIND_BRIDGE_TRANSCRIPT_DELTA = "bridge_transcript_delta"
 OBS_KIND_CLIENT_RENDER = "client_render"
 OBS_KIND_SERVER_FANOUT = "server_fanout"
+
+_COMPRESSED_TRANSCRIPT_OBSERVATION_KINDS = {
+    OBS_KIND_PROVIDER_SOURCE_LINE,
+    OBS_KIND_PROVIDER_EVENT,
+}
 OBS_KIND_PROVIDER_BINDING_CONFLICT = "provider_binding_conflict"
 OBS_KIND_PROVIDER_BINDING_MISSING = "provider_binding_missing"
 
@@ -74,6 +82,7 @@ def record_session_observation(
         thread_id = ensure_thread_id_for_session(db, session_id)
 
     payload_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    payload_storage = _payload_storage_values(payload_json, source_domain=source_domain, kind=kind)
     stmt = (
         sqlite_insert(SessionObservation)
         .values(
@@ -91,9 +100,7 @@ def record_session_observation(
             source_cursor=source_cursor,
             observed_at=normalize_utc(observed_at) or datetime.now(timezone.utc),
             received_at=normalize_utc(received_at) or datetime.now(timezone.utc),
-            payload_json=payload_json,
-            payload_json_z=None,
-            payload_json_codec=CODEC_PLAIN,
+            **payload_storage,
         )
         .on_conflict_do_nothing(index_elements=["observation_id"])
     )
@@ -105,6 +112,31 @@ def record_session_observation(
         observation = db.query(SessionObservation).filter(SessionObservation.observation_id == observation_id).first()
         return ObservationWriteResult(observation=observation, inserted=True)
     return ObservationWriteResult(observation=None, inserted=False)
+
+
+def decode_observation_payload_json(observation: SessionObservation) -> str | None:
+    """Return a session observation payload JSON string from plain or zstd storage."""
+    codec = getattr(observation, "payload_json_codec", CODEC_PLAIN)
+    if codec == CODEC_ZSTD:
+        blob = getattr(observation, "payload_json_z", None)
+        if blob is None:
+            return None
+        return decompress_raw_json(blob)
+    return getattr(observation, "payload_json", None)
+
+
+def _payload_storage_values(payload_json: str, *, source_domain: str, kind: str) -> dict[str, Any]:
+    if source_domain == SOURCE_DOMAIN_TRANSCRIPT and kind in _COMPRESSED_TRANSCRIPT_OBSERVATION_KINDS:
+        return {
+            "payload_json": "",
+            "payload_json_z": compress_raw_json(payload_json),
+            "payload_json_codec": CODEC_ZSTD,
+        }
+    return {
+        "payload_json": payload_json,
+        "payload_json_z": None,
+        "payload_json_codec": CODEC_PLAIN,
+    }
 
 
 def record_runtime_observation(
