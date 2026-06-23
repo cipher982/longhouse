@@ -310,6 +310,17 @@ def _extract_tool_results(
                 first = False
 
 
+def parse_tool_result_events_from_raw_line(raw_line: str, *, session_id: str, offset: int) -> list[ParsedEvent]:
+    """Parse only role=tool result events from one archived Claude JSONL line."""
+    try:
+        obj = _loads(raw_line)
+    except _JSONDecodeError:
+        return []
+    if not isinstance(obj, dict) or obj.get("type") != "user":
+        return []
+    return list(_extract_tool_results(obj, session_id=session_id, offset=offset, raw_line=raw_line))
+
+
 def _compact_metadata_hint(metadata: object) -> str | None:
     """Build a compact metadata hint string from compactMetadata payload."""
     if not isinstance(metadata, dict):
