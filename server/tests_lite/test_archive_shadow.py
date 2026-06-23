@@ -39,6 +39,7 @@ from zerg.services.archive_shadow import write_ingest_shadow_archive
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.session_observations import OBS_KIND_PROVIDER_EVENT
 from zerg.services.session_observations import OBS_KIND_PROVIDER_SOURCE_LINE
+from zerg.services.session_observations import decode_observation_payload_json
 
 
 def test_shadow_archive_disabled_does_not_write(tmp_path):
@@ -416,9 +417,13 @@ def test_ingest_route_archive_primary_can_disable_legacy_raw_writes(tmp_path, mo
         assert events[1].content_text == "server synthetic event"
         assert all(event.raw_json is None for event in events)
         assert all(event.raw_json_z is None for event in events)
-        assert "raw_json" not in json.loads(source_observation.payload_json or "{}")
+        assert source_observation.payload_json == ""
+        assert source_observation.payload_json_z is not None
+        assert "raw_json" not in json.loads(decode_observation_payload_json(source_observation) or "{}")
         assert len(event_observations) == 2
-        assert all("raw_json" not in json.loads(observation.payload_json or "{}") for observation in event_observations)
+        assert all(observation.payload_json == "" for observation in event_observations)
+        assert all(observation.payload_json_z is not None for observation in event_observations)
+        assert all("raw_json" not in json.loads(decode_observation_payload_json(observation) or "{}") for observation in event_observations)
 
         archive_store = FilesystemArchiveStore(tmp_path / "primary-archive")
         records_by_stream: dict[str, list[bytes]] = {}
