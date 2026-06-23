@@ -15,6 +15,7 @@ use anyhow::Result;
 use chrono::Utc;
 use rusqlite::Connection;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::task;
 
 use crate::discovery::{self, ProviderConfig};
@@ -24,11 +25,12 @@ use crate::media_upload;
 use crate::opencode_db;
 use crate::pipeline::batcher::{self, PlannedRangeAction, ShipRange};
 use crate::pipeline::compressor::{self, CompressionAlgo};
-use crate::pipeline::parser::{self, ParseResult, ParsedMediaObject};
+use crate::pipeline::parser::{self, ParseResult, ParsedMediaObject, ParsedSourceLine};
 use crate::shipping::client::{ShipResult, ShipperClient};
 use crate::shipping_stats::{
     RecentShipStatsTracker, ShipAttemptOutcome, ShipLane, ShipStageTimings,
 };
+use crate::source_line_claims;
 use crate::state::file_identity::identity_from_metadata;
 use crate::state::file_state::FileState;
 use crate::state::live_file_state::LiveFileState;
@@ -45,10 +47,10 @@ const BACKGROUND_REPAIR_TARGET_BATCH_BYTES: u64 = 32 * 1024;
 /// huge tenant DB, which defeats the runtime's interactive control SLO.
 const ARCHIVE_TARGET_BATCH_BYTES: u64 = 256 * 1024;
 
-// The Runtime Host allows /api/agents/ingest to run for 30s. Archive and
-// replay sends should not give up first; otherwise the server may still commit
-// the batch after the client has already marked it retryable.
-const ARCHIVE_INGEST_TIMEOUT: Duration = Duration::from_secs(35);
+// The Runtime Host allows archive ingest writes to run up to 60s. Archive,
+// replay, and media sends should not give up first; otherwise the server may
+// still commit the batch after the client has already marked it retryable.
+const ARCHIVE_INGEST_TIMEOUT: Duration = Duration::from_secs(75);
 const LIVE_TRANSCRIPT_INGEST_TIMEOUT: Duration = Duration::from_secs(20);
 const ARCHIVE_BACKPRESSURE_RETRY_DELAY: Duration = Duration::from_secs(60);
 
@@ -561,6 +563,7 @@ pub fn prepare_file(
             .iter()
             .map(|line| line.source_offset)
             .collect(),
+        source_line_refs: source_line_refs_for_lines(&parse_result.source_lines),
         media_objects: parse_result.media_objects.clone(),
         compressed,
     }))
@@ -973,6 +976,31 @@ fn media_objects_for_offset_range(
         .collect()
 }
 
+fn source_line_refs_for_lines(lines: &[ParsedSourceLine]) -> Vec<SourceLineRef> {
+    lines
+        .iter()
+        .map(|line| SourceLineRef {
+            source_offset: line.source_offset,
+            line_hash: format!("{:x}", Sha256::digest(line.raw_line.as_bytes())),
+        })
+        .collect()
+}
+
+fn source_line_refs_for_offset_range(
+    parse_result: &ParseResult,
+    start_offset: u64,
+    end_offset: u64,
+) -> Vec<SourceLineRef> {
+    source_line_refs_for_lines(
+        &parse_result.source_lines[parse_result
+            .source_lines
+            .partition_point(|line| line.source_offset < start_offset)
+            ..parse_result
+                .source_lines
+                .partition_point(|line| line.source_offset < end_offset)],
+    )
+}
+
 fn prepare_whole_document_action(
     parse_result: &ParseResult,
     path_str: &str,
@@ -1005,6 +1033,11 @@ fn prepare_whole_document_action(
             event_count: parse_result.events.len(),
             session_id: payload_session_id.to_string(),
             source_line_offsets: Vec::new(),
+            source_line_refs: source_line_refs_for_offset_range(
+                parse_result,
+                start_offset,
+                end_offset,
+            ),
             media_objects: media_objects_for_offset_range(parse_result, start_offset, end_offset),
             compressed,
         })]);
@@ -1075,6 +1108,12 @@ fn materialize_ship_range(
                     .iter()
                     .map(|line| line.source_offset)
                     .collect(),
+                    SourceLineMode::EventOnly => Vec::new(),
+                },
+                source_line_refs: match source_line_mode {
+                    SourceLineMode::Full => source_line_refs_for_lines(
+                        &parse_result.source_lines[range.source_line_range.clone()],
+                    ),
                     SourceLineMode::EventOnly => Vec::new(),
                 },
                 media_objects: media_objects_for_offset_range(
@@ -1684,6 +1723,49 @@ async fn attempt_ship(
         remove_json_field(&mut header_record, "request_timeout_ms");
         serde_json::to_string(&header_record).ok()
     });
+    if matches!(ship_lane, ShipLane::Archive | ShipLane::Repair)
+        && !item.source_line_refs.is_empty()
+    {
+        match source_line_claims::claim_source_lines_present(
+            client,
+            &item.session_id,
+            &item.path_str,
+            &item.source_line_refs,
+            request_timeout,
+        )
+        .await
+        {
+            Ok(summary) if summary.claimed > 0 && summary.missing == 0 => {
+                tracing::info!(
+                    path = %item.path_str,
+                    provider = %item.provider,
+                    session_id = %item.session_id,
+                    source_lines = summary.present,
+                    "Archive transcript range already durable; reconciling without replay"
+                );
+                return AttemptedShip::Reconciled(item);
+            }
+            Ok(summary) => {
+                tracing::debug!(
+                    path = %item.path_str,
+                    provider = %item.provider,
+                    session_id = %item.session_id,
+                    source_lines_present = summary.present,
+                    source_lines_missing = summary.missing,
+                    "Archive transcript range still needs ingest"
+                );
+            }
+            Err(error) => {
+                tracing::debug!(
+                    path = %item.path_str,
+                    provider = %item.provider,
+                    session_id = %item.session_id,
+                    error = %error,
+                    "Source-line reconciliation unavailable; continuing with ingest"
+                );
+            }
+        }
+    }
     if !item.media_objects.is_empty() {
         match media_upload::ensure_media_uploaded(
             client,
@@ -2393,6 +2475,24 @@ pub async fn ship_prepared_file_with_trace(
                 )
                 .await
                 {
+                    AttemptedShip::Reconciled(item) => {
+                        match cursor_mode {
+                            CursorMode::Archive => file_state.set_offset(
+                                &item.path_str,
+                                item.new_offset,
+                                &item.session_id,
+                                &item.session_id,
+                                &item.provider,
+                            )?,
+                            CursorMode::Live => live_file_state.set_offset(
+                                &item.path_str,
+                                item.new_offset,
+                                &item.provider,
+                                &item.session_id,
+                            )?,
+                        }
+                        outcome.bytes_shipped += item.new_offset - item.offset;
+                    }
                     AttemptedShip::Shipped(item) => {
                         match cursor_mode {
                             CursorMode::Archive => file_state.set_offset(
@@ -2935,6 +3035,15 @@ async fn replay_spool_entries(
                     )
                     .await
                     {
+                        AttemptedShip::Reconciled(item) => {
+                            file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
+                            if item.new_offset >= entry.end_offset {
+                                spool.mark_shipped(entry.id)?;
+                                entry_done = true;
+                            } else {
+                                spool.advance_start(entry.id, item.new_offset)?;
+                            }
+                        }
                         AttemptedShip::Shipped(item) => {
                             outcome.events_shipped += item.event_count;
                             file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
@@ -3824,11 +3933,11 @@ mod tests {
 
         assert_eq!(
             request_timeout_for_trace(Some(&trace)),
-            Some(Duration::from_secs(35))
+            Some(Duration::from_secs(75))
         );
         assert_eq!(
             request_timeout_for_trace(None),
-            Some(Duration::from_secs(35))
+            Some(Duration::from_secs(75))
         );
     }
 
@@ -4870,7 +4979,8 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_antigravity_legacy_json_file_uses_source_line_boundaries_when_archive_is_available() {
+    fn test_prepare_antigravity_legacy_json_file_uses_source_line_boundaries_when_archive_is_available(
+    ) {
         let (_tmp, conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session-gemini.json");
@@ -4895,8 +5005,10 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec_pretty(&gemini).unwrap()).unwrap();
 
         let prepared =
-            prepare_file_batches(&path, "antigravity", CompressionAlgo::Gzip, &conn, 32, None).unwrap();
-        let prepared = prepared.expect("legacy JSON file should still prepare with source-line archive");
+            prepare_file_batches(&path, "antigravity", CompressionAlgo::Gzip, &conn, 32, None)
+                .unwrap();
+        let prepared =
+            prepared.expect("legacy JSON file should still prepare with source-line archive");
 
         assert!(
             prepared.actions.len() > 1,
@@ -4934,7 +5046,9 @@ mod tests {
             PreparedAction::DeadLetter(_) => {
                 panic!("normal batch limit should ship whole-document legacy JSON payload")
             }
-            PreparedAction::AckOnly(_) => panic!("conversation legacy JSON file should not ack-only"),
+            PreparedAction::AckOnly(_) => {
+                panic!("conversation legacy JSON file should not ack-only")
+            }
         }
     }
 
@@ -5115,8 +5229,15 @@ mod tests {
         assert_eq!(outcome.events_shipped, 0);
         assert_eq!(outcome.dead_lettered, 0);
         assert!(outcome.fully_processed);
-        assert_eq!(fs.get_offset("/tmp/antigravity-legacy-info.json").unwrap(), 413);
-        assert_eq!(fs.get_queued_offset("/tmp/antigravity-legacy-info.json").unwrap(), 413);
+        assert_eq!(
+            fs.get_offset("/tmp/antigravity-legacy-info.json").unwrap(),
+            413
+        );
+        assert_eq!(
+            fs.get_queued_offset("/tmp/antigravity-legacy-info.json")
+                .unwrap(),
+            413
+        );
     }
 
     #[tokio::test]
@@ -6606,6 +6727,7 @@ mod tests {
             event_count: 2,
             session_id: "session-1".to_string(),
             source_line_offsets: Vec::new(),
+            source_line_refs: Vec::new(),
             media_objects: Vec::new(),
             compressed: b"secret transcript payload".to_vec(),
         };
@@ -6698,10 +6820,16 @@ mod tests {
         std::fs::write(&path, format!("{line}\n")).unwrap();
         let path_str = path.to_string_lossy().to_string();
 
-        let prepared =
-            prepare_file_batches(&path, "codex", CompressionAlgo::Gzip, &conn, 512 * 1024, None)
-                .unwrap()
-                .expect("prepared media ship item");
+        let prepared = prepare_file_batches(
+            &path,
+            "codex",
+            CompressionAlgo::Gzip,
+            &conn,
+            512 * 1024,
+            None,
+        )
+        .unwrap()
+        .expect("prepared media ship item");
         let media = match &prepared.actions[0] {
             PreparedAction::Ship(item) => item.media_objects[0].clone(),
             _ => panic!("expected ship action"),
@@ -6730,6 +6858,83 @@ mod tests {
     }
 
     #[test]
+    fn test_archive_replay_reconciles_already_durable_source_lines_without_reupload() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let image_data = "A".repeat(4096);
+        let session_id = "019c638d-0000-0000-0000-000000000558";
+        let line = format!(
+            r#"{{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{{"type":"message","role":"user","content":[{{"type":"input_image","image_url":"data:image/png;base64,{image_data}"}}]}}}}"#
+        );
+        let path = dir.path().join(format!("{session_id}.jsonl"));
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+
+        let prepared = prepare_file_batches(
+            &path,
+            "codex",
+            CompressionAlgo::Gzip,
+            &conn,
+            512 * 1024,
+            None,
+        )
+        .unwrap()
+        .expect("prepared media ship item");
+        let source_line_ref = match &prepared.actions[0] {
+            PreparedAction::Ship(item) => {
+                assert_eq!(item.source_line_refs.len(), 1);
+                assert_eq!(item.media_objects.len(), 1);
+                item.source_line_refs[0].clone()
+            }
+            _ => panic!("expected ship action"),
+        };
+        let end_offset = prepared.new_offset;
+        let spool = Spool::new(&conn);
+        spool
+            .enqueue("codex", &path_str, 0, end_offset, Some(session_id))
+            .unwrap();
+        let claim_body = json!({
+            "present": [{
+                "source_path": path_str,
+                "source_offset": source_line_ref.source_offset,
+                "line_hash": source_line_ref.line_hash,
+            }],
+            "missing": [],
+            "rejected": [],
+        })
+        .to_string();
+        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", &claim_body)]);
+        let client = make_test_client(&url);
+
+        let replay = rt
+            .block_on(
+                replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+                    &conn,
+                    &client,
+                    CompressionAlgo::Gzip,
+                    &path,
+                    10,
+                    512 * 1024,
+                    None,
+                    None,
+                ),
+            )
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(captured.lock().unwrap().len(), 1);
+        assert_eq!(replay.resolved, 1);
+        assert_eq!(replay.failed, 0);
+        assert_eq!(replay.events_shipped, 0);
+        assert_eq!(spool.pending_count().unwrap(), 0);
+        assert_eq!(
+            FileState::new(&conn).get_offset(&path_str).unwrap(),
+            end_offset
+        );
+    }
+
+    #[test]
     fn test_replay_media_upload_failure_defers_without_dead_letter_retry() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (_tmp, conn) = make_db();
@@ -6743,10 +6948,16 @@ mod tests {
         std::fs::write(&path, format!("{line}\n")).unwrap();
         let path_str = path.to_string_lossy().to_string();
 
-        let prepared =
-            prepare_file_batches(&path, "codex", CompressionAlgo::Gzip, &conn, 512 * 1024, None)
-                .unwrap()
-                .expect("prepared media ship item");
+        let prepared = prepare_file_batches(
+            &path,
+            "codex",
+            CompressionAlgo::Gzip,
+            &conn,
+            512 * 1024,
+            None,
+        )
+        .unwrap()
+        .expect("prepared media ship item");
         let media = match &prepared.actions[0] {
             PreparedAction::Ship(item) => item.media_objects[0].clone(),
             _ => panic!("expected ship action"),
@@ -6761,21 +6972,25 @@ mod tests {
             .enqueue("codex", &path_str, 0, end_offset, Some(session_id))
             .unwrap();
         let entry_id = spool.pending_entries_for_path(&path_str, 1).unwrap()[0].id;
-        let (url, captured, handle) =
-            spawn_http_sequence_server(&[("200 OK", &claim_body), ("500 Internal Server Error", "upload down")]);
+        let (url, captured, handle) = spawn_http_sequence_server(&[
+            ("200 OK", &claim_body),
+            ("500 Internal Server Error", "upload down"),
+        ]);
         let client = make_test_client(&url);
 
         let replay = rt
-            .block_on(replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
-                &conn,
-                &client,
-                CompressionAlgo::Gzip,
-                &path,
-                10,
-                512 * 1024,
-                None,
-                None,
-            ))
+            .block_on(
+                replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+                    &conn,
+                    &client,
+                    CompressionAlgo::Gzip,
+                    &path,
+                    10,
+                    512 * 1024,
+                    None,
+                    None,
+                ),
+            )
             .unwrap();
         handle.join().unwrap();
 
@@ -6807,6 +7022,7 @@ mod tests {
             event_count: 2,
             session_id: "session-1".to_string(),
             source_line_offsets: Vec::new(),
+            source_line_refs: Vec::new(),
             media_objects: Vec::new(),
             compressed: Vec::new(),
         };

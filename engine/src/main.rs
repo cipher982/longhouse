@@ -29,6 +29,7 @@ mod scheduler;
 mod shipper;
 mod shipping;
 mod shipping_stats;
+mod source_line_claims;
 mod state;
 mod text;
 mod unmanaged_bindings;

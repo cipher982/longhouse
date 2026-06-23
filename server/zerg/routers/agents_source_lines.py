@@ -1,0 +1,116 @@
+"""Agents API for cheap source-line reconciliation."""
+
+from __future__ import annotations
+
+import re
+from uuid import UUID
+
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
+from fastapi import status
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from zerg.database import get_db
+from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.models.agents import AgentSourceLine
+
+router = APIRouter(prefix="/agents/source-lines", tags=["agents"])
+
+_SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+
+
+class SourceLineClaimItem(BaseModel):
+    session_id: UUID
+    source_path: str
+    source_offset: int
+    line_hash: str
+
+
+class SourceLineClaimsRequest(BaseModel):
+    items: list[SourceLineClaimItem]
+
+
+class SourceLineClaimResponseItem(BaseModel):
+    source_path: str
+    source_offset: int
+    line_hash: str
+
+
+class SourceLineRejectedItem(BaseModel):
+    source_path: str | None = None
+    source_offset: int | None = None
+    line_hash: str | None = None
+    reason: str
+
+
+class SourceLineClaimsResponse(BaseModel):
+    present: list[SourceLineClaimResponseItem]
+    missing: list[SourceLineClaimResponseItem]
+    rejected: list[SourceLineRejectedItem]
+
+
+def _normalized_claim(item: SourceLineClaimItem) -> tuple[SourceLineClaimResponseItem | None, str | None]:
+    source_path = item.source_path.strip()
+    line_hash = item.line_hash.strip().lower()
+    if not source_path:
+        return None, "missing_source_path"
+    if item.source_offset < 0:
+        return None, "invalid_source_offset"
+    if not _SHA256_RE.fullmatch(line_hash):
+        return None, "invalid_line_hash"
+    return (
+        SourceLineClaimResponseItem(
+            source_path=source_path,
+            source_offset=int(item.source_offset),
+            line_hash=line_hash,
+        ),
+        None,
+    )
+
+
+@router.post(
+    "/claims",
+    response_model=SourceLineClaimsResponse,
+    dependencies=[Depends(verify_agents_token), Depends(require_single_tenant)],
+)
+async def create_source_line_claims(
+    request: SourceLineClaimsRequest,
+    db: Session = Depends(get_db),
+) -> SourceLineClaimsResponse:
+    """Return which source-line identities are already durable on this host."""
+
+    if len(request.items) > 512:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="too many source-line claim items")
+
+    present: list[SourceLineClaimResponseItem] = []
+    missing: list[SourceLineClaimResponseItem] = []
+    rejected: list[SourceLineRejectedItem] = []
+
+    for item in request.items:
+        normalized, error = _normalized_claim(item)
+        if error is not None or normalized is None:
+            rejected.append(
+                SourceLineRejectedItem(
+                    source_path=item.source_path,
+                    source_offset=item.source_offset,
+                    line_hash=item.line_hash,
+                    reason=error or "invalid_claim",
+                )
+            )
+            continue
+
+        exists = (
+            db.query(AgentSourceLine.id)
+            .filter(AgentSourceLine.session_id == item.session_id)
+            .filter(AgentSourceLine.source_path == normalized.source_path)
+            .filter(AgentSourceLine.source_offset == normalized.source_offset)
+            .filter(AgentSourceLine.line_hash == normalized.line_hash)
+            .first()
+            is not None
+        )
+        (present if exists else missing).append(normalized)
+
+    return SourceLineClaimsResponse(present=present, missing=missing, rejected=rejected)

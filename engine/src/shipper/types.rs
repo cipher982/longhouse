@@ -6,6 +6,12 @@ use std::time::Duration;
 use crate::pipeline::parser::ParsedMediaObject;
 use crate::text::truncate_head_chars;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceLineRef {
+    pub source_offset: u64,
+    pub line_hash: String,
+}
+
 /// Result of parsing + compressing a single file.
 pub struct ShipItem {
     pub path_str: String,
@@ -15,6 +21,7 @@ pub struct ShipItem {
     pub event_count: usize,
     pub session_id: String,
     pub source_line_offsets: Vec<u64>,
+    pub source_line_refs: Vec<SourceLineRef>,
     pub media_objects: Vec<ParsedMediaObject>,
     pub compressed: Vec<u8>,
 }
@@ -209,6 +216,7 @@ pub(crate) struct GapRecoveryOutcome {
 
 pub(crate) enum AttemptedShip {
     Shipped(ShipItem),
+    Reconciled(ShipItem),
     Transient {
         item: ShipItem,
         error: String,
