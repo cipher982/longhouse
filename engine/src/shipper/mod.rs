@@ -6935,6 +6935,202 @@ mod tests {
     }
 
     #[test]
+    fn test_archive_ship_reconciles_already_durable_source_lines_without_reupload() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let image_data = "A".repeat(4096);
+        let session_id = "019c638d-0000-0000-0000-000000000559";
+        let line = format!(
+            r#"{{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{{"type":"message","role":"user","content":[{{"type":"input_image","image_url":"data:image/png;base64,{image_data}"}}]}}}}"#
+        );
+        let path = dir.path().join(format!("{session_id}.jsonl"));
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+
+        let prepared = prepare_file_batches(
+            &path,
+            "codex",
+            CompressionAlgo::Gzip,
+            &conn,
+            512 * 1024,
+            None,
+        )
+        .unwrap()
+        .expect("prepared media ship item");
+        let source_line_ref = match &prepared.actions[0] {
+            PreparedAction::Ship(item) => item.source_line_refs[0].clone(),
+            _ => panic!("expected ship action"),
+        };
+        let end_offset = prepared.new_offset;
+        let claim_body = json!({
+            "present": [{
+                "source_path": path_str,
+                "source_offset": source_line_ref.source_offset,
+                "line_hash": source_line_ref.line_hash,
+            }],
+            "missing": [],
+            "rejected": [],
+        })
+        .to_string();
+        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", &claim_body)]);
+        let client = make_test_client(&url);
+
+        let outcome = rt
+            .block_on(ship_prepared_file(prepared, &client, &conn, None, None))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(captured.lock().unwrap().len(), 1);
+        assert_eq!(outcome.events_shipped, 0);
+        assert!(outcome.fully_processed);
+        assert_eq!(
+            FileState::new(&conn).get_offset(&path_str).unwrap(),
+            end_offset
+        );
+    }
+
+    #[test]
+    fn test_archive_replay_missing_or_unavailable_source_line_claim_falls_through() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let image_data = "A".repeat(4096);
+        let session_id = "019c638d-0000-0000-0000-000000000560";
+        let line = format!(
+            r#"{{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{{"type":"message","role":"user","content":[{{"type":"input_image","image_url":"data:image/png;base64,{image_data}"}}]}}}}"#
+        );
+        let path = dir.path().join(format!("{session_id}.jsonl"));
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+
+        let prepared = prepare_file_batches(
+            &path,
+            "codex",
+            CompressionAlgo::Gzip,
+            &conn,
+            512 * 1024,
+            None,
+        )
+        .unwrap()
+        .expect("prepared media ship item");
+        let (source_line_ref, media) = match &prepared.actions[0] {
+            PreparedAction::Ship(item) => (
+                item.source_line_refs[0].clone(),
+                item.media_objects[0].clone(),
+            ),
+            _ => panic!("expected ship action"),
+        };
+        let end_offset = prepared.new_offset;
+        let spool = Spool::new(&conn);
+        spool
+            .enqueue("codex", &path_str, 0, end_offset, Some(session_id))
+            .unwrap();
+        let source_claim_missing = json!({
+            "present": [],
+            "missing": [{
+                "source_path": path_str,
+                "source_offset": source_line_ref.source_offset,
+                "line_hash": source_line_ref.line_hash,
+            }],
+            "rejected": [],
+        })
+        .to_string();
+        let media_claim_present = format!(
+            r#"{{"needed":[],"present":["{}"],"rejected":[]}}"#,
+            media.sha256
+        );
+        let (url, captured, handle) = spawn_http_sequence_server(&[
+            ("200 OK", &source_claim_missing),
+            ("200 OK", &media_claim_present),
+            ("200 OK", "{}"),
+        ]);
+        let client = make_test_client(&url);
+
+        let replay = rt
+            .block_on(
+                replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+                    &conn,
+                    &client,
+                    CompressionAlgo::Gzip,
+                    &path,
+                    10,
+                    512 * 1024,
+                    None,
+                    None,
+                ),
+            )
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(captured.lock().unwrap().len(), 3);
+        assert_eq!(replay.resolved, 1);
+        assert_eq!(replay.failed, 0);
+        assert_eq!(replay.events_shipped, 1);
+        assert_eq!(spool.pending_count().unwrap(), 0);
+
+        let fallback_session_id = "019c638d-0000-0000-0000-000000000561";
+        let path_fallback = dir.path().join(format!("{fallback_session_id}.jsonl"));
+        std::fs::write(&path_fallback, format!("{line}\n")).unwrap();
+        let fallback_path_str = path_fallback.to_string_lossy().to_string();
+        let fallback_prepared = prepare_file_batches(
+            &path_fallback,
+            "codex",
+            CompressionAlgo::Gzip,
+            &conn,
+            512 * 1024,
+            None,
+        )
+        .unwrap()
+        .expect("prepared fallback media ship item");
+        let fallback_end_offset = fallback_prepared.new_offset;
+        spool
+            .enqueue(
+                "codex",
+                &fallback_path_str,
+                0,
+                fallback_end_offset,
+                Some(fallback_session_id),
+            )
+            .unwrap();
+        let fallback_media = match &fallback_prepared.actions[0] {
+            PreparedAction::Ship(item) => item.media_objects[0].clone(),
+            _ => panic!("expected ship action"),
+        };
+        let fallback_media_claim_present = format!(
+            r#"{{"needed":[],"present":["{}"],"rejected":[]}}"#,
+            fallback_media.sha256
+        );
+        let (fallback_url, fallback_captured, fallback_handle) = spawn_http_sequence_server(&[
+            ("404 Not Found", r#"{"detail":"not found"}"#),
+            ("200 OK", &fallback_media_claim_present),
+            ("200 OK", "{}"),
+        ]);
+        let fallback_client = make_test_client(&fallback_url);
+
+        let fallback_replay = rt
+            .block_on(
+                replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+                    &conn,
+                    &fallback_client,
+                    CompressionAlgo::Gzip,
+                    &path_fallback,
+                    10,
+                    512 * 1024,
+                    None,
+                    None,
+                ),
+            )
+            .unwrap();
+        fallback_handle.join().unwrap();
+
+        assert_eq!(fallback_captured.lock().unwrap().len(), 3);
+        assert_eq!(fallback_replay.resolved, 1);
+        assert_eq!(fallback_replay.failed, 0);
+        assert_eq!(fallback_replay.events_shipped, 1);
+    }
+
+    #[test]
     fn test_replay_media_upload_failure_defers_without_dead_letter_retry() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (_tmp, conn) = make_db();
