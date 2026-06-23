@@ -13,6 +13,8 @@ from fastapi import Response
 from fastapi import status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import and_
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
@@ -22,6 +24,7 @@ from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import AgentSession
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
+from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.services.media_store import absolute_media_path
 from zerg.services.media_store import claim_media
@@ -80,12 +83,34 @@ def _row_or_404(db: Session, sha256: str) -> MediaObject:
     return row
 
 
-def _browser_row_or_404(db: Session, sha256: str) -> MediaObject:
+def _browser_owner_id(user: User) -> int | None:
+    raw_owner_id = getattr(user, "id", None)
+    if raw_owner_id is None:
+        return None
+    try:
+        return int(raw_owner_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def _browser_row_or_404(db: Session, sha256: str, current_user: User) -> MediaObject:
     row = _row_or_404(db, sha256)
+    owner_id = _browser_owner_id(current_user)
+    device_token_join = and_(
+        DeviceToken.device_id == AgentSession.device_id,
+        DeviceToken.revoked_at.is_(None),
+    )
+    visibility_filters = [AgentSession.device_id.is_(None)]
+    if owner_id is not None:
+        device_token_join = and_(device_token_join, DeviceToken.owner_id == owner_id)
+        visibility_filters.append(DeviceToken.id.isnot(None))
+
     ref = (
         db.query(SessionMediaRef.id)
         .join(AgentSession, AgentSession.id == SessionMediaRef.session_id)
+        .outerjoin(DeviceToken, device_token_join)
         .filter(SessionMediaRef.media_sha256 == row.sha256)
+        .filter(or_(*visibility_filters))
         .first()
     )
     if ref is None:
@@ -190,11 +215,11 @@ async def head_media_blob(sha256: str, db: Session = Depends(get_db)) -> Respons
 async def get_browser_media_blob(
     sha256: str,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_browser_route_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ) -> StreamingResponse:
     """Fetch a browser-visible media blob by sha256."""
 
-    row = _browser_row_or_404(db, sha256)
+    row = _browser_row_or_404(db, sha256, current_user)
     return _stream_media_row(row)
 
 
@@ -202,11 +227,11 @@ async def get_browser_media_blob(
 async def get_browser_media_thumbnail(
     sha256: str,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_browser_route_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ) -> StreamingResponse:
     """Fetch a derived thumbnail for a browser-visible media object."""
 
-    row = _browser_row_or_404(db, sha256)
+    row = _browser_row_or_404(db, sha256, current_user)
     if not row.thumbnail_sha256:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media thumbnail not found")
     thumb_row = _row_or_404(db, row.thumbnail_sha256)
@@ -217,9 +242,9 @@ async def get_browser_media_thumbnail(
 async def head_browser_media_blob(
     sha256: str,
     db: Session = Depends(get_db),
-    _current_user: User = Depends(get_current_browser_route_user),
+    current_user: User = Depends(get_current_browser_route_user),
 ) -> Response:
     """Cheap browser integrity probe for a visible media blob."""
 
-    row = _browser_row_or_404(db, sha256)
+    row = _browser_row_or_404(db, sha256, current_user)
     return _head_media_row(row)

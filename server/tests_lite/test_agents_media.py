@@ -7,6 +7,7 @@ import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -26,6 +27,8 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
+from zerg.models.device_token import DeviceToken
+from zerg.models.user import User
 
 
 def _setup_app(tmp_path, monkeypatch):
@@ -46,7 +49,7 @@ def _setup_app(tmp_path, monkeypatch):
     api_app.dependency_overrides[get_db] = _override_db
     api_app.dependency_overrides[verify_agents_token] = lambda: None
     api_app.dependency_overrides[require_single_tenant] = lambda: None
-    api_app.dependency_overrides[get_current_browser_route_user] = lambda: object()
+    api_app.dependency_overrides[get_current_browser_route_user] = lambda: SimpleNamespace(id=1)
 
     def _cleanup():
         api_app.dependency_overrides.pop(get_db, None)
@@ -57,12 +60,13 @@ def _setup_app(tmp_path, monkeypatch):
     return factory, blob_root, _cleanup
 
 
-def _create_session(db, session_id):
+def _create_session(db, session_id, *, device_id=None):
     db.add(
         AgentSession(
             id=session_id,
             provider="codex",
             environment="test",
+            device_id=device_id,
             started_at=datetime.now(timezone.utc),
         )
     )
@@ -283,6 +287,58 @@ def test_browser_media_read_requires_session_ref(tmp_path, monkeypatch):
         cleanup()
 
 
+def test_browser_media_read_requires_visible_device_owner(tmp_path, monkeypatch):
+    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    payload = b"\x89PNG\r\nother-owner-media"
+    digest = hashlib.sha256(payload).hexdigest()
+    session_id = uuid4()
+
+    try:
+        uploaded = client.put(f"/agents/media/{digest}", content=payload, headers={"Content-Type": "image/png"})
+        assert uploaded.status_code == 200, uploaded.text
+
+        with factory() as db:
+            db.add(User(id=1, email="owner@test.local"))
+            db.add(User(id=2, email="other@test.local"))
+            _create_session(db, session_id, device_id="other-device")
+            db.add(
+                DeviceToken(
+                    owner_id=2,
+                    device_id="other-device",
+                    token_hash=hashlib.sha256(b"other-token").hexdigest(),
+                )
+            )
+            db.commit()
+
+        claim = client.post(
+            "/agents/media/claims",
+            json={
+                "items": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "byte_size": len(payload),
+                        "session_id": str(session_id),
+                        "source_path": "/tmp/codex.jsonl",
+                        "source_offset": 10,
+                    }
+                ]
+            },
+        )
+        assert claim.status_code == 200, claim.text
+
+        denied = client.get(f"/media/{digest}/blob")
+        assert denied.status_code == 404, denied.text
+
+        api_app.dependency_overrides[get_current_browser_route_user] = lambda: SimpleNamespace(id=2)
+        allowed = client.get(f"/media/{digest}/blob")
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.content == payload
+    finally:
+        cleanup()
+
+
 def test_browser_media_thumbnail_streams_authorized_derivative(tmp_path, monkeypatch):
     factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
     client = TestClient(api_app)
@@ -412,6 +468,78 @@ def test_session_events_project_media_refs_from_source_coordinates(tmp_path, mon
                 "original_kind": "inline_data_url",
             }
         ]
+    finally:
+        cleanup()
+
+
+def test_session_events_do_not_guess_ambiguous_source_coordinate_media_refs(tmp_path, monkeypatch):
+    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    session_id = uuid4()
+    source_path = "/tmp/codex/ambiguous.jsonl"
+    source_offset = 456
+    payload = b"\x89PNG\r\nambiguous-media"
+    digest = hashlib.sha256(payload).hexdigest()
+    base = datetime.now(timezone.utc)
+
+    try:
+        with factory() as db:
+            _create_session(db, session_id)
+
+        claim = client.post(
+            "/agents/media/claims",
+            json={
+                "items": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "byte_size": len(payload),
+                        "session_id": str(session_id),
+                        "source_path": source_path,
+                        "source_offset": source_offset,
+                        "json_pointer": "/message/content/0/image_url",
+                        "provider": "codex",
+                        "original_kind": "inline_data_url",
+                    }
+                ]
+            },
+        )
+        assert claim.status_code == 200, claim.text
+
+        uploaded = client.put(f"/agents/media/{digest}", content=payload, headers={"Content-Type": "image/png"})
+        assert uploaded.status_code == 200, uploaded.text
+
+        with factory() as db:
+            db.add_all(
+                [
+                    AgentEvent(
+                        session_id=session_id,
+                        role="user",
+                        content_text="first ambiguous event",
+                        timestamp=base,
+                        source_path=source_path,
+                        source_offset=source_offset,
+                        event_hash=hashlib.sha256(b"ambiguous-event-1").hexdigest(),
+                    ),
+                    AgentEvent(
+                        session_id=session_id,
+                        role="user",
+                        content_text="second ambiguous event",
+                        timestamp=base + timedelta(milliseconds=1),
+                        source_path=source_path,
+                        source_offset=source_offset,
+                        event_hash=hashlib.sha256(b"ambiguous-event-2").hexdigest(),
+                    ),
+                ]
+            )
+            db.commit()
+
+        response = client.get(f"/agents/sessions/{session_id}/events")
+        assert response.status_code == 200, response.text
+        events = response.json()["events"]
+        assert len(events) == 2
+        assert events[0]["media_refs"] == []
+        assert events[1]["media_refs"] == []
     finally:
         cleanup()
 

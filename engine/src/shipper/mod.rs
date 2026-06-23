@@ -1736,6 +1736,23 @@ async fn attempt_ship(
         .await
         {
             Ok(summary) if summary.claimed > 0 && summary.missing == 0 => {
+                if !item.media_objects.is_empty() {
+                    if let Err(err) = media_upload::ensure_media_uploaded(
+                        client,
+                        &item.session_id,
+                        &item.provider,
+                        &item.path_str,
+                        &item.media_objects,
+                        request_timeout,
+                    )
+                    .await
+                    {
+                        return AttemptedShip::MediaUploadFailed {
+                            item,
+                            error: err.to_string(),
+                        };
+                    }
+                }
                 tracing::info!(
                     path = %item.path_str,
                     provider = %item.provider,
@@ -6999,11 +7016,14 @@ mod tests {
         )
         .unwrap()
         .expect("prepared media ship item");
-        let source_line_ref = match &prepared.actions[0] {
+        let (source_line_ref, media) = match &prepared.actions[0] {
             PreparedAction::Ship(item) => {
                 assert_eq!(item.source_line_refs.len(), 1);
                 assert_eq!(item.media_objects.len(), 1);
-                item.source_line_refs[0].clone()
+                (
+                    item.source_line_refs[0].clone(),
+                    item.media_objects[0].clone(),
+                )
             }
             _ => panic!("expected ship action"),
         };
@@ -7022,7 +7042,14 @@ mod tests {
             "rejected": [],
         })
         .to_string();
-        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", &claim_body)]);
+        let media_claim_body = json!({
+            "needed": [],
+            "present": [media.sha256],
+            "rejected": [],
+        })
+        .to_string();
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", &claim_body), ("200 OK", &media_claim_body)]);
         let client = make_test_client(&url);
 
         let replay = rt
@@ -7041,15 +7068,12 @@ mod tests {
             .unwrap();
         handle.join().unwrap();
 
-        assert_eq!(captured.lock().unwrap().len(), 1);
+        assert_eq!(captured.lock().unwrap().len(), 2);
         assert_eq!(replay.resolved, 1);
         assert_eq!(replay.failed, 0);
         assert_eq!(replay.events_shipped, 0);
         assert_eq!(spool.pending_count().unwrap(), 0);
-        assert_eq!(
-            FileState::new(&conn).get_offset(&path_str).unwrap(),
-            end_offset
-        );
+        assert_eq!(FileState::new(&conn).get_offset(&path_str).unwrap(), 0);
     }
 
     #[test]
@@ -7076,8 +7100,11 @@ mod tests {
         )
         .unwrap()
         .expect("prepared media ship item");
-        let source_line_ref = match &prepared.actions[0] {
-            PreparedAction::Ship(item) => item.source_line_refs[0].clone(),
+        let (source_line_ref, media) = match &prepared.actions[0] {
+            PreparedAction::Ship(item) => (
+                item.source_line_refs[0].clone(),
+                item.media_objects[0].clone(),
+            ),
             _ => panic!("expected ship action"),
         };
         let end_offset = prepared.new_offset;
@@ -7091,7 +7118,14 @@ mod tests {
             "rejected": [],
         })
         .to_string();
-        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", &claim_body)]);
+        let media_claim_body = json!({
+            "needed": [],
+            "present": [media.sha256],
+            "rejected": [],
+        })
+        .to_string();
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", &claim_body), ("200 OK", &media_claim_body)]);
         let client = make_test_client(&url);
 
         let outcome = rt
@@ -7099,7 +7133,7 @@ mod tests {
             .unwrap();
         handle.join().unwrap();
 
-        assert_eq!(captured.lock().unwrap().len(), 1);
+        assert_eq!(captured.lock().unwrap().len(), 2);
         assert_eq!(outcome.events_shipped, 0);
         assert!(outcome.fully_processed);
         assert_eq!(

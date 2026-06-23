@@ -1824,6 +1824,11 @@ def build_event_media_ref_map(db, events: list[AgentEvent]) -> dict[int, list[Ev
 
     event_by_id = {int(event.id): event for event in events if getattr(event, "id", None) is not None}
     event_ids = set(event_by_id)
+    events_by_source: dict[tuple[Any, str, int], list[int]] = {}
+    for event_id, event in event_by_id.items():
+        if event.source_path and event.source_offset is not None:
+            key = (event.session_id, event.source_path, int(event.source_offset))
+            events_by_source.setdefault(key, []).append(event_id)
     session_ids = {event.session_id for event in events}
     offsets = {int(event.source_offset) for event in events if event.source_offset is not None}
     source_paths = {event.source_path for event in events if event.source_path}
@@ -1855,15 +1860,10 @@ def build_event_media_ref_map(db, events: list[AgentEvent]) -> dict[int, list[Ev
         matched_ids: list[int] = []
         if ref.event_id is not None and int(ref.event_id) in event_by_id:
             matched_ids.append(int(ref.event_id))
-        for event_id, event in event_by_id.items():
-            if (
-                event.session_id == ref.session_id
-                and event.source_path == ref.source_path
-                and event.source_offset is not None
-                and ref.source_offset is not None
-                and int(event.source_offset) == int(ref.source_offset)
-            ):
-                matched_ids.append(event_id)
+        elif ref.source_path and ref.source_offset is not None:
+            candidates = events_by_source.get((ref.session_id, ref.source_path, int(ref.source_offset)), [])
+            if len(candidates) == 1:
+                matched_ids.extend(candidates)
 
         for event_id in sorted(set(matched_ids)):
             key = (event_id, ref.media_sha256, int(ref.id))
