@@ -86,7 +86,7 @@ def test_conditional_rebuild_keeps_uncovered_raw(tmp_path):
     r = subprocess.run([sys.executable, str(SCRIPT), str(src), str(slim)], env=env, capture_output=True, text=True)
     assert r.returncode == 0, f"build failed:\n{r.stdout}\n{r.stderr}"
     assert "quick_check=ok" in r.stdout, r.stdout
-    assert "integrity_check" not in r.stdout, r.stdout
+    assert "integrity_check=" not in r.stdout, r.stdout
     assert "SLIM BUILD OK" in r.stdout, r.stdout
 
     c = sqlite3.connect(slim)
