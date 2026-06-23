@@ -187,6 +187,23 @@ Rules:
 - `primary_only=True` remains available for callers that need root-only lookup
 - missing provider id returns `None`, not a synthetic fallback
 
+### `ensure_subagent_thread`
+
+`server/zerg/services/agents/session_graph_writes.py::ensure_subagent_thread`
+also writes `provider_session_id` aliases for child/subagent threads. It must
+resolve an existing provider id before materializing a child thread with a
+competing alias.
+
+Rules:
+
+- if a child `provider_session_id` already resolves to a thread, reuse that
+  thread instead of writing the alias to a new child thread
+- if the resolved thread belongs under the current parent graph, attach
+  observations there
+- if the resolved thread conflicts with the current parent graph, record
+  `provider_binding_conflict`
+- do not rely on the partial unique index as normal control flow
+
 ### `AgentsStore.ingest_session`
 
 `server/zerg/services/agents/store.py::ingest_session` currently resolves
