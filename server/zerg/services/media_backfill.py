@@ -24,6 +24,7 @@ from zerg.services.media_store import upsert_media_ref
 from zerg.services.raw_json_compression import decode_raw_json
 
 DATA_IMAGE_RE = re.compile(r"data:(image/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n]+)")
+BASE64_WHITESPACE_DELETE = str.maketrans("", "", "\r\n ")
 
 
 @dataclass(frozen=True)
@@ -233,7 +234,7 @@ def _decode_data_url(candidate: InlineMediaCandidate, *, mime_type: str) -> byte
 
     try:
         _header, encoded = candidate.data_url.split(",", 1)
-        return base64.b64decode(encoded, validate=True)
+        return base64.b64decode(encoded.translate(BASE64_WHITESPACE_DELETE), validate=True)
     except (ValueError, binascii.Error) as exc:
         raise ValueError("invalid data url") from exc
 

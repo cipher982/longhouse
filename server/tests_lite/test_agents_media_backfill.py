@@ -54,8 +54,8 @@ def _setup_app(tmp_path, monkeypatch):
     return factory, blob_root, _cleanup
 
 
-def _create_session_and_source_line(factory, payload: bytes):
-    encoded = base64.b64encode(payload).decode("ascii")
+def _create_session_and_source_line(factory, payload: bytes, *, encoded: str | None = None):
+    encoded = encoded or base64.b64encode(payload).decode("ascii")
     raw = json.dumps(
         {
             "type": "response_item",
@@ -156,6 +156,28 @@ def test_inline_media_backfill_requires_gate_then_writes_object_and_ref(tmp_path
             assert ref.json_pointer == "/payload/content/0/image_url"
             assert ref.original_kind == "data_url_backfill"
             assert ref.media_state == "present"
+    finally:
+        cleanup()
+
+
+def test_inline_media_backfill_accepts_line_wrapped_base64(tmp_path, monkeypatch):
+    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    payload = b"\x89PNG\r\nlegacy-wrapped"
+    encoded = base64.b64encode(payload).decode("ascii")
+    wrapped = f"{encoded[:8]}\n{encoded[8:]}"
+    _create_session_and_source_line(factory, payload, encoded=wrapped)
+
+    try:
+        response = client.post(
+            "/agents/media/backfill-inline-data-urls"
+            "?dry_run=false&confirmed_backup_gate=true&disk_floor_bytes=0&max_rows=10&max_bytes=1024"
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["candidate_refs"] == 1
+        assert body["decoded_bytes"] == len(payload)
+        assert body["rejected"] == 0
     finally:
         cleanup()
 
