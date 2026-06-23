@@ -82,14 +82,47 @@ struct TimelineViewModelConnectivityTests {
     }
 
     @Test
-    func streamAuthFailureShowsAuthRequiredInsteadOfOffline() async {
+    func streamAuthFailureRefreshesSessionAndRestartsStream() async {
         let session = makeSession()
-        let api = FakeTimelineSessionsClient([.success([session])])
+        let api = FakeTimelineSessionsClient([
+            .success([session]),
+            .success([session]),
+        ])
         let stream = TimelineStreamRecorder()
         let model = makeModel(api: api, stream: stream)
         let appState = makeAppState()
 
         await model.refresh(using: appState, force: true)
+        appState.isAuthenticated = true
+        model.startStream(using: appState)
+        await settle()
+        let startCountBefore401 = stream.startCount()
+
+        stream.emit(.disconnected(LonghouseAPIError.notAuthenticated))
+        await settle()
+
+        #expect(await api.requestCount() == 2)
+        #expect(stream.startCount() == startCountBefore401 + 1)
+        #expect(appState.isAuthenticated)
+        #expect(model.connectionBanner == .none)
+        #expect(model.connectivity.reachability == .reachable)
+
+        model.stopStream()
+    }
+
+    @Test
+    func streamAuthFailureShowsAuthRequiredOnlyAfterRefreshFails() async {
+        let session = makeSession()
+        let api = FakeTimelineSessionsClient([
+            .success([session]),
+            .notAuthenticated,
+        ])
+        let stream = TimelineStreamRecorder()
+        let model = makeModel(api: api, stream: stream)
+        let appState = makeAppState()
+
+        await model.refresh(using: appState, force: true)
+        appState.isAuthenticated = true
         model.startStream(using: appState)
         await settle()
 
@@ -98,6 +131,7 @@ struct TimelineViewModelConnectivityTests {
 
         #expect(model.connectionBanner == .authRequired)
         #expect(model.connectivity.reachability == .authRequired)
+        #expect(!appState.isAuthenticated)
     }
 
     @Test
@@ -222,6 +256,7 @@ private actor FakeTimelineSessionsClient: TimelineSessionsClient {
 private final class TimelineStreamRecorder: Sendable {
     private struct State {
         var continuation: AsyncStream<TimelineSessionsStream.Event>.Continuation?
+        var startCount = 0
     }
 
     private let state = OSAllocatedUnfairLock(initialState: State())
@@ -232,6 +267,7 @@ private final class TimelineStreamRecorder: Sendable {
                 AsyncStream { continuation in
                     state.withLock {
                         $0.continuation = continuation
+                        $0.startCount += 1
                     }
                 }
             },
@@ -247,5 +283,9 @@ private final class TimelineStreamRecorder: Sendable {
     func emit(_ event: TimelineSessionsStream.Event) {
         let continuation = state.withLock { $0.continuation }
         continuation?.yield(event)
+    }
+
+    func startCount() -> Int {
+        state.withLock { $0.startCount }
     }
 }
