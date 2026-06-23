@@ -7310,7 +7310,17 @@ mod tests {
             PreparedAction::Ship(item) => item.media_objects[0].clone(),
             _ => panic!("expected ship action"),
         };
+        let source_line = match &prepared.actions[0] {
+            PreparedAction::Ship(item) => item.source_line_refs[0].clone(),
+            _ => panic!("expected ship action"),
+        };
         let end_offset = prepared.new_offset;
+        let source_line_body = format!(
+            r#"{{"present":[],"missing":[{{"source_path":"{}","source_offset":{},"line_hash":"{}"}}],"rejected":[]}}"#,
+            path_str,
+            source_line.source_offset,
+            source_line.line_hash
+        );
         let claim_body = format!(
             r#"{{"needed":["{}"],"present":[],"rejected":[]}}"#,
             media.sha256
@@ -7321,6 +7331,7 @@ mod tests {
             .unwrap();
         let entry_id = spool.pending_entries_for_path(&path_str, 1).unwrap()[0].id;
         let (url, captured, handle) = spawn_http_sequence_server(&[
+            ("200 OK", &source_line_body),
             ("200 OK", &claim_body),
             ("500 Internal Server Error", "upload down"),
         ]);
@@ -7342,7 +7353,7 @@ mod tests {
             .unwrap();
         handle.join().unwrap();
 
-        assert_eq!(captured.lock().unwrap().len(), 2);
+        assert_eq!(captured.lock().unwrap().len(), 3);
         assert_eq!(replay.resolved, 0);
         assert_eq!(replay.failed, 1);
         assert_eq!(spool.pending_count().unwrap(), 1);
