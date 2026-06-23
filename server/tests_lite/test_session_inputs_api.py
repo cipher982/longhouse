@@ -637,6 +637,133 @@ def test_codex_auto_input_routes_through_machine_control(monkeypatch, tmp_path):
     )
 
 
+class _DisconnectOnSendMachineWebSocket:
+    """Fake Machine Agent that drops its control channel as the command goes out.
+
+    Mimics the most plausible "no babysitting" steer-loop failure: the engine's
+    control WebSocket disconnects while a send_text is in flight. The frame is
+    recorded, then the connection unregisters itself, which fails the pending
+    command via the registry's disconnect path.
+    """
+
+    def __init__(self, *, owner_id: int, device_id: str):
+        self.sent: list[dict[str, object]] = []
+        self._owner_id = owner_id
+        self._device_id = device_id
+
+    async def send_json(self, message):
+        self.sent.append(message)
+        await get_machine_control_channel_registry().unregister(
+            owner_id=self._owner_id,
+            device_id=self._device_id,
+            websocket=self,
+        )
+
+
+def _assert_provider_inflight_disconnect_fails_cleanly(
+    monkeypatch,
+    tmp_path,
+    *,
+    provider: str,
+    control_plane: str,
+    support: str,
+    managed_transport: str | None = None,
+) -> None:
+    session_local = _make_db(tmp_path)
+    device_id = f"{provider}-machine-control"
+    session_id, user_id = _seed_machine_control_session(
+        session_local,
+        provider=provider,
+        control_plane=control_plane,
+        managed_transport=managed_transport,
+        device_id=device_id,
+    )
+    websocket = _DisconnectOnSendMachineWebSocket(owner_id=user_id, device_id=device_id)
+    asyncio.run(
+        get_machine_control_channel_registry().register(
+            owner_id=user_id,
+            device_id=device_id,
+            machine_name=device_id,
+            engine_build="test-engine",
+            supports=[support],
+            websocket=websocket,
+        )
+    )
+
+    monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation",
+        lambda **_kwargs: None,
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={
+                "text": f"steer through {provider}",
+                "intent": "auto",
+                "client_request_id": f"{provider}-disconnect-1",
+            },
+        )
+
+        # The engine dropped mid-command: the client must see a clean gateway
+        # error, never a false "sent".
+        assert resp.status_code == 502, resp.text
+        assert resp.json()["detail"]["error_code"] == "send_failed"
+        assert len(websocket.sent) == 1
+        assert websocket.sent[0]["command_type"] == "session.send_text"
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
+            # The crucial "no babysitting" guarantee: a dropped send is NOT
+            # silently marked delivered.
+            assert row.status == INPUT_STATUS_FAILED
+            assert row.status != INPUT_STATUS_DELIVERED
+            assert row.last_error
+            # The turn for this dropped input must not claim a send_accepted milestone.
+            turn = (
+                db.query(SessionTurn)
+                .filter(
+                    SessionTurn.session_id == session_id,
+                    SessionTurn.session_input_id == row.id,
+                )
+                .one_or_none()
+            )
+            if turn is not None:
+                assert turn.send_accepted_at is None
+        # Lock must be released so the next steer attempt is not wedged.
+        assert asyncio.run(session_lock_manager.is_locked(str(session_id))) is False
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
+        api_app_ref.dependency_overrides = {}
+
+
+def test_claude_inflight_disconnect_fails_cleanly(monkeypatch, tmp_path):
+    _assert_provider_inflight_disconnect_fails_cleanly(
+        monkeypatch,
+        tmp_path,
+        provider="claude",
+        control_plane="claude_channel_bridge",
+        support="claude.send",
+    )
+
+
+def test_codex_inflight_disconnect_fails_cleanly(monkeypatch, tmp_path):
+    _assert_provider_inflight_disconnect_fails_cleanly(
+        monkeypatch,
+        tmp_path,
+        provider="codex",
+        control_plane="codex_bridge",
+        managed_transport="codex_app_server",
+        support="codex.send",
+    )
+
+
 def test_intent_queue_always_persists_queued(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
