@@ -600,7 +600,7 @@ def test_attachment_store_commit_failure_rolls_back_media_rows(monkeypatch, tmp_
         assert list((tmp_path / "blobs").rglob("*.bin")) == []
 
 
-def test_cleanup_stale_blobs_removes_terminal_aged_rows(monkeypatch, tmp_path):
+def test_cleanup_stale_blobs_removes_delivery_blob_but_keeps_media_provenance(monkeypatch, tmp_path):
     _set_blob_root(monkeypatch, tmp_path)
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_codex_session(session_local)
@@ -623,6 +623,8 @@ def test_cleanup_stale_blobs_removes_terminal_aged_rows(monkeypatch, tmp_path):
             row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
             assert row.status == INPUT_STATUS_DELIVERED
             attach = db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == input_id).one()
+            attach_id = attach.id
+            sha = attach.sha256
             blob_path = tmp_path / "blobs" / attach.blob_path
             assert blob_path.exists()
 
@@ -636,13 +638,65 @@ def test_cleanup_stale_blobs_removes_terminal_aged_rows(monkeypatch, tmp_path):
             assert not blob_path.exists()
             assert (
                 db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == input_id).count()
-                == 0
+                == 1
             )
-            media = db.query(MediaObject).filter(MediaObject.sha256 == attach.sha256).one()
+            assert db.query(SessionMediaRef).filter(SessionMediaRef.media_sha256 == sha).count() == 1
+            media = db.query(MediaObject).filter(MediaObject.sha256 == sha).one()
             assert (tmp_path / "media" / media.storage_path).exists()
+
+        fetched = client.get(
+            f"/api/agents/sessions/{session_id}/inputs/{input_id}/attachments/{attach_id}/blob",
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert fetched.status_code == 200, fetched.text
+        assert fetched.content == _PNG_BYTES
+        assert fetched.headers["X-Attachment-Sha256"] == sha
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         api_app_ref.dependency_overrides = {}
+
+
+def test_cleanup_stale_blobs_preserves_only_remaining_attachment_copy(monkeypatch, tmp_path):
+    _set_blob_root(monkeypatch, tmp_path)
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_codex_session(session_local)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="look at this",
+            owner_id=user_id,
+            intent="auto",
+            status=INPUT_STATUS_DELIVERED,
+            client_request_id="cleanup-missing-media",
+            delivery_request_id="cleanup-missing-media-delivery",
+        )
+        stored = store_attachment_blob(
+            db,
+            session_input=row,
+            mime_type="image/png",
+            data=_PNG_BYTES,
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+        attach = db.query(SessionInputAttachment).filter(SessionInputAttachment.id == stored.id).one()
+        blob_path = tmp_path / "blobs" / attach.blob_path
+        media = db.query(MediaObject).filter(MediaObject.sha256 == attach.sha256).one()
+        media_path = tmp_path / "media" / media.storage_path
+        assert blob_path.exists()
+        assert media_path.exists()
+
+        media_path.unlink()
+        db.delete(media)
+        attach.created_at = datetime.now(timezone.utc) - timedelta(days=2)
+        db.commit()
+
+        removed = cleanup_stale_blobs(db)
+
+        assert removed == 0
+        assert blob_path.exists()
+        assert db.query(SessionInputAttachment).filter(SessionInputAttachment.id == stored.id).count() == 1
 
 
 def test_startup_reconciliation_fails_stuck_attachment_rows(monkeypatch, tmp_path):

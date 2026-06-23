@@ -49,9 +49,9 @@ from zerg.services.session_input_attachments import ALLOWED_MIME_TYPES
 from zerg.services.session_input_attachments import MAX_ATTACHMENT_BYTES
 from zerg.services.session_input_attachments import MAX_ATTACHMENTS_PER_INPUT
 from zerg.services.session_input_attachments import StoredAttachment
-from zerg.services.session_input_attachments import absolute_blob_path
 from zerg.services.session_input_attachments import get_attachment
 from zerg.services.session_input_attachments import list_attachments_for_input
+from zerg.services.session_input_attachments import read_path_for_attachment
 from zerg.services.session_input_attachments import store_attachment_blob
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
@@ -357,7 +357,7 @@ async def fetch_attachment_blob(
         session_input_attachment_blob_fetches_total.labels(outcome="not_found").inc()
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="not found")
 
-    blob_path: Path = absolute_blob_path(row)
+    blob_path: Path = read_path_for_attachment(db, row)
     if not blob_path.exists():
         logger.warning("attachment row %s exists but blob is missing at %s", row.id, blob_path)
         session_input_attachment_blob_fetches_total.labels(outcome="blob_missing").inc()

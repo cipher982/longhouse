@@ -25,8 +25,10 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
+from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionInputAttachment
+from zerg.services.media_store import absolute_media_path
 from zerg.services.media_store import store_media_blob
 from zerg.services.media_store import upsert_media_ref
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
@@ -174,12 +176,37 @@ def absolute_blob_path(row: SessionInputAttachment) -> Path:
     return attachment_blob_root() / row.blob_path
 
 
-def cleanup_stale_blobs(db: Session, *, retention_secs: int = BLOB_RETENTION_SECS) -> int:
-    """Delete blobs+rows whose parent input is terminal and older than retention.
+def read_path_for_attachment(db: Session, row: SessionInputAttachment) -> Path:
+    """Return the best available blob path for an attachment row.
 
-    Cascading FK already deletes the row when a session_input is hard-deleted;
-    this handler covers the soft-terminal case (delivered/failed) where the
-    parent row still exists but the bytes are no longer needed.
+    The attachment-specific blob is a delivery cache for the engine fetch path.
+    Durable history lives in the shared media store, so old rows can still be
+    fetched after the duplicate attachment blob has been reaped.
+    """
+
+    path = absolute_blob_path(row)
+    if path.is_file():
+        return path
+    media = db.query(MediaObject).filter(MediaObject.sha256 == row.sha256).first()
+    if media is not None:
+        media_path = absolute_media_path(media)
+        if media_path.is_file():
+            return media_path
+    return path
+
+
+def _shared_media_present(db: Session, row: SessionInputAttachment) -> bool:
+    media = db.query(MediaObject).filter(MediaObject.sha256 == row.sha256).first()
+    return media is not None and absolute_media_path(media).is_file()
+
+
+def cleanup_stale_blobs(db: Session, *, retention_secs: int = BLOB_RETENTION_SECS) -> int:
+    """Delete duplicate delivery blobs whose bytes are durable in media_objects.
+
+    Attachment rows remain as durable composer provenance. We only reap the
+    attachment-specific delivery copy after confirming the shared media object
+    still exists, so cleanup can never delete the only copy of user-supplied
+    session media.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=retention_secs)
     stale: Iterable[SessionInputAttachment] = (
@@ -193,16 +220,22 @@ def cleanup_stale_blobs(db: Session, *, retention_secs: int = BLOB_RETENTION_SEC
     )
     removed = 0
     for row in list(stale):
+        if not _shared_media_present(db, row):
+            logger.warning(
+                "attachment cleanup: preserving %s because shared media %s is missing",
+                row.id,
+                row.sha256,
+            )
+            continue
         path = absolute_blob_path(row)
         try:
             if path.exists():
                 path.unlink()
+                removed += 1
         except OSError:
             logger.warning("attachment cleanup: failed to unlink %s", path, exc_info=True)
-        db.delete(row)
-        removed += 1
+    db.commit()
     if removed:
-        db.commit()
         logger.info("attachment cleanup: removed %d stale blobs", removed)
     return removed
 
