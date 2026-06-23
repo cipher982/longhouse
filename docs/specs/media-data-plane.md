@@ -12,9 +12,15 @@ Related specs:
 ## Context
 
 Longhouse needs to support screenshots and other image artifacts across every
-coding agent and harness we support: Codex, Claude Code, Antigravity, OpenCode,
-browser automation, Computer Use, web composer, iOS composer, and future agent
-tools.
+coding agent we support: Codex, Claude Code, Antigravity, and OpenCode, plus
+web/iOS composer input and future agent tools.
+
+Images can appear in a session through two paths: provider-imported transcript
+history with inline image data, and in-session tool surfaces (browser
+automation, Computer Use) that emit screenshots as tool output within an
+existing provider session. Browser harness and Computer Use are not separate
+ingestion providers — they produce media inside a Codex or Claude Code session,
+and the owning provider's extractor handles their tool-result images.
 
 The current system has two different image stories:
 
@@ -422,9 +428,20 @@ queue, but it must share the same lane scheduler, backoff vocabulary, retry
 limits, and host pressure signals. The implementation must not create an
 independent retry loop that can fight transcript repair.
 
-## Provider Adapter Responsibilities
+## Adapter Responsibilities
 
-Adapters should detect media mechanically and leave judgment to clients/agents.
+Adapters detect media mechanically and leave judgment to clients/agents. There
+are two kinds of adapter, not one:
+
+1. **Transcript provider adapters** (Codex, Claude Code, Antigravity, OpenCode)
+   own a session's transcript import path. They redact inline base64, detect
+   provider-native media fields, and register `MediaRef` rows with provenance.
+2. **In-session tool surfaces** (browser harness, Computer Use) emit
+   screenshots as tool output *within* a provider session. They are not
+   separate ingestion providers. Their images flow through the owning
+   provider's adapter and are covered by its extractor. The guidance below for
+   browser harness and Computer Use describes how a provider adapter should
+   treat tool-result screenshots, not a standalone adapter implementation.
 
 ### Provider-Neutral Inline Data URLs
 
@@ -469,19 +486,25 @@ local file path to Codex. That part is already the right provider boundary.
 - Normalize to `MediaRef`.
 - Preserve the provider-native pointer in `session_media_refs`.
 
-### Browser Harness and Computer Use
+### In-Session Tool Surfaces (Browser Harness, Computer Use)
 
-- Treat screenshots as media objects from capture time. They should never enter
-  a transcript as base64.
+Browser harness and Computer Use are not separate ingestion providers. They
+emit screenshots as tool output within a provider session (e.g., a Codex or
+Claude Code run that drives a browser). Their images are handled by the owning
+provider's extractor. This section describes how tool-result screenshots should
+be treated when they appear in a provider transcript, not a standalone adapter.
+
+- Tool-result screenshots should be treated as media objects at extraction
+  time. They should never remain in the transcript as base64.
 - Tool output should include a `MediaRef`, dimensions, and a compact textual
   label. Full bytes should never be embedded into transcript JSON.
 - Deduplicate consecutive identical frames by sha256.
 - Apply capture-time budgets for repeated screenshots. When a loop exceeds its
   byte budget, keep transcript/tool metadata and surface visible media repair or
   capture budget state instead of silently dropping evidence.
-- Generate a small thumbnail at capture/extraction time and upload it as a
-  derived media object. The Runtime Host should remain a byte store on the hot
-  path; expensive OCR/captioning stays in L4 enrichment.
+- Generate a small thumbnail at extraction time and upload it as a derived
+  media object. The Runtime Host should remain a byte store on the hot path;
+  expensive OCR/captioning stays in L4 enrichment.
 
 ### Web and iOS Composer
 
@@ -612,14 +635,17 @@ Rules:
 - Remove 24-hour delivery-only cleanup semantics for media that is part of
   durable session history.
 
-### Phase 4: Provider/Harness Coverage
+### Phase 4: Provider Coverage
 
-- Add extractors for Claude Code, Antigravity, OpenCode, browser harness, and
-  Computer Use.
-- Each extractor gets fixtures proving the transcript carries refs and the
-  media store has bytes.
-- Add capture-time screenshot budgets and consecutive-frame dedupe for browser
-  harness and Computer Use.
+- Add transcript-provider extractors for Claude Code and Antigravity (Codex and
+  OpenCode already ship). OpenCode extraction landed alongside Codex in the
+  initial implementation.
+- Each provider extractor gets fixtures proving the transcript carries refs and
+  the media store has bytes.
+- Ensure tool-result screenshots from in-session surfaces (browser harness,
+  Computer Use) are handled by the owning provider's extractor — no separate
+  adapter. Add capture-time screenshot budgets and consecutive-frame dedupe
+  inside the provider extractor path.
 
 ### Phase 5: Archive and UI Cutover
 
