@@ -2784,7 +2784,7 @@ fn is_plan_approval_request(method: &str, params: &Value) -> bool {
     .collect::<Vec<_>>()
     .join(" ")
     .to_ascii_lowercase();
-    if !(question_text.contains("plan") || question_text.contains("proposal")) {
+    if !has_plan_context(&question_text) {
         return false;
     }
 
@@ -2800,17 +2800,35 @@ fn is_plan_approval_request(method: &str, params: &Value) -> bool {
         })
         .unwrap_or_default();
     let has_approve = option_labels.iter().any(|label| {
-        let trimmed = label.trim();
-        trimmed == "approve" || trimmed == "approved" || trimmed.contains("approve")
+        label_tokens(label)
+            .into_iter()
+            .any(|token| matches!(token.as_str(), "approve" | "approved"))
     });
     let has_reject = option_labels.iter().any(|label| {
-        let trimmed = label.trim();
-        trimmed == "reject"
-            || trimmed == "decline"
-            || trimmed == "deny"
-            || trimmed.contains("reject")
+        label_tokens(label)
+            .into_iter()
+            .any(|token| matches!(token.as_str(), "reject" | "decline" | "deny"))
     });
     has_approve && has_reject
+}
+
+fn has_plan_context(text: &str) -> bool {
+    label_tokens(text)
+        .into_iter()
+        .any(|token| matches!(token.as_str(), "plan" | "plans" | "proposal" | "proposals"))
+}
+
+fn label_tokens(text: &str) -> Vec<String> {
+    text.split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter_map(|token| {
+            let token = token.trim().to_ascii_lowercase();
+            if token.is_empty() {
+                None
+            } else {
+                Some(token)
+            }
+        })
+        .collect()
 }
 
 fn is_permission_approval_method(method: &str) -> bool {
@@ -8538,6 +8556,21 @@ mod tests {
                     "options": [
                         {"label": "Approve", "description": "Allow"},
                         {"label": "Reject", "description": "Deny"}
+                    ]
+                }]
+            }),
+        ));
+
+        assert!(!is_plan_approval_request(
+            "item/tool/requestUserInput",
+            &json!({
+                "questions": [{
+                    "id": "explanation",
+                    "header": "Explanation approval",
+                    "question": "Approve this explanation?",
+                    "options": [
+                        {"label": "Disapprove", "description": "No"},
+                        {"label": "Reject", "description": "Revise"}
                     ]
                 }]
             }),
