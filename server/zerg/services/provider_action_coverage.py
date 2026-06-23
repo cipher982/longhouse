@@ -245,12 +245,6 @@ def _provider_specific_action_state(
         )
 
     if question.id == "plan_approval":
-        if provider == "codex":
-            return (
-                ActionCoverageState.SUPPORTED,
-                ActionCoverageReasonCode.PROVIDER_PAUSE_ANSWER_SUPPORTED,
-                "Codex plan approval requests use the managed pause-response path.",
-            )
         return (
             ActionCoverageState.UNKNOWN,
             ActionCoverageReasonCode.PROVIDER_SURFACE_UNPROVEN,

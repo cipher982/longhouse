@@ -42,8 +42,8 @@ def test_provider_specific_pause_actions_are_derived_without_manual_matrix():
 
     assert codex["structured_question"].state == ActionCoverageState.SUPPORTED
     assert codex["structured_question"].reason_code == ActionCoverageReasonCode.PROVIDER_PAUSE_ANSWER_SUPPORTED
-    assert codex["plan_approval"].state == ActionCoverageState.SUPPORTED
-    assert codex["plan_approval"].reason_code == ActionCoverageReasonCode.PROVIDER_PAUSE_ANSWER_SUPPORTED
+    assert codex["plan_approval"].state == ActionCoverageState.UNKNOWN
+    assert codex["plan_approval"].reason_code == ActionCoverageReasonCode.PROVIDER_SURFACE_UNPROVEN
 
     assert opencode["structured_question"].state == ActionCoverageState.READ_ONLY
     assert opencode["structured_question"].reason_code == ActionCoverageReasonCode.PROVIDER_PAUSE_DETECT_ONLY
