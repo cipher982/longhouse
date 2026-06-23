@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+from datetime import datetime
+from datetime import timezone
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -17,7 +19,9 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.main import api_app
+from zerg.models.agents import AgentSession
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
 
@@ -40,13 +44,27 @@ def _setup_app(tmp_path, monkeypatch):
     api_app.dependency_overrides[get_db] = _override_db
     api_app.dependency_overrides[verify_agents_token] = lambda: None
     api_app.dependency_overrides[require_single_tenant] = lambda: None
+    api_app.dependency_overrides[get_current_browser_route_user] = lambda: object()
 
     def _cleanup():
         api_app.dependency_overrides.pop(get_db, None)
         api_app.dependency_overrides.pop(verify_agents_token, None)
         api_app.dependency_overrides.pop(require_single_tenant, None)
+        api_app.dependency_overrides.pop(get_current_browser_route_user, None)
 
     return factory, blob_root, _cleanup
+
+
+def _create_session(db, session_id):
+    db.add(
+        AgentSession(
+            id=session_id,
+            provider="codex",
+            environment="test",
+            started_at=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
 
 
 def test_media_claim_upload_claim_and_fetch(tmp_path, monkeypatch):
@@ -209,8 +227,115 @@ def test_media_upload_rejects_hash_mismatch(tmp_path, monkeypatch):
 
     try:
         response = client.put(f"/agents/media/{wrong_digest}", content=b"actual", headers={"Content-Type": "image/png"})
-        assert response.status_code == 400, response.text
+        assert response.status_code == 409, response.text
         assert response.json()["detail"] == "sha256 mismatch"
+    finally:
+        cleanup()
+
+
+def test_browser_media_read_requires_session_ref(tmp_path, monkeypatch):
+    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    payload = b"\x89PNG\r\nvisible-browser-media"
+    digest = hashlib.sha256(payload).hexdigest()
+
+    try:
+        uploaded = client.put(f"/agents/media/{digest}", content=payload, headers={"Content-Type": "image/png"})
+        assert uploaded.status_code == 200, uploaded.text
+
+        denied = client.get(f"/media/{digest}/blob")
+        assert denied.status_code == 404, denied.text
+
+        session_id = uuid4()
+        with factory() as db:
+            _create_session(db, session_id)
+
+        claim = client.post(
+            "/agents/media/claims",
+            json={
+                "items": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "byte_size": len(payload),
+                        "session_id": str(session_id),
+                        "source_path": "/tmp/codex.jsonl",
+                        "source_offset": 9,
+                    }
+                ]
+            },
+        )
+        assert claim.status_code == 200, claim.text
+
+        head = client.head(f"/media/{digest}")
+        assert head.status_code == 200, head.text
+        assert head.headers["content-length"] == str(len(payload))
+        assert head.headers["x-media-sha256"] == digest
+
+        fetched = client.get(f"/media/{digest}/blob")
+        assert fetched.status_code == 200, fetched.text
+        assert fetched.content == payload
+        assert fetched.headers["content-type"].startswith("image/png")
+        assert fetched.headers["x-media-sha256"] == digest
+    finally:
+        cleanup()
+
+
+def test_browser_media_thumbnail_streams_authorized_derivative(tmp_path, monkeypatch):
+    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    session_id = uuid4()
+    payload = b"\x89PNG\r\noriginal-media"
+    digest = hashlib.sha256(payload).hexdigest()
+    thumb_payload = b"RIFFwebp-thumbnail"
+    thumb_digest = hashlib.sha256(thumb_payload).hexdigest()
+
+    try:
+        with factory() as db:
+            _create_session(db, session_id)
+
+        claim = client.post(
+            "/agents/media/claims",
+            json={
+                "items": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "byte_size": len(payload),
+                        "session_id": str(session_id),
+                        "source_path": "/tmp/codex.jsonl",
+                        "source_offset": 11,
+                    }
+                ]
+            },
+        )
+        assert claim.status_code == 200, claim.text
+
+        uploaded = client.put(f"/agents/media/{digest}", content=payload, headers={"Content-Type": "image/png"})
+        assert uploaded.status_code == 200, uploaded.text
+
+        missing_thumb = client.get(f"/media/{digest}/thumb")
+        assert missing_thumb.status_code == 404, missing_thumb.text
+        assert missing_thumb.json()["detail"] == "media thumbnail not found"
+
+        uploaded_thumb = client.put(
+            f"/agents/media/{thumb_digest}",
+            content=thumb_payload,
+            headers={"Content-Type": "image/webp"},
+        )
+        assert uploaded_thumb.status_code == 200, uploaded_thumb.text
+
+        with factory() as db:
+            row = db.query(MediaObject).filter(MediaObject.sha256 == digest).first()
+            assert row is not None
+            row.thumbnail_sha256 = thumb_digest
+            db.commit()
+
+        fetched = client.get(f"/media/{digest}/thumb")
+        assert fetched.status_code == 200, fetched.text
+        assert fetched.content == thumb_payload
+        assert fetched.headers["content-type"].startswith("image/webp")
+        assert fetched.headers["x-media-sha256"] == thumb_digest
     finally:
         cleanup()
 

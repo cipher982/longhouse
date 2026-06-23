@@ -18,13 +18,18 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.models.agents import AgentSession
 from zerg.models.agents import MediaObject
+from zerg.models.agents import SessionMediaRef
+from zerg.models.user import User
 from zerg.services.media_store import absolute_media_path
 from zerg.services.media_store import claim_media
 from zerg.services.media_store import is_valid_sha256
 from zerg.services.media_store import store_media_blob
 
 router = APIRouter(prefix="/agents/media", tags=["agents"])
+browser_router = APIRouter(prefix="/media", tags=["media"])
 
 
 class MediaClaimItem(BaseModel):
@@ -75,6 +80,42 @@ def _row_or_404(db: Session, sha256: str) -> MediaObject:
     return row
 
 
+def _browser_row_or_404(db: Session, sha256: str) -> MediaObject:
+    row = _row_or_404(db, sha256)
+    ref = (
+        db.query(SessionMediaRef.id)
+        .join(AgentSession, AgentSession.id == SessionMediaRef.session_id)
+        .filter(SessionMediaRef.media_sha256 == row.sha256)
+        .first()
+    )
+    if ref is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media not found")
+    return row
+
+
+def _stream_media_row(row: MediaObject) -> StreamingResponse:
+    path = absolute_media_path(row)
+    return StreamingResponse(
+        path.open("rb"),
+        media_type=row.mime_type,
+        headers={
+            "Content-Length": str(row.byte_size),
+            "X-Media-Sha256": row.sha256,
+        },
+    )
+
+
+def _head_media_row(row: MediaObject) -> Response:
+    return Response(
+        status_code=status.HTTP_200_OK,
+        media_type=row.mime_type,
+        headers={
+            "Content-Length": str(row.byte_size),
+            "X-Media-Sha256": row.sha256,
+        },
+    )
+
+
 @router.post(
     "/claims",
     response_model=MediaClaimsResponse,
@@ -111,7 +152,8 @@ async def put_media_blob(
             first_seen_session_id=first_seen_session_id,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        status_code = status.HTTP_409_CONFLICT if str(exc) == "sha256 mismatch" else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
     return MediaUploadResponse(
         sha256=stored.sha256,
@@ -130,15 +172,7 @@ async def get_media_blob(sha256: str, db: Session = Depends(get_db)) -> Streamin
     """Fetch a media blob by sha256 over machine-token auth."""
 
     row = _row_or_404(db, sha256)
-    path = absolute_media_path(row)
-    return StreamingResponse(
-        path.open("rb"),
-        media_type=row.mime_type,
-        headers={
-            "Content-Length": str(row.byte_size),
-            "X-Media-Sha256": row.sha256,
-        },
-    )
+    return _stream_media_row(row)
 
 
 @router.head(
@@ -149,11 +183,43 @@ async def head_media_blob(sha256: str, db: Session = Depends(get_db)) -> Respons
     """Cheap integrity probe for a media blob."""
 
     row = _row_or_404(db, sha256)
-    return Response(
-        status_code=status.HTTP_200_OK,
-        media_type=row.mime_type,
-        headers={
-            "Content-Length": str(row.byte_size),
-            "X-Media-Sha256": row.sha256,
-        },
-    )
+    return _head_media_row(row)
+
+
+@browser_router.get("/{sha256}/blob")
+async def get_browser_media_blob(
+    sha256: str,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_browser_route_user),
+) -> StreamingResponse:
+    """Fetch a browser-visible media blob by sha256."""
+
+    row = _browser_row_or_404(db, sha256)
+    return _stream_media_row(row)
+
+
+@browser_router.get("/{sha256}/thumb")
+async def get_browser_media_thumbnail(
+    sha256: str,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_browser_route_user),
+) -> StreamingResponse:
+    """Fetch a derived thumbnail for a browser-visible media object."""
+
+    row = _browser_row_or_404(db, sha256)
+    if not row.thumbnail_sha256:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media thumbnail not found")
+    thumb_row = _row_or_404(db, row.thumbnail_sha256)
+    return _stream_media_row(thumb_row)
+
+
+@browser_router.head("/{sha256}")
+async def head_browser_media_blob(
+    sha256: str,
+    db: Session = Depends(get_db),
+    _current_user: User = Depends(get_current_browser_route_user),
+) -> Response:
+    """Cheap browser integrity probe for a visible media blob."""
+
+    row = _browser_row_or_404(db, sha256)
+    return _head_media_row(row)
