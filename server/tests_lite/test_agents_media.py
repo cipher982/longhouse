@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from uuid import uuid4
 
@@ -411,6 +412,118 @@ def test_session_events_project_media_refs_from_source_coordinates(tmp_path, mon
                 "original_kind": "inline_data_url",
             }
         ]
+    finally:
+        cleanup()
+
+
+def test_events_and_projection_project_event_id_media_refs(tmp_path, monkeypatch):
+    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    session_id = uuid4()
+    pending_digest = hashlib.sha256(b"pending-media").hexdigest()
+    present_payload = b"\x89PNG\r\npresent-event-media"
+    present_digest = hashlib.sha256(present_payload).hexdigest()
+    base = datetime.now(timezone.utc)
+
+    try:
+        with factory() as db:
+            _create_session(db, session_id)
+            first = AgentEvent(
+                session_id=session_id,
+                role="user",
+                content_text="[pending media redacted]",
+                timestamp=base,
+                source_path="/tmp/events-only.jsonl",
+                source_offset=1,
+                event_hash=hashlib.sha256(b"pending-event").hexdigest(),
+            )
+            second = AgentEvent(
+                session_id=session_id,
+                role="user",
+                content_text="[present media redacted]",
+                timestamp=base + timedelta(milliseconds=1),
+                source_path="/tmp/events-only.jsonl",
+                source_offset=2,
+                event_hash=hashlib.sha256(b"present-event").hexdigest(),
+            )
+            db.add_all([first, second])
+            db.commit()
+            first_id = first.id
+            second_id = second.id
+
+        claim = client.post(
+            "/agents/media/claims",
+            json={
+                "items": [
+                    {
+                        "sha256": pending_digest,
+                        "mime_type": "image/png",
+                        "byte_size": 13,
+                        "session_id": str(session_id),
+                        "event_id": first_id,
+                        "source_path": "/tmp/ref-only.jsonl",
+                        "source_offset": 501,
+                        "json_pointer": "/pending",
+                        "provider": "codex",
+                        "original_kind": "inline_data_url",
+                    },
+                    {
+                        "sha256": present_digest,
+                        "mime_type": "image/png",
+                        "byte_size": len(present_payload),
+                        "session_id": str(session_id),
+                        "event_id": second_id,
+                        "source_path": "/tmp/ref-only.jsonl",
+                        "source_offset": 502,
+                        "json_pointer": "/present",
+                        "provider": "codex",
+                        "original_kind": "inline_data_url",
+                    },
+                ]
+            },
+        )
+        assert claim.status_code == 200, claim.text
+        assert claim.json()["needed"] == [pending_digest, present_digest]
+
+        uploaded = client.put(
+            f"/agents/media/{present_digest}",
+            content=present_payload,
+            headers={"Content-Type": "image/png"},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+
+        events_response = client.get(f"/agents/sessions/{session_id}/events")
+        assert events_response.status_code == 200, events_response.text
+        events_by_id = {item["id"]: item for item in events_response.json()["events"]}
+        assert set(events_by_id) == {first_id, second_id}
+
+        pending_ref = events_by_id[first_id]["media_refs"][0]
+        assert pending_ref["sha256"] == pending_digest
+        assert pending_ref["media_state"] == "pending"
+        assert pending_ref["mime_type"] is None
+        assert pending_ref["byte_size"] is None
+        assert pending_ref["blob_url"] == f"/api/media/{pending_digest}/blob"
+        assert pending_ref["source_path"] == "/tmp/ref-only.jsonl"
+        assert pending_ref["source_offset"] == 501
+
+        present_ref = events_by_id[second_id]["media_refs"][0]
+        assert present_ref["sha256"] == present_digest
+        assert present_ref["media_state"] == "present"
+        assert present_ref["mime_type"] == "image/png"
+        assert present_ref["byte_size"] == len(present_payload)
+        assert present_ref["blob_url"] == f"/api/media/{present_digest}/blob"
+        assert present_ref["source_path"] == "/tmp/ref-only.jsonl"
+        assert present_ref["source_offset"] == 502
+
+        projection_response = client.get(f"/agents/sessions/{session_id}/projection?limit=50")
+        assert projection_response.status_code == 200, projection_response.text
+        projection_events = {
+            item["event"]["id"]: item["event"]
+            for item in projection_response.json()["items"]
+            if item["kind"] == "event"
+        }
+        assert projection_events[first_id]["media_refs"] == [pending_ref]
+        assert projection_events[second_id]["media_refs"] == [present_ref]
     finally:
         cleanup()
 
