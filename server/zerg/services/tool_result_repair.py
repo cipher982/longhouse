@@ -1,14 +1,16 @@
-"""Read-only classification for orphaned tool-result repair.
+"""Classification and guarded repair for orphaned tool results.
 
-This service does not insert repaired rows. It separates orphaned assistant tool
-calls whose result is recoverable from archived/source-line evidence from calls
-that appear genuinely dropped or cannot be reconstructed.
+The scanner is read-only. The repair path is opt-in and writes recovered rows
+through the normal session-observation reducer so historical backfills preserve
+the same audit and dedupe semantics as fresh ingest.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
+from typing import Any
 from typing import Literal
 from uuid import UUID
 
@@ -18,10 +20,14 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import aliased
 
 from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.session_observation_reducers import reduce_provider_event_observation
+from zerg.services.session_observations import record_provider_event_observation
+from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import parse_tool_result_events_from_raw_line
 
 _RECOVERED_OUTPUT_PREVIEW_CHARS = 500
@@ -60,6 +66,26 @@ class OrphanToolResultScanResult:
     findings: list[OrphanToolResultFinding]
 
 
+@dataclass(frozen=True)
+class OrphanToolResultRepairResult:
+    dry_run: bool
+    scanned_orphan_calls: int
+    recoverable: int
+    inserted: int
+    skipped_existing: int
+    no_source_evidence: int
+    no_result_in_source: int
+    unparseable_result: int
+    findings: list[OrphanToolResultFinding]
+
+
+@dataclass(frozen=True)
+class _OrphanToolResultEvaluation:
+    finding: OrphanToolResultFinding
+    parsed_event: ParsedEvent | None = None
+    raw_json_for_event: str | None = None
+
+
 def scan_orphan_tool_results(
     db: Session,
     *,
@@ -77,27 +103,79 @@ def scan_orphan_tool_results(
     findings: list[OrphanToolResultFinding] = []
     for call in _orphan_tool_calls(db, session_id=session_id, limit=limit):
         try:
-            findings.append(
-                _classify_orphan_call(
-                    db,
-                    call,
-                    max_source_lines_per_call=max_source_lines_per_call,
-                    archive_store=archive_store,
-                )
+            evaluation = _evaluate_orphan_call(
+                db,
+                call,
+                max_source_lines_per_call=max_source_lines_per_call,
+                archive_store=archive_store,
             )
+            findings.append(evaluation.finding)
         except Exception as exc:
             findings.append(_finding(call, "unparseable_result", f"classification failed: {type(exc).__name__}"))
-    counts = {
-        "recoverable": 0,
-        "no_source_evidence": 0,
-        "no_result_in_source": 0,
-        "unparseable_result": 0,
-    }
-    for finding in findings:
-        counts[finding.status] += 1
+    counts = _finding_counts(findings)
     return OrphanToolResultScanResult(
         scanned_orphan_calls=len(findings),
         recoverable=counts["recoverable"],
+        no_source_evidence=counts["no_source_evidence"],
+        no_result_in_source=counts["no_result_in_source"],
+        unparseable_result=counts["unparseable_result"],
+        findings=findings,
+    )
+
+
+def repair_orphan_tool_results(
+    db: Session,
+    *,
+    session_id: UUID | str | None = None,
+    limit: int = 500,
+    max_source_lines_per_call: int = 500,
+    archive_store: FilesystemArchiveStore | None = None,
+    apply: bool = False,
+) -> OrphanToolResultRepairResult:
+    """Dry-run or apply recovery for orphaned tool-result events.
+
+    The caller owns transaction commit/rollback. When ``apply`` is false, this
+    function performs the same classification work without mutating the DB.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
+    if max_source_lines_per_call < 1:
+        raise ValueError("max_source_lines_per_call must be at least 1")
+
+    findings: list[OrphanToolResultFinding] = []
+    inserted = 0
+    skipped_existing = 0
+    for call in _orphan_tool_calls(db, session_id=session_id, limit=limit):
+        try:
+            evaluation = _evaluate_orphan_call(
+                db,
+                call,
+                max_source_lines_per_call=max_source_lines_per_call,
+                archive_store=archive_store,
+            )
+        except Exception as exc:
+            findings.append(_finding(call, "unparseable_result", f"classification failed: {type(exc).__name__}"))
+            continue
+
+        findings.append(evaluation.finding)
+        if not apply or evaluation.finding.status != "recoverable" or evaluation.parsed_event is None:
+            continue
+        if _has_matching_tool_result(db, call):
+            skipped_existing += 1
+            continue
+        reduction = _insert_recovered_tool_result(db, call, evaluation)
+        if reduction is not None and reduction.inserted:
+            inserted += 1
+        else:
+            skipped_existing += 1
+
+    counts = _finding_counts(findings)
+    return OrphanToolResultRepairResult(
+        dry_run=not apply,
+        scanned_orphan_calls=len(findings),
+        recoverable=counts["recoverable"],
+        inserted=inserted,
+        skipped_existing=skipped_existing,
         no_source_evidence=counts["no_source_evidence"],
         no_result_in_source=counts["no_result_in_source"],
         unparseable_result=counts["unparseable_result"],
@@ -139,21 +217,21 @@ def _orphan_tool_calls(
     return query.all()
 
 
-def _classify_orphan_call(
+def _evaluate_orphan_call(
     db: Session,
     call: AgentEvent,
     *,
     max_source_lines_per_call: int,
     archive_store: FilesystemArchiveStore | None,
-) -> OrphanToolResultFinding:
+) -> _OrphanToolResultEvaluation:
     if not call.source_path:
-        return _finding(call, "no_source_evidence", "tool call has no source_path")
+        return _OrphanToolResultEvaluation(_finding(call, "no_source_evidence", "tool call has no source_path"))
     if call.branch_id is None:
-        return _finding(call, "no_source_evidence", "tool call has no branch_id")
+        return _OrphanToolResultEvaluation(_finding(call, "no_source_evidence", "tool call has no branch_id"))
 
     source_lines = _candidate_source_lines(db, call, limit=max_source_lines_per_call)
     if not source_lines:
-        return _finding(call, "no_source_evidence", "no source_lines rows after the tool call")
+        return _OrphanToolResultEvaluation(_finding(call, "no_source_evidence", "no source_lines rows after the tool call"))
 
     archive_bytes: dict[tuple[str, int, str], str] | None = None
     saw_matching_unparsed_result = False
@@ -164,21 +242,111 @@ def _classify_orphan_call(
         parsed_results = parse_tool_result_events_from_raw_line(raw, session_id=str(call.session_id), offset=int(row.source_offset))
         for parsed in parsed_results:
             if parsed.tool_call_id == call.tool_call_id:
-                return _finding(
-                    call,
-                    "recoverable",
-                    "matching tool_result found in archived source line",
-                    recovered_event_uuid=parsed.uuid,
-                    recovered_tool_output_text=parsed.tool_output_text,
-                    recovered_source_path=row.source_path,
-                    recovered_source_offset=int(row.source_offset),
+                return _OrphanToolResultEvaluation(
+                    _finding(
+                        call,
+                        "recoverable",
+                        "matching tool_result found in archived source line",
+                        recovered_event_uuid=parsed.uuid,
+                        recovered_tool_output_text=parsed.tool_output_text,
+                        recovered_source_path=row.source_path,
+                        recovered_source_offset=int(row.source_offset),
+                    ),
+                    parsed_event=parsed,
+                    raw_json_for_event=parsed.raw_line or None,
                 )
         if _raw_line_mentions_tool_result(raw, str(call.tool_call_id or "")):
             saw_matching_unparsed_result = True
 
     if saw_matching_unparsed_result:
-        return _finding(call, "unparseable_result", "matching tool_result raw line no longer parses to a role=tool event")
-    return _finding(call, "no_result_in_source", "no matching tool_result found in source evidence")
+        return _OrphanToolResultEvaluation(
+            _finding(call, "unparseable_result", "matching tool_result raw line no longer parses to a role=tool event")
+        )
+    return _OrphanToolResultEvaluation(_finding(call, "no_result_in_source", "no matching tool_result found in source evidence"))
+
+
+def _insert_recovered_tool_result(db: Session, call: AgentEvent, evaluation: _OrphanToolResultEvaluation):
+    parsed = evaluation.parsed_event
+    if parsed is None or call.branch_id is None:
+        return None
+    session = db.get(AgentSession, call.session_id)
+    if session is None:
+        raise ValueError(f"session {call.session_id} not found")
+
+    raw_json = evaluation.raw_json_for_event
+    event_uuid, parent_event_uuid = _extract_event_lineage(raw_json)
+    observation_result = record_provider_event_observation(
+        db,
+        session_id=call.session_id,
+        thread_id=call.thread_id,
+        provider=session.provider,
+        device_id=session.device_id,
+        source="tool_result_repair",
+        branch_id=int(call.branch_id),
+        role=parsed.role,
+        content_text=parsed.content_text,
+        tool_name=parsed.tool_name,
+        tool_input_json=parsed.tool_input_json,
+        tool_output_text=parsed.tool_output_text,
+        tool_call_id=parsed.tool_call_id,
+        timestamp=parsed.timestamp,
+        source_path=evaluation.finding.recovered_source_path,
+        source_offset=evaluation.finding.recovered_source_offset,
+        event_hash=_compute_event_hash(parsed, raw_json=raw_json),
+        raw_json=raw_json,
+        event_uuid=event_uuid,
+        parent_event_uuid=parent_event_uuid,
+        load_observation=True,
+    )
+    if observation_result.observation is None:
+        return None
+    return reduce_provider_event_observation(db, observation_result.observation)
+
+
+def _has_matching_tool_result(db: Session, call: AgentEvent) -> bool:
+    query = (
+        db.query(AgentEvent.id)
+        .filter(AgentEvent.session_id == call.session_id)
+        .filter(AgentEvent.role == "tool")
+        .filter(AgentEvent.tool_call_id == call.tool_call_id)
+        .filter(AgentEvent.event_origin == "durable")
+    )
+    if call.branch_id is None:
+        query = query.filter(AgentEvent.branch_id.is_(None))
+    else:
+        query = query.filter(AgentEvent.branch_id == call.branch_id)
+    return db.query(query.exists()).scalar() is True
+
+
+def _compute_event_hash(parsed: ParsedEvent, *, raw_json: str | None) -> str:
+    payload: dict[str, Any] = {
+        "role": parsed.role,
+        "content_text": parsed.content_text,
+        "tool_name": parsed.tool_name,
+        "tool_input_json": parsed.tool_input_json,
+        "tool_output_text": parsed.tool_output_text,
+        "tool_call_id": parsed.tool_call_id,
+    }
+    if raw_json:
+        payload["source_line_hash"] = hashlib.sha256(raw_json.encode()).hexdigest()
+    else:
+        payload["timestamp"] = parsed.timestamp.isoformat()
+    content = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(content.encode()).hexdigest()
+
+
+def _extract_event_lineage(raw_json: str | None) -> tuple[str | None, str | None]:
+    if not raw_json:
+        return None, None
+    try:
+        obj = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None, None
+    if not isinstance(obj, dict):
+        return None, None
+    event_uuid = obj.get("uuid")
+    parent_uuid = obj.get("parentUuid")
+    return (event_uuid if isinstance(event_uuid, str) else None, parent_uuid if isinstance(parent_uuid, str) else None)
 
 
 def _candidate_source_lines(db: Session, call: AgentEvent, *, limit: int) -> list[AgentSourceLine]:
@@ -226,6 +394,18 @@ def _raw_line_mentions_tool_result(raw: str, tool_call_id: str) -> bool:
         isinstance(item, dict) and item.get("type") == "tool_result" and str(item.get("tool_use_id") or "") == tool_call_id
         for item in content
     )
+
+
+def _finding_counts(findings: list[OrphanToolResultFinding]) -> dict[ToolResultFindingStatus, int]:
+    counts: dict[ToolResultFindingStatus, int] = {
+        "recoverable": 0,
+        "no_source_evidence": 0,
+        "no_result_in_source": 0,
+        "unparseable_result": 0,
+    }
+    for finding in findings:
+        counts[finding.status] += 1
+    return counts
 
 
 def _finding(
