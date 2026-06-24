@@ -244,6 +244,60 @@ def db_optimize(
         typer.echo(f"SQLite optimize complete elapsed_ms={payload['elapsed_ms']}")
 
 
+@db_app.command(name="detect-provider-duplicates")
+def db_detect_provider_duplicates(
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="SQLite DATABASE_URL override (defaults to env).",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Detect duplicate sessions sharing one provider-native id (read-only).
+
+    Pure SELECT — no writes (read locks only). Safe to run against the live
+    corpus. The destructive merge is intentionally not implemented; this only
+    reports split rows backed by a recorded provider_binding_conflict
+    observation (pre-instrumentation duplicates are not covered).
+    """
+    from zerg.database import make_sessionmaker
+    from zerg.services.agents.provider_binding_cleanup import detect_duplicate_sessions_by_provider_binding
+
+    engine, resolved_database_url = _resolve_db_engine(database_url)
+    SessionLocal = make_sessionmaker(engine)
+    db = SessionLocal()
+    try:
+        groups = detect_duplicate_sessions_by_provider_binding(db)
+    finally:
+        db.close()
+
+    payload = {
+        "status": "ok",
+        "database_url": resolved_database_url,
+        "discovery": "provider_binding_conflict observations only",
+        "coverage_note": (
+            "Detects duplicates backed by a recorded conflict observation. "
+            "Duplicates created before conflict-recording shipped are NOT visible here."
+        ),
+        "duplicate_group_count": len(groups),
+        "groups": [group.to_dict() for group in groups],
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if not groups:
+        typer.echo("No conflict-observation-backed duplicate provider-session bindings detected.")
+        typer.echo("  (Pre-instrumentation duplicates without a conflict observation are not covered.)")
+        return
+    typer.echo(f"Found {len(groups)} provider-native id(s) mapping to multiple sessions:")
+    for group in groups:
+        typer.echo(f"  {group.provider} {group.provider_session_id}")
+        typer.echo(f"    sessions: {', '.join(group.session_ids)}")
+        typer.echo(f"    threads:  {', '.join(group.thread_ids)}")
+        typer.echo(f"    evidence: {group.evidence}")
+
+
 app.add_typer(messages_app, name="messages", help="Durable session inbox commands")
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")

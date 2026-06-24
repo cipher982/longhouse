@@ -559,6 +559,7 @@ import-smoke: ## @internal Fast import + CSS reference smoke (<5s)
 qa-live: ## Canonical post-deploy hosted QA, including continuation readiness (~60s)
 	@$(MAKE) ensure-js-deps
 	@./scripts/qa/qa-live.sh
+	@python3 scripts/qa/provider-binding-convergence-canary.py
 
 hosted-shipper-mixed-bench: ## Hosted mixed live/archive ingest bench
 	@./scripts/qa/hosted-shipper-mixed-bench.sh

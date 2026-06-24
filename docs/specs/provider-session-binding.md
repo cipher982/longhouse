@@ -247,13 +247,13 @@ where the id is recorded.
 
 Reason codes:
 
-| Reason | Meaning |
-| --- | --- |
-| `provider_binding_missing` | Provider-native id was seen but no alias exists yet. |
-| `managed_provider_id_unbound` | Managed launch evidence exists, but the provider id did not resolve. |
-| `provider_binding_conflict` | Same provider-native id is claimed by competing Longhouse threads. |
-| `provider_binding_import_blocked` | Import fallback was blocked because managed ownership evidence exists. |
-| `provider_native_id_unexpected_missing` | A provider contract expected a durable native id, but none was observed. |
+| Reason | Status | Meaning |
+| --- | --- | --- |
+| `provider_binding_missing` | live | Managed evidence exists and a provider-native id was seen, but no alias resolved. |
+| `provider_binding_conflict` | live | Same provider-native id is claimed by competing Longhouse threads. |
+| `managed_provider_id_unbound` | not implemented | Originally proposed; folded into `provider_binding_missing`. Delete or implement — see Follow-Up reason-code reconciliation. |
+| `provider_binding_import_blocked` | not implemented | Originally proposed import-fallback block. Not wired. |
+| `provider_native_id_unexpected_missing` | not implemented | Originally proposed provider-contract miss. Not wired. |
 
 Local health and the macOS menu bar should summarize these directly:
 
@@ -401,6 +401,11 @@ This work is finished when the product invariant is observable at three levels:
 
 ### User Signal
 
+Status: PARTIAL. CLI + local-health JSON land in Follow-Up 1. Web, iOS, and the
+macOS menu bar remain open until `KernelSessionCapabilities` exposes a stable
+machine-readable `provider_binding_degraded` signal (deferred — see Follow-Up 1
+Out of scope). This criterion is not closed by the CLI pass alone.
+
 - Web, iOS, CLI, and the macOS menu bar all distinguish:
   - imported/read-only because Longhouse did not launch it
   - managed/live because transcript and control are bound
@@ -420,6 +425,202 @@ Longhouse started this session, but its transcript is not bound to the managed t
   one row for OpenCode.
 - `record_thread_alias` cannot silently swallow a provider-id conflict between
   different threads.
+
+## Follow-Up Work (Post-Kernel)
+
+The identity kernel shipped: the routing index, resolve-before-create root
+ingest, `ProviderSessionAliasConflict`, the OpenCode server bridge reader, and
+the `provider_binding_conflict` / `provider_binding_missing` observations all
+landed and are covered by unit/ingest tests. What remains is the work that makes
+the invariant **observable to humans**, **clean on the existing corpus**, and
+**continuously proven**. Three follow-ups close that gap.
+
+### Reason-Code Reconciliation
+
+The diagnostics table above originally listed five reason codes. Only two are
+wired up and recorded today:
+
+- `provider_binding_conflict` — recorded (`store.py`).
+- `provider_binding_missing` — recorded (`store.py`).
+
+The other three (`managed_provider_id_unbound`, `provider_binding_import_blocked`,
+`provider_native_id_unexpected_missing`) were never implemented. They are not
+part of this follow-up scope. Either fold their meaning into the two live codes
+or delete them from the table; do not leave them as aspirational scaffolding.
+
+### Follow-Up 1: Surface Binding Diagnostics To Humans
+
+**Problem.** Binding failures are recorded as `SessionObservation` rows but
+nothing reads them back. A managed session that loses its binding is detectable
+only by hand-querying SQLite. The spec's User Signal criterion is unmet.
+
+**Scope for this pass: CLI + local-health JSON only.** Web/iOS/menu-bar are a
+later pass; this follow-up establishes the read path they will reuse.
+
+**Plan.**
+
+- Add a shared read helper, `summarize_provider_binding_diagnostics(db, *,
+  since)`, in a new `server/zerg/services/agents/provider_binding_diagnostics.py`.
+  It queries `SessionObservation` filtered to
+  `kind IN (provider_binding_conflict, provider_binding_missing)` within a
+  lookback window (default 7 days), and returns a small typed summary:
+  per-kind counts, distinct affected `session_id`s, distinct
+  `provider_session_id`s, most-recent `observed_at`, and a capped sample of
+  recent entries. `provider_session_id` (and the conflict-only
+  `existing_thread_id` / `requested_thread_id`) live ONLY in `payload_json`, so
+  the helper must parse payloads defensively and skip malformed ones rather than
+  raise.
+- **Observed vs current.** These are observation rows, not live state, and the
+  observation IDs are deterministic (same conflict re-records the same id), so
+  `observed_at` does not refresh on repeat and a persistent issue can age out of
+  the window. The summary must be phrased and reported as "recent binding
+  diagnostic observed," never "currently degraded." Authoritative current state
+  is a later capabilities-projection concern (see Out of scope), not this read.
+- `local_health.py::collect_local_health` gains a `provider_binding_diagnostics`
+  section built from a guarded read-only `sqlite3` reader. local-health already
+  reads a local SQLite DB directly via `sqlite3` (e.g. `_load_session_binding_rows`),
+  so reuse that `mode=ro` path — do NOT introduce the app/ORM sessionmaker or any
+  dependency on hosted `david010` state into local-health. On `fast=True` the
+  section is skipped. On a DB error in deep mode, emit
+  `{"status": "unavailable", "skipped_reason": ...}` rather than omitting the
+  key, so consumers cannot confuse "not checked" with "clean." Never fatal.
+- `doctor.py` gains a `_check_provider_binding() -> list[CheckResult]` added to
+  the `sections` list. Green when zero recent diagnostics; warn (not fail) with
+  counts and the most recent affected session when any exist; warn on
+  `unavailable` too. A warn here means "a managed session may be degraded," not
+  "doctor is broken."
+- Copy stays in the spec's voice: name the broken contract piece, e.g.
+  "Longhouse started this session, but its transcript is not bound to the
+  managed thread."
+
+**Out of scope (named, not silently dropped):** adding a
+`provider_binding_degraded` field to `KernelSessionCapabilities` for web/iOS.
+That is the natural next seam (`kernel_capabilities.py`) but is deferred to keep
+this pass to the CLI surface. Note it so the client work has an anchor.
+
+**Guardrail tests.**
+
+- Helper returns empty summary on a clean DB.
+- Helper counts and samples a seeded conflict and a seeded missing observation.
+- Helper's lookback window excludes old observations.
+- `collect_local_health`'s reader reports `unavailable` when the DB is absent and
+  `skipped` on the fast path, and never raises.
+
+### Follow-Up 2: Detect The Dogfood Duplicate Rows (Detector Now, Merge Deferred)
+
+**Problem.** The migration only removes duplicate `provider_session_id` *aliases*
+that would block the routing index. The duplicate *session rows* from the
+original OpenCode incident still exist on hosted `david010`. The ghost row is
+still in the timeline.
+
+**Decision: ship a read-only detector now; defer the destructive merge.**
+Adversarial review surfaced four correctness hazards that make an automatic merge
+unsafe to run against the live corpus on a first pass. The detector gives the
+operator visibility immediately without rewriting any production rows.
+
+**This pass — detector only (pure SELECT, zero writes).**
+
+- Add `detect_duplicate_sessions_by_provider_binding(db) -> list[...]`. Because
+  the startup migration already deleted the duplicate *aliases*, duplicates can
+  no longer be found by grouping aliases. Discovery must use surviving evidence:
+  the recorded `provider_binding_conflict` / `provider_binding_missing`
+  observations (which carry `existing_thread_id` / `requested_thread_id` /
+  `provider_session_id` in their payloads). Cross-reference those to identify
+  session rows that share one provider-native id.
+- Expose as `longhouse maintenance detect-provider-duplicates` (read-only,
+  prints the candidate groups and why each was flagged). Safe to run against
+  `david010` anytime; it takes no write lock.
+
+**Deferred — the merge (`merge_duplicate_sessions_by_provider_binding`).** Do NOT
+implement until these four hazards are resolved in a dedicated design:
+
+1. **Discovery after alias dedup.** As above — there are no longer duplicate
+   aliases to group on. The merge must agree with the detector's evidence-based
+   discovery, not assume alias duplicates exist.
+2. **Canonical ordering must match the migration EXACTLY.** The migration order
+   is: control-capable/attached connection, then `is_primary`, then
+   `thread.created_at ASC`, then `alias.id ASC`. An earlier draft dropped the
+   `alias.id` tiebreaker — that can pick a different canonical thread than the
+   index kept its surviving alias on. The merge winner and the migration winner
+   must be provably identical, including the final tiebreak.
+3. **Concurrency.** `WriteSerializer` is process-local, not an interprocess
+   SQLite lock. A separate `--apply` CLI process bulk-rewriting the hosted DB
+   while ingest is live will contend for and hold long write locks (worsened by
+   FTS rebuild). Dry-run-by-default is not sufficient. The apply path must run
+   offline (instance quiesced) OR as an in-server privileged maintenance job
+   routed through `WriteSerializer` in small low-priority transactions. Dry-run
+   must be pure SELECT, never write-then-rollback.
+4. **Table coverage + unique-index collisions.** Session-scoped rows extend well
+   beyond events/source_lines/runs/connections/observations/aliases: live
+   previews, media refs, archive chunks/checkpoints/quarantine, projector
+   checkpoints, pause requests, session messages, inputs/attachments, launch
+   attempts, embeddings, timeline cards, shares, notification/APNS references,
+   turns. A naive relink onto the canonical `session_id` can violate unique
+   indexes and orphan rows in tables without cascade. The merge needs a full
+   table inventory with explicit per-table conflict behavior (merge / drop
+   duplicate read model / recompute / abort-as-ambiguous) before it touches
+   production.
+
+**Guardrail tests (detector).**
+
+- Clean DB: detector returns no candidates.
+- Seeded conflict observation pointing two threads at one native id: detector
+  flags the group and names both session ids and the native id.
+- Single clean session is never flagged.
+
+### Follow-Up 3: End-To-End Convergence Canary
+
+**Problem.** Convergence is proven only in-process. Nothing proves it on a real
+managed launch against a live runtime, so a future regression in the launch or
+ship path ships green.
+
+**Decision: hermetic test is the regression guard; live canary is gated proof.**
+A live-only check is flaky (transcript-ship timing, provider/token/runtime
+availability, `make qa-live` is hosted Playwright, not a local provider
+runtime). So we build both, with the hermetic one as the load-bearing guard.
+
+**Plan.**
+
+- **Hermetic convergence test (the real guard).** In `server/tests_lite/`, drive
+  the two-door convergence purely in-process: ingest a managed-launch session,
+  then ingest a root transcript carrying the same provider-native id in
+  launch-first AND transcript-first orderings, and assert exactly one session /
+  one thread results, with content and managed-capability projection. This runs
+  on every `make test` and is what actually catches a launch/ingest regression.
+- **Shared assertion helper.** Put the "exactly one session for this
+  provider-native id, with content + managed caps, no split row" assertion in
+  one importable place so the hermetic test, the live canary, and any future
+  Sauron release-watch all call the same logic.
+- **Gated live split-row audit (shipped as release/dogfood proof).**
+  `scripts/qa/provider-binding-convergence-canary.py` audits the EXISTING hosted
+  corpus: it lists managed OpenCode sessions, resolves each session's
+  provider-native id via the `X-Provider-Session-ID` detail header (the list API
+  does not expose it; the detail endpoint now sets it, mirroring the export
+  path), groups by native id, and FAILs only on the split-row symptom (one
+  native id, multiple sessions). It is GATED — SKIPs cleanly on no token /
+  unreachable instance — and is honest: zero resolved native ids is a SKIP
+  marked "not a PASS," and the detail-crawl cap is logged, never silent. Wired
+  onto `make qa-live`.
+- **Deferred — launch-orchestration canary.** The spec's original
+  launch→ship→assert shape (start managed OpenCode, send a unique marker, poll
+  transcript ship, assert one row with content + managed caps) needs a managed
+  provider runtime on the QA box and is a separate follow-up. The shipped audit
+  catches the split-row symptom on the live corpus; it does NOT exercise a fresh
+  launch. Claude and Codex variants belong to that deferred orchestration work.
+  Do not treat the audit as the launch proof or as the regression guard — the
+  hermetic test is the guard.
+
+**Guardrail / success.**
+
+- Hermetic test passes on `make test` and fails on an injected split row.
+- Live audit SKIPs cleanly when token/runtime/native-ids are absent, and FAILs
+  on one native id mapping to multiple sessions.
+
+### Sequencing
+
+1 and 2 are independent and can land in parallel. 3 depends on nothing but is
+most valuable after 2 (so the canary runs against an already-clean corpus).
+Suggested order: 1 (surface), then 2 (detect), then 3 (prove).
 
 ## Non-Goals
 

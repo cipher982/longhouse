@@ -748,6 +748,45 @@ def _provider_live_route_e2e_detail(route: dict) -> str:
     return "; ".join(parts) or "not configured"
 
 
+def _check_provider_binding() -> list[CheckResult]:
+    """Recently observed provider-session-binding diagnostics from local-health.
+
+    A warn here means "a managed session may have failed to bind its provider
+    transcript" — observed evidence, not a live-state assertion and not a sign
+    that doctor itself is broken.
+    """
+    try:
+        from zerg.services.local_health import collect_local_health
+
+        snapshot = collect_local_health()
+        diagnostics = dict(snapshot.get("provider_binding_diagnostics") or {})
+    except Exception as exc:
+        return [CheckResult(WARN, "Provider binding diagnostics unavailable", str(exc))]
+
+    status = str(diagnostics.get("status") or "unavailable")
+    if status == "skipped":
+        return [CheckResult(PASS, "Provider binding diagnostics skipped (fast)")]
+    if status == "unavailable":
+        reason = diagnostics.get("skipped_reason") or "unknown"
+        return [CheckResult(WARN, "Provider binding diagnostics unavailable", f"reason={reason}")]
+
+    conflict = int(diagnostics.get("conflict_count") or 0)
+    missing = int(diagnostics.get("missing_count") or 0)
+    if conflict == 0 and missing == 0:
+        return [CheckResult(PASS, "Provider binding healthy", "no recent binding diagnostics")]
+
+    affected = list(diagnostics.get("affected_session_ids") or [])
+    detail_parts = [f"conflict={conflict}", f"missing={missing}"]
+    if affected:
+        detail_parts.append(f"sessions={len(affected)}")
+        detail_parts.append(f"latest_session={affected[0]}")
+    most_recent = diagnostics.get("most_recent_observed_at")
+    if most_recent:
+        detail_parts.append(f"observed_at={most_recent}")
+    detail_parts.append("Longhouse may have started a session whose transcript did not bind to the managed thread")
+    return [CheckResult(WARN, "Provider binding diagnostics observed", "; ".join(detail_parts))]
+
+
 # ---------------------------------------------------------------------------
 # Main command
 # ---------------------------------------------------------------------------
@@ -788,6 +827,7 @@ def doctor(
         ("Machine Agent", _check_shipper()),
         ("Provider Support", _check_provider_support()),
         ("Provider Route E2E", _check_provider_live_route_e2e()),
+        ("Provider Binding", _check_provider_binding()),
         ("Config", _check_config()),
     ]
 

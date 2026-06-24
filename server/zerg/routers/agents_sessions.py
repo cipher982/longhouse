@@ -873,6 +873,12 @@ def get_session(
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
             pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
         )
+    # Expose the provider-native id (when bound) so binding-convergence tooling
+    # can group sessions by it; the list endpoint does not carry it. Mirrors the
+    # export path's X-Provider-Session-ID header.
+    provider_session_id = project_provider_session_id(db, session)
+    if provider_session_id:
+        response.headers["X-Provider-Session-ID"] = provider_session_id
     timing.apply(response)
     return result
 
