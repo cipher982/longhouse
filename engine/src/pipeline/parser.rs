@@ -25,9 +25,7 @@ use serde_json::value::RawValue;
 use uuid::Uuid;
 
 use crate::codex_source::parse_codex_subagent_source_str;
-use crate::media_redaction::{
-    redact_inline_image_data_urls_with_media, InlineImageRedaction,
-};
+use crate::media_redaction::{redact_inline_image_data_urls_with_media, InlineImageRedaction};
 
 /// Threshold for switching from buffered read to mmap (1 MB).
 const MMAP_THRESHOLD: u64 = 1_048_576;
@@ -235,8 +233,22 @@ struct CodexPayload {
     arguments: Option<String>,
     /// function_call / function_call_output: call correlation ID
     call_id: Option<String>,
-    /// function_call_output: result text
-    output: Option<String>,
+    /// function_call_output: result. Codex emits a plain string for text tool
+    /// results, but an array of content items for image-bearing results (e.g.
+    /// `view_image` -> [{type: input_image, image_url: data:...}]). Accept both
+    /// so image-only results do not fail the whole line's deserialization.
+    output: Option<CodexFunctionOutput>,
+}
+
+/// Codex `function_call_output.output`: either opaque result text or an array of
+/// content items. Image content (`image_url`) is intentionally ignored here --
+/// inline image bytes are captured by source-line media redaction, not by this
+/// struct, so we never pull megabyte base64 into the parse DOM.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CodexFunctionOutput {
+    Text(String),
+    Items(Vec<CodexContentItem>),
 }
 
 #[derive(Debug, Clone)]
@@ -2022,10 +2034,42 @@ fn extract_codex_events(
             let call_id = payload.call_id.as_deref().unwrap_or("");
             let uuid_suffix = if call_id.is_empty() { "0" } else { call_id };
 
-            let output = payload.output.as_deref().unwrap_or("");
-            if output.is_empty() {
-                return;
-            }
+            // Resolve the tool-result text. String outputs are opaque (kept as-is,
+            // even if they happen to look like JSON). Array outputs are content
+            // items: join their text, and when the only content is image(s), emit a
+            // placeholder so the result event still exists. The image bytes
+            // themselves are captured by source-line media redaction and bound back
+            // to this event via its source coordinate, so we do not extract media here.
+            let tool_output_text = match payload.output.as_ref() {
+                Some(CodexFunctionOutput::Text(text)) => {
+                    if text.is_empty() {
+                        return;
+                    }
+                    text.clone()
+                }
+                Some(CodexFunctionOutput::Items(items)) => {
+                    let image_count = items
+                        .iter()
+                        .filter(|item| item.r#type.as_deref() == Some("input_image"))
+                        .count();
+                    let text: String = items
+                        .iter()
+                        .filter_map(|item| item.text.as_deref())
+                        .filter(|t| !t.trim().is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    if !text.trim().is_empty() {
+                        text
+                    } else if image_count == 1 {
+                        "[image result]".to_string()
+                    } else if image_count > 1 {
+                        format!("[{} image results]", image_count)
+                    } else {
+                        return;
+                    }
+                }
+                None => return,
+            };
 
             events.push(ParsedEvent {
                 uuid: format!("{}-result-{}", msg_uuid, uuid_suffix),
@@ -2035,7 +2079,7 @@ fn extract_codex_events(
                 content_text: None,
                 tool_name: None,
                 tool_input_json: None,
-                tool_output_text: Some(output.to_string()),
+                tool_output_text: Some(tool_output_text),
                 tool_call_id: if call_id.is_empty() {
                     None
                 } else {
@@ -2854,6 +2898,56 @@ mod tests {
             Some("file1.txt\nfile2.txt")
         );
         assert_eq!(result.events[1].raw_type, "codex_function_call_output");
+    }
+
+    #[test]
+    fn test_codex_function_call_output_image_array_emits_tool_event() {
+        // Codex image-returning tools (e.g. view_image) emit function_call_output
+        // with `output` as an ARRAY of content items instead of a string. The line
+        // must still parse and emit a role=Tool result event carrying a placeholder,
+        // so the image (captured separately by source-line media redaction) has an
+        // event to bind to. Regression for historical screenshots never rendering.
+        let dir = tempfile::tempdir().unwrap();
+        let img = format!("data:image/png;base64,{}", "A".repeat(800));
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-00000000ff02.jsonl",
+            &[
+                // image-only result
+                &format!(
+                    r#"{{"type":"response_item","timestamp":"2026-02-15T17:06:14Z","payload":{{"type":"function_call_output","call_id":"call_img","output":[{{"type":"input_image","image_url":"{img}"}}]}}}}"#
+                ),
+                // result array carrying text plus an image -> text wins
+                &format!(
+                    r#"{{"type":"response_item","timestamp":"2026-02-15T17:06:15Z","payload":{{"type":"function_call_output","call_id":"call_both","output":[{{"type":"output_text","text":"saw a cat"}},{{"type":"input_image","image_url":"{img}"}}]}}}}"#
+                ),
+                // plain string result still works unchanged
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:16Z","payload":{"type":"function_call_output","call_id":"call_text","output":"plain text"}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 3, "all three results must emit events");
+
+        assert_eq!(result.events[0].role, Role::Tool);
+        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("call_img"));
+        assert_eq!(
+            result.events[0].tool_output_text.as_deref(),
+            Some("[image result]")
+        );
+
+        assert_eq!(result.events[1].tool_call_id.as_deref(), Some("call_both"));
+        assert_eq!(result.events[1].tool_output_text.as_deref(), Some("saw a cat"));
+
+        assert_eq!(result.events[2].tool_call_id.as_deref(), Some("call_text"));
+        assert_eq!(result.events[2].tool_output_text.as_deref(), Some("plain text"));
+
+        // The inline image bytes should be captured as media objects by source-line
+        // redaction, independent of the event.
+        assert!(
+            !result.media_objects.is_empty(),
+            "image tool result bytes should be redacted into media objects"
+        );
     }
 
     #[test]
