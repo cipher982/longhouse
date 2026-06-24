@@ -23,6 +23,19 @@ from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli.main import app
 from zerg.services.managed_session_contracts import list_managed_session_contracts
 
+_SUBPROCESS_RUNTIME_ENV_KEYS = {
+    "DYLD_LIBRARY_PATH",
+    "LD_LIBRARY_PATH",
+    "PYTHONHOME",
+    "TMPDIR",
+}
+
+
+def _hook_env(values: dict[str, str]) -> dict[str, str]:
+    env = {key: value for key in _SUBPROCESS_RUNTIME_ENV_KEYS if (value := os.environ.get(key))}
+    env.update(values)
+    return env
+
 
 @pytest.fixture(autouse=True)
 def _isolate_longhouse_home(monkeypatch, tmp_path):
@@ -318,12 +331,12 @@ def test_antigravity_hook_script_writes_outbox_without_jq(tmp_path):
         text=True,
         capture_output=True,
         check=False,
-        env={
+        env=_hook_env({
             "LONGHOUSE_HOOK_PYTHON": sys.executable,
             "LONGHOUSE_ENGINE": "/bin/true",
             "LONGHOUSE_MANAGED_SESSION_ID": "session-123",
             "PATH": "/nonexistent",
-        },
+        }),
     )
 
     assert result.returncode == 0, result.stderr
@@ -375,14 +388,14 @@ def test_antigravity_hook_claims_inbox_message_and_injects_preinvocation(tmp_pat
         text=True,
         capture_output=True,
         check=False,
-        env={
+        env=_hook_env({
             "LONGHOUSE_HOOK_PYTHON": sys.executable,
             "LONGHOUSE_ENGINE": "/bin/true",
             "LONGHOUSE_MANAGED_SESSION_ID": "session-123",
             "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(inbox_dir),
             "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(state_dir),
             "PATH": os.defpath,
-        },
+        }),
     )
 
     assert result.returncode == 0, result.stderr
@@ -424,12 +437,12 @@ def test_antigravity_hook_derives_canonical_inbox_from_longhouse_home(tmp_path):
         text=True,
         capture_output=True,
         check=False,
-        env={
+        env=_hook_env({
             "LONGHOUSE_HOOK_PYTHON": sys.executable,
             "LONGHOUSE_ENGINE": "/bin/true",
             "LONGHOUSE_MANAGED_SESSION_ID": "session-123",
             "PATH": os.defpath,
-        },
+        }),
     )
 
     assert result.returncode == 0, result.stderr
@@ -451,10 +464,10 @@ def test_antigravity_hook_reports_python_probe_failure(tmp_path):
         text=True,
         capture_output=True,
         check=False,
-        env={
+        env=_hook_env({
             "LONGHOUSE_HOOK_PYTHON": str(tmp_path / "missing-python"),
             "PATH": os.defpath,
-        },
+        }),
     )
 
     assert result.returncode == 0
@@ -509,7 +522,7 @@ def test_antigravity_hook_claims_postinvocation_message_and_forces_continue(tmp_
         text=True,
         capture_output=True,
         check=False,
-        env={
+        env=_hook_env({
             "LONGHOUSE_HOOK_PYTHON": sys.executable,
             "LONGHOUSE_ENGINE": "/bin/true",
             "LONGHOUSE_MANAGED_SESSION_ID": "session-123",
@@ -518,7 +531,7 @@ def test_antigravity_hook_claims_postinvocation_message_and_forces_continue(tmp_
             ),
             "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(antigravity_channel.antigravity_state_dir(config_dir)),
             "PATH": os.defpath,
-        },
+        }),
     )
 
     assert result.returncode == 0, result.stderr
@@ -549,7 +562,7 @@ def test_antigravity_stop_hook_continues_when_inbox_has_pending_input(tmp_path):
         text=True,
         capture_output=True,
         check=False,
-        env={
+        env=_hook_env({
             "LONGHOUSE_HOOK_PYTHON": sys.executable,
             "LONGHOUSE_ENGINE": "/bin/true",
             "LONGHOUSE_MANAGED_SESSION_ID": "session-123",
@@ -558,7 +571,7 @@ def test_antigravity_stop_hook_continues_when_inbox_has_pending_input(tmp_path):
             ),
             "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(antigravity_channel.antigravity_state_dir(config_dir)),
             "PATH": os.defpath,
-        },
+        }),
     )
 
     assert result.returncode == 0, result.stderr
@@ -606,11 +619,11 @@ def test_antigravity_hook_binds_transcript_in_same_longhouse_home(tmp_path):
         text=True,
         capture_output=True,
         check=False,
-        env={
+        env=_hook_env({
             "LONGHOUSE_HOOK_PYTHON": sys.executable,
             "LONGHOUSE_MANAGED_SESSION_ID": "session-123",
             "PATH": os.defpath,
-        },
+        }),
     )
 
     assert result.returncode == 0, result.stderr
@@ -826,11 +839,11 @@ def test_antigravity_hook_script_quotes_paths_with_special_chars(tmp_path):
         text=True,
         capture_output=True,
         check=False,
-        env={
+        env=_hook_env({
             "LONGHOUSE_HOOK_PYTHON": sys.executable,
             "LONGHOUSE_MANAGED_SESSION_ID": "session-weird",
             "PATH": os.defpath,
-        },
+        }),
     )
 
     assert result.returncode == 0, result.stderr

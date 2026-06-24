@@ -37,6 +37,17 @@ from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
 from zerg.services.provider_action_coverage import serialize_provider_action_coverage
 
+_SUBPROCESS_RUNTIME_ENV_KEYS = {
+    "DYLD_LIBRARY_PATH",
+    "LD_LIBRARY_PATH",
+    "PYTHONHOME",
+    "TMPDIR",
+}
+
+
+def _subprocess_runtime_env() -> dict[str, str]:
+    return {key: value for key in _SUBPROCESS_RUNTIME_ENV_KEYS if (value := os.environ.get(key))}
+
 
 def _seed_managed_kernel_rows(db: Any, session: Any, *, control_plane: str) -> None:
     from zerg.services.agents.kernel_writes import ensure_primary_thread
@@ -2078,6 +2089,7 @@ class UniversalProviderAdapter:
         answerer.start()
 
         hook_env = {
+            **_subprocess_runtime_env(),
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
             "LONGHOUSE_HOOK_URL": base_url,
