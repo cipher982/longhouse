@@ -473,6 +473,11 @@ def test_session_events_project_media_refs_from_source_coordinates(tmp_path, mon
 
 
 def test_session_events_do_not_guess_ambiguous_source_coordinate_media_refs(tmp_path, monkeypatch):
+    # A coordinate-only media ref (event_id=NULL) must not bind when the source
+    # offset is shared by events with DIFFERENT semantic identities (distinct
+    # event_hash) -- e.g. assistant text plus a tool call from one provider line.
+    # Binding there would paste the image onto unrelated events. The two events
+    # below carry different event_hash values, so neither should receive the ref.
     factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
     client = TestClient(api_app)
     session_id = uuid4()
@@ -540,6 +545,90 @@ def test_session_events_do_not_guess_ambiguous_source_coordinate_media_refs(tmp_
         assert len(events) == 2
         assert events[0]["media_refs"] == []
         assert events[1]["media_refs"] == []
+    finally:
+        cleanup()
+
+
+def test_session_events_bind_media_ref_to_duplicate_source_coordinate_events(tmp_path, monkeypatch):
+    # When a source offset is shared by events that are the SAME logical line --
+    # re-ingestion duplicates or branch-copies, identified by an identical
+    # event_hash -- a coordinate-only media ref (event_id=NULL, e.g. legacy
+    # backfill) must bind to every one of them. This is the historical-image
+    # backfill case: one image-bearing line projected into several event rows.
+    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    session_id = uuid4()
+    source_path = "/tmp/codex/duplicated.jsonl"
+    source_offset = 789
+    payload = b"\x89PNG\r\nduplicated-media"
+    digest = hashlib.sha256(payload).hexdigest()
+    base = datetime.now(timezone.utc)
+    shared_event_hash = hashlib.sha256(b"shared-line").hexdigest()
+
+    try:
+        with factory() as db:
+            _create_session(db, session_id)
+
+        claim = client.post(
+            "/agents/media/claims",
+            json={
+                "items": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "byte_size": len(payload),
+                        "session_id": str(session_id),
+                        "source_path": source_path,
+                        "source_offset": source_offset,
+                        "source_line_hash": hashlib.sha256(b"dup-source-line").hexdigest(),
+                        "provider": "codex",
+                        "original_kind": "data_url_backfill",
+                    }
+                ]
+            },
+        )
+        assert claim.status_code == 200, claim.text
+        uploaded = client.put(f"/agents/media/{digest}", content=payload, headers={"Content-Type": "image/png"})
+        assert uploaded.status_code == 200, uploaded.text
+
+        with factory() as db:
+            # Two events at one coordinate, same event_hash: a re-ingestion
+            # duplicate / branch-copy of one image-bearing line.
+            db.add_all(
+                [
+                    AgentEvent(
+                        session_id=session_id,
+                        role="user",
+                        content_text="[Image #1] same line",
+                        timestamp=base,
+                        source_path=source_path,
+                        source_offset=source_offset,
+                        branch_id=1,
+                        event_hash=shared_event_hash,
+                    ),
+                    AgentEvent(
+                        session_id=session_id,
+                        role="user",
+                        content_text="[Image #1] same line",
+                        timestamp=base,
+                        source_path=source_path,
+                        source_offset=source_offset,
+                        branch_id=2,
+                        event_hash=shared_event_hash,
+                    ),
+                ]
+            )
+            db.commit()
+
+        response = client.get(f"/agents/sessions/{session_id}/events?branch_mode=all")
+        assert response.status_code == 200, response.text
+        events = response.json()["events"]
+        with_refs = [e for e in events if e["media_refs"]]
+        assert with_refs, "duplicate-coordinate events should each carry the backfilled media ref"
+        for event in with_refs:
+            assert event["media_refs"][0]["sha256"] == digest
+            assert event["media_refs"][0]["media_state"] == "present"
+            assert event["media_refs"][0]["original_kind"] == "data_url_backfill"
     finally:
         cleanup()
 
