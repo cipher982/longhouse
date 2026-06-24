@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from datetime import timezone
 from uuid import UUID
@@ -26,6 +27,10 @@ from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.tool_result_repair import repair_orphan_tool_results
 from zerg.services.tool_result_repair import scan_orphan_tool_results
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", text)
 
 
 def test_scan_classifies_recoverable_compressed_image_tool_result(tmp_path):
@@ -567,7 +572,7 @@ def test_archive_scan_orphan_tool_results_cli_rejects_bad_session_id(tmp_path):
     )
 
     assert result.exit_code != 0
-    assert "--session-id must be a valid UUID" in result.output
+    assert "--session-id must be a valid UUID" in _strip_ansi(result.output)
 
 
 def test_archive_repair_orphan_tool_results_cli_defaults_to_dry_run(tmp_path):
@@ -657,7 +662,7 @@ def test_archive_repair_orphan_tool_results_cli_rejects_bad_session_id(tmp_path)
     )
 
     assert result.exit_code != 0
-    assert "--session-id must be a valid UUID" in result.output
+    assert "--session-id must be a valid UUID" in _strip_ansi(result.output)
 
 
 _SOURCE_PATH = "/Users/davidrose/.claude/projects/longhouse/session.jsonl"
