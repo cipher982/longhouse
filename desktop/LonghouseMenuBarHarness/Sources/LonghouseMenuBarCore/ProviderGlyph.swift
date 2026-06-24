@@ -44,6 +44,50 @@ struct ProviderGlyph: View {
         providerColor(key)
     }
 
+    private var chipFill: Color {
+        switch key {
+        case "codex", "openai":
+            return Color(red: 0.08, green: 0.09, blue: 0.09)
+        case "opencode":
+            return Color(red: 0.12, green: 0.17, blue: 0.22)
+        default:
+            return brand.opacity(0.16)
+        }
+    }
+
+    private var chipStroke: Color {
+        switch key {
+        case "codex", "openai":
+            return Color.white.opacity(0.32)
+        case "opencode":
+            return Color(red: 0.40, green: 0.74, blue: 0.92).opacity(0.45)
+        default:
+            return brand.opacity(0.22)
+        }
+    }
+
+    private var chipCornerRadius: CGFloat {
+        switch key {
+        case "codex", "openai":
+            return size / 2
+        case "opencode":
+            return max(3, size * 0.18)
+        default:
+            return max(4, size * 0.28)
+        }
+    }
+
+    private var templateMarkColor: Color? {
+        switch key {
+        case "codex", "openai":
+            return Color.white.opacity(0.92)
+        case "opencode":
+            return Color(red: 0.52, green: 0.82, blue: 0.98)
+        default:
+            return nil
+        }
+    }
+
     private var providerImage: NSImage? {
         guard let assetPDF,
               let url = LonghouseResourceLocator.coreBundle()?.url(
@@ -59,10 +103,18 @@ struct ProviderGlyph: View {
     @ViewBuilder
     private var mark: some View {
         if let providerImage {
-            Image(nsImage: providerImage)
-                .resizable()
-                .renderingMode(.original)
-                .aspectRatio(contentMode: .fit)
+            if let templateMarkColor {
+                Image(nsImage: providerImage)
+                    .resizable()
+                    .renderingMode(.template)
+                    .foregroundStyle(templateMarkColor)
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Image(nsImage: providerImage)
+                    .resizable()
+                    .renderingMode(.original)
+                    .aspectRatio(contentMode: .fit)
+            }
         } else {
             Image(systemName: "chevron.left.forwardslash.chevron.right")
                 .font(.system(size: size * 0.58, weight: .semibold))
@@ -82,12 +134,12 @@ struct ProviderGlyph: View {
                 .frame(width: markSize, height: markSize)
                 .frame(width: size, height: size)
                 .background(
-                    RoundedRectangle(cornerRadius: max(4, size * 0.28), style: .continuous)
-                        .fill(brand.opacity(0.16))
+                    RoundedRectangle(cornerRadius: chipCornerRadius, style: .continuous)
+                        .fill(chipFill)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: max(4, size * 0.28), style: .continuous)
-                        .strokeBorder(brand.opacity(0.22), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: chipCornerRadius, style: .continuous)
+                        .strokeBorder(chipStroke, lineWidth: 0.5)
                 )
                 .accessibilityLabel(Text(HealthSnapshot.providerDisplayName(key)))
         }
