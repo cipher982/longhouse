@@ -306,13 +306,8 @@ private struct SessionTokenRibbon: View {
     var body: some View {
         HStack(spacing: 5) {
             ForEach(tokens) { token in
-                Capsule()
-                    .fill(sessionTokenFillColor(token))
-                    .frame(width: 16, height: 8)
-                    .overlay {
-                        Capsule()
-                            .stroke(providerColor(token.provider).opacity(0.9), lineWidth: 1)
-                    }
+                ProviderGlyph(provider: token.provider, size: 14, variant: .chip)
+                    .opacity(token.attention == .idle ? 0.58 : 1)
                     .overlay(alignment: .trailing) {
                         if token.attention == .needsYou || token.attention == .blocked {
                             Circle()
@@ -324,23 +319,6 @@ private struct SessionTokenRibbon: View {
             }
         }
         .padding(.vertical, 2)
-    }
-
-    private func sessionTokenFillColor(_ token: HeaderSessionToken) -> Color {
-        switch token.attention {
-        case .working:
-            return Color.secondary.opacity(0.32)
-        case .needsYou, .blocked:
-            return Color(red: 0.95, green: 0.70, blue: 0.20).opacity(0.65)
-        case .idle:
-            return Color.white.opacity(0.05)
-        case .detached:
-            return Color(red: 0.90, green: 0.67, blue: 0.16).opacity(0.4)
-        case .degraded:
-            return Color(red: 0.86, green: 0.29, blue: 0.23).opacity(0.45)
-        case .unknown:
-            return Color(red: 0.86, green: 0.29, blue: 0.23).opacity(0.52)
-        }
     }
 }
 
@@ -426,9 +404,7 @@ struct ActivityFeed: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 HStack(alignment: .center, spacing: 10) {
-                    Circle()
-                        .fill(providerColor(entry.provider))
-                        .frame(width: 7, height: 7)
+                    ProviderGlyph(provider: entry.provider, size: 16, variant: .chip)
 
                     Text(entry.title)
                         .font(.system(size: 12, weight: .semibold))
@@ -469,9 +445,7 @@ struct UnmanagedActivityList: View {
         VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 HStack(alignment: .center, spacing: 8) {
-                    Circle()
-                        .fill(providerColor(entry.provider))
-                        .frame(width: 7, height: 7)
+                    ProviderGlyph(provider: entry.provider, size: 16, variant: .chip)
 
                     Text(entry.title)
                         .font(.system(size: 12, weight: .semibold))
@@ -697,9 +671,7 @@ private struct ManagedSessionRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
-            Circle()
-                .fill(providerColor(entry.provider))
-                .frame(width: 7, height: 7)
+            ProviderGlyph(provider: entry.provider, size: 16, variant: .chip)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
@@ -853,9 +825,7 @@ private struct BackgroundBridgeRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .center, spacing: 8) {
-                Circle()
-                    .fill(providerColor(entry.provider))
-                    .frame(width: 7, height: 7)
+                ProviderGlyph(provider: entry.provider, size: 16, variant: .chip)
 
                 Text(entry.workspace)
                     .font(.system(size: 12, weight: .bold))
@@ -919,9 +889,7 @@ private struct ProviderComparisonRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center, spacing: 8) {
                 HStack(alignment: .center, spacing: 7) {
-                    Circle()
-                        .fill(providerColor(provider))
-                        .frame(width: 7, height: 7)
+                    ProviderGlyph(provider: provider, size: 16, variant: .chip)
 
                     Text(HealthSnapshot.providerDisplayName(provider))
                         .font(.system(size: 12, weight: .bold))
@@ -1062,15 +1030,19 @@ func longhouseBrandEmblem(severity: HarnessSeverity) -> some View {
 }
 
 func providerColor(_ raw: String) -> Color {
-    switch raw.lowercased() {
+    switch raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
     case "claude":
-        return Color(red: 0.39, green: 0.72, blue: 0.56)
-    case "codex":
-        return Color(red: 0.33, green: 0.57, blue: 0.88)
+        return Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
+    case "codex", "openai":
+        return Color(red: 0xF3 / 255, green: 0xEA / 255, blue: 0xD9 / 255)
+    case "opencode":
+        return Color(red: 0xC9 / 255, green: 0xC4 / 255, blue: 0xC4 / 255)
     case "gemini", "antigravity":
-        return Color(red: 0.31, green: 0.53, blue: 0.93)
+        return Color(red: 0x4F / 255, green: 0x87 / 255, blue: 0xED / 255)
+    case "zai":
+        return Color(red: 0xB0 / 255, green: 0x6E / 255, blue: 0x8A / 255)
     default:
-        return Color.secondary
+        return Color(red: 0x9A / 255, green: 0x8F / 255, blue: 0x7E / 255)
     }
 }
 
