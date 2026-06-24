@@ -85,7 +85,7 @@ jobs:
         id: target-authority
         run: |
           echo "skip=false" >> "$GITHUB_OUTPUT"
-          if [[ "$GITHUB_EVENT_NAME" != "schedule" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
             exit 0
           fi
           if ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$REMOTE_LAUNCH_SMOKE_SSH_TARGET" true; then
