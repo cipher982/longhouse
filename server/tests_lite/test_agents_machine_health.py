@@ -268,7 +268,7 @@ def test_machine_archive_backlog_route_returns_latest_heartbeat_archive_state(tm
         api_app_ref.dependency_overrides = {}
 
 
-def test_machine_health_route_degrades_dead_archive_ranges_from_heartbeat_archive_state(tmp_path, monkeypatch):
+def test_machine_health_route_degrades_dead_archive_state_from_heartbeat_archive_state(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     pinned_now = datetime(2026, 6, 2, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
@@ -294,7 +294,7 @@ def test_machine_health_route_degrades_dead_archive_ranges_from_heartbeat_archiv
                             "mode": "drain",
                             "pending_ranges": 0,
                             "pending_bytes": 0,
-                            "dead_ranges": 7,
+                            "dead_ranges": 0,
                             "dead_bytes": 62_675,
                         }
                     }
@@ -314,9 +314,10 @@ def test_machine_health_route_degrades_dead_archive_ranges_from_heartbeat_archiv
         machine = payload["machines"][0]
         assert machine["status"] == "degraded"
         assert machine["status_reason"] == "archive_dead_lettered"
-        assert machine["status_summary"] == "7 dead-letter archive range(s) need attention."
+        assert machine["status_summary"] == "62675 dead-letter archive byte(s) need attention."
         assert machine["spool_dead"] == 0
-        assert machine["archive_repair"]["dead_ranges"] == 7
+        assert machine["archive_repair"]["dead_ranges"] == 0
+        assert machine["archive_repair"]["dead_bytes"] == 62_675
         assert machine["reasons"] == ["archive_dead_lettered"]
     finally:
         api_app_ref.dependency_overrides = {}

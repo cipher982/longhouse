@@ -190,12 +190,15 @@ def build_machine_transport_health_summary(
         ),
         archive_repair=archive_repair,
     )
+    heartbeat_status, heartbeat_status_reason, heartbeat_status_summary = _overlay_heartbeat_status(
+        transport=transport,
+        is_stale=is_stale,
+        heartbeat_age_seconds=heartbeat_age_seconds,
+    )
     status, status_reason, status_summary = _overlay_archive_repair_status(
-        *_overlay_heartbeat_status(
-            transport=transport,
-            is_stale=is_stale,
-            heartbeat_age_seconds=heartbeat_age_seconds,
-        ),
+        heartbeat_status,
+        heartbeat_status_reason,
+        heartbeat_status_summary,
         archive_repair=archive_repair,
     )
 
@@ -263,8 +266,8 @@ def _archive_repair_from_heartbeat(row: AgentHeartbeat, *, spool_pending: int) -
     return fallback
 
 
-def _archive_dead_ranges(archive_repair: dict[str, Any]) -> int:
-    value = archive_repair.get("dead_ranges")
+def _archive_dead_count(archive_repair: dict[str, Any], key: str) -> int:
+    value = archive_repair.get(key)
     if value is None or isinstance(value, bool):
         return 0
     try:
@@ -273,12 +276,30 @@ def _archive_dead_ranges(archive_repair: dict[str, Any]) -> int:
         return 0
 
 
+def _archive_has_dead_letters(archive_repair: dict[str, Any]) -> bool:
+    return (
+        str(archive_repair.get("state") or "").strip() == "dead_lettered"
+        or _archive_dead_count(archive_repair, "dead_ranges") > 0
+        or _archive_dead_count(archive_repair, "dead_bytes") > 0
+    )
+
+
+def _archive_dead_letter_summary(archive_repair: dict[str, Any]) -> str:
+    dead_ranges = _archive_dead_count(archive_repair, "dead_ranges")
+    if dead_ranges > 0:
+        return f"{dead_ranges} dead-letter archive range(s) need attention."
+    dead_bytes = _archive_dead_count(archive_repair, "dead_bytes")
+    if dead_bytes > 0:
+        return f"{dead_bytes} dead-letter archive byte(s) need attention."
+    return "Archive repair has dead-lettered work."
+
+
 def _overlay_archive_repair_reasons(
     reasons: tuple[str, ...],
     *,
     archive_repair: dict[str, Any],
 ) -> tuple[str, ...]:
-    if _archive_dead_ranges(archive_repair) <= 0 or "archive_dead_lettered" in reasons:
+    if not _archive_has_dead_letters(archive_repair) or "archive_dead_lettered" in reasons:
         return reasons
     return (*reasons, "archive_dead_lettered")
 
@@ -290,13 +311,12 @@ def _overlay_archive_repair_status(
     *,
     archive_repair: dict[str, Any],
 ) -> tuple[str, str, str]:
-    dead_ranges = _archive_dead_ranges(archive_repair)
-    if dead_ranges <= 0 or status != "healthy":
+    if not _archive_has_dead_letters(archive_repair) or status != "healthy":
         return status, status_reason, status_summary
     return (
         "degraded",
         "archive_dead_lettered",
-        f"{dead_ranges} dead-letter archive range(s) need attention.",
+        _archive_dead_letter_summary(archive_repair),
     )
 
 
