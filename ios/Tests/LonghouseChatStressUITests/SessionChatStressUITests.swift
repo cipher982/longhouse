@@ -120,10 +120,10 @@ final class SessionChatStressUITests: XCTestCase {
 
         try? "1".write(to: triggerURL, atomically: true, encoding: .utf8)
 
-        XCTAssertTrue(waitForProbeFile(probeURL, timeout: 10) { metrics in
-            metrics.renders > afterInitialRender.renders
+        XCTAssertTrue(waitForStableProbeFile(probeURL, timeout: 10, stableFor: 0.5) { metrics in
+            metrics.renders > afterParentChurn.renders
                 && metrics.stage == "rendered"
-                && (metrics.latest != afterInitialRender.latest || metrics.rows > afterInitialRender.rows)
+                && (metrics.latest != afterParentChurn.latest || metrics.rows > afterParentChurn.rows)
         }, readProbe(probeURL))
 
         let afterLiveUpdate = probeMetrics(readProbe(probeURL))
