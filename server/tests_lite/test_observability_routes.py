@@ -432,11 +432,11 @@ def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(t
                 {
                     "archive_backlog": {
                         **archive_backlog,
-                        "state": "dead_lettered",
+                        "state": "draining",
                         "mode": "drain",
                         "pending_ranges": 0,
                         "dead_ranges": 7,
-                        "dead_bytes": 62_675,
+                        "dead_bytes": 0,
                     }
                 }
             ),
@@ -482,6 +482,7 @@ def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(t
         dead_machine = next(machine for machine in payload["machines"] if machine["device_id"] == "dead-archive-machine")
         assert dead_machine["status"] == "degraded"
         assert dead_machine["status_reason"] == "archive_dead_lettered"
+        assert dead_machine["status_summary"] == "7 dead-letter archive range(s) need attention."
         assert dead_machine["archive_repair"]["dead_ranges"] == 7
         assert "archive_dead_lettered" in dead_machine["reasons"]
     finally:

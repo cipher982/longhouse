@@ -268,7 +268,7 @@ def test_machine_archive_backlog_route_returns_latest_heartbeat_archive_state(tm
         api_app_ref.dependency_overrides = {}
 
 
-def test_machine_health_route_degrades_dead_archive_state_from_heartbeat_archive_state(tmp_path, monkeypatch):
+def test_machine_health_route_degrades_dead_archive_bytes_from_heartbeat_archive_state(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     pinned_now = datetime(2026, 6, 2, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
@@ -290,7 +290,7 @@ def test_machine_health_route_degrades_dead_archive_state_from_heartbeat_archive
                 raw_json=json.dumps(
                     {
                         "archive_backlog": {
-                            "state": "dead_lettered",
+                            "state": "draining",
                             "mode": "drain",
                             "pending_ranges": 0,
                             "pending_bytes": 0,
