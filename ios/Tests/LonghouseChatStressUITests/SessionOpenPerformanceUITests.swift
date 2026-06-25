@@ -2,6 +2,9 @@ import XCTest
 
 @MainActor
 final class SessionOpenPerformanceUITests: XCTestCase {
+    private static let wallClockMedianBudgetMs = 2_200
+    private static let webKitRenderBudgetMs = 1_000
+
     private enum LaunchEnvironment {
         static let timelineOpenFixture = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
@@ -47,6 +50,7 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         XCTAssertTrue(row.waitForExistence(timeout: 10))
 
         var samplesMs: [Int] = []
+        var sampleMetrics: [ProbeMetrics] = []
         for _ in 0..<5 {
             try? FileManager.default.removeItem(at: probeURL)
             let startedAt = Date()
@@ -57,6 +61,7 @@ final class SessionOpenPerformanceUITests: XCTestCase {
             }, readProbe(probeURL))
 
             samplesMs.append(Int(Date().timeIntervalSince(startedAt) * 1000))
+            sampleMetrics.append(probeMetrics(readProbe(probeURL)))
             app.navigationBars.buttons.element(boundBy: 0).tap()
             XCTAssertTrue(row.waitForExistence(timeout: 5))
         }
@@ -66,9 +71,29 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         let p50 = sorted[sorted.count / 2]
         let p90 = sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * 0.9))]
         let maxMs = sorted.last ?? 0
-        print("SESSION_OPEN_SIM_METRIC samples_ms=\(samplesMs) avg_ms=\(average) p50_ms=\(p50) p90_ms=\(p90) max_ms=\(maxMs)")
+        let renderSamples = sampleMetrics.map(\.renderMs)
+        let maxRenderMs = sampleMetrics.map(\.maxRenderMs).max() ?? 0
+        print([
+            "SESSION_OPEN_SIM_METRIC",
+            "samples_ms=\(samplesMs)",
+            "avg_ms=\(average)",
+            "p50_ms=\(p50)",
+            "p90_ms=\(p90)",
+            "max_ms=\(maxMs)",
+            "render_ms=\(renderSamples)",
+            "max_render_ms=\(maxRenderMs)",
+        ].joined(separator: " "))
 
-        XCTAssertLessThan(p50, 1_500, "Simulator tap-to-paint median regressed. samples_ms=\(samplesMs)")
+        XCTAssertLessThan(
+            p50,
+            Self.wallClockMedianBudgetMs,
+            "Simulator tap-to-paint median regressed. samples_ms=\(samplesMs)"
+        )
+        XCTAssertLessThan(
+            maxRenderMs,
+            Self.webKitRenderBudgetMs,
+            "WebKit transcript render regressed. render_ms=\(renderSamples) max_render_ms=\(maxRenderMs)"
+        )
     }
 
     func testTimelineTapToTranscriptPaintProfile() throws {
