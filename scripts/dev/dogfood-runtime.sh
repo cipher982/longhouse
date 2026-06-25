@@ -24,6 +24,7 @@ ROUTE_E2E_ATTEMPTS="${LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_ATTEMPTS:-1}"
 MENUBAR=1
 SKIP_ENGINE=0
 SKIP_ROUTE_E2E=0
+FULL_HEALTH="${LONGHOUSE_DOGFOOD_FULL_HEALTH:-0}"
 
 resolve_longhouse_home() {
   local provider_home="$1"
@@ -57,6 +58,7 @@ Notes:
     The default provider set is auto from current sidecars. Set LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_STRICT=1 to fail refresh on this remote check.
     The hosted route check is capped by LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_HTTP_TIMEOUT_S (default 45s) and LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_ATTEMPTS (default 1).
   - Engine builds use LONGHOUSE_DOGFOOD_ENGINE_PROFILE=ci by default. Set it to release to force the slower release-LTO profile.
+  - Check prints one local-health JSON-derived launch summary by default. Set LONGHOUSE_DOGFOOD_FULL_HEALTH=1 to also print the full human local-health report.
 EOF
 }
 
@@ -317,13 +319,18 @@ run_check() {
   snapshot_file="$(mktemp -t longhouse-dogfood-health.XXXXXX.json)"
   if run_repo_longhouse local-health --json >"$snapshot_file"; then
     print_launch_readiness_summary "$snapshot_file"
-    log ""
+    if [[ "$FULL_HEALTH" == "1" || "$FULL_HEALTH" == "true" || "$FULL_HEALTH" == "yes" ]]; then
+      log ""
+      log "==> Local health"
+      run_repo_longhouse local-health
+    fi
   else
     log "WARN: local-health --json failed; falling back to human local-health output"
+    log ""
+    log "==> Local health"
+    run_repo_longhouse local-health
   fi
   rm -f "$snapshot_file"
-  log "==> Local health"
-  run_repo_longhouse local-health
 }
 
 publish_provider_live_proof() {

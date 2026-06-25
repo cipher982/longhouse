@@ -124,6 +124,10 @@ jobs:
       timeout-minutes: 2
       run: make validate-ship-monitor
 
+    - name: Validate dogfood runtime helper
+      timeout-minutes: 2
+      run: make validate-dogfood-runtime
+
     - name: Lint test patterns
       timeout-minutes: 2
       run: make lint-test-patterns
