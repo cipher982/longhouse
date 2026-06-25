@@ -200,8 +200,8 @@ def test_peers_returns_live_repo_matches(tmp_path, monkeypatch):
     data = result["data"]
     assert data["total"] == 1
     assert data["peers"][0]["session_id"] == peer_id
-    assert data["peers"][0]["control_label"] == "live"
-    assert data["peers"][0]["live_control_available"] is True
+    assert data["peers"][0]["kernel_control_label"] == "live"
+    assert data["peers"][0]["kernel_live_control_available"] is True
     assert data["peers"][0]["presence_state"] == "thinking"
     assert data["peers"][0]["pending_inbound_messages"] == 0
 

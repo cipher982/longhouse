@@ -12403,39 +12403,39 @@ export interface components {
             /** Presence State */
             presence_state?: string | null;
             /**
-             * Control Label
-             * @description Kernel-projected control bucket for this session.
+             * Kernel Control Label
+             * @description Raw kernel-projected control bucket. Not runtime/offline clamped.
              */
-            control_label?: ("live" | "reattach" | "search-only" | "imported") | null;
+            kernel_control_label?: ("live" | "reattach" | "search-only" | "imported") | null;
             /**
-             * Live Control Available
-             * @description True when Longhouse can steer the live session now.
+             * Kernel Live Control Available
+             * @description Raw kernel live-control bit before runtime/offline clamping.
              * @default false
              */
-            live_control_available: boolean;
+            kernel_live_control_available: boolean;
             /**
-             * Host Reattach Available
-             * @description True when the host can reattach this managed session.
+             * Kernel Host Reattach Available
+             * @description Raw kernel host-reattach bit before lifecycle clamping.
              * @default false
              */
-            host_reattach_available: boolean;
+            kernel_host_reattach_available: boolean;
             /**
-             * Observe Only
-             * @description True when Longhouse can observe output but not steer.
+             * Kernel Observe Only
+             * @description Raw kernel bit: Longhouse can observe output but not steer.
              * @default false
              */
-            observe_only: boolean;
+            kernel_observe_only: boolean;
             /**
-             * Search Only
-             * @description True when this is an imported/search-only transcript.
+             * Kernel Search Only
+             * @description Raw kernel bit: imported/search-only transcript.
              * @default false
              */
-            search_only: boolean;
+            kernel_search_only: boolean;
             /**
-             * Staleness Reason
-             * @description Why live control is unavailable, when known.
+             * Kernel Staleness Reason
+             * @description Raw kernel reason live control is unavailable, when known.
              */
-            staleness_reason?: string | null;
+            kernel_staleness_reason?: string | null;
             /**
              * Pending Inbound Messages
              * @default 0

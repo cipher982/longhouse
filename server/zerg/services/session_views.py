@@ -959,15 +959,15 @@ class WallSessionResponse(UTCBaseModel):
     last_tool_call_at: Optional[datetime] = None
     has_live_presence: bool = False
     presence_state: Optional[str] = None
-    control_label: Optional[Literal["live", "reattach", "search-only", "imported"]] = Field(
+    kernel_control_label: Optional[Literal["live", "reattach", "search-only", "imported"]] = Field(
         None,
-        description="Kernel-projected control bucket for this session.",
+        description="Raw kernel-projected control bucket. Not runtime/offline clamped.",
     )
-    live_control_available: bool = Field(False, description="True when Longhouse can steer the live session now.")
-    host_reattach_available: bool = Field(False, description="True when the host can reattach this managed session.")
-    observe_only: bool = Field(False, description="True when Longhouse can observe output but not steer.")
-    search_only: bool = Field(False, description="True when this is an imported/search-only transcript.")
-    staleness_reason: Optional[str] = Field(None, description="Why live control is unavailable, when known.")
+    kernel_live_control_available: bool = Field(False, description="Raw kernel live-control bit before runtime/offline clamping.")
+    kernel_host_reattach_available: bool = Field(False, description="Raw kernel host-reattach bit before lifecycle clamping.")
+    kernel_observe_only: bool = Field(False, description="Raw kernel bit: Longhouse can observe output but not steer.")
+    kernel_search_only: bool = Field(False, description="Raw kernel bit: imported/search-only transcript.")
+    kernel_staleness_reason: Optional[str] = Field(None, description="Raw kernel reason live control is unavailable, when known.")
     pending_inbound_messages: int = 0
     user_messages: int = 0
     assistant_messages: int = 0

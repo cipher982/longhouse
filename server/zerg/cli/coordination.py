@@ -73,7 +73,7 @@ def _print_peer_summary(peer: dict) -> None:
     session_id = str(peer.get("session_id") or "")
     provider = str(peer.get("provider") or "-")
     device_name = str(peer.get("device_name") or "-")
-    control_label = str(peer.get("control_label") or "-")
+    control_label = str(peer.get("kernel_control_label") or peer.get("control_label") or "-")
     presence_state = str(peer.get("presence_state") or "-")
     branch = str(peer.get("git_branch") or "-")
     title = str(peer.get("summary_title") or "").strip()
@@ -159,7 +159,7 @@ def _print_wall_session_summary(session: dict) -> None:
     provider = str(session.get("provider") or "-")
     device_name = str(session.get("device_name") or "-")
     presence_state = str(session.get("presence_state") or "-")
-    control_label = str(session.get("control_label") or "-")
+    control_label = str(session.get("kernel_control_label") or session.get("control_label") or "-")
     branch = str(session.get("git_branch") or "-")
     repo = str(session.get("git_repo") or "-")
     last_event_at = str(session.get("last_event_at") or "-")
@@ -335,12 +335,12 @@ def peers(
                 "session_id": item.get("session_id"),
                 "device_name": item.get("device_name"),
                 "provider": item.get("provider"),
-                "control_label": item.get("control_label"),
-                "live_control_available": item.get("live_control_available"),
-                "host_reattach_available": item.get("host_reattach_available"),
-                "observe_only": item.get("observe_only"),
-                "search_only": item.get("search_only"),
-                "staleness_reason": item.get("staleness_reason"),
+                "kernel_control_label": item.get("kernel_control_label"),
+                "kernel_live_control_available": item.get("kernel_live_control_available"),
+                "kernel_host_reattach_available": item.get("kernel_host_reattach_available"),
+                "kernel_observe_only": item.get("kernel_observe_only"),
+                "kernel_search_only": item.get("kernel_search_only"),
+                "kernel_staleness_reason": item.get("kernel_staleness_reason"),
                 "presence_state": item.get("presence_state"),
                 "summary_title": item.get("summary_title"),
                 "git_branch": item.get("git_branch"),

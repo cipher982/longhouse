@@ -322,25 +322,25 @@ def test_wall_includes_kernel_control_buckets(tmp_path):
         assert resp.status_code == 200
         rows = {row["device_name"]: row for row in resp.json()["sessions"]}
 
-        assert rows["live-machine"]["control_label"] == "live"
-        assert rows["live-machine"]["live_control_available"] is True
-        assert rows["live-machine"]["host_reattach_available"] is True
-        assert rows["live-machine"]["observe_only"] is False
-        assert rows["live-machine"]["search_only"] is False
+        assert rows["live-machine"]["kernel_control_label"] == "live"
+        assert rows["live-machine"]["kernel_live_control_available"] is True
+        assert rows["live-machine"]["kernel_host_reattach_available"] is True
+        assert rows["live-machine"]["kernel_observe_only"] is False
+        assert rows["live-machine"]["kernel_search_only"] is False
 
-        assert rows["reattach-machine"]["control_label"] == "reattach"
-        assert rows["reattach-machine"]["live_control_available"] is False
-        assert rows["reattach-machine"]["host_reattach_available"] is True
-        assert rows["reattach-machine"]["staleness_reason"] == "connection_released"
+        assert rows["reattach-machine"]["kernel_control_label"] == "reattach"
+        assert rows["reattach-machine"]["kernel_live_control_available"] is False
+        assert rows["reattach-machine"]["kernel_host_reattach_available"] is True
+        assert rows["reattach-machine"]["kernel_staleness_reason"] == "connection_released"
 
-        assert rows["observe-machine"]["control_label"] == "search-only"
-        assert rows["observe-machine"]["observe_only"] is True
-        assert rows["observe-machine"]["search_only"] is False
+        assert rows["observe-machine"]["kernel_control_label"] == "search-only"
+        assert rows["observe-machine"]["kernel_observe_only"] is True
+        assert rows["observe-machine"]["kernel_search_only"] is False
 
-        assert rows["imported-machine"]["control_label"] == "imported"
-        assert rows["imported-machine"]["live_control_available"] is False
-        assert rows["imported-machine"]["host_reattach_available"] is False
-        assert rows["imported-machine"]["search_only"] is True
+        assert rows["imported-machine"]["kernel_control_label"] == "imported"
+        assert rows["imported-machine"]["kernel_live_control_available"] is False
+        assert rows["imported-machine"]["kernel_host_reattach_available"] is False
+        assert rows["imported-machine"]["kernel_search_only"] is True
     finally:
         api_ref.dependency_overrides = {}
 
