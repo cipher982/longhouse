@@ -27,6 +27,7 @@ from zerg.services.agents.store import _git_repo_project_stem
     ("git_repo", "expected"),
     [
         ("git@github.com:cipher982/longhouse.git", "longhouse"),
+        ("git@github.com:cipher982/longhouse", "longhouse"),
         ("https://github.com/cipher982/longhouse.git", "longhouse"),
         ("ssh://git@github.com/cipher982/longhouse.git/", "longhouse"),
         ("/Users/davidrose/git/zerg/longhouse/.git", None),
@@ -348,7 +349,8 @@ def test_opencode_reingest_repairs_workspace_project_from_cwd(tmp_path):
         assert card.project == "longhouse"
 
 
-def test_reingest_repairs_stale_cwd_basename_project_with_git_evidence(tmp_path):
+@pytest.mark.parametrize("initial_git_repo", [None, "git@github.com:cipher982/longhouse.git"])
+def test_reingest_repairs_stale_cwd_basename_project_with_git_evidence(tmp_path, initial_git_repo):
     db_path = tmp_path / "stale_cwd_basename_project_repair.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
@@ -369,6 +371,7 @@ def test_reingest_repairs_stale_cwd_basename_project_with_git_evidence(tmp_path)
                 project="server",
                 device_id="cinder",
                 cwd=cwd,
+                git_repo=initial_git_repo,
                 started_at=base_time,
                 events=[
                     EventIngest(
