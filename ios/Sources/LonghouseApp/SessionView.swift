@@ -1562,6 +1562,7 @@ final class SessionViewModel: ObservableObject {
     /// Guards against an auth-refresh→reconnect→401 loop: we attempt at most
     /// one refresh per stream session, reset once a connection succeeds.
     private var streamAuthRefreshAttempted = false
+    var hasRealtimeStreamTaskForTesting: Bool { streamTask != nil }
     private var pendingRealtimeTelemetry: PendingRealtimeTelemetry?
     private var activeSessionId: String?
     private var activeServerURL: String?

@@ -124,16 +124,17 @@ struct SessionStreamResumeTests {
 
         // First 401 → one refresh + restart. Second 401 (no connect) is
         // suppressed and must drop the dead stream handle.
+        let startsBeforeUnauthorized = recorder.startCount
         recorder.emitUnauthorized()
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await waitForStartCount(recorder, atLeast: startsBeforeUnauthorized + 1)
         recorder.emitUnauthorized()
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(await waitForStreamDetached(model), "suppressed 401 should clear the dead stream")
         let startsAfterSuppressed = recorder.startCount
 
         // A foreground resume of the same session must reattach the stream,
         // proving the dead handle was cleared (start() gates on streamTask==nil).
         await model.start(sessionId: "session-1", appState: appState)
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await waitForStartCount(recorder, atLeast: startsAfterSuppressed + 1)
         #expect(recorder.startCount == startsAfterSuppressed + 1, "resume should reattach a dead stream")
 
         model.stop()
@@ -243,6 +244,27 @@ struct SessionStreamResumeTests {
             }
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
+    }
+
+    private func waitForStartCount(_ recorder: StreamFactoryRecorder, atLeast count: Int) async {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if recorder.startCount >= count {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    private func waitForStreamDetached(_ model: SessionViewModel) async -> Bool {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if !model.hasRealtimeStreamTaskForTesting {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return false
     }
 }
 
