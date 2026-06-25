@@ -88,19 +88,27 @@ cargo_build_release() {
     cargo_env+=("RUSTUP_HOME=$ORIGINAL_RUSTUP_HOME")
   fi
 
+  cargo_env_cmd() {
+    if (( ${#cargo_env[@]} )); then
+      env "${cargo_env[@]}" "$@"
+    else
+      "$@"
+    fi
+  }
+
   if command -v cargo >/dev/null 2>&1; then
-    if env "${cargo_env[@]}" cargo --version >/dev/null 2>&1; then
-      env "${cargo_env[@]}" cargo build --release "$@"
+    if cargo_env_cmd cargo --version >/dev/null 2>&1; then
+      cargo_env_cmd cargo build --release "$@"
       return 0
     fi
-    if env "${cargo_env[@]}" cargo +stable --version >/dev/null 2>&1; then
-      env "${cargo_env[@]}" cargo +stable build --release "$@"
+    if cargo_env_cmd cargo +stable --version >/dev/null 2>&1; then
+      cargo_env_cmd cargo +stable build --release "$@"
       return 0
     fi
   fi
 
-  if command -v rustup >/dev/null 2>&1 && env "${cargo_env[@]}" rustup run stable cargo --version >/dev/null 2>&1; then
-    env "${cargo_env[@]}" rustup run stable cargo build --release "$@"
+  if command -v rustup >/dev/null 2>&1 && cargo_env_cmd rustup run stable cargo --version >/dev/null 2>&1; then
+    cargo_env_cmd rustup run stable cargo build --release "$@"
     return 0
   fi
 
