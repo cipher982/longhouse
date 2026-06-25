@@ -194,7 +194,7 @@ def test_scan_classifies_orphan_without_matching_source_result_as_genuine_gap(tm
     assert result.findings[0].status == "no_result_in_source"
 
 
-def test_scan_classifies_matching_unparsed_result_separately(tmp_path):
+def test_scan_recovers_empty_success_tool_result(tmp_path):
     factory = _factory(tmp_path)
     session_id = uuid4()
     raw = _tool_result_raw("toolu_empty", "")
@@ -208,8 +208,28 @@ def test_scan_classifies_matching_unparsed_result_separately(tmp_path):
         result = scan_orphan_tool_results(db, session_id=session_id)
 
     assert result.scanned_orphan_calls == 1
-    assert result.unparseable_result == 1
-    assert result.findings[0].status == "unparseable_result"
+    assert result.recoverable == 1
+    assert result.findings[0].status == "recoverable"
+    assert result.findings[0].recovered_tool_output_text == "[empty tool result]"
+
+
+def test_scan_recovers_json_object_tool_result(tmp_path):
+    factory = _factory(tmp_path)
+    session_id = uuid4()
+    raw = _tool_result_raw("toolu_object", {"status": "ok", "count": 0})
+
+    with factory() as db:
+        _seed_session(db, session_id)
+        _seed_tool_call(db, session_id, tool_call_id="toolu_object")
+        _seed_source_line(db, session_id, raw=raw, source_offset=100)
+        db.commit()
+
+        result = scan_orphan_tool_results(db, session_id=session_id)
+
+    assert result.scanned_orphan_calls == 1
+    assert result.recoverable == 1
+    assert result.findings[0].status == "recoverable"
+    assert result.findings[0].recovered_tool_output_text == '{"status":"ok","count":0}'
 
 
 def test_scan_contains_corrupt_source_line_without_aborting_batch(tmp_path):

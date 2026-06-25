@@ -29,6 +29,7 @@ use crate::media_redaction::{redact_inline_image_data_urls_with_media, InlineIma
 
 /// Threshold for switching from buffered read to mmap (1 MB).
 const MMAP_THRESHOLD: u64 = 1_048_576;
+const EMPTY_TOOL_RESULT_PLACEHOLDER: &str = "[empty tool result]";
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -2299,7 +2300,7 @@ fn extract_tool_results_from_items(
         let output_text = match result_text {
             Some(ref t) if !t.is_empty() => Some(t.clone()),
             _ if item.is_error == Some(true) => Some("[tool error]".to_string()),
-            _ => None,
+            _ => Some(EMPTY_TOOL_RESULT_PLACEHOLDER.to_string()),
         };
 
         if let Some(text) = output_text {
@@ -2937,10 +2938,16 @@ mod tests {
         );
 
         assert_eq!(result.events[1].tool_call_id.as_deref(), Some("call_both"));
-        assert_eq!(result.events[1].tool_output_text.as_deref(), Some("saw a cat"));
+        assert_eq!(
+            result.events[1].tool_output_text.as_deref(),
+            Some("saw a cat")
+        );
 
         assert_eq!(result.events[2].tool_call_id.as_deref(), Some("call_text"));
-        assert_eq!(result.events[2].tool_output_text.as_deref(), Some("plain text"));
+        assert_eq!(
+            result.events[2].tool_output_text.as_deref(),
+            Some("plain text")
+        );
 
         // The inline image bytes should be captured as media objects by source-line
         // redaction, independent of the event.
@@ -3810,6 +3817,70 @@ mod tests {
             result.events[0].tool_output_text.as_deref(),
             Some("[tool error]")
         );
+    }
+
+    #[test]
+    fn test_empty_success_tool_results_emit_placeholder() {
+        // Empty stdout is still a completed tool result. Dropping the event
+        // leaves the assistant call looking orphaned/running forever.
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "session.jsonl",
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_empty","content":""}]}}"#,
+                r#"{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_empty_text","content":[{"type":"text","text":""}]}]}}"#,
+                r#"{"type":"user","uuid":"u3","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_missing_content"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 3);
+        assert_eq!(
+            result.events[0].tool_call_id.as_deref(),
+            Some("toolu_empty")
+        );
+        assert_eq!(
+            result.events[0].tool_output_text.as_deref(),
+            Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
+        );
+        assert_eq!(
+            result.events[1].tool_call_id.as_deref(),
+            Some("toolu_empty_text")
+        );
+        assert_eq!(
+            result.events[1].tool_output_text.as_deref(),
+            Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
+        );
+        assert_eq!(
+            result.events[2].tool_call_id.as_deref(),
+            Some("toolu_missing_content")
+        );
+        assert_eq!(
+            result.events[2].tool_output_text.as_deref(),
+            Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
+        );
+    }
+
+    #[test]
+    fn test_json_object_tool_result_emits_raw_json_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "session.jsonl",
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_object","content":{"status":"ok","count":0}}]}}"#,
+                r#"{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_false","content":false}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 2);
+        assert_eq!(
+            result.events[0].tool_output_text.as_deref(),
+            Some(r#"{"status":"ok","count":0}"#)
+        );
+        assert_eq!(result.events[1].tool_output_text.as_deref(), Some("false"));
     }
 
     #[test]

@@ -16,6 +16,7 @@ events and converts them to a normalized format for the agents schema.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ except ImportError:
     _JSONDecodeError = _json_mod_std.JSONDecodeError  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+_EMPTY_TOOL_RESULT_PLACEHOLDER = "[empty tool result]"
 
 
 @dataclass
@@ -287,13 +289,20 @@ def _extract_tool_results(
                     elif part_types:
                         result_text = f"[non-text tool result: {', '.join(part_types)}]"
                     else:
-                        result_text = "[non-text tool result]"
+                        result_text = None
             else:
-                result_text = str(result_content) if result_content else None
+                if isinstance(result_content, str):
+                    result_text = result_content or None
+                elif result_content is None:
+                    result_text = None
+                else:
+                    result_text = json.dumps(result_content, separators=(",", ":"), ensure_ascii=False)
 
             # Emit placeholder for empty-content error results so call stays paired
             if not result_text and is_error:
                 result_text = "[tool error]"
+            elif not result_text:
+                result_text = _EMPTY_TOOL_RESULT_PLACEHOLDER
 
             if result_text:
                 yield ParsedEvent(
