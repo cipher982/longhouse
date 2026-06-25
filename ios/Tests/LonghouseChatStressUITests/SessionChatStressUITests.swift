@@ -93,7 +93,7 @@ final class SessionChatStressUITests: XCTestCase {
             return metrics.rows >= minimumInitialRows && metrics.bytes > 0
         }, readProbe(probeURL))
 
-        XCTAssertTrue(waitForStableProbeFile(probeURL, timeout: 3, stableFor: 0.25) { metrics in
+        XCTAssertTrue(waitForStableProbeFile(probeURL, timeout: 5, stableFor: 0.75) { metrics in
             guard metrics.renders >= 1 else { return false }
             if let expectedInitialRows {
                 return metrics.rows == expectedInitialRows
