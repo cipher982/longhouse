@@ -16,6 +16,8 @@ import { Badge, Input, Spinner, EmptyState } from "./ui";
 interface RecallPanelProps {
   /** Pre-filter results to a specific project */
   project?: string;
+  /** Pre-filter results to a specific provider */
+  provider?: string;
 }
 
 function ContextTurn({ turn }: { turn: RecallContextTurn }) {
@@ -71,13 +73,14 @@ function RecallCard({ match }: { match: RecallMatch }) {
   );
 }
 
-export function RecallPanel({ project }: RecallPanelProps) {
+export function RecallPanel({ project, provider }: RecallPanelProps) {
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebouncedValue(query, 400);
 
   const filters: RecallFilters = {
     query: debouncedQuery,
     project: project || undefined,
+    provider: provider || undefined,
     since_days: 90,
     max_results: 8,
     context_turns: 2,

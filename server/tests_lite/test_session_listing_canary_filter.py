@@ -7,6 +7,8 @@ from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
@@ -182,6 +184,65 @@ def test_recall_hides_internal_canary_sessions(monkeypatch, tmp_path):
                 query="launch review",
                 project=None,
                 provider=None,
+                max_results=10,
+                since_days=14,
+                context_turns=2,
+                context_mode="forensic",
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+        )
+
+    assert [match.session_id for match in response.matches] == [str(visible.id)]
+
+
+@pytest.mark.parametrize("provider", ["canary", "cnary"])
+def test_recall_allows_explicit_internal_canary_provider(monkeypatch, tmp_path, provider):
+    factory = _make_db(tmp_path)
+
+    class FakeEmbeddingCache:
+        def __init__(self):
+            self._session_loaded = True
+            self._turn_loaded = True
+
+        def load_session_embeddings(self, db, model, dims):
+            return 0
+
+        def load_turn_embeddings(self, db, model, dims):
+            return 0
+
+        @property
+        def turn_embedding_count(self):
+            return 1
+
+        def search_turns(self, query_vec, limit, session_filter):
+            return [(session_id, 0, 0.9, 0, 0) for session_id in sorted(session_filter)]
+
+    async def fake_generate_embedding(query, config):
+        return [1.0]
+
+    monkeypatch.setattr("zerg.models_config.get_embedding_config", lambda: SimpleNamespace(model="test", dims=1))
+    monkeypatch.setattr("zerg.services.embedding_cache.EmbeddingCache", FakeEmbeddingCache)
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding)
+
+    with factory() as db:
+        visible = _seed_session(db, provider=provider, project=provider, device_id=f"demo-machine-{provider}", user_messages=1)
+        db.add(
+            AgentEvent(
+                session_id=visible.id,
+                role="user",
+                content_text="launch review",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        response = asyncio.run(
+            recall_sessions(
+                query="launch review",
+                project=None,
+                provider=provider,
                 max_results=10,
                 since_days=14,
                 context_turns=2,

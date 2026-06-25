@@ -55,6 +55,17 @@ class EmbeddingChunk:
     event_index_end: int | None = None
 
 
+@dataclass(frozen=True)
+class CleanTranscriptEvent:
+    """A content-bearing transcript event in the same projection used for turn embeddings."""
+
+    index: int
+    event_id: int | None
+    role: str
+    content: str
+    tool_name: str | None = None
+
+
 def sanitize_for_embedding(text: str) -> str:
     """Clean text for embedding: strip noise and redact secrets."""
     if not text:
@@ -114,6 +125,7 @@ async def generate_embeddings(texts: Sequence[str], config: "EmbeddingConfig") -
         data = list(response.data or [])
         if len(data) != len(inputs):
             raise ValueError(f"Expected {len(inputs)} embeddings, received {len(data)}")
+
         def _order_key(pair) -> int:
             fallback, item = pair
             index = getattr(item, "index", None)
@@ -212,7 +224,7 @@ class _TranscriptTurn:
     event_index_end: int
 
 
-def _event_sort_key(event: dict) -> tuple[datetime, int]:
+def _event_sort_key(event: Mapping[str, object]) -> tuple[datetime, int]:
     timestamp = event.get("timestamp")
     if isinstance(timestamp, datetime):
         ts = timestamp
@@ -228,11 +240,9 @@ def _event_sort_key(event: dict) -> tuple[datetime, int]:
     return ts, int(event.get("id") or 0)
 
 
-def _iter_clean_turns(events: list[dict]) -> Iterator[_TranscriptTurn]:
+def iter_clean_transcript_events(events: list[Mapping[str, object]]) -> Iterator[CleanTranscriptEvent]:
+    """Yield content-bearing events in the clean index space used by turn embeddings."""
     ordered = sorted(events, key=_event_sort_key)
-    current_role: str | None = None
-    current_texts: list[str] = []
-    current_start = 0
     message_index = 0
 
     for event in ordered:
@@ -243,11 +253,32 @@ def _iter_clean_turns(events: list[dict]) -> Iterator[_TranscriptTurn]:
         if not content.strip():
             continue
 
-        role = event.get("role", "unknown")
+        event_id_value = event.get("id")
+        event_id = int(event_id_value) if event_id_value is not None else None
+        tool_name_value = event.get("tool_name")
+        yield CleanTranscriptEvent(
+            index=message_index,
+            event_id=event_id,
+            role=str(event.get("role") or "unknown"),
+            content=content,
+            tool_name=str(tool_name_value) if tool_name_value else None,
+        )
+        message_index += 1
+
+
+def _iter_clean_turns(events: list[Mapping[str, object]]) -> Iterator[_TranscriptTurn]:
+    ordered = sorted(events, key=_event_sort_key)
+    current_role: str | None = None
+    current_texts: list[str] = []
+    current_start = 0
+
+    for clean_event in iter_clean_transcript_events(ordered):
+        content = clean_event.content
+        role = clean_event.role
         if current_role is None:
             current_role = role
             current_texts = [content]
-            current_start = message_index
+            current_start = clean_event.index
         elif role == current_role:
             current_texts.append(content)
         else:
@@ -256,19 +287,18 @@ def _iter_clean_turns(events: list[dict]) -> Iterator[_TranscriptTurn]:
                     role=current_role,
                     combined_text="\n".join(current_texts),
                     event_index_start=current_start,
-                    event_index_end=message_index - 1,
+                    event_index_end=clean_event.index - 1,
                 )
             current_role = role
             current_texts = [content]
-            current_start = message_index
-        message_index += 1
+            current_start = clean_event.index
 
     if current_role is not None and current_texts:
         yield _TranscriptTurn(
             role=current_role,
             combined_text="\n".join(current_texts),
             event_index_start=current_start,
-            event_index_end=message_index - 1,
+            event_index_end=current_start + len(current_texts) - 1,
         )
 
 
@@ -558,10 +588,7 @@ async def embed_session(
     written = 0
     for batch in _chunk_batches(chunks):
         vectors = await generate_embeddings([chunk.text for chunk in batch], config)
-        pending = [
-            _PendingEmbedding(chunk=chunk, vec_bytes=embedding_to_bytes(vec))
-            for chunk, vec in zip(batch, vectors, strict=True)
-        ]
+        pending = [_PendingEmbedding(chunk=chunk, vec_bytes=embedding_to_bytes(vec)) for chunk, vec in zip(batch, vectors, strict=True)]
         written += await _persist_embedding_batch(session_id, pending, config, db)
 
     return written, 1 if has_more else 0

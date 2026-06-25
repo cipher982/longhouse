@@ -11,6 +11,7 @@ from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.models.agents import AgentEvent
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
@@ -364,6 +365,99 @@ def test_recall_filters_by_provider(tmp_path):
     payload = resp.json()
     assert payload["total"] == 1
     assert payload["matches"][0]["session_id"] == codex_id
+
+
+def test_recall_uses_clean_event_index_projection_for_context(tmp_path):
+    factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        store = AgentsStore(db)
+        result = store.ingest_session(
+            SessionIngest(
+                provider="codex",
+                environment="production",
+                project="zerg",
+                device_id="clean-projection-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                started_at=_ts(10),
+                events=[
+                    EventIngest(
+                        role="tool",
+                        content_text="tool output should not become recall context",
+                        timestamp=_ts(10),
+                        source_path="/tmp/clean-projection.jsonl",
+                        source_offset=0,
+                        raw_json='{"type":"tool"}',
+                    ),
+                    EventIngest(
+                        role="user",
+                        content_text="How does the clean recall projection work?",
+                        timestamp=_ts(11),
+                        source_path="/tmp/clean-projection.jsonl",
+                        source_offset=1,
+                        raw_json='{"type":"user"}',
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="It skips tool result rows before applying embedding event indexes.",
+                        timestamp=_ts(12),
+                        source_path="/tmp/clean-projection.jsonl",
+                        source_offset=2,
+                        raw_json='{"type":"assistant"}',
+                    ),
+                ],
+            )
+        )
+        session_id = str(result.session_id)
+        user_event = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == result.session_id, AgentEvent.role == "user")
+            .one()
+        )
+    finally:
+        db.close()
+
+    class FakeEmbeddingCache:
+        def __init__(self):
+            self._session_loaded = False
+            self._turn_loaded = False
+
+        def load_session_embeddings(self, db, model, dims):
+            self._session_loaded = True
+
+        def load_turn_embeddings(self, db, model, dims):
+            self._turn_loaded = True
+
+        @property
+        def turn_embedding_count(self):
+            return 1
+
+        def search_turns(self, query_vec, limit, session_filter):
+            assert session_id in session_filter
+            return [(session_id, 0, 0.95, 0, 1)]
+
+    async def fake_generate_embedding(query, config):
+        return [0.1, 0.2, 0.3]
+
+    with (
+        patch("zerg.models_config.get_embedding_config", return_value=SimpleNamespace(model="fake", dims=3)),
+        patch("zerg.services.embedding_cache.EmbeddingCache", FakeEmbeddingCache),
+        patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
+    ):
+        for client in _get_client(factory):
+            resp = client.get(
+                "/agents/recall",
+                params={"query": "clean recall projection", "since_days": 90, "context_turns": 0},
+            )
+
+    assert resp.status_code == 200, resp.text
+    match = resp.json()["matches"][0]
+    assert match["match_event_id"] == user_event.id
+    assert match["total_events"] == 2
+    assert [turn["role"] for turn in match["context"]] == ["user", "assistant"]
+    assert all("tool output should not become recall context" not in turn["content"] for turn in match["context"])
 
 
 def test_semantic_search_fails_loud_when_embedding_config_unavailable(tmp_path):

@@ -8,6 +8,7 @@ import * as agentsApi from "../../services/api/agents";
 import type {
   AgentSession,
   AgentSessionFilters,
+  RecallFilters,
   SessionCapabilities,
   SessionRuntimeDisplay,
   TimelineCardPresentation,
@@ -21,6 +22,7 @@ import SessionsPage from "../SessionsPage";
 const hookMocks = vi.hoisted(() => ({
   useAgentSessions: vi.fn(),
   useAgentFilters: vi.fn(),
+  useRecall: vi.fn(),
 }));
 
 const runnerHookMocks = vi.hoisted(() => ({
@@ -34,6 +36,7 @@ const timelineStreamMocks = vi.hoisted(() => ({
 vi.mock("../../hooks/useAgentSessions", () => ({
   useAgentSessions: hookMocks.useAgentSessions,
   useAgentFilters: hookMocks.useAgentFilters,
+  useRecall: hookMocks.useRecall,
 }));
 
 vi.mock("../../hooks/useRunners", () => ({
@@ -54,7 +57,7 @@ vi.mock("../../lib/config", () => ({
   },
 }));
 
-const { useAgentSessions: mockUseAgentSessions, useAgentFilters: mockUseAgentFilters } = hookMocks;
+const { useAgentSessions: mockUseAgentSessions, useAgentFilters: mockUseAgentFilters, useRecall: mockUseRecall } = hookMocks;
 const { useRunners: mockUseRunners } = runnerHookMocks;
 const { useTimelineSessionStream: mockUseTimelineSessionStream } = timelineStreamMocks;
 
@@ -282,6 +285,7 @@ function setDocumentVisibility(state: "visible" | "hidden") {
 
 describe("SessionsPage", () => {
   let latestFilters: AgentSessionFilters | undefined;
+  let latestRecallFilters: RecallFilters | undefined;
   let latestSessionOptions: { refetchInterval?: unknown } | undefined;
   let latestTimelineStreamOptions: { enabled?: boolean; skipInitialReplay?: boolean } | undefined;
 
@@ -289,6 +293,7 @@ describe("SessionsPage", () => {
     vi.useRealTimers();
     vi.clearAllMocks();
     latestFilters = undefined;
+    latestRecallFilters = undefined;
     latestSessionOptions = undefined;
     latestTimelineStreamOptions = undefined;
     setDocumentVisibility("visible");
@@ -313,6 +318,15 @@ describe("SessionsPage", () => {
         machines: ["laptop", "demo-machine"],
       },
       isLoading: false,
+    });
+
+    mockUseRecall.mockImplementation((filters: RecallFilters) => {
+      latestRecallFilters = filters;
+      return {
+        data: { matches: [], total: 0 },
+        isLoading: false,
+        error: null,
+      };
     });
 
     mockUseRunners.mockReturnValue({
@@ -352,6 +366,20 @@ describe("SessionsPage", () => {
         mode: "hybrid",
         sort: "recency",
         hide_autonomous: false,
+      });
+    });
+  });
+
+  it("passes active provider filters into recall search", async () => {
+    const user = userEvent.setup();
+    renderSessionsPage("/timeline?project=zerg&provider=codex");
+
+    await user.click(await screen.findByTestId("recall-toggle"));
+
+    await waitFor(() => {
+      expect(latestRecallFilters).toMatchObject({
+        project: "zerg",
+        provider: "codex",
       });
     });
   });

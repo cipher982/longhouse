@@ -24,6 +24,8 @@ from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_pause_requests import load_active_pause_request_map
 from zerg.services.session_pause_requests import serialize_pause_request_projection
+from zerg.services.session_processing.embeddings import CleanTranscriptEvent
+from zerg.services.session_processing.embeddings import iter_clean_transcript_events
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
@@ -229,8 +231,6 @@ async def recall_sessions(
     if not config:
         raise _embedding_unavailable_response(embedding_unavailable_detail())
 
-    from zerg.services.session_processing.content import redact_secrets
-
     query_vec = await generate_embedding(query, config)
 
     cache = EmbeddingCache()
@@ -245,7 +245,8 @@ async def recall_sessions(
         filter_query = filter_query.filter(AgentSession.project == project)
     if provider:
         filter_query = filter_query.filter(AgentSession.provider == provider)
-    filter_query = filter_query.filter(~internal_canary_session_clause(AgentSession))
+    if not is_internal_canary_provider_filter(provider):
+        filter_query = filter_query.filter(~internal_canary_session_clause(AgentSession))
     valid_ids = {str(row[0]) for row in filter_query.all()}
     if valid_ids and cache.turn_embedding_count == 0:
         raise _embedding_corpus_unavailable_response("turn")
@@ -274,27 +275,37 @@ async def recall_sessions(
         for event in all_events:
             events_by_session.setdefault(str(event.session_id), []).append(event)
 
+    clean_events_by_session: dict[str, list[CleanTranscriptEvent]] = {
+        session_key: list(iter_clean_transcript_events([_event_to_clean_projection_dict(event) for event in events]))
+        for session_key, events in events_by_session.items()
+    }
+    event_by_session_and_id: dict[str, dict[int, AgentEvent]] = {
+        session_key: {event.id: event for event in events if event.id is not None} for session_key, events in events_by_session.items()
+    }
+
     active_start_index_cache: dict[str, int] = {}
     if context_mode == "active_context":
         for session_id in ordered_session_ids:
             session_key = str(session_id)
-            session_events = events_by_session.get(session_key, [])
-            total_events = len(session_events)
+            clean_events = clean_events_by_session.get(session_key, [])
+            total_events = len(clean_events)
             boundary = store.get_active_context_boundary(session_id)
             if boundary is None:
                 active_start_index_cache[session_key] = 0
                 continue
             active_start_index = total_events
-            for idx, event in enumerate(session_events):
-                if store.is_event_in_active_context(event, boundary):
+            event_by_id = event_by_session_and_id.get(session_key, {})
+            for idx, clean_event in enumerate(clean_events):
+                event = event_by_id.get(clean_event.event_id or -1)
+                if event is not None and store.is_event_in_active_context(event, boundary):
                     active_start_index = idx
                     break
             active_start_index_cache[session_key] = active_start_index
 
     matches = []
     for session_id, chunk_index, score, event_start, event_end in results:
-        all_events = events_by_session.get(str(session_id), [])
-        total_events = len(all_events)
+        clean_events = clean_events_by_session.get(str(session_id), [])
+        total_events = len(clean_events)
         if total_events == 0:
             continue
 
@@ -310,9 +321,9 @@ async def recall_sessions(
             window_start = max(active_start_index, event_start - context_turns)
             window_end = min(total_events, event_end + context_turns + 1)
             for i in range(window_start, window_end):
-                if i < len(all_events):
-                    e = all_events[i]
-                    content = redact_secrets(e.content_text or "")
+                if i < len(clean_events):
+                    e = clean_events[i]
+                    content = e.content
                     if len(content) > 500:
                         content = content[:500] + "..."
                     context.append(
@@ -328,7 +339,7 @@ async def recall_sessions(
         if context_mode == "active_context" and event_start is not None and event_start < active_start_index:
             event_start = active_start_index
 
-        match_event_id = all_events[event_start].id if event_start is not None and event_start < total_events else None
+        match_event_id = clean_events[event_start].event_id if event_start is not None and event_start < total_events else None
 
         matches.append(
             RecallMatch(
@@ -344,3 +355,14 @@ async def recall_sessions(
         )
 
     return RecallResponse(matches=matches, total=len(matches))
+
+
+def _event_to_clean_projection_dict(event: AgentEvent) -> dict[str, object]:
+    return {
+        "id": event.id,
+        "role": event.role,
+        "content_text": event.content_text,
+        "tool_output_text": event.tool_output_text,
+        "tool_name": event.tool_name,
+        "timestamp": event.timestamp,
+    }

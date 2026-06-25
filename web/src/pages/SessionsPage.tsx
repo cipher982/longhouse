@@ -721,7 +721,7 @@ export default function SessionsPage() {
         {/* Recall Panel */}
         {recallOpen && (
           <div id="recall-panel" role="region" aria-label="Recall search">
-            <RecallPanel project={project || undefined} />
+            <RecallPanel project={project || undefined} provider={provider || undefined} />
           </div>
         )}
 
