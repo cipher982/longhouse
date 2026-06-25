@@ -115,6 +115,12 @@ def _print_message_summary(message: dict) -> None:
         typer.echo(f"  {text}")
 
 
+def _wall_value(item: dict, kernel_key: str, legacy_key: str):
+    if kernel_key in item:
+        return item.get(kernel_key)
+    return item.get(legacy_key)
+
+
 def _fetch_wall_payload(
     *,
     base_url: str,
@@ -335,12 +341,20 @@ def peers(
                 "session_id": item.get("session_id"),
                 "device_name": item.get("device_name"),
                 "provider": item.get("provider"),
-                "kernel_control_label": item.get("kernel_control_label"),
-                "kernel_live_control_available": item.get("kernel_live_control_available"),
-                "kernel_host_reattach_available": item.get("kernel_host_reattach_available"),
-                "kernel_observe_only": item.get("kernel_observe_only"),
-                "kernel_search_only": item.get("kernel_search_only"),
-                "kernel_staleness_reason": item.get("kernel_staleness_reason"),
+                "kernel_control_label": _wall_value(item, "kernel_control_label", "control_label"),
+                "kernel_live_control_available": _wall_value(
+                    item,
+                    "kernel_live_control_available",
+                    "live_control_available",
+                ),
+                "kernel_host_reattach_available": _wall_value(
+                    item,
+                    "kernel_host_reattach_available",
+                    "host_reattach_available",
+                ),
+                "kernel_observe_only": _wall_value(item, "kernel_observe_only", "observe_only"),
+                "kernel_search_only": _wall_value(item, "kernel_search_only", "search_only"),
+                "kernel_staleness_reason": _wall_value(item, "kernel_staleness_reason", "staleness_reason"),
                 "presence_state": item.get("presence_state"),
                 "summary_title": item.get("summary_title"),
                 "git_branch": item.get("git_branch"),
