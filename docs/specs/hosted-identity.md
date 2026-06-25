@@ -63,7 +63,7 @@ verifies CP-issued tokens. Self-host mode keeps its existing local
 identity system unchanged.**
 
 Phase 0 already fixed the visible hosted login funnel by routing tenant
-login through the CP. A maintainer dogfooded that flow successfully. The
+login through the CP. The Longhouse maintainer dogfooded that flow successfully. The
 remaining work should not preserve a long hosted compatibility window:
 there are no external users, and this is the cheapest moment to make the
 final shape clean. Preserve hosted product data; do not preserve legacy
@@ -688,7 +688,7 @@ are unchanged. The legacy hosted bridge cannot mint or accept tokens.
 
 ## Phase 0 acceptance
 
-Phase 0 shipped before this clean-break revision. A maintainer dogfooded
+Phase 0 shipped before this clean-break revision. The Longhouse maintainer dogfooded
 hosted web sign-in, sign-out, and sign-in again on
 `tenant.longhouse.example` and found no user-facing issues. The visible
 login funnel is accepted. Do not continue extending the HS256 hosted

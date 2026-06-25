@@ -15,6 +15,8 @@ SCAN_ROOTS = (
     Path("README.md"),
     Path("VISION.md"),
     Path(".env.example"),
+    Path("docs/README.md"),
+    Path("docs/contracts"),
     Path("docs/specs"),
     Path("docs/runbooks"),
     Path("docs/tasks"),
@@ -22,6 +24,7 @@ SCAN_ROOTS = (
 )
 
 TEXT_SUFFIXES = {".md", ".txt", ".example"}
+IGNORE_TOKEN = "PUBLIC_SURFACE_SCAN_ALLOW"
 
 
 @dataclass(frozen=True)
@@ -44,7 +47,7 @@ RULES = (
     ),
     Rule(
         "internal agent review process",
-        re.compile(r"\bHatch\b", re.IGNORECASE),
+        re.compile(r"\bHatch\b|\bhatch\s+(?:codex|review|opus|expert|deepseek)\b"),
     ),
     Rule(
         "personal maintainer approval process",
@@ -82,7 +85,11 @@ def scan(root: Path) -> list[str]:
             continue
 
         relative = path.relative_to(root)
-        for line_number, line in enumerate(text.splitlines(), start=1):
+        lines = text.splitlines()
+        for line_number, line in enumerate(lines, start=1):
+            previous_line = lines[line_number - 2] if line_number > 1 else ""
+            if IGNORE_TOKEN in line or IGNORE_TOKEN in previous_line:
+                continue
             for rule in RULES:
                 if rule.pattern.search(line):
                     snippet = line.strip()
@@ -105,37 +112,50 @@ def run_self_tests() -> None:
 
         _write(root / "docs/specs/private.md", "Owner: david010@gmail.com\n")
         failures = scan(root)
-        assert len(failures) == 1, failures
-        assert "personal owner email" in failures[0], failures
+        assert len(failures) == 1, f"email fixture: {failures}"
+        assert "personal owner email" in failures[0], f"email fixture: {failures}"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write(root / "docs/runbooks/reclaim.md", "ssh zerg 'docker exec longhouse-david010 true'\n")
         failures = scan(root)
-        assert len(failures) == 2, failures
-        assert any("personal SSH host alias" in failure for failure in failures), failures
-        assert any("personal hosted container" in failure for failure in failures), failures
+        assert len(failures) == 2, f"ssh/container fixture: {failures}"
+        assert any("personal SSH host alias" in failure for failure in failures), f"ssh/container fixture: {failures}"
+        assert any("personal hosted container" in failure for failure in failures), f"ssh/container fixture: {failures}"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write(root / "docs/specs/review.md", "## Hatch Opus Review\n")
         failures = scan(root)
-        assert len(failures) == 1, failures
-        assert "internal agent review process" in failures[0], failures
+        assert len(failures) == 1, f"hatch fixture: {failures}"
+        assert "internal agent review process" in failures[0], f"hatch fixture: {failures}"
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write(root / "docs/specs/legit.md", "Open the lower hatch before maintenance.\n")
+        assert scan(root) == [], "lowercase hatch fixture should pass"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write(root / "docs/runbooks/reclaim.md", "David approval before production reclaim.\n")
         failures = scan(root)
-        assert len(failures) == 1, failures
-        assert "personal maintainer approval process" in failures[0], failures
+        assert len(failures) == 1, f"approval fixture: {failures}"
+        assert "personal maintainer approval process" in failures[0], f"approval fixture: {failures}"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write(root / "docs/specs/review.md", "Codex reviewed the plan.\n")
         failures = scan(root)
-        assert len(failures) == 1, failures
-        assert "internal Codex review process" in failures[0], failures
+        assert len(failures) == 1, f"codex fixture: {failures}"
+        assert "internal Codex review process" in failures[0], f"codex fixture: {failures}"
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write(
+            root / "docs/specs/allow.md",
+            f"<!-- {IGNORE_TOKEN}: intentional quoted example -->\nOwner: david010@gmail.com\n",
+        )
+        assert scan(root) == [], "allow annotation fixture should pass"
 
 
 def main() -> int:
