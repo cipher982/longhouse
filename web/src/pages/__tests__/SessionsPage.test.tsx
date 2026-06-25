@@ -413,6 +413,17 @@ describe("SessionsPage", () => {
             }),
           }),
           makeTimelineCard({
+            id: "session-observe",
+            summary_title: "Observe thread",
+            thread_root_session_id: "thread-observe",
+            thread_head_session_id: "session-observe",
+            capabilities: makeCapabilities({
+              control_label: "search-only",
+              observe_only: true,
+              search_only: false,
+            }),
+          }),
+          makeTimelineCard({
             id: "session-imported",
             summary_title: "Imported thread",
             thread_root_session_id: "thread-imported",
@@ -423,7 +434,7 @@ describe("SessionsPage", () => {
             }),
           }),
         ],
-        total: 3,
+        total: 4,
         has_real_sessions: true,
       },
       isLoading: false,
@@ -434,7 +445,12 @@ describe("SessionsPage", () => {
     renderSessionsPage("/timeline");
 
     const controlLabels = await screen.findAllByTestId("session-row-control");
-    expect(controlLabels.map((node) => node.textContent)).toEqual(["Live control", "Reattach", "Search only"]);
+    expect(controlLabels.map((node) => node.textContent)).toEqual([
+      "Live control",
+      "Reattach",
+      "Observe only",
+      "Search only",
+    ]);
   });
 
 

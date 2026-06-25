@@ -202,7 +202,7 @@ export function SessionRow({
 }
 
 export function getRowControlPresentation(capabilities: SessionCapabilities | null | undefined): RowControlPresentation {
-  if (capabilities?.live_control_available || capabilities?.control_label === "live") {
+  if (capabilities?.control_label === "live" || capabilities?.live_control_available) {
     return {
       label: "Live control",
       tone: "live",
@@ -210,7 +210,7 @@ export function getRowControlPresentation(capabilities: SessionCapabilities | nu
     };
   }
 
-  if (capabilities?.host_reattach_available || capabilities?.control_label === "reattach") {
+  if (capabilities?.control_label === "reattach" || capabilities?.host_reattach_available) {
     return {
       label: "Reattach",
       tone: "reattach",
@@ -218,7 +218,9 @@ export function getRowControlPresentation(capabilities: SessionCapabilities | nu
     };
   }
 
-  if (capabilities?.observe_only || capabilities?.control_label === "search-only") {
+  // Kernel "search-only" covers observe-only tails: readable transcript output,
+  // but no steerable control path.
+  if (capabilities?.control_label === "search-only" || capabilities?.observe_only) {
     return {
       label: "Observe only",
       tone: "observe",

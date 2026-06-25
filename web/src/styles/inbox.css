@@ -17,7 +17,7 @@
     --inbox-repo-pad-y: 7px;
     --inbox-meta-font: 13px;
     --inbox-status-width: 13ch;
-    --inbox-source-width: 26ch;
+    --inbox-source-width: 22ch;
     --inbox-time-width: 16ch;
     --inbox-title-max: 50%;
     --inbox-group-gap: 0px;
@@ -295,21 +295,21 @@
   }
 
   .inbox-row-control[data-tone="live"] {
-    color: #14685f;
-    border-color: color-mix(in srgb, #3db5c8 48%, var(--color-border-muted));
-    background: color-mix(in srgb, #3db5c8 16%, transparent);
+    color: var(--color-text-primary);
+    border-color: color-mix(in srgb, var(--color-intent-success) 42%, var(--color-border-muted));
+    background: color-mix(in srgb, var(--color-intent-success) 15%, transparent);
   }
 
   .inbox-row-control[data-tone="reattach"] {
-    color: #7a4c10;
-    border-color: color-mix(in srgb, #e8a33d 50%, var(--color-border-muted));
-    background: color-mix(in srgb, #e8a33d 15%, transparent);
+    color: var(--color-text-primary);
+    border-color: color-mix(in srgb, var(--color-intent-warning) 42%, var(--color-border-muted));
+    background: color-mix(in srgb, var(--color-intent-warning) 15%, transparent);
   }
 
   .inbox-row-control[data-tone="observe"] {
-    color: #36566d;
-    border-color: color-mix(in srgb, #5f8dad 38%, var(--color-border-muted));
-    background: color-mix(in srgb, #5f8dad 13%, transparent);
+    color: var(--color-text-primary);
+    border-color: color-mix(in srgb, var(--color-brand-primary) 34%, var(--color-border-muted));
+    background: color-mix(in srgb, var(--color-brand-primary) 11%, transparent);
   }
 
   .inbox-row-control--status {
