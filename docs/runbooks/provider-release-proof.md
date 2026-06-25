@@ -189,7 +189,7 @@ lookup, timeline listing, and preserved provider-session binding.
 Use the store that matches the caller:
 
 - Longhouse local command default: `.provider-release-proofs`
-- David dogfood accepted store: `~/.local/share/longhouse/provider-release-proofs`
+- Maintainer dogfood accepted store: `~/.local/share/longhouse/provider-release-proofs`
 - Sauron production container store: `/data/provider-release-proofs`
 
 Sauron release-envelope tooling also honors `AGENT_RELEASE_PROOF_BASELINE_ROOT`

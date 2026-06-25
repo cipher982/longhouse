@@ -51,7 +51,7 @@ RULES = (
     ),
     Rule(
         "personal maintainer approval process",
-        re.compile(r"\bDavid (?:dogfooded|approval|explicitly|approved)\b|David-approved", re.IGNORECASE),
+        re.compile(r"\bDavid (?:dogfood|dogfooded|approval|explicitly|approved)\b|David-approved", re.IGNORECASE),
     ),
     Rule(
         "internal Codex review process",
@@ -141,6 +141,13 @@ def run_self_tests() -> None:
         failures = scan(root)
         assert len(failures) == 1, f"approval fixture: {failures}"
         assert "personal maintainer approval process" in failures[0], f"approval fixture: {failures}"
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write(root / "docs/runbooks/provider.md", "David dogfood accepted store.\n")
+        failures = scan(root)
+        assert len(failures) == 1, f"dogfood fixture: {failures}"
+        assert "personal maintainer approval process" in failures[0], f"dogfood fixture: {failures}"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
