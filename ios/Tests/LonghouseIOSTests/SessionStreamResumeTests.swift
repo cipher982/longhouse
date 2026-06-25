@@ -116,7 +116,7 @@ struct SessionStreamResumeTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await waitForStartCount(recorder, atLeast: 1)
 
         // First 401 → one refresh + restart. Second 401 (no connect) is
         // suppressed and must drop the dead stream handle.
