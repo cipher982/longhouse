@@ -55,6 +55,7 @@ def test_parse_session_file_emits_empty_success_tool_result_placeholder(tmp_path
             '{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_empty","content":""}]}}',
             '{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_empty_text","content":[{"type":"text","text":""}]}]}}',
             '{"type":"user","uuid":"u3","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_empty_list","content":[]}]}}',
+            '{"type":"user","uuid":"u4","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_null","content":null}]}}',
         ],
     )
 
@@ -65,6 +66,7 @@ def test_parse_session_file_emits_empty_success_tool_result_placeholder(tmp_path
         ("tool", "toolu_empty", "[empty tool result]"),
         ("tool", "toolu_empty_text", "[empty tool result]"),
         ("tool", "toolu_empty_list", "[empty tool result]"),
+        ("tool", "toolu_null", "[empty tool result]"),
     ]
 
 

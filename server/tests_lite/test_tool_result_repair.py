@@ -197,20 +197,26 @@ def test_scan_classifies_orphan_without_matching_source_result_as_genuine_gap(tm
 def test_scan_recovers_empty_success_tool_result(tmp_path):
     factory = _factory(tmp_path)
     session_id = uuid4()
-    raw = _tool_result_raw("toolu_empty", "")
+    raw = _tool_results_raw([
+        ("toolu_empty", ""),
+        ("toolu_null", None),
+    ])
 
     with factory() as db:
         _seed_session(db, session_id)
         _seed_tool_call(db, session_id, tool_call_id="toolu_empty")
+        _seed_tool_call(db, session_id, tool_call_id="toolu_null")
         _seed_source_line(db, session_id, raw=raw, source_offset=100)
         db.commit()
 
         result = scan_orphan_tool_results(db, session_id=session_id)
 
-    assert result.scanned_orphan_calls == 1
-    assert result.recoverable == 1
-    assert result.findings[0].status == "recoverable"
-    assert result.findings[0].recovered_tool_output_text == "[empty tool result]"
+    assert result.scanned_orphan_calls == 2
+    assert result.recoverable == 2
+    assert [(finding.tool_call_id, finding.status, finding.recovered_tool_output_text) for finding in result.findings] == [
+        ("toolu_empty", "recoverable", "[empty tool result]"),
+        ("toolu_null", "recoverable", "[empty tool result]"),
+    ]
 
 
 def test_scan_recovers_json_object_tool_result(tmp_path):

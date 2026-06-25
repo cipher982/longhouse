@@ -2366,6 +2366,10 @@ fn extract_user_content_from_items(items: &[ContentItem]) -> Option<String> {
 fn extract_text_from_raw_content(raw_json: &str) -> Option<String> {
     let trimmed = raw_json.trim();
 
+    if trimmed == "null" {
+        return None;
+    }
+
     // Plain string: "some text"
     if trimmed.starts_with('"') {
         if let Ok(s) = serde_json::from_str::<String>(trimmed) {
@@ -3832,11 +3836,12 @@ mod tests {
                 r#"{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_empty_text","content":[{"type":"text","text":""}]}]}}"#,
                 r#"{"type":"user","uuid":"u3","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_missing_content"}]}}"#,
                 r#"{"type":"user","uuid":"u4","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_empty_list","content":[]}]}}"#,
+                r#"{"type":"user","uuid":"u5","timestamp":"2026-01-01T00:00:06Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_null","content":null}]}}"#,
             ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
-        assert_eq!(result.events.len(), 4);
+        assert_eq!(result.events.len(), 5);
         assert_eq!(
             result.events[0].tool_call_id.as_deref(),
             Some("toolu_empty")
@@ -3867,6 +3872,14 @@ mod tests {
         );
         assert_eq!(
             result.events[3].tool_output_text.as_deref(),
+            Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
+        );
+        assert_eq!(
+            result.events[4].tool_call_id.as_deref(),
+            Some("toolu_null")
+        );
+        assert_eq!(
+            result.events[4].tool_output_text.as_deref(),
             Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
         );
     }
