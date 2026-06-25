@@ -88,4 +88,18 @@ describe("getRowControlPresentation", () => {
       tone: "search",
     });
   });
+
+  it("treats the server control label as canonical when legacy booleans disagree", () => {
+    expect(
+      getRowControlPresentation({
+        live_control_available: true,
+        host_reattach_available: true,
+        reply_to_live_session_available: true,
+        control_label: "reattach",
+      }),
+    ).toMatchObject({
+      label: "Reattach",
+      tone: "reattach",
+    });
+  });
 });

@@ -202,32 +202,50 @@ export function SessionRow({
 }
 
 export function getRowControlPresentation(capabilities: SessionCapabilities | null | undefined): RowControlPresentation {
-  if (capabilities?.control_label === "live" || capabilities?.live_control_available) {
-    return {
-      label: "Live control",
-      tone: "live",
-      title: "Managed session with live control available",
-    };
+  switch (capabilities?.control_label) {
+    case "live":
+      return liveControlPresentation();
+    case "reattach":
+      return reattachControlPresentation();
+    case "search-only":
+      return observeOnlyPresentation();
+    case "imported":
+      return searchOnlyPresentation();
   }
 
-  if (capabilities?.control_label === "reattach" || capabilities?.host_reattach_available) {
-    return {
-      label: "Reattach",
-      tone: "reattach",
-      title: "Managed session can be reattached from its host",
-    };
-  }
+  if (capabilities?.live_control_available) return liveControlPresentation();
+  if (capabilities?.host_reattach_available) return reattachControlPresentation();
+  if (capabilities?.observe_only) return observeOnlyPresentation();
+  return searchOnlyPresentation();
+}
 
+function liveControlPresentation(): RowControlPresentation {
+  return {
+    label: "Live control",
+    tone: "live",
+    title: "Managed session with live control available",
+  };
+}
+
+function reattachControlPresentation(): RowControlPresentation {
+  return {
+    label: "Reattach",
+    tone: "reattach",
+    title: "Managed session can be reattached from its host",
+  };
+}
+
+function observeOnlyPresentation(): RowControlPresentation {
   // Kernel "search-only" covers observe-only tails: readable transcript output,
   // but no steerable control path.
-  if (capabilities?.control_label === "search-only" || capabilities?.observe_only) {
-    return {
-      label: "Observe only",
-      tone: "observe",
-      title: "Transcript output is observable, but this session is not steerable",
-    };
-  }
+  return {
+    label: "Observe only",
+    tone: "observe",
+    title: "Transcript output is observable, but this session is not steerable",
+  };
+}
 
+function searchOnlyPresentation(): RowControlPresentation {
   return {
     label: "Search only",
     tone: "search",

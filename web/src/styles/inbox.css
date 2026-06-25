@@ -55,7 +55,7 @@
   }
 
   .inbox-closed-divider-label {
-    color: var(--text-secondary);
+    color: var(--color-text-secondary);
   }
 
   .inbox-closed-divider-count {
