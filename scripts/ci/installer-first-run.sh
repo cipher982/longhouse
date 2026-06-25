@@ -984,7 +984,7 @@ if [[ "$ENABLE_E2E_BROWSER" == "1" ]]; then
   if ! (cd "$ROOT_DIR" && bun install --frozen-lockfile --silent); then
     fail "Failed to install E2E Node dependencies"
   fi
-  if ! (cd "$ROOT_DIR/e2e" && bunx playwright install --with-deps chromium 2>/dev/null); then
+  if ! "$ROOT_DIR/scripts/ci/install-playwright.sh" chromium 2>/dev/null; then
     fail "Failed to install Playwright chromium"
   fi
   if ! (cd "$ROOT_DIR/e2e" && bunx tsx scripts/verify-installer-browser.ts --url "http://127.0.0.1:${DEMO_PORT}"); then

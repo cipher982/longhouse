@@ -227,9 +227,8 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          cd e2e
-          bun install --silent
-          bunx playwright install --with-deps chromium
+          (cd e2e && bun install --silent)
+          ./scripts/ci/install-playwright.sh chromium
 
       - name: Run launch gate locally
         run: make launch-gate-local

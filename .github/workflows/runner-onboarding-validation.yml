@@ -136,13 +136,8 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          cd e2e
-          bun install --silent
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            bunx playwright install --with-deps ${{ matrix.browsers }}
-          else
-            bunx playwright install ${{ matrix.browsers }}
-          fi
+          (cd e2e && bun install --silent)
+          ./scripts/ci/install-playwright.sh ${{ matrix.browsers }}
 
       - name: Run runner install contract tests
         run: make test-install-runner
@@ -218,13 +213,8 @@ jobs:
 
       - name: Install Playwright browsers
         run: |
-          cd e2e
-          bun install --silent
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            bunx playwright install --with-deps ${{ matrix.browsers }}
-          else
-            bunx playwright install ${{ matrix.browsers }}
-          fi
+          (cd e2e && bun install --silent)
+          ./scripts/ci/install-playwright.sh ${{ matrix.browsers }}
 
       - name: Run runner install contract tests
         run: make test-install-runner
@@ -287,10 +277,9 @@ jobs:
 
       - name: Install Playwright Chromium shell
         run: |
-          cd e2e
+          (cd e2e && bun install --silent)
           # The README onboarding contract runs the onboarding-chromium project only.
-          bunx playwright install-deps chromium
-          bunx playwright install --only-shell chromium
+          LONGHOUSE_PLAYWRIGHT_ONLY_SHELL=1 ./scripts/ci/install-playwright.sh chromium
 
       - name: Run fresh-clone onboarding funnel
         run: make onboarding-funnel
@@ -347,11 +336,9 @@ jobs:
 
       - name: Install Playwright Chromium shell
         run: |
-          cd e2e
-          bun install --silent
+          (cd e2e && bun install --silent)
           # This lane runs the onboarding-chromium project only.
-          bunx playwright install-deps chromium
-          bunx playwright install --only-shell chromium
+          LONGHOUSE_PLAYWRIGHT_ONLY_SHELL=1 ./scripts/ci/install-playwright.sh chromium
 
       - name: Run runner install contract tests
         run: make test-install-runner
@@ -412,11 +399,9 @@ jobs:
 
       - name: Install Playwright Chromium shell
         run: |
-          cd e2e
-          bun install --silent
+          (cd e2e && bun install --silent)
           # This lane runs the onboarding-chromium project only.
-          bunx playwright install-deps chromium
-          bunx playwright install --only-shell chromium
+          LONGHOUSE_PLAYWRIGHT_ONLY_SHELL=1 ./scripts/ci/install-playwright.sh chromium
 
       - name: Run runner install contract tests
         run: make test-install-runner

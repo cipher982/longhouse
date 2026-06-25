@@ -406,7 +406,7 @@ jobs:
       run: ./scripts/ci/ensure-make.sh
 
     - name: Install Playwright browsers + deps
-      run: cd e2e && bunx playwright install --with-deps chromium
+      run: ./scripts/ci/install-playwright.sh chromium
 
     - name: Pre-install backend deps
       run: cd server && uv sync

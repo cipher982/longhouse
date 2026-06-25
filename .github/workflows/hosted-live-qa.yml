@@ -90,7 +90,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install Playwright browsers + deps
-        run: cd e2e && bunx playwright install --with-deps chromium
+        run: ./scripts/ci/install-playwright.sh chromium
 
       - name: Prepare isolated QA home
         run: mkdir -p "$QA_HOME" "$PLAYWRIGHT_BROWSERS_PATH"

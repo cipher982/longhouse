@@ -99,7 +99,7 @@ jobs:
 
       - name: Install Playwright browsers + deps
         if: startsWith(inputs.suite, 'e2e-') || inputs.suite == 'full'
-        run: cd e2e && bunx playwright install --with-deps chromium
+        run: ./scripts/ci/install-playwright.sh chromium
 
       - name: Run selected suite
         run: |
