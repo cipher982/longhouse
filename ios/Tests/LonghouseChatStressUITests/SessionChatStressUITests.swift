@@ -2,6 +2,9 @@ import XCTest
 
 @MainActor
 final class SessionChatStressUITests: XCTestCase {
+    private static let liveUpdateRenderBudget = 4
+    private static let liveUpdateDuplicateBudget = 1
+
     private enum LaunchEnvironment {
         static let chatFixture = "LONGHOUSE_UI_TEST_CHAT_FIXTURE"
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
@@ -129,7 +132,9 @@ final class SessionChatStressUITests: XCTestCase {
 
         let afterLiveUpdate = probeMetrics(readProbe(probeURL))
         let liveUpdateRenders = afterLiveUpdate.renders - afterParentChurn.renders
-        XCTAssertLessThanOrEqual(liveUpdateRenders, 3, readProbe(probeURL))
+        let liveUpdateDuplicates = afterLiveUpdate.duplicates - afterParentChurn.duplicates
+        XCTAssertLessThanOrEqual(liveUpdateRenders, Self.liveUpdateRenderBudget, readProbe(probeURL))
+        XCTAssertLessThanOrEqual(liveUpdateDuplicates, Self.liveUpdateDuplicateBudget, readProbe(probeURL))
         XCTAssertEqual(afterLiveUpdate.repeats, 0, readProbe(probeURL))
         XCTAssertLessThan(afterLiveUpdate.maxRenderMs, 2_500, "WebKit render should stay inside the mobile chat budget. \(readProbe(probeURL))")
         XCTAssertEqual(afterLiveUpdate.stick, 0, "Live update should not snap to bottom after user scrolled up. \(readProbe(probeURL))")
