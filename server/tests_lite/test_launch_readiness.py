@@ -112,6 +112,43 @@ def test_required_workflow_must_succeed(monkeypatch):
     ]
 
 
+def test_missing_required_workflow_includes_dispatch_hint(monkeypatch):
+    mod = _load_module()
+    sha = "3b40315871558fe77984c90423851d0194337923"
+
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="[]", stderr=""),
+    )
+
+    checks = mod.check_workflows("cipher982/longhouse", sha, ("Launch Gate",))
+
+    assert checks == [
+        mod.Check(
+            "workflow:Launch Gate",
+            False,
+            "no exact-SHA run found",
+            hint=(
+                "No exact-SHA evidence exists for this required workflow. "
+                "It may be path-filtered for this commit; dispatch it on a branch or tag "
+                "that points at 3b4031587155: "
+                "gh workflow run launch-gate.yml -R cipher982/longhouse --ref <branch-or-tag>"
+            ),
+        )
+    ]
+
+
+def test_human_output_prints_hints(capsys):
+    mod = _load_module()
+
+    mod.print_human([mod.Check("workflow:Launch Gate", False, "no exact-SHA run found", hint="dispatch it")])
+
+    captured = capsys.readouterr()
+    assert "FAIL workflow:Launch Gate: no exact-SHA run found" in captured.out
+    assert "HINT dispatch it" in captured.out
+
+
 def test_wait_mode_exits_on_terminal_workflow_failure(monkeypatch, capsys):
     mod = _load_module()
     sha = "3b40315871558fe77984c90423851d0194337923"

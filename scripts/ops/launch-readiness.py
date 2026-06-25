@@ -32,6 +32,15 @@ class Check:
     ok: bool
     detail: str
     terminal: bool = False
+    hint: str | None = None
+
+
+WORKFLOW_DISPATCH_FILES = {
+    "CI": "contract-first-ci.yml",
+    "Deploy and Verify": "deploy-and-verify.yml",
+    "Launch Gate": "launch-gate.yml",
+    "Installer Validation Ring": "test-install.yml",
+}
 
 
 def repo_root() -> Path:
@@ -103,6 +112,22 @@ def latest_run_by_workflow(runs: list[dict[str, Any]]) -> dict[str, dict[str, An
     return latest
 
 
+def missing_workflow_hint(repo: str, sha: str, workflow: str) -> str:
+    workflow_file = WORKFLOW_DISPATCH_FILES.get(workflow)
+    if workflow_file is None:
+        return (
+            "No exact-SHA evidence exists for this required workflow. "
+            "If it is path-filtered, dispatch it on a branch or tag that points at "
+            f"{sha[:12]}."
+        )
+    return (
+        "No exact-SHA evidence exists for this required workflow. "
+        "It may be path-filtered for this commit; dispatch it on a branch or tag "
+        f"that points at {sha[:12]}: "
+        f"gh workflow run {workflow_file} -R {repo} --ref <branch-or-tag>"
+    )
+
+
 def check_workflows(repo: str, sha: str, required: tuple[str, ...]) -> list[Check]:
     proc = run(
         [
@@ -130,7 +155,14 @@ def check_workflows(repo: str, sha: str, required: tuple[str, ...]) -> list[Chec
     for workflow in required:
         run_info = latest.get(workflow)
         if run_info is None:
-            checks.append(Check(f"workflow:{workflow}", False, "no exact-SHA run found"))
+            checks.append(
+                Check(
+                    f"workflow:{workflow}",
+                    False,
+                    "no exact-SHA run found",
+                    hint=missing_workflow_hint(repo, sha, workflow),
+                )
+            )
             continue
         status = run_info.get("status")
         conclusion = run_info.get("conclusion")
@@ -290,6 +322,8 @@ def print_human(checks: list[Check]) -> None:
     for check in checks:
         prefix = "OK" if check.ok else "FAIL"
         print(f"{prefix} {check.name}: {check.detail}")
+        if check.hint:
+            print(f"  HINT {check.hint}")
 
 
 def run_checks(args: argparse.Namespace, sha: str, required: tuple[str, ...]) -> list[Check]:
