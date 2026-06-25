@@ -20,6 +20,22 @@ from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.agents import SourceLineIngest
+from zerg.services.agents.store import _git_repo_project_stem
+
+
+@pytest.mark.parametrize(
+    ("git_repo", "expected"),
+    [
+        ("git@github.com:cipher982/longhouse.git", "longhouse"),
+        ("https://github.com/cipher982/longhouse.git", "longhouse"),
+        ("ssh://git@github.com/cipher982/longhouse.git/", "longhouse"),
+        ("/Users/davidrose/git/zerg/longhouse/.git", None),
+        ("", None),
+        (None, None),
+    ],
+)
+def test_git_repo_project_stem_normalizes_common_remote_shapes(git_repo, expected):
+    assert _git_repo_project_stem(git_repo) == expected
 
 
 def test_duplicate_event_sqlite_no_pending_rollback(tmp_path):
@@ -506,6 +522,15 @@ def test_reingest_preserves_cwd_basename_project_without_git_evidence(tmp_path):
             "zerg",
             "/Users/davidrose/git/zerg/longhouse/server",
             "git@github.com:cipher982/longhouse.git",
+        ),
+        (
+            "incoming_project_is_parent_but_not_remote_stem",
+            "server",
+            "/Users/davidrose/git/acme/server",
+            None,
+            "acme",
+            "/Users/davidrose/git/acme/server",
+            "git@github.com:acme/acme-platform.git",
         ),
     ],
 )
