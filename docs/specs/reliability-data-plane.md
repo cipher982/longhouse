@@ -266,7 +266,7 @@ Chunk format v1:
 ```json
 {
   "v": 1,
-  "tenant_id": "david010",
+  "tenant_id": "example-tenant",
   "session_id": "...",
   "stream": "source_lines",
   "source_seq": 12345,
@@ -496,7 +496,7 @@ On 2026-06-05, the hosted dogfood tenant was quiesced, checkpointed, and copied
 off-volume to the NAS:
 
 ```text
-/volume1/homes/drose/longhouse-backups/reliability-data-plane-20260605/david010/20260605T192032Z-consistent/
+/path/to/backups/longhouse-backups/reliability-data-plane-20260605/example-tenant/20260605T192032Z-consistent/
 ```
 
 Validation performed:
@@ -542,8 +542,8 @@ Deliverables:
 
 - this spec,
 - task checkpoint file,
-- Hatch Expert design refinement captured in this spec,
-- Hatch Opus spec review,
+- design refinement captured in this spec,
+- architecture review,
 - maintainer review pause.
 
 Acceptance:
@@ -585,7 +585,7 @@ Tests:
 - regression test proving no-query session list does not read `events` for
   card previews once hot cards are active.
 
-Review gate: Hatch Opus review.
+Review gate: architecture review.
 
 ### Phase 2: Filesystem Archive Store
 
@@ -618,7 +618,7 @@ Tests:
 - chunk boundary tests;
 - orphan recovery tests.
 
-Review gate: Hatch Opus review before any production exporter work.
+Review gate: architecture review before any production exporter work.
 
 ### Phase 3: Hot and Derived Store Skeletons
 
@@ -644,7 +644,7 @@ Tests:
 - restart/reopen tests;
 - config path tests.
 
-Review gate: Hatch Opus review.
+Review gate: architecture review.
 
 ### Phase 4: Shadow Ingest and Projectors
 
@@ -677,7 +677,7 @@ Tests:
 - duplicate/out-of-order record handling;
 - detail/search lag does not break session list/control.
 
-Review gate: Hatch Opus review.
+Review gate: architecture review.
 
 ### Phase 5: Backup Gate and Legacy Exporter
 
@@ -712,7 +712,7 @@ Tests:
 - low-disk simulation;
 - keyset pagination regression.
 
-Review gate: Hatch Opus review before running on hosted production tenant.
+Review gate: architecture review before running on hosted production tenant.
 
 ### Phase 6: Read Cutover
 
@@ -742,7 +742,7 @@ Tests:
 - p95/p99 route timing on synthetic tenant;
 - browser/API smoke.
 
-Review gate: Hatch Opus review.
+Review gate: architecture review.
 
 ### Phase 7: Archive-Primary Writes and Legacy Fallback
 
@@ -769,7 +769,7 @@ Tests:
 - mixed old/new session replay;
 - search/detail rebuild from archive.
 
-Review gate: Hatch Opus review.
+Review gate: architecture review.
 
 ### Phase 8: Decommission Plan
 
@@ -796,7 +796,7 @@ Tests:
 - event-stream replay for legacy-exported and live archive-primary records;
 - smoke timeline/search/detail/control on restored data.
 
-Review gate: maintainer approval plus Hatch Opus review.
+Review gate: maintainer approval plus architecture review.
 
 ## Decision Log
 
@@ -880,16 +880,16 @@ and the compatibility default is no longer needed.
 
 ## Review Plan
 
-- Phase 0: Hatch Expert refinement complete; Hatch Opus review required before
+- Phase 0: design review refinement complete; architecture review required before
   maintainer review.
-- Phases 1-4: Hatch Opus review after each phase.
-- Phase 5: Hatch Opus review before any hosted production exporter run.
-- Phase 6: Hatch Opus review before read cutover.
-- Phase 8: Hatch Opus plus maintainer approval before any deletion/reclaim.
+- Phases 1-4: architecture review after each phase.
+- Phase 5: architecture review before any hosted production exporter run.
+- Phase 6: architecture review before read cutover.
+- Phase 8: architecture review plus maintainer approval before any deletion/reclaim.
 
 ## Current Pause Point
 
 Local implementation has reached the Phase 8 restore/decommission planning
 boundary. Any hosted raw-data cutover, storage reclaim, compaction, or deletion
 remains blocked on explicit maintainer approval after backup/export/replay,
-comparison evidence, and Hatch Opus review.
+comparison evidence, and architecture review.

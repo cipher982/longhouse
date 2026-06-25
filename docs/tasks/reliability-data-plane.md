@@ -2,7 +2,7 @@
 
 Due: none
 Area: longhouse
-Workspace: /Users/davidrose/git/_wt/longhouse-reliability-data-plane
+Workspace: /path/to/user/git/_wt/longhouse-reliability-data-plane
 Status: Production dogfood archive-primary enabled with legacy fallback; deletion and compaction remain unapproved
 
 This task file tracks the SDP-1 epic for separating hot product/control state
@@ -13,10 +13,10 @@ Spec: `docs/specs/reliability-data-plane.md`
 ## Phase 0: Spec and Review
 
 - [x] Create worktree `epic/reliability-data-plane`.
-- [x] Consult Hatch Expert for architecture refinement.
+- [x] Consult design review for architecture refinement.
 - [x] Write persistent spec.
 - [x] Commit Phase 0 spec.
-- [x] Run Hatch Opus review of spec.
+- [x] Run architecture review of spec.
 - [x] Incorporate review feedback or record why not.
 - [x] Pause for maintainer review.
 
@@ -91,7 +91,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 
 ## Production Dogfood Closeout
 
-Completed for the solo pre-launch `david010` tenant on 2026-06-06:
+Completed for the solo pre-launch `example-tenant` tenant on 2026-06-06:
 
 - additive archive shadow writes were enabled and verified on live ingest;
 - archive-primary writes were enabled with legacy raw fallback still on;

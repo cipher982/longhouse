@@ -129,7 +129,7 @@ If evidence shows a different 422 body, update this section before implementing 
 - Capture or reproduce the second-send 422 body, including request path, method, request body shape, and FastAPI validation detail.
 - Do not exit this phase until either the exact failing request is pasted into this spec or captured as a failing regression test, or the current code path proves the suspected empty-text JSON request is already guarded and the remaining defect is array-shaped FastAPI validation error rendering.
 - Document the current lifecycle and decisions in this spec.
-- Have Hatch Opus review the spec from first principles before implementation.
+- Have architecture review cover the spec from first principles before implementation.
 
 ### Phase 2: Backend Error Shaping
 
@@ -163,7 +163,7 @@ If evidence shows a different 422 body, update this section before implementing 
 - Run focused web tests for `SessionChat`.
 - Run `make test-frontend` for the changed web surface.
 - Run `make test` if backend routes/services change.
-- Ask Hatch Opus to review the implementation before merging.
+- Ask for architecture review of the implementation before merging.
 - Commit coherent checkpoints during implementation.
 - Merge the worktree branch back to `main` and push to `origin`.
 

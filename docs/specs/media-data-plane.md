@@ -690,9 +690,9 @@ Rules:
 | Same sha256 arrives with different MIME labels | Treat sha256 as authority; MIME is advisory metadata |
 | Imported media exceeds ordinary composer caps | Use a separate generous original-media cap and surface `oversize` repair state instead of dropping |
 
-## Hatch Opus Review
+## Architecture Review
 
-Reviewed with Hatch Claude Opus on 2026-06-22. Key findings incorporated:
+Reviewed through architecture review on 2026-06-22. Key findings incorporated:
 
 - The large bytes are primarily in raw `source_lines`, not extracted event
   previews. The spec now centers source-line redaction plus reconstructable raw

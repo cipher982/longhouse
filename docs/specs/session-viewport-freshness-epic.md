@@ -1,6 +1,6 @@
 # Session Viewport Freshness Epic
 
-Status: Draft, revised after Hatch Opus review
+Status: Draft, revised after architecture review
 Last updated: 2026-06-08
 
 ## Executive Summary
@@ -30,7 +30,7 @@ The target architecture is "snapshot first, subscribe from snapshot." The
 practical implementation should be additive and phased; do not replace the
 archive/projection stack or invent a new transcript transport.
 
-Hatch Opus review found one blocking defect in the current server primitive:
+architecture review found one blocking defect in the current server primitive:
 the workspace signature does not currently move when a pause-request question
 appears. That is not an implementation detail; pause requests are viewport
 state, and they were part of the motivating failure. Phase 2 must fix and test
@@ -504,7 +504,7 @@ Work:
   soon as Phase 2 changes the revision primitive. Phase 7 hardens the harness
   and telemetry; it should not be the first proof that the fingerprint can see
   pause requests.
-- Add hosted dogfood notes for david010 manual verification if an automated
+- Add hosted dogfood notes for example-tenant manual verification if an automated
   fixture is too expensive.
 - Record telemetry around cache-hit-to-refresh latency and stream mismatch
   refreshes.
@@ -571,7 +571,7 @@ payloads.
 Revisit if: A future launch requirement needs sub-100ms full transcript deltas
 and the projection model has a durable ordered delta log.
 
-## Review Questions for Hatch Opus
+## Review Questions for Architecture Review
 
 1. Is `workspace_revision` the right correctness primitive, or should the epic
    instead introduce a durable monotonic workspace cursor?

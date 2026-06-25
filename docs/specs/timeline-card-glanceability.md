@@ -2,7 +2,7 @@
 
 **Status:** Research spike → spec. Not yet built.
 **Surfaces:** iOS Timeline, web Timeline, iOS home-screen widget, shared model logic.
-**Owner:** david010@gmail.com
+**Owner:** owner@example.com
 
 ---
 

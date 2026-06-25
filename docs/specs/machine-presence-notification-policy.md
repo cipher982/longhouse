@@ -233,7 +233,7 @@ is waiting" or keep the floor high enough that "Ran 10m" feels honest.
 ### Phase 0 - Spec And Review
 
 - write this spec;
-- ask Hatch Opus for a product/architecture review;
+- request product and architecture review;
 - incorporate the review into the spec before code.
 
 ### Phase 1 - Machine Presence Endpoint
@@ -268,7 +268,7 @@ is waiting" or keep the floor high enough that "Ran 10m" feels honest.
 
 ### Phase 4 - Review And Validation
 
-- ask Hatch Opus after Phase 1/2 and again after Phase 3;
+- request architecture review after Phase 1/2 and again after Phase 3;
 - fix all correctness blockers;
 - run focused tests after each phase;
 - run `make test`, `make test-frontend` if generated/types change,
@@ -280,7 +280,7 @@ The feature is complete only when:
 
 - implementation is on a new worktree branch;
 - commits are small and coherent;
-- Hatch Opus reviews the main large phases;
+- architecture review covers the main large phases;
 - many unit and integration tests cover the endpoint, engine bucketing, resolver,
   and notification policy;
 - validation passes or any skipped/failed check is explicitly explained;

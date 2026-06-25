@@ -149,7 +149,7 @@ The default launch flow should ask for an initial prompt and run once:
 ```text
 Start Agent
 Machine      cinder
-Workspace    /Users/davidrose/git/zerg/longhouse
+Workspace    /path/to/longhouse
 Provider     Codex
 Mode         Run once
 Prompt       Fix the failing telemetry test and summarize the change.
@@ -480,9 +480,9 @@ more intentional.
   Recommendation: do not block Codex one-shot on this, but default to fail-fast
   instead of auto-approve.
 
-## Hatch Opus Review Incorporated
+## Architecture Review Incorporated
 
-This revision incorporates Hatch Opus pushback from 2026-06-16:
+This revision incorporates architecture review feedback from 2026-06-16:
 
 - grounded execution lifetime in `SessionRun` and `SessionConnection`;
 - called out the existing `launch_state="live"` naming collision;

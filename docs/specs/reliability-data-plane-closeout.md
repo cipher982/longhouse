@@ -1,6 +1,6 @@
 # Reliability Data Plane — Loose-End Closeout Plan
 
-**Status:** Draft for review (hatch codex) — not started
+**Status:** Draft for review (architecture review) — not started
 **Owner:** Longhouse core
 **Created:** 2026-06-06
 **Predecessor:** `docs/specs/reliability-data-plane.md` (the additive epic that shipped)
@@ -21,7 +21,7 @@ has one clean path.
 
 ## Ground Truth (verified 2026-06-06 @ `0bb4ba49`)
 
-What is actually live on `david010`:
+What is actually live on `example-tenant`:
 
 1. **Archive-primary raw writes are ON** with **legacy raw fallback ON**. New
    ingest writes raw bytes to *both* the filesystem archive (`archive/`) and the
@@ -75,9 +75,9 @@ Invariant preserved: hot product/control + list/timeline paths never scan raw
 tables (already true via hot-card listing). Detail/search read structured event
 rows. Raw fidelity lives in the archive, replayable to rebuild structured rows.
 
-## hatch codex Review Findings (2026-06-06, gpt-5.5 max/high)
+## Architecture Review Findings (2026-06-06, gpt-5.5 max/high)
 
-Codex reviewed v1 of this plan and confirmed the ground truth, but found
+Architecture review confirmed the ground truth, but found
 **data-loss / regression holes that block implementation as originally drafted.**
 Verified independently before incorporating:
 
@@ -188,9 +188,9 @@ The exporter already exists (`legacy_archive_exporter.py`, CLI
 low-disk pause and corruption quarantine.
 
 - **Backup gate (re-confirm):** the 2026-06-05 NAS off-volume backup at
-  `.../reliability-data-plane-20260605/david010/...-consistent/` satisfies the
+  `.../reliability-data-plane-20260605/example-tenant/...-consistent/` satisfies the
   spec's gate. Re-verify it still exists and counts match before exporting.
-  Get explicit David approval to run the exporter against prod.
+  Get explicit maintainer approval to run the exporter against prod.
 - Run `archive export-legacy --source-table source_lines` and
   `--source-table events` in a loop until `selected_rows == 0`, honoring the
   30 GB disk floor.
@@ -263,7 +263,7 @@ tie-break risk entirely); the structured rows already exist and are authoritativ
 - Swap via documented stop → move-aside → start → smoke → retain.
 - Keep old monolith + NAS backup + archive for the retention window.
 - Smoke: timeline, detail, search, FTS, health, launch, heartbeat, control all
-  green; resume works (archive-backed); `make qa-live` david010 = 12/12.
+  green; resume works (archive-backed); `QA_INSTANCE_SUBDOMAIN=example-tenant make qa-live` = 12/12.
 
 Exit: monolith is small; raw bytes live only in the archive; disk reclaimed.
 
@@ -372,7 +372,7 @@ fixture; no code change required.
 - **Shared worktree / parallel agents.** Commit only touched paths; anchor any
   deploy claim to exact SHA.
 
-## First-Principles Architecture Gate (hatch codex xhigh, 2026-06-06)
+## First-Principles Architecture Gate (architecture review, 2026-06-06)
 
 A from-scratch architecture review (not just plan validation) on the live-measured
 116 GB confirmed the end state but found two **production-data-correctness bugs**.
@@ -407,7 +407,7 @@ archive.
   snapshot both; restore verification checks `file_sha256` + `payload_sha256` +
   per-record raw hash before any raw SQLite reclaim.
 
-**Observation ledger decision (David-approved, codex-confirmed):** archive becomes
+**Observation ledger decision (maintainer-approved, review-confirmed):** archive becomes
 the SOLE durable raw transcript source. `provider_event` / `provider_source_line`
 observations demote to a transient projection buffer, pruned only after the row
 is both projected AND archive-sealed. `rebuild-from-ledger` for transcript is
@@ -430,7 +430,7 @@ The single most important thing before touching production data: **prove
 byte-identity at the `source_lines` row level via `line_hash`.** Without it,
 reclaim can silently produce valid-looking but wrong resumed transcripts.
 
-## Execution Sequence (hatch codex-directed, David-approved)
+## Maintainer-Approved Execution Sequence
 
 Decisive, non-bundled, reversible at every step. **STOP before Phase B.**
 
@@ -447,7 +447,7 @@ Decisive, non-bundled, reversible at every step. **STOP before Phase B.**
    parallel; final shape gated on measurement.
 4. **STOP — human approval gate.** No prod export (B), off-volume archive
    confirm (C), legacy-write disable (D), slim-index conversion / raw-column drop
-   / reclaim (E), or scaffolding deletion (F) without explicit David approval.
+   / reclaim (E), or scaffolding deletion (F) without explicit maintainer approval.
 
 A′ split clarified: the archive-backed *read path* + parity tests are safe now
 (PR2). The slim-index *conversion* (dropping `source_lines` raw columns) is
@@ -456,9 +456,9 @@ archive first.
 
 ## Review & Approval Gates
 
-1. hatch codex review of THIS plan before any code. ← next step
-2. David approval before Phase B exporter runs against prod.
-3. David approval before Phase E reclaim (exact paths, backup id, rollback cmds).
+1. architecture review of this plan before any code. ← next step
+2. maintainer approval before Phase B exporter runs against prod.
+3. maintainer approval before Phase E reclaim (exact paths, backup id, rollback cmds).
 
 ## Resolved by review
 

@@ -3,7 +3,7 @@
 Status: proposed core invariant
 Owner: Longhouse session core + Machine Agent
 Created: 2026-06-23
-Reviewed: Hatch Opus steelman on 2026-06-23
+Reviewed: architecture review on 2026-06-23
 Related:
 - `docs/specs/session-identity-kernel.md`
 - `docs/specs/session-graph-invariants.md`
@@ -266,7 +266,7 @@ Healthy managed sessions should be equally direct:
 
 ```text
 OpenCode healthy
-Control ready / transcript bound / syncing to david010
+Control ready / transcript bound / syncing to example-tenant
 ```
 
 Antigravity-like providers that do not promise a durable native id must not show

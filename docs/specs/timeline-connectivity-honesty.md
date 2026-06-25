@@ -403,7 +403,7 @@ Add a structured debug event for banner transitions so field logs can answer:
 
 ## Review findings
 
-Initial Hatch Opus review, 2026-06-02:
+Initial architecture review, 2026-06-02:
 
 - The original draft correctly identified a category error, but over-modeled the
   fix with four stored axes. This revision collapses product policy to
@@ -420,13 +420,13 @@ Initial Hatch Opus review, 2026-06-02:
   keeps snapshots on their existing short request timeout and allows
   `NWPathMonitor` only as an explicit OS no-connectivity input.
 
-Second Hatch Opus review, 2026-06-02:
+Second architecture review, 2026-06-02:
 
 - No blocking findings.
 - Added the banner derivation table, first-connect freshness note, cold-start
   behavior, and explicit replacement of the old `ConnectionStateTests` ladder.
 
-Final holistic Hatch Opus review, 2026-06-02:
+Final holistic architecture review, 2026-06-02:
 
 - No release-blocking findings. `Offline`/`degraded`/`Reconnecting` are provably
   unreachable from any stream signal or disconnect; only snapshot failure, auth,

@@ -33,7 +33,7 @@ Related:
 
 Longhouse has two FastAPI services that each render a Longhouse-branded
 login page on a different domain. A user landing on a hosted tenant
-(`david010.longhouse.ai`) clicks "Continue to your Longhouse account" and
+(`tenant.longhouse.example`) clicks "Continue to your Longhouse account" and
 gets bounced to a different login on `control.longhouse.ai`. The CP login
 has its own Google + GitHub + email/password buttons, its own cookie, its
 own brand surface. From the user's point of view it reads as "I logged
@@ -63,7 +63,7 @@ verifies CP-issued tokens. Self-host mode keeps its existing local
 identity system unchanged.**
 
 Phase 0 already fixed the visible hosted login funnel by routing tenant
-login through the CP. David dogfooded that flow successfully. The
+login through the CP. A maintainer dogfooded that flow successfully. The
 remaining work should not preserve a long hosted compatibility window:
 there are no external users, and this is the cheapest moment to make the
 final shape clean. Preserve hosted product data; do not preserve legacy
@@ -235,9 +235,9 @@ user during profile refresh, keep the old cached value and log
   "iss": "https://control.longhouse.ai",
   "aud": "<INSTANCE_ID>",
   "sub": "<cp_user_id, decimal string>",
-  "email": "david010@gmail.com",
+  "email": "owner@example.com",
   "email_verified": true,
-  "display_name": "David Rose",
+  "display_name": "Example Owner",
   "avatar_url": "https://...",
   "iat": 1718448000,
   "exp": 1718451600
@@ -433,16 +433,16 @@ URL has the wrong `tenant_state` (or none) and is rejected.
 
 ### Browser flow
 
-1. User visits `https://david010.longhouse.ai/login`. React app
+1. User visits `https://tenant.longhouse.example/login`. React app
    calls `GET /api/auth/methods`, gets
    `{sso: true, sso_url: "https://control.longhouse.ai",
     sso_login_url: "https://control.longhouse.ai/auth/start"}`.
 2. `LoginPage` is a thin navigator: it reads the current
    `return_to` from the URL and navigates the browser to
-   `https://david010.longhouse.ai/api/auth/start-handoff?return_to=...`.
+   `https://tenant.longhouse.example/api/auth/start-handoff?return_to=...`.
    The server route there generates `tenant_state`, sets the
    `tenant_login_state` cookie, and 302s to
-   `https://control.longhouse.ai/auth/start?tenant=david010&return_to=...&tenant_state=...`.
+   `https://control.longhouse.ai/auth/start?tenant=example-tenant&return_to=...&tenant_state=...`.
 3. CP `/auth/start` renders the tenant-aware login page. CP
    OAuth state JWT carries `tenant`, `return_to`, and
    `tenant_state`. The CP does not currently have the user's CP
@@ -451,7 +451,7 @@ URL has the wrong `tenant_state` (or none) and is rejected.
    decodes state. If the user owns `tenant`, the CP creates a
    handoff row (opaque code, profile snapshot per the
    "Handoff code" section above) and 302s to
-   `https://david010.longhouse.ai/api/auth/accept-handoff?code=...&return_to=...&tenant_state=...`.
+   `https://tenant.longhouse.example/api/auth/accept-handoff?code=...&return_to=...&tenant_state=...`.
 5. Tenant `accept-handoff` (server-to-server):
    - Validates the request's `tenant_state` matches the
      `tenant_login_state` cookie (anti-CSRF).
@@ -688,9 +688,9 @@ are unchanged. The legacy hosted bridge cannot mint or accept tokens.
 
 ## Phase 0 acceptance
 
-Phase 0 shipped before this clean-break revision. David dogfooded
+Phase 0 shipped before this clean-break revision. A maintainer dogfooded
 hosted web sign-in, sign-out, and sign-in again on
-`david010.longhouse.ai` and found no user-facing issues. The visible
+`tenant.longhouse.example` and found no user-facing issues. The visible
 login funnel is accepted. Do not continue extending the HS256 hosted
 bridge; replace it with the CP identity-provider flow below.
 

@@ -17,9 +17,9 @@ All of these must be true before any storage reclaim command is proposed:
 - clean-store restore drill passes;
 - timeline, detail, search, health, launch, heartbeat, and control smoke checks
   pass against the restored stores;
-- Hatch Opus review has no high or medium issues for the restore/decommission
+- architecture review has no high or medium issues for the restore/decommission
   plan;
-- David explicitly approves the exact reclaim action and target tenant.
+- the maintainer explicitly approves the exact reclaim action and target tenant.
 
 ## Clean Restore Drill
 
@@ -74,7 +74,7 @@ The final reclaim command must be written down before it runs and must include:
 - exact old DB path;
 - exact new hot/derived DB paths;
 - expected rollback move/rename commands;
-- approval line from David.
+- maintainer approval line.
 
 No agent should infer this approval from the existence of this runbook, green
 tests, successful export, or prior broad instruction to continue the epic.
