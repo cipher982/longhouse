@@ -163,13 +163,14 @@ Built by [David Rose](https://github.com/cipher982). Apache-2.0.
   "steps": [
     "bun install --frozen-lockfile --silent",
     "(cd web && bun run build)",
+    "python3 scripts/build/generate_build_identity.py",
     "uv venv .tmp-readme-serve-venv --python 3.12 -q",
     ". .tmp-readme-serve-venv/bin/activate",
     "uv pip install -e server -q",
     "DATABASE_URL=sqlite:///$(mktemp -d)/test.db LLM_DISABLED=1 longhouse serve --port 47398 &",
     "SERVER_PID=$!",
     "for _ in $(seq 1 20); do curl -sf http://127.0.0.1:47398/api/health && break; sleep 1; done",
-    "curl -sf http://127.0.0.1:47398/api/health",
+    "python3 -c 'import json,urllib.request; p=json.load(urllib.request.urlopen(\"http://127.0.0.1:47398/api/health\")); assert p.get(\"status\") == \"healthy\", p'",
     "kill $SERVER_PID 2>/dev/null || true"
   ],
   "cleanup": [
@@ -185,10 +186,11 @@ Built by [David Rose](https://github.com/cipher982). Apache-2.0.
   "workdir": "/tmp/longhouse-onboarding",
   "steps": [
     "cd {{WORKDIR}}/web && bun install --silent && bun run build",
+    "cd {{WORKDIR}} && python3 scripts/build/generate_build_identity.py",
     "cd {{WORKDIR}}/server && uv sync",
     "cd {{WORKDIR}}/server && HOME={{WORKDIR}}/.qa-home LLM_DISABLED=1 uv run longhouse serve --host 127.0.0.1 --port 8080 --daemon",
     "sleep 5",
-    "curl -fsS http://127.0.0.1:8080/api/health",
+    "python3 -c 'import json,urllib.request; p=json.load(urllib.request.urlopen(\"http://127.0.0.1:8080/api/health\")); assert p.get(\"status\") == \"healthy\", p'",
     "cd {{WORKDIR}}/e2e && bun install --silent && PLAYWRIGHT_BASE_URL=http://127.0.0.1:8080 bunx playwright test --config playwright.onboarding.config.js --project onboarding-chromium"
   ],
   "cleanup": [
