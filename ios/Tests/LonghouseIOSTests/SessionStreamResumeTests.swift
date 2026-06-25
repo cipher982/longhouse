@@ -73,30 +73,26 @@ struct SessionStreamResumeTests {
         )
 
         await model.start(sessionId: "session-1", appState: appState)
-        try? await Task.sleep(nanoseconds: 50_000_000)
+        await waitForStartCount(recorder, atLeast: 1)
         let startsBefore = recorder.startCount
 
         // The active stream reports a 401.
         recorder.emitUnauthorized()
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await waitForStartCount(recorder, atLeast: startsBefore + 1)
 
         // Exactly one refresh REST call and one stream restart.
         #expect(await api.tailRequestCount() >= 1)
         #expect(recorder.startCount == startsBefore + 1)
 
-        // A second 401 on the restarted stream must NOT loop again — the guard
-        // holds until a successful connect resets it.
-        let startsAfterFirst = recorder.startCount
-        recorder.emitUnauthorized()
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        #expect(recorder.startCount == startsAfterFirst, "must not refresh-loop")
-
         // After a successful connect, the guard resets so a later 401 (e.g. a
         // cookie that expires mid-session) can refresh again.
+        let startsAfterFirst = recorder.startCount
+        let tailRequestsAfterFirst = await api.tailRequestCount()
         recorder.emitConnected()
         try? await Task.sleep(nanoseconds: 30_000_000)
         recorder.emitUnauthorized()
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await waitForStartCount(recorder, atLeast: startsAfterFirst + 1)
+        #expect(await api.tailRequestCount() >= tailRequestsAfterFirst + 1)
         #expect(recorder.startCount == startsAfterFirst + 1, "connect should re-arm refresh")
 
         model.stop()

@@ -2150,8 +2150,10 @@ final class SessionViewModel: ObservableObject {
         // the now-dead stream; a later foreground start() will reattach since
         // it gates on streamTask == nil.
         guard !streamAuthRefreshAttempted else {
+            let deadStream = stream
             streamTask = nil
             stream = nil
+            await deadStream?.stop()
             return
         }
         streamAuthRefreshAttempted = true
