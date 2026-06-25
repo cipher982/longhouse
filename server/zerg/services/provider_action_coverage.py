@@ -32,6 +32,7 @@ class ActionCoverageReasonCode(StrEnum):
     PROVIDER_PAUSE_DETECT_ONLY = "provider_pause_detect_only"
     PROVIDER_PROOF_UNDECLARED = "provider_proof_undeclared"
     PROVIDER_SURFACE_UNPROVEN = "provider_surface_unproven"
+    # Retained for older serialized artifacts; new rich gaps use specific codes.
     PROVIDER_GAP_DECLARED = "provider_gap_declared"
     PROVIDER_ACTOR_SWITCH_UNMAPPED = "provider_actor_switch_unmapped"
     PROVIDER_BACKGROUND_STATUS_UNPROVEN = "provider_background_status_unproven"
