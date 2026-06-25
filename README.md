@@ -167,8 +167,9 @@ Built by [David Rose](https://github.com/cipher982). Apache-2.0.
     "uv venv .tmp-readme-serve-venv --python 3.12 -q",
     ". .tmp-readme-serve-venv/bin/activate",
     "uv pip install -e server -q",
+    "rm -rf .tmp-readme-serve-db .tmp-readme-serve.pid .tmp-readme-serve.port",
     "PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind((\"127.0.0.1\", 0)); print(s.getsockname()[1]); s.close()')",
-    "rm -rf .tmp-readme-serve-db .tmp-readme-serve.pid",
+    "echo \"$PORT\" > .tmp-readme-serve.port",
     "mkdir -p .tmp-readme-serve-db",
     "DATABASE_URL=\"sqlite:///$(pwd)/.tmp-readme-serve-db/test.db\" LLM_DISABLED=1 longhouse serve --port \"$PORT\" &",
     "SERVER_PID=$!",
@@ -180,7 +181,8 @@ Built by [David Rose](https://github.com/cipher982). Apache-2.0.
   ],
   "cleanup": [
     "if [ -f .tmp-readme-serve.pid ]; then kill \"$(cat .tmp-readme-serve.pid)\" 2>/dev/null || true; fi",
-    "rm -f .tmp-readme-serve.pid",
+    "if [ -f .tmp-readme-serve.port ] && command -v lsof >/dev/null 2>&1; then for pid in $(lsof -tiTCP:\"$(cat .tmp-readme-serve.port)\" -sTCP:LISTEN 2>/dev/null || true); do kill \"$pid\" 2>/dev/null || true; done; fi",
+    "rm -f .tmp-readme-serve.pid .tmp-readme-serve.port",
     "rm -rf .tmp-readme-serve-venv .tmp-readme-serve-db"
   ]
 }

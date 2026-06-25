@@ -113,6 +113,10 @@ def run_block(block: dict) -> bool:
     print(f"  {name}  ({source})")
     print(f"{'─' * 60}")
 
+    if not isinstance(steps, list) or not steps or not all(isinstance(step, str) and step.strip() for step in steps):
+        print("  ✗  ERROR: steps must be a non-empty list of shell commands", file=sys.stderr)
+        return False
+
     env = {**os.environ, **{k: str(v) for k, v in env_extra.items()}}
 
     # Write steps as a single shell script so variables persist across steps

@@ -139,6 +139,14 @@ def test_missing_required_workflow_includes_dispatch_hint(monkeypatch):
     ]
 
 
+def test_workflow_dispatch_hint_files_exist():
+    mod = _load_module()
+    repo_root = Path(__file__).resolve().parents[2]
+
+    for workflow_file in mod.WORKFLOW_DISPATCH_FILES.values():
+        assert (repo_root / ".github" / "workflows" / workflow_file).exists()
+
+
 def test_human_output_prints_hints(capsys):
     mod = _load_module()
 

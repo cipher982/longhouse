@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import shutil
 import sys
 import tempfile
+from contextlib import redirect_stderr
 from contextlib import redirect_stdout
 from pathlib import Path
 
@@ -19,9 +21,13 @@ assert spec.loader is not None
 sys.modules[spec.name] = run_readme_tests
 spec.loader.exec_module(run_readme_tests)
 
+_TEMP_DIRS: list[Path] = []
+
 
 def write_markdown(text: str) -> Path:
-    path = Path(tempfile.mkdtemp(prefix="longhouse-readme-test-")) / "README.md"
+    temp_dir = Path(tempfile.mkdtemp(prefix="longhouse-readme-test-"))
+    _TEMP_DIRS.append(temp_dir)
+    path = temp_dir / "README.md"
     path.write_text(text, encoding="utf-8")
     return path
 
@@ -71,6 +77,13 @@ def test_empty_scan_fails_without_explicit_allow_empty() -> None:
         assert run_readme_tests.main(["--mode", "smoke", "--allow-empty", str(path)]) == 0
 
 
+def test_empty_steps_do_not_pass() -> None:
+    block = {"name": "empty", "_source": "test", "steps": []}
+
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        assert run_readme_tests.run_block(block) is False
+
+
 def test_valid_block_extracts_source() -> None:
     path = write_markdown(
         """
@@ -93,12 +106,17 @@ def test_valid_block_extracts_source() -> None:
 
 
 def main() -> int:
-    test_bad_json_fails_contract_parse()
-    test_unterminated_block_fails_contract_parse()
-    test_empty_scan_fails_without_explicit_allow_empty()
-    test_valid_block_extracts_source()
-    print("readme-tests.test.py: OK")
-    return 0
+    try:
+        test_bad_json_fails_contract_parse()
+        test_unterminated_block_fails_contract_parse()
+        test_empty_scan_fails_without_explicit_allow_empty()
+        test_empty_steps_do_not_pass()
+        test_valid_block_extracts_source()
+        print("readme-tests.test.py: OK")
+        return 0
+    finally:
+        for temp_dir in _TEMP_DIRS:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
