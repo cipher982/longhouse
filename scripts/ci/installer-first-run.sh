@@ -17,6 +17,9 @@ TEST_SHELL="${INSTALLER_TEST_SHELL:-${SHELL:-/bin/bash}}"
 WORK_HOME=""
 INSTALLER_TMP=""
 ORIGINAL_PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+ORIGINAL_HOME="${HOME:-}"
+ORIGINAL_CARGO_HOME="${CARGO_HOME:-${ORIGINAL_HOME:+$ORIGINAL_HOME/.cargo}}"
+ORIGINAL_RUSTUP_HOME="${RUSTUP_HOME:-${ORIGINAL_HOME:+$ORIGINAL_HOME/.rustup}}"
 ENABLE_MENUBAR_SMOKE="${INSTALLER_TEST_MENUBAR:-0}"
 REBUILD_FRONTEND="${INSTALLER_TEST_REBUILD_FRONTEND:-0}"
 ENABLE_E2E_BROWSER="${INSTALLER_TEST_E2E_BROWSER:-0}"
@@ -76,19 +79,28 @@ require_cmd() {
 }
 
 cargo_build_release() {
+  local -a cargo_env=()
+
+  if [[ -n "$ORIGINAL_CARGO_HOME" && -d "$ORIGINAL_CARGO_HOME" ]]; then
+    cargo_env+=("CARGO_HOME=$ORIGINAL_CARGO_HOME")
+  fi
+  if [[ -n "$ORIGINAL_RUSTUP_HOME" && -d "$ORIGINAL_RUSTUP_HOME" ]]; then
+    cargo_env+=("RUSTUP_HOME=$ORIGINAL_RUSTUP_HOME")
+  fi
+
   if command -v cargo >/dev/null 2>&1; then
-    if cargo --version >/dev/null 2>&1; then
-      cargo build --release "$@"
+    if env "${cargo_env[@]}" cargo --version >/dev/null 2>&1; then
+      env "${cargo_env[@]}" cargo build --release "$@"
       return 0
     fi
-    if cargo +stable --version >/dev/null 2>&1; then
-      cargo +stable build --release "$@"
+    if env "${cargo_env[@]}" cargo +stable --version >/dev/null 2>&1; then
+      env "${cargo_env[@]}" cargo +stable build --release "$@"
       return 0
     fi
   fi
 
-  if command -v rustup >/dev/null 2>&1 && rustup run stable cargo --version >/dev/null 2>&1; then
-    rustup run stable cargo build --release "$@"
+  if command -v rustup >/dev/null 2>&1 && env "${cargo_env[@]}" rustup run stable cargo --version >/dev/null 2>&1; then
+    env "${cargo_env[@]}" rustup run stable cargo build --release "$@"
     return 0
   fi
 
