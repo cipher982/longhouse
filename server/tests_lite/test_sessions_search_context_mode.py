@@ -122,13 +122,13 @@ def _seed_compacted_session(factory):
         db.close()
 
 
-def _seed_simple_session(factory, name: str) -> str:
+def _seed_simple_session(factory, name: str, *, provider: str = "claude") -> str:
     db = factory()
     try:
         store = AgentsStore(db)
         result = store.ingest_session(
             SessionIngest(
-                provider="claude",
+                provider=provider,
                 environment="production",
                 project="zerg",
                 device_id=f"{name}-device",
@@ -319,6 +319,51 @@ def test_recall_active_context_dedupes_session_boundary_lookups(tmp_path):
             assert payload["total"] == 2
 
     assert len(boundary_calls) == 1
+
+
+def test_recall_filters_by_provider(tmp_path):
+    factory = _make_db(tmp_path)
+    claude_id = _seed_simple_session(factory, "claude-recall", provider="claude")
+    codex_id = _seed_simple_session(factory, "codex-recall", provider="codex")
+
+    class FakeEmbeddingCache:
+        def __init__(self):
+            self._session_loaded = False
+            self._turn_loaded = False
+
+        def load_session_embeddings(self, db, model, dims):
+            self._session_loaded = True
+
+        def load_turn_embeddings(self, db, model, dims):
+            self._turn_loaded = True
+
+        @property
+        def turn_embedding_count(self):
+            return 2
+
+        def search_turns(self, query_vec, limit, session_filter):
+            assert claude_id not in session_filter
+            assert codex_id in session_filter
+            return [(codex_id, 0, 0.91, 0, 0)]
+
+    async def fake_generate_embedding(query, config):
+        return [0.1, 0.2, 0.3]
+
+    with (
+        patch("zerg.models_config.get_embedding_config", return_value=SimpleNamespace(model="fake", dims=3)),
+        patch("zerg.services.embedding_cache.EmbeddingCache", FakeEmbeddingCache),
+        patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
+    ):
+        for client in _get_client(factory):
+            resp = client.get(
+                "/agents/recall",
+                params={"query": "provider-specific recall", "since_days": 90, "provider": "codex"},
+            )
+
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["total"] == 1
+    assert payload["matches"][0]["session_id"] == codex_id
 
 
 def test_semantic_search_fails_loud_when_embedding_config_unavailable(tmp_path):

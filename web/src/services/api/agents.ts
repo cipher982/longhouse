@@ -1095,6 +1095,7 @@ export interface RecallResponse {
 export interface RecallFilters {
   query: string;
   project?: string;
+  provider?: string;
   since_days?: number;
   max_results?: number;
   context_turns?: number;
@@ -1133,6 +1134,7 @@ export async function fetchRecall(
   const params = new URLSearchParams();
   params.set("query", filters.query);
   if (filters.project) params.set("project", filters.project);
+  if (filters.provider) params.set("provider", filters.provider);
   if (filters.since_days) params.set("since_days", String(filters.since_days));
   if (filters.max_results)
     params.set("max_results", String(filters.max_results));

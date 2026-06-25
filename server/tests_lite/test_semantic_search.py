@@ -224,6 +224,48 @@ def test_session_filter(tmp_path):
     EmbeddingCache.reset()
 
 
+def test_empty_session_filter_means_no_session_candidates(tmp_path):
+    """Empty session filter returns no session search results."""
+    EmbeddingCache.reset()
+    SessionLocal = _make_db(tmp_path)
+
+    sid = str(uuid4())
+
+    with SessionLocal() as db:
+        _create_session(db, sid)
+        _add_session_embedding(db, sid, [1.0, 0.0, 0.0, 0.0])
+
+    with SessionLocal() as db:
+        cache = EmbeddingCache()
+        cache.load_session_embeddings(db, "test-model", 4)
+
+        query = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        assert cache.search_sessions(query, limit=10, session_filter=set()) == []
+
+    EmbeddingCache.reset()
+
+
+def test_empty_session_filter_means_no_turn_candidates(tmp_path):
+    """Empty session filter returns no turn search results."""
+    EmbeddingCache.reset()
+    SessionLocal = _make_db(tmp_path)
+
+    sid = str(uuid4())
+
+    with SessionLocal() as db:
+        _create_session(db, sid)
+        _add_turn_embedding(db, sid, 0, [1.0, 0.0, 0.0, 0.0], event_start=0, event_end=1)
+
+    with SessionLocal() as db:
+        cache = EmbeddingCache()
+        cache.load_turn_embeddings(db, "test-model", 4)
+
+        query = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+        assert cache.search_turns(query, limit=10, session_filter=set()) == []
+
+    EmbeddingCache.reset()
+
+
 def test_zero_vector_query(tmp_path):
     """Zero-vector query returns empty results (no division by zero)."""
     EmbeddingCache.reset()

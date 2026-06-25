@@ -8,7 +8,6 @@ import os
 import socket
 import subprocess
 import webbrowser
-from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -717,8 +716,9 @@ def recall(
     # Build query params
     params: dict = {
         "query": query,
-        "days_back": days_back,
-        "limit": limit,
+        "since_days": days_back,
+        "max_results": limit,
+        "context_turns": 2,
     }
     if project:
         params["project"] = project
@@ -729,7 +729,7 @@ def recall(
     try:
         with httpx.Client(timeout=15) as client:
             response = client.get(
-                f"{url.rstrip('/')}/api/agents/sessions",
+                f"{url.rstrip('/')}/api/agents/recall",
                 headers={"X-Agents-Token": token},
                 params=params,
             )
@@ -755,60 +755,57 @@ def recall(
         return
 
     # Pretty-print results
-    sessions = data.get("sessions", [])
+    matches = data.get("matches", [])
     total = data.get("total", 0)
 
-    if not sessions:
-        typer.echo(f'No sessions found for "{query}"')
+    if not matches:
+        typer.echo(f'No recall matches found for "{query}"')
         return
 
-    typer.echo(f'Found {total} session{"s" if total != 1 else ""} matching "{query}"')
+    typer.echo(f'Found {total} recall match{"es" if total != 1 else ""} for "{query}"')
     typer.echo("")
 
-    for i, s in enumerate(sessions):
-        # Format date
-        started = s.get("started_at", "")
-        try:
-            dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
-            date_str = dt.strftime("%Y-%m-%d %H:%M")
-        except (ValueError, AttributeError):
-            date_str = started[:16] if started else "unknown"
-
-        # Header line: index, date, provider, project
-        proj = s.get("project") or "-"
-        prov = s.get("provider", "?")
-        header = f"  [{i + 1}] {date_str}  {prov}"
-        if proj != "-":
-            header += f"  ({proj})"
+    for i, match in enumerate(matches):
+        session_id = str(match.get("session_id") or "")
+        score = match.get("score")
+        score_label = f"{float(score) * 100:.0f}%" if isinstance(score, (int, float)) else "score n/a"
+        event_id = match.get("match_event_id")
+        total_events = match.get("total_events", 0)
+        event_range = _recall_event_range(match)
+        header = f"  [{i + 1}] Session {session_id}  {score_label}"
+        if event_id is not None:
+            header += f"  event:{event_id}"
         typer.secho(header, fg=typer.colors.CYAN, bold=True)
+        typer.echo(f"      {total_events} events{event_range}")
 
-        # Stats line
-        user_msgs = s.get("user_messages", 0)
-        asst_msgs = s.get("assistant_messages", 0)
-        tools = s.get("tool_calls", 0)
-        git_branch = s.get("git_branch")
-        stats = f"      {user_msgs}u/{asst_msgs}a msgs, {tools} tool calls"
-        if git_branch:
-            stats += f"  branch:{git_branch}"
-        typer.echo(stats)
-
-        # Snippet line (if search returned a match)
-        snippet = s.get("match_snippet")
-        if snippet:
-            role = s.get("match_role", "")
-            role_prefix = f"[{role}] " if role else ""
-            # Truncate long snippets and normalize whitespace
-            clean = " ".join(snippet.split())
-            if len(clean) > 120:
-                clean = clean[:117] + "..."
-            typer.echo(f"      {role_prefix}{clean}")
-
-        # CWD line
-        cwd = s.get("cwd")
-        if cwd:
-            typer.echo(f"      cwd: {cwd}")
+        context = list(match.get("context") or [])
+        for turn in context:
+            role = _recall_turn_label(turn)
+            marker = "*" if turn.get("is_match") else " "
+            content = " ".join(str(turn.get("content") or "").split())
+            if len(content) > 160:
+                content = content[:157] + "..."
+            typer.echo(f"      {marker} [{role}] {content}")
 
         typer.echo("")
+
+
+def _recall_event_range(match: dict) -> str:
+    start = match.get("event_index_start")
+    end = match.get("event_index_end")
+    if start is None:
+        return ""
+    if end is None or end == start:
+        return f"  match:event_index {start}"
+    return f"  match:event_index {start}-{end}"
+
+
+def _recall_turn_label(turn: dict) -> str:
+    role = str(turn.get("role") or "unknown")
+    tool_name = str(turn.get("tool_name") or "").strip()
+    if role == "tool" and tool_name:
+        return tool_name
+    return role
 
 
 def _handle_status() -> None:

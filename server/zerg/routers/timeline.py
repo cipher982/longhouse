@@ -186,6 +186,7 @@ async def semantic_search_timeline_sessions(
 async def recall_timeline_sessions(
     query: str = Query(..., description="What to search for"),
     project: Optional[str] = Query(None, description="Filter by project"),
+    provider: Optional[str] = Query(None, description="Filter by provider"),
     since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
     max_results: int = Query(5, ge=1, le=20, description="Max matches"),
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
@@ -195,6 +196,7 @@ async def recall_timeline_sessions(
     return await _search_router.recall_sessions(
         query=query,
         project=project,
+        provider=provider,
         since_days=since_days,
         max_results=max_results,
         context_turns=context_turns,

@@ -168,7 +168,7 @@ class EmbeddingCache:
         scores = self._session_matrix @ query_normalized
 
         # Apply filter if provided
-        if session_filter:
+        if session_filter is not None:
             for i, sid in enumerate(self._session_ids):
                 if sid not in session_filter:
                     scores[i] = -1.0
@@ -210,7 +210,7 @@ class EmbeddingCache:
 
         scores = self._turn_matrix @ query_normalized
 
-        if session_filter:
+        if session_filter is not None:
             for i, sid in enumerate(self._turn_session_ids):
                 if sid not in session_filter:
                     scores[i] = -1.0

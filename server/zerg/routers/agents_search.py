@@ -204,6 +204,7 @@ async def semantic_search_sessions(
 async def recall_sessions(
     query: str = Query(..., description="What to search for"),
     project: Optional[str] = Query(None, description="Filter by project"),
+    provider: Optional[str] = Query(None, description="Filter by provider"),
     since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
     max_results: int = Query(5, ge=1, le=20, description="Max matches"),
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
@@ -242,6 +243,8 @@ async def recall_sessions(
     filter_query = db.query(AgentSession.id).filter(AgentSession.started_at >= since)
     if project:
         filter_query = filter_query.filter(AgentSession.project == project)
+    if provider:
+        filter_query = filter_query.filter(AgentSession.provider == provider)
     filter_query = filter_query.filter(~internal_canary_session_clause(AgentSession))
     valid_ids = {str(row[0]) for row in filter_query.all()}
     if valid_ids and cache.turn_embedding_count == 0:

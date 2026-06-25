@@ -178,15 +178,16 @@ def test_recall_hides_internal_canary_sessions(monkeypatch, tmp_path):
         db.commit()
 
         response = asyncio.run(
-                recall_sessions(
-                    query="launch review",
-                    project=None,
-                    max_results=10,
-                    since_days=14,
-                    context_turns=2,
-                    context_mode="forensic",
-                    db=db,
-                    _auth=None,
+            recall_sessions(
+                query="launch review",
+                project=None,
+                provider=None,
+                max_results=10,
+                since_days=14,
+                context_turns=2,
+                context_mode="forensic",
+                db=db,
+                _auth=None,
                 _single=None,
             )
         )

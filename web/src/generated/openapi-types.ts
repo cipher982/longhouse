@@ -18362,6 +18362,8 @@ export interface operations {
                 query: string;
                 /** @description Filter by project */
                 project?: string | null;
+                /** @description Filter by provider */
+                provider?: string | null;
                 /** @description Days to look back */
                 since_days?: number;
                 /** @description Max matches */
@@ -19754,6 +19756,8 @@ export interface operations {
                 query: string;
                 /** @description Filter by project */
                 project?: string | null;
+                /** @description Filter by provider */
+                provider?: string | null;
                 /** @description Days to look back */
                 since_days?: number;
                 /** @description Max matches */

@@ -11,6 +11,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.cli import coordination as coordination_cli
+from zerg.cli import connect as connect_cli
 from zerg.cli import sessions as sessions_cli
 from zerg.cli.main import app
 
@@ -183,6 +184,116 @@ def test_peers_command_lists_live_peer_sessions(monkeypatch):
             "params": {"repo": "/tmp/repo", "days": 7, "limit": 50},
         }
     ]
+
+
+def test_recall_command_uses_recall_endpoint_and_prints_context(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "matches": [
+                    {
+                        "session_id": "22222222-2222-2222-2222-222222222222",
+                        "chunk_index": 3,
+                        "score": 0.873,
+                        "event_index_start": 4,
+                        "event_index_end": 5,
+                        "total_events": 12,
+                        "match_event_id": 42,
+                        "context": [
+                            {
+                                "index": 3,
+                                "role": "user",
+                                "content": "How did auth refresh work?",
+                                "tool_name": None,
+                                "is_match": False,
+                            },
+                            {
+                                "index": 4,
+                                "role": "assistant",
+                                "content": "The auth refresh fix used a single durable token refresh path.",
+                                "tool_name": None,
+                                "is_match": True,
+                            },
+                        ],
+                    }
+                ],
+                "total": 1,
+            },
+        )
+    )
+
+    monkeypatch.setattr(connect_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(connect_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(connect_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(
+        app,
+        [
+            "recall",
+            "auth refresh",
+            "--project",
+            "zerg",
+            "--provider",
+            "codex",
+            "--days-back",
+            "30",
+            "--limit",
+            "3",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert 'Found 1 recall match for "auth refresh"' in result.output
+    assert "Session 22222222-2222-2222-2222-222222222222  87%  event:42" in result.output
+    assert "12 events  match:event_index 4-5" in result.output
+    assert "* [assistant] The auth refresh fix used a single durable token refresh path." in result.output
+    assert fake_client.calls == [
+        {
+            "method": "GET",
+            "url": "https://longhouse.test/api/agents/recall",
+            "headers": {"X-Agents-Token": "zdt_test_token"},
+            "params": {
+                "query": "auth refresh",
+                "since_days": 30,
+                "max_results": 3,
+                "context_turns": 2,
+                "project": "zerg",
+                "provider": "codex",
+            },
+        }
+    ]
+
+
+def test_recall_command_json_output(monkeypatch):
+    runner = CliRunner()
+    payload = {
+        "matches": [
+            {
+                "session_id": "22222222-2222-2222-2222-222222222222",
+                "chunk_index": 0,
+                "score": 0.91,
+                "event_index_start": 1,
+                "event_index_end": 1,
+                "total_events": 3,
+                "context": [],
+                "match_event_id": 7,
+            }
+        ],
+        "total": 1,
+    }
+    fake_client = _FakeClient(get_response=_FakeResponse(status_code=200, json_data=payload))
+
+    monkeypatch.setattr(connect_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(connect_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(connect_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(app, ["recall", "token refresh", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == payload
+    assert fake_client.calls[0]["url"] == "https://longhouse.test/api/agents/recall"
 
 
 def test_wall_command_prints_raw_sessions(monkeypatch):
