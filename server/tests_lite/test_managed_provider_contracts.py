@@ -253,13 +253,15 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.interrupt is True
     assert opencode.steer_active_turn is False
     assert opencode.answer_pause is False
+    assert opencode.reattach is True
+    assert opencode.can_resume is False
     assert opencode.machine_control_supports == ("opencode.send", "opencode.interrupt", "opencode.launch")
     assert opencode.connection_capabilities == {
         "can_send_input": 1,
         "can_interrupt": 1,
         "can_terminate": 1,
         "can_tail_output": 1,
-        "can_resume": 0,
+        "can_resume": 1,
     }
 
 

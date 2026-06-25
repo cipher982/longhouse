@@ -992,7 +992,10 @@ def test_happy_path_inserts_live_opencode_server_bridge_session(tmp_path):
         assert connection.can_interrupt == 1
         assert connection.can_terminate == 1
         assert connection.can_tail_output == 1
-        assert connection.can_resume == 0
+        # Kernel can_resume is host reattach, not provider continue.
+        assert connection.can_resume == 1
+        assert capabilities.host_reattach_available is True
+        assert capabilities.can_resume is True
 
     assert len(registry.sent) == 1
     sent = registry.sent[0]

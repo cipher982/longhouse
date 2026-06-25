@@ -245,14 +245,21 @@ def test_known_provider_control_plane_clamps_capability_bits_to_contract(db):
     assert coverage["observe_transcript"].state == ActionCoverageState.SUPPORTED
 
 
-def test_legacy_provider_control_plane_aliases_are_contract_clamped(db):
-    s = _make_session(db, provider="antigravity")
+@pytest.mark.parametrize(
+    ("provider", "control_plane", "expected"),
+    [
+        ("antigravity", "antigravity_process", {"send": True, "interrupt": False, "terminate": False, "resume": False}),
+        ("opencode", "opencode_process", {"send": True, "interrupt": True, "terminate": True, "resume": True}),
+    ],
+)
+def test_legacy_provider_control_plane_aliases_are_contract_clamped(db, provider, control_plane, expected):
+    s = _make_session(db, provider=provider)
     t = _make_thread(db, s)
     r = _make_run(db, t)
     _make_conn(
         db,
         r,
-        control_plane="antigravity_process",
+        control_plane=control_plane,
         state="attached",
         caps={"send": 1, "interrupt": 1, "terminate": 1, "tail": 1, "resume": 1},
     )
@@ -261,11 +268,11 @@ def test_legacy_provider_control_plane_aliases_are_contract_clamped(db):
     caps = project_session_capabilities(db, session_id=s.id)
 
     assert caps.live_control_available is True
-    assert caps.managed_transport.value == "antigravity_process"
-    assert caps.can_send_input is True
-    assert caps.can_interrupt is False
-    assert caps.can_terminate is False
-    assert caps.can_resume is False
+    assert caps.managed_transport.value == control_plane
+    assert caps.can_send_input is expected["send"]
+    assert caps.can_interrupt is expected["interrupt"]
+    assert caps.can_terminate is expected["terminate"]
+    assert caps.can_resume is expected["resume"]
     assert caps.can_tail_output is True
 
 

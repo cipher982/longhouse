@@ -65,12 +65,15 @@ class ManagedProviderContract:
 
     @property
     def connection_capabilities(self) -> dict[str, int]:
+        # SessionConnection.can_resume is the host reattach bit. The provider
+        # contract's can_resume flag is the separate machine-control continue
+        # capability used by continue_supported_providers().
         return {
             "can_send_input": int(self.send_input),
             "can_interrupt": int(self.interrupt),
             "can_terminate": int(self.terminate),
             "can_tail_output": int(self.tail_output),
-            "can_resume": int(self.can_resume),
+            "can_resume": int(self.reattach),
         }
 
     def operation_evidence_for(self, operation: str) -> Mapping[str, str]:

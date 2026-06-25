@@ -861,11 +861,14 @@ def test_heartbeat_repeated_opencode_digest_repairs_live_send_capabilities(monke
             assert connection.can_interrupt == 1
             assert connection.can_terminate == 1
             assert connection.can_tail_output == 1
-            assert connection.can_resume == 0
+            # Kernel can_resume is host reattach, not provider continue.
+            assert connection.can_resume == 1
             caps = project_session_capabilities(db, session_id=session_id)
             assert caps.live_control_available is True
+            assert caps.host_reattach_available is True
             assert caps.can_send_input is True
             assert caps.can_interrupt is True
+            assert caps.can_resume is True
             assert caps.can_steer_active_turn is False
     finally:
         api_app_ref.dependency_overrides = {}
