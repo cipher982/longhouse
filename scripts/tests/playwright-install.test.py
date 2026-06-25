@@ -98,7 +98,37 @@ def test_non_linux_install_does_not_request_system_deps() -> None:
         assert "Microsoft apt source" not in result.stderr
 
 
+def test_default_browser_and_only_shell_mode_are_forwarded() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        sources = tmp_path / "sources"
+        sources.mkdir()
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        log_path = tmp_path / "bunx.log"
+        make_fake_bunx(bin_dir, log_path)
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{bin_dir}:{env['PATH']}",
+                "LONGHOUSE_APT_SOURCES_DIR": str(sources),
+                "LONGHOUSE_FAKE_BUNX_LOG": str(log_path),
+                "LONGHOUSE_PLAYWRIGHT_UNAME": "Linux",
+                "LONGHOUSE_PLAYWRIGHT_ONLY_SHELL": "1",
+            }
+        )
+
+        result = run_script(env=env)
+
+        assert result.returncode == 0
+        assert f"{ROOT / 'e2e'}|playwright install --with-deps --only-shell chromium" in log_path.read_text(
+            encoding="utf-8"
+        )
+
+
 if __name__ == "__main__":
     test_linux_with_deps_temporarily_disables_microsoft_apt_sources()
     test_non_linux_install_does_not_request_system_deps()
+    test_default_browser_and_only_shell_mode_are_forwarded()
     print("playwright install wrapper tests passed")
