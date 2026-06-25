@@ -54,12 +54,16 @@ def test_provider_specific_pause_actions_are_derived_without_manual_matrix():
 
 
 def test_declared_rich_provider_gaps_have_specific_reason_codes():
-    coverage = derive_provider_action_coverage("opencode")
+    for provider in ("claude", "codex", "opencode", "antigravity"):
+        coverage = derive_provider_action_coverage(provider)
 
-    assert coverage["switch_actor"].state == ActionCoverageState.UNKNOWN
-    assert coverage["switch_actor"].reason_code == ActionCoverageReasonCode.PROVIDER_GAP_DECLARED
-    assert coverage["background_task_status"].state == ActionCoverageState.UNKNOWN
-    assert coverage["background_task_status"].reason_code == ActionCoverageReasonCode.PROVIDER_GAP_DECLARED
+        assert coverage["switch_actor"].state == ActionCoverageState.UNKNOWN
+        assert coverage["switch_actor"].reason_code == ActionCoverageReasonCode.PROVIDER_ACTOR_SWITCH_UNMAPPED
+        assert coverage["background_task_status"].state == ActionCoverageState.UNKNOWN
+        assert (
+            coverage["background_task_status"].reason_code
+            == ActionCoverageReasonCode.PROVIDER_BACKGROUND_STATUS_UNPROVEN
+        )
 
 
 def test_contract_false_operation_derives_unsupported_without_manual_matrix_cell():

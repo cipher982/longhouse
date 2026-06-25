@@ -33,6 +33,8 @@ class ActionCoverageReasonCode(StrEnum):
     PROVIDER_PROOF_UNDECLARED = "provider_proof_undeclared"
     PROVIDER_SURFACE_UNPROVEN = "provider_surface_unproven"
     PROVIDER_GAP_DECLARED = "provider_gap_declared"
+    PROVIDER_ACTOR_SWITCH_UNMAPPED = "provider_actor_switch_unmapped"
+    PROVIDER_BACKGROUND_STATUS_UNPROVEN = "provider_background_status_unproven"
     REQUIRED_PROOF_PASSED = "required_proof_passed"
     REQUIRED_PROOF_MISSING = "required_proof_missing"
     OBSERVATION_PROOF_UNDECLARED = "observation_proof_undeclared"
@@ -260,14 +262,14 @@ def _provider_specific_action_state(
     if question.id == "switch_actor":
         return (
             ActionCoverageState.UNKNOWN,
-            ActionCoverageReasonCode.PROVIDER_GAP_DECLARED,
+            ActionCoverageReasonCode.PROVIDER_ACTOR_SWITCH_UNMAPPED,
             "Provider actor switching is not yet mapped to a Longhouse control contract.",
         )
 
     if question.id == "background_task_status":
         return (
             ActionCoverageState.UNKNOWN,
-            ActionCoverageReasonCode.PROVIDER_GAP_DECLARED,
+            ActionCoverageReasonCode.PROVIDER_BACKGROUND_STATUS_UNPROVEN,
             "Background task status is not yet proven as a provider action surface.",
         )
 

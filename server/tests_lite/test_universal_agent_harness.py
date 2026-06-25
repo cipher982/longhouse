@@ -1319,6 +1319,16 @@ def test_opencode_orchestration_projection_uses_real_longhouse_sqlite(tmp_path: 
     assert result["data"]["operation_evidence"]["opencode_task_id_resume_projection"]["status"] == "pass"
     assert result["data"]["capability_states"]["background_task_status"] == "unknown"
     assert result["data"]["capability_states"]["switch_actor"] == "unknown"
+    assert result["data"]["capability_reason_codes"]["background_task_status"] == "provider_background_status_unproven"
+    assert result["data"]["capability_reason_codes"]["switch_actor"] == "provider_actor_switch_unmapped"
+    assert (
+        result["data"]["operation_evidence"]["opencode_rich_gap_manifest"]["background_task_status_reason_code"]
+        == "provider_background_status_unproven"
+    )
+    assert (
+        result["data"]["operation_evidence"]["opencode_rich_gap_manifest"]["switch_actor_reason_code"]
+        == "provider_actor_switch_unmapped"
+    )
 
     evidence_root = Path(result["evidence_root"])
     projection = json.loads(
@@ -1352,7 +1362,16 @@ def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path:
         assert "orchestration_observe_transcript" in operation_evidence
         assert "orchestration_background_task_status" in operation_evidence
         assert all("verdict" in item for item in operation_evidence.values())
+        assert all("reason_code" in item for item in operation_evidence.values())
         assert all(item["canary"] == "provider_action_coverage" for item in operation_evidence.values())
+        assert (
+            operation_evidence["orchestration_background_task_status"]["reason_code"]
+            == "provider_background_status_unproven"
+        )
+        background_rows = [
+            row for row in result["data"]["capabilities"] if row["capability"] == "background_task_status"
+        ]
+        assert background_rows[0]["reason_code"] == "provider_background_status_unproven"
         summary = result["data"]["summary"]
         assert summary["green"] + summary["yellow"] + summary["red"] == len(operation_evidence)
 

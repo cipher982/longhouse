@@ -374,6 +374,9 @@ def test_release_status_derives_provider_action_coverage_from_artifact_evidence(
     assert coverage["classify_subagents"]["state"] == "supported"
     assert coverage["fork"]["state"] == "read_only"
     assert coverage["background_task_status"]["state"] == "unknown"
+    assert coverage["background_task_status"]["reason_code"] == "provider_background_status_unproven"
+    assert coverage["switch_actor"]["state"] == "unknown"
+    assert coverage["switch_actor"]["reason_code"] == "provider_actor_switch_unmapped"
 
 
 def test_release_status_preserves_serialized_provider_action_coverage(monkeypatch, tmp_path: Path) -> None:

@@ -6374,6 +6374,7 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
 
     opencode_matrix = _provider_action_coverage_table("opencode")
     capability_states = {capability: entry.get("state") for capability, entry in opencode_matrix.items()}
+    capability_reason_codes = {capability: entry.get("reason_code") for capability, entry in opencode_matrix.items()}
     snapshot = {
         "db_path": str(db_path),
         "session_ids": [str(session.id) for session in sessions],
@@ -6410,6 +6411,7 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
         "visible_timeline_total": visible_total,
         "visible_timeline_session_ids": [row[1] for row in visible_rows],
         "capability_states": capability_states,
+        "capability_reason_codes": capability_reason_codes,
     }
     snapshot_path = package.write_json("longhouse/opencode-orchestration-projection.json", snapshot)
     edge_lookup = {(row["source_thread_id"], row["target_thread_id"], row["edge_kind"]) for row in snapshot["edge_rows"]}  # noqa: E501
@@ -6425,7 +6427,9 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
         and fork_thread.branch_kind == "fork"
         and str(fork_id) in snapshot["visible_timeline_session_ids"],
         "rich_capability_gaps_are_declared": capability_states.get("switch_actor") == "unknown"
-        and capability_states.get("background_task_status") == "unknown",
+        and capability_reason_codes.get("switch_actor") == "provider_actor_switch_unmapped"
+        and capability_states.get("background_task_status") == "unknown"
+        and capability_reason_codes.get("background_task_status") == "provider_background_status_unproven",
     }
     status = STATUS_PASS if all(assertions.values()) else STATUS_FAIL
     operation_evidence = {
@@ -6461,7 +6465,9 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
             "canary": "provider_action_coverage",
             "failure_code": None if assertions["rich_capability_gaps_are_declared"] else "opencode_rich_gap_manifest_failed",  # noqa: E501
             "switch_actor_state": capability_states.get("switch_actor"),
+            "switch_actor_reason_code": capability_reason_codes.get("switch_actor"),
             "background_task_status_state": capability_states.get("background_task_status"),
+            "background_task_status_reason_code": capability_reason_codes.get("background_task_status"),
         },
     }
     payload = {
@@ -6471,6 +6477,7 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
         "projection_path": str(snapshot_path),
         "assertions": assertions,
         "capability_states": capability_states,
+        "capability_reason_codes": capability_reason_codes,
         "operation_evidence": operation_evidence,
     }
     if status != STATUS_PASS:
@@ -6516,6 +6523,8 @@ def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> 
             {
                 "capability": capability,
                 "state": state,
+                "reason_code": entry.get("reason_code"),
+                "reason": entry.get("reason"),
                 "verdict": verdict,
                 "source": entry.get("source"),
             }
@@ -6526,6 +6535,8 @@ def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> 
             "canary": "provider_action_coverage",
             "failure_code": None if status == STATUS_PASS else f"{capability}_{state}",
             "capability_state": state,
+            "reason_code": entry.get("reason_code"),
+            "provider_action_reason": entry.get("reason"),
             "verdict": verdict,
         }
 
@@ -6551,6 +6562,8 @@ def _provider_action_coverage_table(provider: str) -> dict[str, dict[str, str]]:
     return {
         action_id: {
             "state": str(info.get("state") or "unknown"),
+            "reason_code": str(info.get("reason_code") or ""),
+            "reason": str(info.get("reason") or ""),
             "source": str(info.get("reason") or ""),
         }
         for action_id, info in coverage.items()
