@@ -311,6 +311,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
     async def recall(
         query: str,
         project: str | None = None,
+        provider: str | None = None,
         since_days: int = 90,
         max_results: int = 5,
         context_turns: int = 2,
@@ -326,6 +327,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         Args:
             query: Natural language description of what you are looking for.
             project: Filter by project name (optional).
+            provider: Filter by provider, e.g. claude, codex, antigravity, opencode (optional).
             since_days: Days to look back (default 90).
             max_results: Max sessions to return content from (default 5).
             context_turns: Turns before/after match to include (default 2).
@@ -343,6 +345,8 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         }
         if project:
             params["project"] = project
+        if provider:
+            params["provider"] = provider
 
         try:
             resp = await client.get("/api/agents/recall", params=params)

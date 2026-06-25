@@ -28,6 +28,50 @@ def test_create_server_exposes_only_continuity_tools():
 
 
 @pytest.mark.asyncio
+async def test_recall_tool_forwards_provider_filter():
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["recall"]
+    response = type(
+        "Resp",
+        (),
+        {
+            "status_code": 200,
+            "text": '{"matches":[],"total":0}',
+        },
+    )()
+
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(return_value=response),
+    ) as mock_get:
+        result = await tool.run(
+            {
+                "query": "auth refresh",
+                "project": "zerg",
+                "provider": "codex",
+                "since_days": 30,
+                "max_results": 3,
+                "context_turns": 4,
+                "context_mode": "active_context",
+            }
+        )
+
+    assert result == '{"matches":[],"total":0}'
+    mock_get.assert_awaited_once_with(
+        "/api/agents/recall",
+        params={
+            "query": "auth refresh",
+            "since_days": 30,
+            "max_results": 3,
+            "context_turns": 4,
+            "context_mode": "active_context",
+            "project": "zerg",
+            "provider": "codex",
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_message_session_uses_current_managed_session_env(monkeypatch):
     server = create_server("http://example.com", "test-token")
     tool = server._tool_manager._tools["message_session"]

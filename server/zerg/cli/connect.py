@@ -657,13 +657,13 @@ def recall(
         14,
         "--days-back",
         "-d",
-        help="Days to look back (1-90)",
+        help="Days to look back (1-365)",
     ),
     limit: int = typer.Option(
         10,
         "--limit",
         "-n",
-        help="Max results to return (1-100)",
+        help="Max results to return (1-20)",
     ),
     output_json: bool = typer.Option(
         False,
