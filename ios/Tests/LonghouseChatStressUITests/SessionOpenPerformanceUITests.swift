@@ -72,7 +72,7 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         let p90 = sorted[min(sorted.count - 1, Int(Double(sorted.count - 1) * 0.9))]
         let maxMs = sorted.last ?? 0
         let renderSamples = sampleMetrics.map(\.renderMs)
-        let maxRenderMs = sampleMetrics.last?.maxRenderMs ?? 0
+        let maxRenderMs = sampleMetrics.map(\.maxRenderMs).max() ?? 0
         print([
             "SESSION_OPEN_SIM_METRIC",
             "samples_ms=\(samplesMs)",
