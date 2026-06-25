@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -170,19 +171,23 @@ def _seed_heartbeat(
     device_id: str,
     received_at: datetime,
     version: str = "0.6.0",
+    spool_pending: int = 0,
     spool_dead: int = 0,
     consecutive_failures: int = 0,
+    raw_json: str | None = None,
 ) -> AgentHeartbeat:
     heartbeat = AgentHeartbeat(
         device_id=device_id,
         received_at=received_at,
         version=version,
+        spool_pending=spool_pending,
         spool_dead=spool_dead,
         consecutive_failures=consecutive_failures,
         ship_attempts_1h=4,
         ship_successes_1h=4 if spool_dead == 0 and consecutive_failures == 0 else 2,
         disk_free_bytes=1_000,
         is_offline=0,
+        raw_json=raw_json,
     )
     db.add(heartbeat)
     db.commit()
@@ -381,6 +386,75 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
         widened_payload = widened.json()
         assert widened_payload["total"] == 3
         assert "ancient-machine" in {machine["device_id"] for machine in widened_payload["machines"]}
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(observability_views, "utc_now", lambda: pinned_now)
+
+    archive_backlog = {
+        "state": "pending",
+        "mode": "trickle",
+        "pending_ranges": 6375,
+        "dead_ranges": 0,
+        "oldest_pending_at": "2026-04-20T00:00:00Z",
+        "newest_pending_at": "2026-04-23T20:59:00Z",
+        "last_repair_at": None,
+        "last_error_at": None,
+        "last_error": None,
+        "updated_at": "2026-04-23T21:00:00Z",
+    }
+
+    with SessionLocal() as db:
+        _seed_heartbeat(
+            db,
+            device_id="archive-only-machine",
+            received_at=pinned_now - timedelta(minutes=1),
+            spool_pending=6375,
+            raw_json=json.dumps({"archive_backlog": archive_backlog}),
+        )
+        _seed_heartbeat(
+            db,
+            device_id="dead-archive-machine",
+            received_at=pinned_now - timedelta(minutes=2),
+            spool_dead=1,
+        )
+
+    client = _make_client(SessionLocal)
+
+    try:
+        overview = client.get(
+            "/observability/overview"
+            "?hours_back=24"
+            "&slow_threshold_ms=30000"
+            "&stale_after_seconds=3600"
+            "&machine_limit=4"
+            "&slow_turn_limit=4"
+        )
+        assert overview.status_code == 200, overview.text
+        payload = overview.json()
+
+        assert payload["machine_counts"] == {
+            "total": 2,
+            "healthy": 1,
+            "degraded": 1,
+            "offline": 0,
+            "broken": 0,
+        }
+        archive_machine = next(
+            machine for machine in payload["machines"] if machine["device_id"] == "archive-only-machine"
+        )
+        assert archive_machine["status"] == "healthy"
+        assert archive_machine["status_reason"] == "healthy"
+        assert archive_machine["spool_pending"] == 6375
+        assert archive_machine["archive_repair"]["state"] == "pending"
+        assert archive_machine["archive_repair"]["pending_ranges"] == 6375
+        assert archive_machine["archive_repair"]["source"] == "heartbeat"
     finally:
         api_app.dependency_overrides.clear()
 
