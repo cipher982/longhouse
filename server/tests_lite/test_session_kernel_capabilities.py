@@ -620,4 +620,5 @@ def test_live_session_capabilities_match_provider_action_coverage(db):
         assert caps.can_send_input is (coverage["send_prompt"].state == ActionCoverageState.SUPPORTED)
         assert caps.can_interrupt is (coverage["abort"].state == ActionCoverageState.SUPPORTED)
         assert caps.can_tail_output is (coverage["observe_transcript"].state == ActionCoverageState.SUPPORTED)
+        # Manifest validation keeps supported reattach operations from carrying no-proof coverage.
         assert caps.can_resume is (coverage["reattach"].state == ActionCoverageState.SUPPORTED)
