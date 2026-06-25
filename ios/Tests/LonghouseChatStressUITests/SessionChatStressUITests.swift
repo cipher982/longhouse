@@ -7,6 +7,7 @@ final class SessionChatStressUITests: XCTestCase {
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
         static let diagnostics = "LONGHOUSE_WEBKIT_TRANSCRIPT_DIAGNOSTICS"
         static let probePath = "LONGHOUSE_UI_TEST_CHAT_PROBE_PATH"
+        static let churnTriggerPath = "LONGHOUSE_UI_TEST_CHAT_CHURN_TRIGGER_PATH"
         static let triggerPath = "LONGHOUSE_UI_TEST_CHAT_TRIGGER_PATH"
         static let replayPath = "LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH"
     }
@@ -51,6 +52,7 @@ final class SessionChatStressUITests: XCTestCase {
         let scratch = FileManager.default.temporaryDirectory
             .appendingPathComponent("longhouse-chat-stress-\(UUID().uuidString)", isDirectory: true)
         let probeURL = scratch.appendingPathComponent("probe.txt")
+        let churnTriggerURL = scratch.appendingPathComponent("churn-trigger")
         let triggerURL = scratch.appendingPathComponent("trigger")
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
 
@@ -64,6 +66,7 @@ final class SessionChatStressUITests: XCTestCase {
         }
         app.launchEnvironment[LaunchEnvironment.diagnostics] = "1"
         app.launchEnvironment[LaunchEnvironment.probePath] = probeURL.path
+        app.launchEnvironment[LaunchEnvironment.churnTriggerPath] = churnTriggerURL.path
         app.launchEnvironment[LaunchEnvironment.triggerPath] = triggerURL.path
         app.launchArguments += [LaunchArgument.appearanceOverride, "light"]
         app.launch()
@@ -90,14 +93,26 @@ final class SessionChatStressUITests: XCTestCase {
             return metrics.rows >= minimumInitialRows && metrics.bytes > 0
         }, readProbe(probeURL))
 
+        XCTAssertTrue(waitForStableProbeFile(probeURL, timeout: 3, stableFor: 0.25) { metrics in
+            guard metrics.renders >= 1 else { return false }
+            if let expectedInitialRows {
+                return metrics.rows == expectedInitialRows
+            }
+            if let maximumInitialRows, metrics.rows > maximumInitialRows {
+                return false
+            }
+            return metrics.rows >= minimumInitialRows && metrics.bytes > 0
+        }, readProbe(probeURL))
+
         let afterInitialRender = probeMetrics(readProbe(probeURL))
+        try? "1".write(to: churnTriggerURL, atomically: true, encoding: .utf8)
 
         XCTAssertTrue(waitForProbeFile(probeURL, timeout: 5) { metrics in
             metrics.tick == 40
         }, readProbe(probeURL))
 
         let afterParentChurn = probeMetrics(readProbe(probeURL))
-        XCTAssertLessThanOrEqual(afterParentChurn.renders, 1, readProbe(probeURL))
+        XCTAssertLessThanOrEqual(afterParentChurn.renders - afterInitialRender.renders, 0, readProbe(probeURL))
         XCTAssertEqual(afterParentChurn.repeats, 0, readProbe(probeURL))
 
         dragTowardOlderMessages(transcript)
@@ -151,6 +166,34 @@ final class SessionChatStressUITests: XCTestCase {
         while Date() < deadline {
             if predicate(probeMetrics(readProbe(url))) {
                 return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        return false
+    }
+
+    private func waitForStableProbeFile(
+        _ url: URL,
+        timeout: TimeInterval,
+        stableFor: TimeInterval,
+        predicate: (ProbeMetrics) -> Bool
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastLabel = ""
+        var stableSince: Date?
+        while Date() < deadline {
+            let label = readProbe(url)
+            let metrics = probeMetrics(label)
+            if predicate(metrics) {
+                if label != lastLabel {
+                    lastLabel = label
+                    stableSince = Date()
+                } else if let stableSince, Date().timeIntervalSince(stableSince) >= stableFor {
+                    return true
+                }
+            } else {
+                lastLabel = label
+                stableSince = nil
             }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }

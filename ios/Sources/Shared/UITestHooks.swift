@@ -6,6 +6,7 @@ enum UITestHooks {
     static let chatFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_FIXTURE"
     static let chatFixtureEventCountEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
     static let chatFixtureProbePathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_PROBE_PATH"
+    static let chatFixtureChurnTriggerPathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_CHURN_TRIGGER_PATH"
     static let chatFixtureTriggerPathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_TRIGGER_PATH"
     static let chatFixtureReplayPathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH"
     static let timelineOpenFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
@@ -35,6 +36,12 @@ enum UITestHooks {
 
     static var chatFixtureProbePath: String? {
         let raw = ProcessInfo.processInfo.environment[chatFixtureProbePathEnvironmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return raw?.isEmpty == false ? raw : nil
+    }
+
+    static var chatFixtureChurnTriggerPath: String? {
+        let raw = ProcessInfo.processInfo.environment[chatFixtureChurnTriggerPathEnvironmentKey]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
     }

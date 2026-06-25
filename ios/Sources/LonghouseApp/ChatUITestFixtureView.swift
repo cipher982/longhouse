@@ -41,6 +41,7 @@ struct ChatUITestFixtureView: View {
         .task(id: fixtureName) {
             if fixtureName == "render-storm" || fixtureName == "replay-file" {
                 await waitForInitialWorkspaceLoad()
+                await waitForParentChurnTriggerIfConfigured()
                 for tick in 1...40 {
                     invalidationTick = tick
                     probe.recordTick(tick)
@@ -92,7 +93,16 @@ struct ChatUITestFixtureView: View {
 
     private func waitForStressTrigger() async {
         guard let triggerPath = UITestHooks.chatFixtureTriggerPath else { return }
-        while !Task.isCancelled && !FileManager.default.fileExists(atPath: triggerPath) {
+        await waitForFile(at: triggerPath)
+    }
+
+    private func waitForParentChurnTriggerIfConfigured() async {
+        guard let triggerPath = UITestHooks.chatFixtureChurnTriggerPath else { return }
+        await waitForFile(at: triggerPath)
+    }
+
+    private func waitForFile(at path: String) async {
+        while !Task.isCancelled && !FileManager.default.fileExists(atPath: path) {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
