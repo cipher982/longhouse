@@ -12403,6 +12403,40 @@ export interface components {
             /** Presence State */
             presence_state?: string | null;
             /**
+             * Control Label
+             * @description Kernel-projected control bucket for this session.
+             */
+            control_label?: ("live" | "reattach" | "search-only" | "imported") | null;
+            /**
+             * Live Control Available
+             * @description True when Longhouse can steer the live session now.
+             * @default false
+             */
+            live_control_available: boolean;
+            /**
+             * Host Reattach Available
+             * @description True when the host can reattach this managed session.
+             * @default false
+             */
+            host_reattach_available: boolean;
+            /**
+             * Observe Only
+             * @description True when Longhouse can observe output but not steer.
+             * @default false
+             */
+            observe_only: boolean;
+            /**
+             * Search Only
+             * @description True when this is an imported/search-only transcript.
+             * @default false
+             */
+            search_only: boolean;
+            /**
+             * Staleness Reason
+             * @description Why live control is unavailable, when known.
+             */
+            staleness_reason?: string | null;
+            /**
              * Pending Inbound Messages
              * @default 0
              */

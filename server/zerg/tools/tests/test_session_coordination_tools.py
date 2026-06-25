@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet
 from sqlalchemy.orm import sessionmaker
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
@@ -183,6 +184,7 @@ def test_peers_returns_live_repo_matches(tmp_path, monkeypatch):
         source = _seed_session(db, device_id="shipper-laptop", device_name="laptop")
         peer = _seed_session(db, device_id="shipper-demo-machine", device_name="demo-machine", git_branch="feature/messaging")
         _seed_session(db, device_id="shipper-idle", device_name="idle-box", git_repo="git@github.com:other/repo.git")
+        seed_managed_kernel_rows(db, peer, control_plane="claude_channel_bridge", state="attached")
         _seed_presence(db, session=source, state="idle")
         _seed_presence(db, session=peer, state="thinking")
         source_id = str(source.id)
@@ -198,6 +200,8 @@ def test_peers_returns_live_repo_matches(tmp_path, monkeypatch):
     data = result["data"]
     assert data["total"] == 1
     assert data["peers"][0]["session_id"] == peer_id
+    assert data["peers"][0]["control_label"] == "live"
+    assert data["peers"][0]["live_control_available"] is True
     assert data["peers"][0]["presence_state"] == "thinking"
     assert data["peers"][0]["pending_inbound_messages"] == 0
 

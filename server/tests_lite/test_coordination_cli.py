@@ -134,6 +134,11 @@ def test_peers_command_lists_live_peer_sessions(monkeypatch):
                         "has_live_presence": True,
                         "device_name": "demo-machine",
                         "provider": "codex",
+                        "control_label": "live",
+                        "live_control_available": True,
+                        "host_reattach_available": True,
+                        "observe_only": False,
+                        "search_only": False,
                         "presence_state": "thinking",
                         "summary_title": "Peer",
                         "git_branch": "feature/messaging",
@@ -143,6 +148,7 @@ def test_peers_command_lists_live_peer_sessions(monkeypatch):
                         "has_live_presence": False,
                         "device_name": "idle-box",
                         "provider": "antigravity",
+                        "control_label": "imported",
                         "presence_state": None,
                         "summary_title": "Inactive peer",
                         "git_branch": "main",
@@ -167,6 +173,7 @@ def test_peers_command_lists_live_peer_sessions(monkeypatch):
     assert result.exit_code == 0, result.output
     assert "Found 1 peer session" in result.output
     assert "22222222-2222-2222-2222-222222222222" in result.output
+    assert "control: live" in result.output
     assert "feature/messaging" in result.output
     assert fake_client.calls == [
         {
@@ -189,6 +196,7 @@ def test_wall_command_prints_raw_sessions(monkeypatch):
                         "session_id": "22222222-2222-2222-2222-222222222222",
                         "device_name": "demo-machine",
                         "provider": "codex",
+                        "control_label": "reattach",
                         "presence_state": "thinking",
                         "summary_title": "Peer",
                         "git_branch": "feature/messaging",
@@ -210,6 +218,7 @@ def test_wall_command_prints_raw_sessions(monkeypatch):
     assert result.exit_code == 0, result.output
     assert "Found 1 wall session" in result.output
     assert "22222222-2222-2222-2222-222222222222" in result.output
+    assert "control: reattach" in result.output
     assert "git@github.com:cipher982/longhouse.git" in result.output
     assert fake_client.calls == [
         {

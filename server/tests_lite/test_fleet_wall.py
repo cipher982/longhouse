@@ -25,6 +25,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
 # ---------------------------------------------------------------------------
 # DB / client helpers
@@ -273,6 +274,73 @@ def test_wall_uses_runtime_state_for_live_presence_without_presence_row(tmp_path
         row = next(s for s in data["sessions"] if s["device_name"] == "demo-machine")
         assert row["has_live_presence"] is True
         assert row["presence_state"] == "needs_user"
+    finally:
+        api_ref.dependency_overrides = {}
+
+
+def test_wall_includes_kernel_control_buckets(tmp_path):
+    """Wall exposes the same control bucket truth as timeline/detail."""
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        live = _seed_session(db, provider="claude", device_name="live-machine", git_repo="control-live")
+        seed_managed_kernel_rows(
+            db,
+            live,
+            control_plane="claude_channel_bridge",
+            state="attached",
+            can_send_input=True,
+            can_tail_output=True,
+        )
+        reattach = _seed_session(db, provider="codex", device_name="reattach-machine", git_repo="control-reattach")
+        seed_managed_kernel_rows(
+            db,
+            reattach,
+            control_plane="codex_bridge",
+            state="detached",
+            can_send_input=True,
+            can_tail_output=True,
+            can_resume=True,
+        )
+        observe = _seed_session(db, provider="antigravity", device_name="observe-machine", git_repo="control-observe")
+        seed_managed_kernel_rows(
+            db,
+            observe,
+            control_plane="log_tail",
+            acquisition_kind="observe_only",
+            state="attached",
+            can_send_input=False,
+            can_interrupt=False,
+            can_tail_output=True,
+        )
+        imported = _seed_session(db, provider="claude", device_name="imported-machine", git_repo="control-imported")
+        db.commit()
+
+    client, api_ref = _make_client(SessionLocal)
+    try:
+        resp = client.get("/api/agents/sessions/wall", params={"repo": "control-", "limit": 10})
+        assert resp.status_code == 200
+        rows = {row["device_name"]: row for row in resp.json()["sessions"]}
+
+        assert rows["live-machine"]["control_label"] == "live"
+        assert rows["live-machine"]["live_control_available"] is True
+        assert rows["live-machine"]["host_reattach_available"] is True
+        assert rows["live-machine"]["observe_only"] is False
+        assert rows["live-machine"]["search_only"] is False
+
+        assert rows["reattach-machine"]["control_label"] == "reattach"
+        assert rows["reattach-machine"]["live_control_available"] is False
+        assert rows["reattach-machine"]["host_reattach_available"] is True
+        assert rows["reattach-machine"]["staleness_reason"] == "connection_released"
+
+        assert rows["observe-machine"]["control_label"] == "search-only"
+        assert rows["observe-machine"]["observe_only"] is True
+        assert rows["observe-machine"]["search_only"] is False
+
+        assert rows["imported-machine"]["control_label"] == "imported"
+        assert rows["imported-machine"]["live_control_available"] is False
+        assert rows["imported-machine"]["host_reattach_available"] is False
+        assert rows["imported-machine"]["search_only"] is True
     finally:
         api_ref.dependency_overrides = {}
 

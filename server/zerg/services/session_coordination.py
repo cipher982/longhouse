@@ -20,6 +20,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
 from zerg.services.agents import AgentsStore
+from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_messages import MESSAGE_STATUS_DELIVERING
 from zerg.services.session_messages import MESSAGE_STATUS_FAILED
@@ -86,6 +87,7 @@ def query_wall_sessions(
     last_user_msg = store.get_last_timestamp_by_role_map(session_ids, "user")
     last_tool_call = store.get_last_tool_call_map(session_ids)
     runtime_state_map = load_runtime_state_map(db, session_ids)
+    kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
     pending_inbound_map: dict[UUID, int] = {}
     if session_ids:
         pending_rows = (
@@ -101,6 +103,7 @@ def query_wall_sessions(
     now = datetime.now(timezone.utc)
     items: list[WallSessionResponse] = []
     for session in sessions:
+        kernel_capabilities = kernel_capabilities_map.get(session.id)
         runtime_overlay = resolve_runtime_overlay(
             session,
             last_activity_at=last_activity.get(session.id),
@@ -128,6 +131,12 @@ def query_wall_sessions(
                 last_tool_call_at=last_tool_call.get(session.id),
                 has_live_presence=has_live_presence,
                 presence_state=presence_state,
+                control_label=(kernel_capabilities.control_label if kernel_capabilities is not None else None),
+                live_control_available=(bool(kernel_capabilities.live_control_available) if kernel_capabilities is not None else False),
+                host_reattach_available=(bool(kernel_capabilities.host_reattach_available) if kernel_capabilities is not None else False),
+                observe_only=(bool(kernel_capabilities.observe_only) if kernel_capabilities is not None else False),
+                search_only=(bool(kernel_capabilities.search_only) if kernel_capabilities is not None else False),
+                staleness_reason=(kernel_capabilities.staleness_reason if kernel_capabilities is not None else None),
                 pending_inbound_messages=pending_inbound_map.get(session.id, 0),
                 user_messages=session.user_messages or 0,
                 assistant_messages=session.assistant_messages or 0,
@@ -162,6 +171,12 @@ def build_peer_payloads(
                 "provider": session.provider,
                 "cwd": session.cwd,
                 "git_repo": session.git_repo,
+                "control_label": session.control_label,
+                "live_control_available": session.live_control_available,
+                "host_reattach_available": session.host_reattach_available,
+                "observe_only": session.observe_only,
+                "search_only": session.search_only,
+                "staleness_reason": session.staleness_reason,
                 "presence_state": session.presence_state,
                 "pending_inbound_messages": session.pending_inbound_messages,
                 "summary_title": session.summary_title,

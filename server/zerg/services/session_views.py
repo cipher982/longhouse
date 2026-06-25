@@ -959,6 +959,15 @@ class WallSessionResponse(UTCBaseModel):
     last_tool_call_at: Optional[datetime] = None
     has_live_presence: bool = False
     presence_state: Optional[str] = None
+    control_label: Optional[Literal["live", "reattach", "search-only", "imported"]] = Field(
+        None,
+        description="Kernel-projected control bucket for this session.",
+    )
+    live_control_available: bool = Field(False, description="True when Longhouse can steer the live session now.")
+    host_reattach_available: bool = Field(False, description="True when the host can reattach this managed session.")
+    observe_only: bool = Field(False, description="True when Longhouse can observe output but not steer.")
+    search_only: bool = Field(False, description="True when this is an imported/search-only transcript.")
+    staleness_reason: Optional[str] = Field(None, description="Why live control is unavailable, when known.")
     pending_inbound_messages: int = 0
     user_messages: int = 0
     assistant_messages: int = 0
