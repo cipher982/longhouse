@@ -153,6 +153,37 @@ def _should_repair_opencode_workspace_project(session: AgentSession, data: Sessi
     return bool(cwd_name and cwd_name == incoming_project)
 
 
+def _should_repair_stale_cwd_basename_project(session: AgentSession, data: SessionIngest) -> bool:
+    existing_project = str(session.project or "").strip()
+    incoming_project = str(data.project or "").strip()
+    if not existing_project or not incoming_project or existing_project == incoming_project:
+        return False
+    if not str(data.git_repo or "").strip():
+        return False
+
+    existing_git_repo = str(session.git_repo or "").strip()
+    incoming_git_repo = str(data.git_repo or "").strip()
+    if existing_git_repo and incoming_git_repo and existing_git_repo != incoming_git_repo:
+        return False
+
+    existing_cwd = str(session.cwd or "").strip()
+    incoming_cwd = str(data.cwd or "").strip()
+    if existing_cwd and incoming_cwd and existing_cwd != incoming_cwd:
+        return False
+
+    cwd = incoming_cwd or existing_cwd
+    if not cwd:
+        return False
+
+    cwd_path = Path(cwd)
+    if existing_project != cwd_path.name.strip():
+        return False
+
+    # Older parsers used cwd.basename as project. Newer engine ingests can carry
+    # git-root evidence; require that root label to appear in the cwd hierarchy.
+    return incoming_project in {part.strip() for part in cwd_path.parts if part.strip()}
+
+
 def _normalize_ingested_project(data: SessionIngest) -> str | None:
     project = str(data.project or "").strip()
     if not project:
@@ -659,7 +690,11 @@ class AgentsStore:
                 session.last_activity_at = data.ended_at
 
         incoming_project = _normalize_ingested_project(data)
-        if incoming_project and (not session.project or _should_repair_opencode_workspace_project(session, data)):
+        if incoming_project and (
+            not session.project
+            or _should_repair_opencode_workspace_project(session, data)
+            or _should_repair_stale_cwd_basename_project(session, data)
+        ):
             session.project = incoming_project
         if data.device_id and not session.device_id:
             session.device_id = data.device_id

@@ -332,6 +332,134 @@ def test_opencode_reingest_repairs_workspace_project_from_cwd(tmp_path):
         assert card.project == "longhouse"
 
 
+def test_reingest_repairs_stale_cwd_basename_project_with_git_evidence(tmp_path):
+    db_path = tmp_path / "stale_cwd_basename_project_repair.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    Base.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        base_time = datetime(2026, 6, 6, 10, 0, 0, tzinfo=timezone.utc)
+        session_id = uuid4()
+        cwd = "/Users/davidrose/git/zerg/longhouse/server"
+
+        first = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="production",
+                project="server",
+                device_id="cinder",
+                cwd=cwd,
+                started_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="old parser labeled this as server",
+                        timestamp=base_time,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=1,
+                    )
+                ],
+            )
+        )
+        assert first.session_created is True
+
+        second = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd=cwd,
+                git_repo="git@github.com:cipher982/longhouse.git",
+                git_branch="main",
+                started_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="old parser labeled this as server",
+                        timestamp=base_time,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=1,
+                    )
+                ],
+            )
+        )
+
+        assert second.session_created is False
+        stored = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert stored.project == "longhouse"
+        assert stored.git_repo == "git@github.com:cipher982/longhouse.git"
+        assert stored.git_branch == "main"
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+        assert card.project == "longhouse"
+
+
+def test_reingest_preserves_cwd_basename_project_without_git_evidence(tmp_path):
+    db_path = tmp_path / "cwd_basename_project_no_git_evidence.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    Base.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        base_time = datetime(2026, 6, 6, 10, 0, 0, tzinfo=timezone.utc)
+        session_id = uuid4()
+        cwd = "/Users/davidrose/git/zerg/longhouse/server"
+
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="production",
+                project="server",
+                device_id="cinder",
+                cwd=cwd,
+                started_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="keep the original project without stronger evidence",
+                        timestamp=base_time,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=1,
+                    )
+                ],
+            )
+        )
+
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd=cwd,
+                started_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="keep the original project without stronger evidence",
+                        timestamp=base_time,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=1,
+                    )
+                ],
+            )
+        )
+
+        stored = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert stored.project == "server"
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+        assert card.project == "server"
+
+
 def test_ingest_does_not_promote_generic_workspace_project_from_cwd(tmp_path):
     db_path = tmp_path / "generic_workspace_project_guard.db"
     engine = make_engine(f"sqlite:///{db_path}")
