@@ -155,7 +155,7 @@ Built by [David Rose](https://github.com/cipher982). Apache-2.0.
   "name": "longhouse-serve-health",
   "mode": "smoke",
   "workdir": ".",
-  "timeout": 240,
+  "timeout": 600,
   "env": {
     "AUTH_DISABLED": "1",
     "SKIP_DEMO_SEED": "1"

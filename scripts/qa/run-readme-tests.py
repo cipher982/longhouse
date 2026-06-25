@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import signal
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -109,9 +110,9 @@ def run_block(block: dict) -> bool:
     env_extra = block.get("env", {})
     workdir = REPO_ROOT / block.get("workdir", ".")
 
-    print(f"\n{'─' * 60}")
-    print(f"  {name}  ({source})")
-    print(f"{'─' * 60}")
+    print(f"\n{'─' * 60}", flush=True)
+    print(f"  {name}  ({source})", flush=True)
+    print(f"{'─' * 60}", flush=True)
 
     if not isinstance(steps, list) or not steps or not all(isinstance(step, str) and step.strip() for step in steps):
         print("  ✗  ERROR: steps must be a non-empty list of shell commands", file=sys.stderr)
@@ -120,7 +121,11 @@ def run_block(block: dict) -> bool:
     env = {**os.environ, **{k: str(v) for k, v in env_extra.items()}}
 
     # Write steps as a single shell script so variables persist across steps
-    script = "\n".join(["set -euo pipefail", *steps])
+    script_lines = ["set -euo pipefail"]
+    for index, step in enumerate(steps, start=1):
+        script_lines.append(f'printf "\\n[readme-test] step {index}/{len(steps)}: %s\\n" {shlex.quote(step)}')
+        script_lines.append(step)
+    script = "\n".join(script_lines)
 
     success = False
     try:
@@ -133,7 +138,7 @@ def run_block(block: dict) -> bool:
         )
         success = result.returncode == 0
         if success:
-            print(f"  ✓  PASS")
+            print(f"  ✓  PASS", flush=True)
         else:
             print(f"  ✗  FAIL (exit {result.returncode})", file=sys.stderr)
     except subprocess.TimeoutExpired:
@@ -142,7 +147,7 @@ def run_block(block: dict) -> bool:
         print(f"  ✗  ERROR: {e}", file=sys.stderr)
     finally:
         if cleanup:
-            print("  → cleanup")
+            print("  → cleanup", flush=True)
             cleanup_script = "\n".join(cleanup)
             subprocess.run(
                 ["bash", "-c", cleanup_script],
@@ -194,7 +199,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"No readme-test blocks found for mode='{args.mode}'.")
         return 1
 
-    print(f"\nRunning {len(blocks)} readme-test block(s)  [mode={args.mode}]")
+    print(f"\nRunning {len(blocks)} readme-test block(s)  [mode={args.mode}]", flush=True)
 
     passed = 0
     failed = 0
