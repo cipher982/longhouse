@@ -1824,11 +1824,21 @@ def build_event_media_ref_map(db, events: list[AgentEvent]) -> dict[int, list[Ev
 
     event_by_id = {int(event.id): event for event in events if getattr(event, "id", None) is not None}
     event_ids = set(event_by_id)
-    events_by_source: dict[tuple[Any, str, int], list[int]] = {}
+    # Map each source coordinate to the events projected from it, remembering each
+    # event's semantic identity (event_hash). One provider source line can project
+    # into several events at the same byte offset in two distinct ways:
+    #   1. Same logical event repeated -- re-ingestion duplicates on one branch, or
+    #      branch-copies of an identical line across branches (same event_hash).
+    #   2. Genuinely different events from one line -- e.g. assistant text plus a
+    #      tool-use call, or several tool-result events (different event_hash).
+    # A coordinate-only media ref (event_id is NULL, e.g. legacy backfill) may bind
+    # to case 1 because every candidate is the same image-bearing line, but must NOT
+    # guess in case 2 where the offset is shared by unrelated events.
+    events_by_source: dict[tuple[Any, str, int], list[tuple[int, Optional[str]]]] = {}
     for event_id, event in event_by_id.items():
         if event.source_path and event.source_offset is not None:
             key = (event.session_id, event.source_path, int(event.source_offset))
-            events_by_source.setdefault(key, []).append(event_id)
+            events_by_source.setdefault(key, []).append((event_id, event.event_hash))
     session_ids = {event.session_id for event in events}
     offsets = {int(event.source_offset) for event in events if event.source_offset is not None}
     source_paths = {event.source_path for event in events if event.source_path}
@@ -1862,8 +1872,13 @@ def build_event_media_ref_map(db, events: list[AgentEvent]) -> dict[int, list[Ev
             matched_ids.append(int(ref.event_id))
         elif ref.source_path and ref.source_offset is not None:
             candidates = events_by_source.get((ref.session_id, ref.source_path, int(ref.source_offset)), [])
-            if len(candidates) == 1:
-                matched_ids.extend(candidates)
+            # Bind when every candidate event shares one semantic identity (the same
+            # image-bearing line, duplicated or branch-copied). Refuse to guess when
+            # the coordinate is shared by distinct events. A lone candidate with a
+            # NULL event_hash still binds -- it is unambiguous by count.
+            distinct_hashes = {event_hash for _eid, event_hash in candidates}
+            if len(candidates) == 1 or len(distinct_hashes) == 1:
+                matched_ids.extend(event_id for event_id, _hash in candidates)
 
         for event_id in sorted(set(matched_ids)):
             key = (event_id, ref.media_sha256, int(ref.id))

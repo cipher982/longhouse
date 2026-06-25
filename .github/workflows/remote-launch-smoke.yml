@@ -81,7 +81,39 @@ jobs:
             exit 1
           fi
 
+      - name: Preflight target authority
+        id: target-authority
+        run: |
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            exit 0
+          fi
+          if ssh -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "$REMOTE_LAUNCH_SMOKE_SSH_TARGET" true; then
+            exit 0
+          fi
+
+          mkdir -p "$REMOTE_LAUNCH_SMOKE_OUTPUT_DIR"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          output_dir = Path(os.environ["REMOTE_LAUNCH_SMOKE_OUTPUT_DIR"])
+          payload = {
+              "ok": True,
+              "skipped": True,
+              "skip_reason": "scheduled remote launch smoke skipped: SSH target unavailable",
+              "ssh_target": os.environ.get("REMOTE_LAUNCH_SMOKE_SSH_TARGET"),
+              "subdomain": os.environ.get("REMOTE_LAUNCH_SMOKE_SUBDOMAIN"),
+              "expected_commit": os.environ.get("REMOTE_LAUNCH_SMOKE_EXPECTED_COMMIT"),
+          }
+          output_dir.joinpath("result.json").write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+          print(json.dumps(payload, indent=2, sort_keys=True))
+          PY
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+
       - name: Run remote launch smoke
+        if: steps.target-authority.outputs.skip != 'true'
         run: ./scripts/ci/remote-launch-smoke.sh
 
       - name: Write summary
@@ -97,7 +129,12 @@ jobs:
               python3 - "$result" <<'PY'
           import json, sys
           payload = json.load(open(sys.argv[1]))
-          print(f"- Result: `{'pass' if payload.get('ok') else 'fail'}`")
+          if payload.get("skipped"):
+              print("- Result: `skipped`")
+          else:
+              print(f"- Result: `{'pass' if payload.get('ok') else 'fail'}`")
+          if payload.get("skip_reason"):
+              print(f"- Reason: `{payload['skip_reason']}`")
           if payload.get("session_id"):
               print(f"- Session: `{payload['session_id']}`")
           if payload.get("machine"):

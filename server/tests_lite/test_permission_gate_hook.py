@@ -8,6 +8,7 @@ when Longhouse explicitly resolves the request.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,17 @@ _HOOK_DIR = Path(tempfile.mkdtemp(prefix="lh-permission-gate-"))
 HOOK_SCRIPT = _HOOK_DIR / "longhouse-permission-gate.py"
 HOOK_SCRIPT.write_text(PERMISSION_GATE_SCRIPT)
 HOOK_SCRIPT.chmod(0o755)
+
+_SUBPROCESS_RUNTIME_ENV_KEYS = {
+    "DYLD_LIBRARY_PATH",
+    "LD_LIBRARY_PATH",
+    "PYTHONHOME",
+    "TMPDIR",
+}
+
+
+def _subprocess_runtime_env() -> dict[str, str]:
+    return {key: value for key in _SUBPROCESS_RUNTIME_ENV_KEYS if (value := os.environ.get(key))}
 
 
 class _StubLonghouse:
@@ -101,6 +113,7 @@ class _StubLonghouse:
 
 def _run_hook(*, base_url: str | None, timeout_env: str = "3", extra_env: dict | None = None):
     env = {
+        **_subprocess_runtime_env(),
         # The canonical installed script is dormant by default; engage it (the
         # launcher sets this in remote-approve mode). The disabled test overrides.
         "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
