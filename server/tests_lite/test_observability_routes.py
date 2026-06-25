@@ -420,9 +420,26 @@ def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(t
         )
         _seed_heartbeat(
             db,
-            device_id="dead-archive-machine",
+            device_id="legacy-pending-machine",
             received_at=pinned_now - timedelta(minutes=2),
-            spool_dead=1,
+            spool_pending=42,
+        )
+        _seed_heartbeat(
+            db,
+            device_id="dead-archive-machine",
+            received_at=pinned_now - timedelta(minutes=3),
+            raw_json=json.dumps(
+                {
+                    "archive_backlog": {
+                        **archive_backlog,
+                        "state": "dead_lettered",
+                        "mode": "drain",
+                        "pending_ranges": 0,
+                        "dead_ranges": 7,
+                        "dead_bytes": 62_675,
+                    }
+                }
+            ),
         )
 
     client = _make_client(SessionLocal)
@@ -440,8 +457,8 @@ def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(t
         payload = overview.json()
 
         assert payload["machine_counts"] == {
-            "total": 2,
-            "healthy": 1,
+            "total": 3,
+            "healthy": 2,
             "degraded": 1,
             "offline": 0,
             "broken": 0,
@@ -455,6 +472,18 @@ def test_observability_overview_counts_archive_backlog_only_machine_as_healthy(t
         assert archive_machine["archive_repair"]["state"] == "pending"
         assert archive_machine["archive_repair"]["pending_ranges"] == 6375
         assert archive_machine["archive_repair"]["source"] == "heartbeat"
+        legacy_machine = next(
+            machine for machine in payload["machines"] if machine["device_id"] == "legacy-pending-machine"
+        )
+        assert legacy_machine["status"] == "healthy"
+        assert legacy_machine["archive_repair"]["state"] == "pending"
+        assert legacy_machine["archive_repair"]["pending_ranges"] == 42
+        assert legacy_machine["archive_repair"]["source"] == "heartbeat_legacy"
+        dead_machine = next(machine for machine in payload["machines"] if machine["device_id"] == "dead-archive-machine")
+        assert dead_machine["status"] == "degraded"
+        assert dead_machine["status_reason"] == "archive_dead_lettered"
+        assert dead_machine["archive_repair"]["dead_ranges"] == 7
+        assert "archive_dead_lettered" in dead_machine["reasons"]
     finally:
         api_app.dependency_overrides.clear()
 
