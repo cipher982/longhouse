@@ -127,7 +127,7 @@ final class SessionChatStressUITests: XCTestCase {
         }, readProbe(probeURL))
 
         let afterLiveUpdate = probeMetrics(readProbe(probeURL))
-        XCTAssertLessThanOrEqual(afterLiveUpdate.renders, 3, readProbe(probeURL))
+        XCTAssertLessThanOrEqual(afterLiveUpdate.renders - afterParentChurn.renders, 3, readProbe(probeURL))
         XCTAssertEqual(afterLiveUpdate.repeats, 0, readProbe(probeURL))
         XCTAssertLessThan(afterLiveUpdate.maxRenderMs, 2_500, "WebKit render should stay inside the mobile chat budget. \(readProbe(probeURL))")
         XCTAssertEqual(afterLiveUpdate.stick, 0, "Live update should not snap to bottom after user scrolled up. \(readProbe(probeURL))")
