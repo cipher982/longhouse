@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode, type Ref } from "react";
 import type { DraggableAttributes } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
-import { type TimelineSessionCard } from "../../services/api/agents";
+import { type SessionCapabilities, type TimelineSessionCard } from "../../services/api/agents";
 import { isSessionClosed, resolveTimelineSignal, timelineSignalLabel } from "../../lib/sessionRuntime";
 import {
   formatRelativeTime,
@@ -22,6 +22,14 @@ import { ProviderGlyph } from "../ProviderGlyph";
 import { getProviderLabel } from "../../lib/providers";
 
 const HOVER_PREFETCH_DELAY_MS = 180;
+
+type RowControlTone = "live" | "reattach" | "observe" | "search";
+
+export interface RowControlPresentation {
+  label: string;
+  tone: RowControlTone;
+  title: string;
+}
 
 export interface SessionRowProps {
   thread: TimelineSessionCard;
@@ -64,6 +72,7 @@ export function SessionRow({
   const text = getSessionCardText(session, { titleMaxChars: 96, subheadingMaxChars: 200 });
   const branch = getBranchLabel(session.git_branch);
   const provider = session.provider;
+  const control = getRowControlPresentation(session.capabilities);
   const startedAtIso = thread.root?.started_at || session.started_at;
   const timeLabel = getRowTimeLabel({
     seenAt: timelineStatus.seen_at,
@@ -159,8 +168,26 @@ export function SessionRow({
           aria-label={timelineSignalLabel(signal)}
         />
         <span className="inbox-row-status-label">{statusLabel}</span>
+        <span
+          className="inbox-row-control inbox-row-control--status"
+          data-tone={control.tone}
+          data-testid="session-row-control-mobile"
+          title={control.title}
+          aria-label={control.title}
+        >
+          {control.label}
+        </span>
       </span>
       <span className="inbox-row-source">
+        <span
+          className="inbox-row-control inbox-row-control--source"
+          data-tone={control.tone}
+          data-testid="session-row-control"
+          title={control.title}
+          aria-label={control.title}
+        >
+          {control.label}
+        </span>
         <span className="inbox-row-provider" title={getProviderLabel(provider)}>
           <ProviderGlyph provider={provider} size={18} />
           <span className="inbox-row-provider-name">{getProviderLabel(provider)}</span>
@@ -172,6 +199,38 @@ export function SessionRow({
       </span>
     </button>
   );
+}
+
+export function getRowControlPresentation(capabilities: SessionCapabilities | null | undefined): RowControlPresentation {
+  if (capabilities?.live_control_available || capabilities?.control_label === "live") {
+    return {
+      label: "Live control",
+      tone: "live",
+      title: "Managed session with live control available",
+    };
+  }
+
+  if (capabilities?.host_reattach_available || capabilities?.control_label === "reattach") {
+    return {
+      label: "Reattach",
+      tone: "reattach",
+      title: "Managed session can be reattached from its host",
+    };
+  }
+
+  if (capabilities?.observe_only || capabilities?.control_label === "search-only") {
+    return {
+      label: "Observe only",
+      tone: "observe",
+      title: "Transcript output is observable, but this session is not steerable",
+    };
+  }
+
+  return {
+    label: "Search only",
+    tone: "search",
+    title: "Imported transcript is searchable, but this session is not steerable",
+  };
 }
 
 export function getRowTimeLabel({

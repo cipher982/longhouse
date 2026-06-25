@@ -63,6 +63,9 @@ function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): Session
     live_control_available: false,
     host_reattach_available: false,
     reply_to_live_session_available: false,
+    control_label: "imported",
+    observe_only: false,
+    search_only: true,
     ...overrides,
   };
 }
@@ -379,6 +382,59 @@ describe("SessionsPage", () => {
 
     expect(await screen.findByPlaceholderText("Search sessions...")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Timeline" })).not.toBeInTheDocument();
+  });
+
+  it("surfaces each row's control bucket before opening a session", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            id: "session-live",
+            summary_title: "Live thread",
+            thread_root_session_id: "thread-live",
+            thread_head_session_id: "session-live",
+            capabilities: makeCapabilities({
+              live_control_available: true,
+              host_reattach_available: true,
+              reply_to_live_session_available: true,
+              control_label: "live",
+              search_only: false,
+            }),
+          }),
+          makeTimelineCard({
+            id: "session-reattach",
+            summary_title: "Reattach thread",
+            thread_root_session_id: "thread-reattach",
+            thread_head_session_id: "session-reattach",
+            capabilities: makeCapabilities({
+              host_reattach_available: true,
+              control_label: "reattach",
+              search_only: false,
+            }),
+          }),
+          makeTimelineCard({
+            id: "session-imported",
+            summary_title: "Imported thread",
+            thread_root_session_id: "thread-imported",
+            thread_head_session_id: "session-imported",
+            capabilities: makeCapabilities({
+              control_label: "imported",
+              search_only: true,
+            }),
+          }),
+        ],
+        total: 3,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    const controlLabels = await screen.findAllByTestId("session-row-control");
+    expect(controlLabels.map((node) => node.textContent)).toEqual(["Live control", "Reattach", "Search only"]);
   });
 
 
