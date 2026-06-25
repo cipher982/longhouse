@@ -115,7 +115,7 @@ final class SessionChatStressUITests: XCTestCase {
         }, readProbe(probeURL))
 
         let afterParentChurn = probeMetrics(readProbe(probeURL))
-        // The live-update budget below uses this render-free churn snapshot as its baseline.
+        // The live-update budgets below use this render-free churn snapshot as their baseline.
         XCTAssertLessThanOrEqual(afterParentChurn.renders - afterInitialRender.renders, 0, readProbe(probeURL))
         XCTAssertEqual(afterParentChurn.repeats, 0, readProbe(probeURL))
 
@@ -133,6 +133,7 @@ final class SessionChatStressUITests: XCTestCase {
         let afterLiveUpdate = probeMetrics(readProbe(probeURL))
         let liveUpdateRenders = afterLiveUpdate.renders - afterParentChurn.renders
         let liveUpdateDuplicates = afterLiveUpdate.duplicates - afterParentChurn.duplicates
+        // CI can produce four distinct live-update renders for the 160-event fixture; repeated renders remain forbidden below.
         XCTAssertLessThanOrEqual(liveUpdateRenders, Self.liveUpdateRenderBudget, readProbe(probeURL))
         XCTAssertLessThanOrEqual(liveUpdateDuplicates, Self.liveUpdateDuplicateBudget, readProbe(probeURL))
         XCTAssertEqual(afterLiveUpdate.repeats, 0, readProbe(probeURL))
