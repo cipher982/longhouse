@@ -23,6 +23,7 @@ from zerg.models.agents import SessionThread
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.provider_action_coverage import ActionCoverageState
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
 
@@ -213,6 +214,59 @@ def test_antigravity_hook_inbox_projects_live_send_without_interrupt_or_steer(db
     assert caps.can_tail_output is True
     assert caps.can_resume is False
     assert caps.can_steer_active_turn is False
+
+
+def test_known_provider_control_plane_clamps_capability_bits_to_contract(db):
+    s = _make_session(db, provider="antigravity")
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    _make_conn(
+        db,
+        r,
+        control_plane="antigravity_hook_inbox",
+        state="attached",
+        caps={"send": 1, "interrupt": 1, "terminate": 1, "tail": 1, "resume": 1},
+    )
+    db.commit()
+
+    caps = project_session_capabilities(db, session_id=s.id)
+    coverage = derive_provider_action_coverage("antigravity")
+
+    assert caps.live_control_available is True
+    assert caps.can_send_input is True
+    assert coverage["send_prompt"].state == ActionCoverageState.SUPPORTED
+    assert caps.can_interrupt is False
+    assert coverage["abort"].state == ActionCoverageState.UNSUPPORTED
+    assert caps.can_terminate is False
+    assert contract_for_provider("antigravity").terminate is False
+    assert caps.can_resume is False
+    assert coverage["reattach"].state == ActionCoverageState.UNSUPPORTED
+    assert caps.can_tail_output is True
+    assert coverage["observe_transcript"].state == ActionCoverageState.SUPPORTED
+
+
+def test_legacy_provider_control_plane_aliases_are_contract_clamped(db):
+    s = _make_session(db, provider="antigravity")
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    _make_conn(
+        db,
+        r,
+        control_plane="antigravity_process",
+        state="attached",
+        caps={"send": 1, "interrupt": 1, "terminate": 1, "tail": 1, "resume": 1},
+    )
+    db.commit()
+
+    caps = project_session_capabilities(db, session_id=s.id)
+
+    assert caps.live_control_available is True
+    assert caps.managed_transport.value == "antigravity_process"
+    assert caps.can_send_input is True
+    assert caps.can_interrupt is False
+    assert caps.can_terminate is False
+    assert caps.can_resume is False
+    assert caps.can_tail_output is True
 
 
 def test_detached_claude_channel_bridge_cannot_steer_until_reattached(db):
@@ -547,7 +601,7 @@ def test_live_session_capabilities_match_provider_action_coverage(db):
                 "interrupt": int(contract.interrupt),
                 "terminate": int(contract.terminate),
                 "tail": int(contract.tail_output),
-                "resume": int(contract.can_resume),
+                "resume": int(contract.reattach),
             },
         )
         db.commit()
@@ -559,3 +613,4 @@ def test_live_session_capabilities_match_provider_action_coverage(db):
         assert caps.can_send_input is (coverage["send_prompt"].state == ActionCoverageState.SUPPORTED)
         assert caps.can_interrupt is (coverage["abort"].state == ActionCoverageState.SUPPORTED)
         assert caps.can_tail_output is (coverage["observe_transcript"].state == ActionCoverageState.SUPPORTED)
+        assert caps.can_resume is (coverage["reattach"].state == ActionCoverageState.SUPPORTED)

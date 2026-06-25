@@ -28,7 +28,10 @@ from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.services.managed_control_state import DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
+from zerg.services.managed_provider_contracts import contract_for_control_plane
+from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
+from zerg.services.managed_provider_contracts import provider_for_control_plane
 from zerg.services.managed_provider_contracts import steer_control_planes
 
 _STATE_PRIORITY = {
@@ -172,6 +175,25 @@ def _connection_capability_count(conn: SessionConnection) -> int:
         conn.can_tail_output,
     )
     return sum(1 for capability in capabilities if capability)
+
+
+def _control_plane_supports(control_plane: str | None, operation: str) -> bool:
+    """Whether a known managed provider contract allows ``operation``.
+
+    Persisted connection bits are runtime observations, not provider contracts.
+    For known managed control planes, clamp those bits to the provider-level
+    contract so a bad row cannot make session capabilities claim an unsupported
+    action. Unknown planes keep legacy behavior because there is no provider
+    contract to reconcile against.
+    """
+
+    contract = contract_for_control_plane(control_plane)
+    if contract is None:
+        provider = provider_for_control_plane(control_plane)
+        contract = contract_for_provider(provider)
+    if contract is None:
+        return True
+    return contract.supports_contract_operation(operation)
 
 
 def _connection_sort_key(conn: SessionConnection, now: datetime) -> tuple:
@@ -397,11 +419,46 @@ def _payload_from_rows(
             can_resume=False,
             staleness_reason=reason,
         )
-    can_send = bool(best.can_send_input) and live
-    can_interrupt = bool(best.can_interrupt) and live
-    can_terminate = bool(best.can_terminate) and live
-    can_tail = bool(best.can_tail_output) and (live or observe)
-    can_resume = bool(best.can_resume) and (live or reattach)
+    can_send = (
+        bool(best.can_send_input)
+        and live
+        and _control_plane_supports(
+            best.control_plane,
+            "send_input",
+        )
+    )
+    can_interrupt = (
+        bool(best.can_interrupt)
+        and live
+        and _control_plane_supports(
+            best.control_plane,
+            "interrupt",
+        )
+    )
+    can_terminate = (
+        bool(best.can_terminate)
+        and live
+        and _control_plane_supports(
+            best.control_plane,
+            "terminate",
+        )
+    )
+    can_tail = (
+        bool(best.can_tail_output)
+        and (live or observe)
+        and _control_plane_supports(
+            best.control_plane,
+            "tail_output",
+        )
+    )
+    can_resume = (
+        bool(best.can_resume)
+        and (live or reattach)
+        and _control_plane_supports(
+            best.control_plane,
+            "reattach",
+        )
+    )
     return KernelSessionCapabilities(
         session_id=sid,
         thread_id=str(thread.id),
