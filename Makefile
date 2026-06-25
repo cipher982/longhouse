@@ -273,6 +273,7 @@ test-runtime-packaging-macos: ## @internal Build/sign/zip Longhouse.app locally
 	@./scripts/qa/test-local-runtime-packaging.sh
 
 test-readmes: ## @internal README contract tests (MODE=smoke|full)
+	@python3 scripts/tests/readme-tests.test.py
 	@python3 scripts/qa/run-readme-tests.py --mode $(or $(MODE),smoke) $(FILES)
 
 # ---------------------------------------------------------------------------

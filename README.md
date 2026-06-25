@@ -167,15 +167,21 @@ Built by [David Rose](https://github.com/cipher982). Apache-2.0.
     "uv venv .tmp-readme-serve-venv --python 3.12 -q",
     ". .tmp-readme-serve-venv/bin/activate",
     "uv pip install -e server -q",
-    "DATABASE_URL=sqlite:///$(mktemp -d)/test.db LLM_DISABLED=1 longhouse serve --port 47398 &",
+    "PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind((\"127.0.0.1\", 0)); print(s.getsockname()[1]); s.close()')",
+    "rm -rf .tmp-readme-serve-db .tmp-readme-serve.pid",
+    "mkdir -p .tmp-readme-serve-db",
+    "DATABASE_URL=\"sqlite:///$(pwd)/.tmp-readme-serve-db/test.db\" LLM_DISABLED=1 longhouse serve --port \"$PORT\" &",
     "SERVER_PID=$!",
-    "for _ in $(seq 1 20); do curl -sf http://127.0.0.1:47398/api/health && break; sleep 1; done",
-    "python3 -c 'import json,urllib.request; p=json.load(urllib.request.urlopen(\"http://127.0.0.1:47398/api/health\")); assert p.get(\"status\") == \"healthy\", p'",
-    "kill $SERVER_PID 2>/dev/null || true"
+    "echo \"$SERVER_PID\" > .tmp-readme-serve.pid",
+    "for _ in $(seq 1 20); do curl -sf \"http://127.0.0.1:$PORT/api/health\" && break; sleep 1; done",
+    "curl -sf \"http://127.0.0.1:$PORT/api/health\" | python3 -c 'import json,sys; p=json.load(sys.stdin); assert p.get(\"status\") == \"healthy\", p'",
+    "kill \"$SERVER_PID\" 2>/dev/null || true",
+    "wait \"$SERVER_PID\" 2>/dev/null || true"
   ],
   "cleanup": [
-    "pkill -f 'longhouse serve.*47398' 2>/dev/null || true",
-    "rm -rf .tmp-readme-serve-venv"
+    "if [ -f .tmp-readme-serve.pid ]; then kill \"$(cat .tmp-readme-serve.pid)\" 2>/dev/null || true; fi",
+    "rm -f .tmp-readme-serve.pid",
+    "rm -rf .tmp-readme-serve-venv .tmp-readme-serve-db"
   ]
 }
 ```

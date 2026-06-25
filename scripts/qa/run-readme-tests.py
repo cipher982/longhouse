@@ -27,6 +27,17 @@ DEFAULT_TIMEOUT = 120
 DEFAULT_MODE = "smoke"
 
 
+class ReadmeTestError(RuntimeError):
+    pass
+
+
+def display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
 # ---------------------------------------------------------------------------
 # Extraction
 # ---------------------------------------------------------------------------
@@ -36,24 +47,34 @@ def extract_blocks(path: Path) -> list[dict]:
     """Extract and parse all readme-test JSON blocks from a Markdown file."""
     blocks: list[dict] = []
     in_block = False
+    block_start = 0
     lines: list[str] = []
 
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         stripped = line.rstrip()
         if stripped == "```readme-test":
+            if in_block:
+                source = display_path(path)
+                raise ReadmeTestError(f"{source}:{lineno}: nested readme-test block")
             in_block = True
+            block_start = lineno
             lines = []
         elif in_block and stripped == "```":
             in_block = False
             raw = "\n".join(lines)
             try:
                 block = json.loads(raw)
-                block["_source"] = str(path.relative_to(REPO_ROOT))
+                block["_source"] = display_path(path)
                 blocks.append(block)
             except json.JSONDecodeError as e:
-                print(f"  ⚠  Bad JSON in {path}: {e}", file=sys.stderr)
+                source = display_path(path)
+                raise ReadmeTestError(f"{source}:{block_start}: bad readme-test JSON: {e}") from e
         elif in_block:
             lines.append(line)
+
+    if in_block:
+        source = display_path(path)
+        raise ReadmeTestError(f"{source}:{block_start}: unterminated readme-test block")
 
     return blocks
 
@@ -144,18 +165,30 @@ def default_paths() -> list[Path]:
     return [p for p in candidates if p.exists()]
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run readme-test blocks")
     parser.add_argument("--mode", choices=["smoke", "full"], default=DEFAULT_MODE)
+    parser.add_argument(
+        "--allow-empty",
+        action="store_true",
+        help="Exit successfully when no readme-test blocks are found.",
+    )
     parser.add_argument("files", nargs="*", type=Path, help="README files to scan")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     paths = [Path(f).resolve() for f in args.files] if args.files else default_paths()
-    blocks = collect_blocks(paths, args.mode)
+    try:
+        blocks = collect_blocks(paths, args.mode)
+    except ReadmeTestError as exc:
+        print(f"README test contract error: {exc}", file=sys.stderr)
+        return 1
 
     if not blocks:
+        if args.allow_empty:
+            print(f"No readme-test blocks found for mode='{args.mode}'.")
+            return 0
         print(f"No readme-test blocks found for mode='{args.mode}'.")
-        return 0
+        return 1
 
     print(f"\nRunning {len(blocks)} readme-test block(s)  [mode={args.mode}]")
 
