@@ -112,6 +112,7 @@ final class SessionChatStressUITests: XCTestCase {
         }, readProbe(probeURL))
 
         let afterParentChurn = probeMetrics(readProbe(probeURL))
+        // The live-update budget below uses this render-free churn snapshot as its baseline.
         XCTAssertLessThanOrEqual(afterParentChurn.renders - afterInitialRender.renders, 0, readProbe(probeURL))
         XCTAssertEqual(afterParentChurn.repeats, 0, readProbe(probeURL))
 
@@ -127,7 +128,8 @@ final class SessionChatStressUITests: XCTestCase {
         }, readProbe(probeURL))
 
         let afterLiveUpdate = probeMetrics(readProbe(probeURL))
-        XCTAssertLessThanOrEqual(afterLiveUpdate.renders - afterParentChurn.renders, 3, readProbe(probeURL))
+        let liveUpdateRenders = afterLiveUpdate.renders - afterParentChurn.renders
+        XCTAssertLessThanOrEqual(liveUpdateRenders, 3, readProbe(probeURL))
         XCTAssertEqual(afterLiveUpdate.repeats, 0, readProbe(probeURL))
         XCTAssertLessThan(afterLiveUpdate.maxRenderMs, 2_500, "WebKit render should stay inside the mobile chat budget. \(readProbe(probeURL))")
         XCTAssertEqual(afterLiveUpdate.stick, 0, "Live update should not snap to bottom after user scrolled up. \(readProbe(probeURL))")
