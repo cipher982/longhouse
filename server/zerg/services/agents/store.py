@@ -153,6 +153,23 @@ def _should_repair_opencode_workspace_project(session: AgentSession, data: Sessi
     return bool(cwd_name and cwd_name == incoming_project)
 
 
+def _git_repo_project_stem(git_repo: str | None) -> str | None:
+    cleaned = str(git_repo or "").strip().rstrip("/")
+    if not cleaned:
+        return None
+    tail = cleaned.rsplit("/", 1)[-1].rsplit(":", 1)[-1].strip()
+    if tail.endswith(".git"):
+        tail = tail[:-4]
+    return tail or None
+
+
+def _incoming_project_matches_git_root_hint(cwd_path: Path, incoming_project: str, git_repo: str | None) -> bool:
+    repo_stem = _git_repo_project_stem(git_repo)
+    if repo_stem and repo_stem == incoming_project:
+        return True
+    return cwd_path.parent.name.strip() == incoming_project
+
+
 def _should_repair_stale_cwd_basename_project(session: AgentSession, data: SessionIngest) -> bool:
     existing_project = str(session.project or "").strip()
     incoming_project = str(data.project or "").strip()
@@ -180,8 +197,9 @@ def _should_repair_stale_cwd_basename_project(session: AgentSession, data: Sessi
         return False
 
     # Older parsers used cwd.basename as project. Newer engine ingests can carry
-    # git-root evidence; require that root label to appear in the cwd hierarchy.
-    return incoming_project in {part.strip() for part in cwd_path.parts if part.strip()}
+    # git-root evidence; require a remote-name match, or a direct parent hint
+    # for worktrees whose folder name intentionally differs from the remote.
+    return _incoming_project_matches_git_root_hint(cwd_path, incoming_project, data.git_repo)
 
 
 def _normalize_ingested_project(data: SessionIngest) -> str | None:

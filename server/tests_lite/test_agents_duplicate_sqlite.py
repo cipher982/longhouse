@@ -460,6 +460,126 @@ def test_reingest_preserves_cwd_basename_project_without_git_evidence(tmp_path):
         assert card.project == "server"
 
 
+@pytest.mark.parametrize(
+    (
+        "name",
+        "initial_project",
+        "initial_cwd",
+        "initial_git_repo",
+        "incoming_project",
+        "incoming_cwd",
+        "incoming_git_repo",
+    ),
+    [
+        (
+            "git_repo_mismatch",
+            "server",
+            "/Users/davidrose/git/zerg/longhouse/server",
+            "git@github.com:cipher982/longhouse.git",
+            "other",
+            "/Users/davidrose/git/zerg/longhouse/server",
+            "git@github.com:cipher982/other.git",
+        ),
+        (
+            "cwd_mismatch",
+            "server",
+            "/Users/davidrose/git/zerg/longhouse/server",
+            None,
+            "longhouse",
+            "/Users/davidrose/git/zerg/longhouse/web",
+            "git@github.com:cipher982/longhouse.git",
+        ),
+        (
+            "existing_project_not_cwd_basename",
+            "api",
+            "/Users/davidrose/git/zerg/longhouse/server",
+            None,
+            "longhouse",
+            "/Users/davidrose/git/zerg/longhouse/server",
+            "git@github.com:cipher982/longhouse.git",
+        ),
+        (
+            "incoming_project_is_path_ancestor_but_not_git_root_hint",
+            "server",
+            "/Users/davidrose/git/zerg/longhouse/server",
+            None,
+            "zerg",
+            "/Users/davidrose/git/zerg/longhouse/server",
+            "git@github.com:cipher982/longhouse.git",
+        ),
+    ],
+)
+def test_reingest_keeps_project_when_stale_basename_repair_proof_fails(
+    tmp_path,
+    name,
+    initial_project,
+    initial_cwd,
+    initial_git_repo,
+    incoming_project,
+    incoming_cwd,
+    incoming_git_repo,
+):
+    db_path = tmp_path / f"cwd_basename_project_guard_{name}.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    Base.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        base_time = datetime(2026, 6, 6, 10, 0, 0, tzinfo=timezone.utc)
+        session_id = uuid4()
+
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="production",
+                project=initial_project,
+                device_id="cinder",
+                cwd=initial_cwd,
+                git_repo=initial_git_repo,
+                started_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text=f"initial metadata for {name}",
+                        timestamp=base_time,
+                        source_path=f"/tmp/{name}.jsonl",
+                        source_offset=1,
+                    )
+                ],
+            )
+        )
+
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="production",
+                project=incoming_project,
+                device_id="cinder",
+                cwd=incoming_cwd,
+                git_repo=incoming_git_repo,
+                started_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text=f"initial metadata for {name}",
+                        timestamp=base_time,
+                        source_path=f"/tmp/{name}.jsonl",
+                        source_offset=1,
+                    )
+                ],
+            )
+        )
+
+        stored = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert stored.project == initial_project
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+        assert card.project == initial_project
+
+
 def test_ingest_does_not_promote_generic_workspace_project_from_cwd(tmp_path):
     db_path = tmp_path / "generic_workspace_project_guard.db"
     engine = make_engine(f"sqlite:///{db_path}")
