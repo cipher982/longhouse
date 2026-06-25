@@ -2439,7 +2439,7 @@ fn extract_text_from_raw_content(raw_json: &str) -> Option<String> {
                 return Some(format!("[non-text tool result: {}]", part_types.join(", ")));
             }
 
-            return Some("[non-text tool result]".to_string());
+            return None;
         }
     }
 
@@ -3831,11 +3831,12 @@ mod tests {
                 r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_empty","content":""}]}}"#,
                 r#"{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_empty_text","content":[{"type":"text","text":""}]}]}}"#,
                 r#"{"type":"user","uuid":"u3","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_missing_content"}]}}"#,
+                r#"{"type":"user","uuid":"u4","timestamp":"2026-01-01T00:00:05Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_empty_list","content":[]}]}}"#,
             ],
         );
 
         let result = parse_session_file(&path, 0).unwrap();
-        assert_eq!(result.events.len(), 3);
+        assert_eq!(result.events.len(), 4);
         assert_eq!(
             result.events[0].tool_call_id.as_deref(),
             Some("toolu_empty")
@@ -3858,6 +3859,14 @@ mod tests {
         );
         assert_eq!(
             result.events[2].tool_output_text.as_deref(),
+            Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
+        );
+        assert_eq!(
+            result.events[3].tool_call_id.as_deref(),
+            Some("toolu_empty_list")
+        );
+        assert_eq!(
+            result.events[3].tool_output_text.as_deref(),
             Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
         );
     }
