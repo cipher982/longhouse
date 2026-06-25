@@ -277,7 +277,6 @@ jobs:
 
       - name: Install Playwright Chromium shell
         run: |
-          (cd e2e && bun install --silent)
           # The README onboarding contract runs the onboarding-chromium project only.
           LONGHOUSE_PLAYWRIGHT_ONLY_SHELL=1 ./scripts/ci/install-playwright.sh chromium
 
