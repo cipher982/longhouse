@@ -14,6 +14,7 @@
 //! Gemini files are full JSON documents rewritten in-place (not JSONL appended),
 //! so they are always parsed from offset 0. The backend deduplicates events by hash.
 
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
@@ -648,6 +649,85 @@ fn workflow_run_id_from_path(path: &Path) -> Option<String> {
     None
 }
 
+/// Seed the antigravity pending-call queue from the record immediately before an
+/// incremental resume `offset`.
+///
+/// Antigravity tool results inherit their call id from the adjacent preceding
+/// planner. The shipper resumes at a stored byte offset, which routinely lands
+/// between a `PLANNER_RESPONSE` and its result record, so without this seed every
+/// flush boundary would mint a fresh live orphan. Bounded backward scan: read the
+/// single line ending at `offset`. Returns empty pending if `offset == 0`, the prior
+/// record is not an antigravity planner with tool_calls, or anything fails.
+fn seed_antigravity_pending(path: &Path, offset: u64) -> AntigravityPending {
+    if offset == 0 {
+        return AntigravityPending::default();
+    }
+    // Read a bounded window ending at `offset`, then take the last complete line.
+    const SEED_WINDOW_BYTES: u64 = 256 * 1024;
+    let window = SEED_WINDOW_BYTES.min(offset);
+    let start = offset - window;
+
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return AntigravityPending::default();
+    };
+    use std::io::{Read, Seek};
+    if file.seek(std::io::SeekFrom::Start(start)).is_err() {
+        return AntigravityPending::default();
+    }
+    let mut buf = vec![0u8; window as usize];
+    if file.read_exact(&mut buf).is_err() {
+        return AntigravityPending::default();
+    }
+    // Drop a possibly-partial leading line when we started mid-file.
+    let search = if start > 0 {
+        match buf.iter().position(|&b| b == b'\n') {
+            Some(nl) => &buf[nl + 1..],
+            None => return AntigravityPending::default(),
+        }
+    } else {
+        &buf[..]
+    };
+    // The record ending at `offset` is the last newline-terminated line in the window.
+    let trimmed = trim_bytes(search);
+    let last_line = match trimmed.iter().rposition(|&b| b == b'\n') {
+        Some(nl) => &trimmed[nl + 1..],
+        None => trimmed,
+    };
+    if last_line.is_empty() {
+        return AntigravityPending::default();
+    }
+    let Ok(obj) = serde_json::from_slice::<RawLine>(last_line) else {
+        return AntigravityPending::default();
+    };
+    if !is_antigravity_line(&obj) {
+        return AntigravityPending::default();
+    }
+    let Some(tool_calls) = obj.tool_calls.as_ref() else {
+        return AntigravityPending::default();
+    };
+    let mut call_ids: VecDeque<String> = VecDeque::new();
+    for (idx, call) in tool_calls.iter().enumerate() {
+        let has_name = call
+            .name
+            .as_ref()
+            .map(|name| !name.trim().is_empty())
+            .unwrap_or(false);
+        if !has_name {
+            continue;
+        }
+        if let Some(step) = obj.step_index {
+            call_ids.push_back(format!("antigravity-{step}-{idx}"));
+        }
+    }
+    if call_ids.is_empty() {
+        return AntigravityPending::default();
+    }
+    AntigravityPending {
+        call_ids,
+        next_result_step: obj.step_index.map(|step| step + 1),
+    }
+}
+
 fn antigravity_session_id_from_path(path: &Path) -> Option<String> {
     let components: Vec<&str> = path
         .components()
@@ -1133,6 +1213,10 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     let mut max_ts: Option<DateTime<Utc>> = None;
     let mut last_good_offset = offset;
     let mut candidate_lines: usize = 0;
+    // Antigravity tool result records inherit their call id from the adjacent
+    // preceding planner. On incremental resume (offset > 0) the planner may live in
+    // the prior batch, so seed from the record before `offset`.
+    let mut antigravity_pending = seed_antigravity_pending(path, offset);
 
     let mut pos: usize = 0;
     while pos < data.len() {
@@ -1193,7 +1277,14 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
         // Collect metadata
         collect_metadata(&obj, &mut metadata, &mut min_ts, &mut max_ts);
 
-        extract_events(&obj, session_id, line_offset, &redacted_line, &mut events);
+        extract_events(
+            &obj,
+            session_id,
+            line_offset,
+            &redacted_line,
+            &mut events,
+            &mut antigravity_pending,
+        );
     }
 
     // Finalize metadata
@@ -1245,6 +1336,8 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     let mut max_ts: Option<DateTime<Utc>> = None;
     let mut current_offset = offset;
     let mut candidate_lines: usize = 0;
+    // See parse_mmap: seed antigravity call/result pairing across the resume boundary.
+    let mut antigravity_pending = seed_antigravity_pending(path, offset);
     let mut line = String::new();
 
     loop {
@@ -1304,7 +1397,14 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
 
         collect_metadata(&obj, &mut metadata, &mut min_ts, &mut max_ts);
 
-        extract_events(&obj, session_id, line_offset, &redacted_line, &mut events);
+        extract_events(
+            &obj,
+            session_id,
+            line_offset,
+            &redacted_line,
+            &mut events,
+            &mut antigravity_pending,
+        );
     }
 
     metadata.started_at = min_ts;
@@ -1497,11 +1597,19 @@ fn extract_events(
     line_offset: u64,
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
+    antigravity_pending: &mut AntigravityPending,
 ) {
     let event_type = obj.r#type.as_deref().unwrap_or("");
 
     if is_antigravity_line(obj) {
-        extract_antigravity_events(obj, session_id, line_offset, raw_line, events);
+        extract_antigravity_events(
+            obj,
+            session_id,
+            line_offset,
+            raw_line,
+            events,
+            antigravity_pending,
+        );
         return;
     }
 
@@ -1623,12 +1731,32 @@ fn antigravity_tool_name_from_type(event_type: &str) -> String {
     event_type.trim().to_ascii_lowercase().replace('_', "-")
 }
 
+/// Pending antigravity tool-call ids awaiting their result records.
+///
+/// Antigravity splits a tool call and its result across adjacent records: a
+/// `PLANNER_RESPONSE` carries `tool_calls: [{name, args}]` at step N, and the
+/// immediately-following `MODEL` non-`_RESPONSE` record at step N+1 is that call's
+/// result. The result records carry no correlation id of their own, so we thread the
+/// call ids forward and let each result inherit one. Pairing is by adjacency (the
+/// alias `list_dir` -> `LIST_DIRECTORY` makes tool-name matching unreliable), so any
+/// interleaving record clears the queue to stay fail-closed.
+#[derive(Default)]
+struct AntigravityPending {
+    /// Call ids emitted by the most recent planner, in order, not yet consumed.
+    call_ids: VecDeque<String>,
+    /// The step_index the next result is expected at. A planner at step N is
+    /// followed by its result(s) at N+1, N+2, ... (one per call, in order). Advances
+    /// on each consumed result so a multi-call planner pairs consecutive results.
+    next_result_step: Option<u64>,
+}
+
 fn extract_antigravity_events(
     obj: &RawLine,
     session_id: &str,
     line_offset: u64,
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
+    pending: &mut AntigravityPending,
 ) {
     let event_type = obj.r#type.as_deref().unwrap_or("");
     let source = obj.source.as_deref().unwrap_or("");
@@ -1636,6 +1764,8 @@ fn extract_antigravity_events(
     let mut emitted_raw_line = false;
 
     if event_type == "USER_INPUT" {
+        // Interleaving non-result record: a pending call had no adjacent result.
+        *pending = AntigravityPending::default();
         if let Some(content) = obj.content.as_deref() {
             let text = antigravity_user_text(content);
             if !text.is_empty() {
@@ -1658,7 +1788,10 @@ fn extract_antigravity_events(
         return;
     }
 
+    let mut emitted_calls_this_record = false;
     if let Some(tool_calls) = obj.tool_calls.as_ref() {
+        // A new planner supersedes any prior unconsumed call.
+        let mut fresh: VecDeque<String> = VecDeque::new();
         for (idx, call) in tool_calls.iter().enumerate() {
             let Some(tool_name) = call.name.as_ref().filter(|name| !name.trim().is_empty()) else {
                 continue;
@@ -1666,6 +1799,9 @@ fn extract_antigravity_events(
             let call_id = obj
                 .step_index
                 .map(|step| format!("antigravity-{step}-{idx}"));
+            if let Some(ref id) = call_id {
+                fresh.push_back(id.clone());
+            }
             events.push(ParsedEvent {
                 uuid: antigravity_uuid(obj, line_offset, &format!("tool-{idx}")),
                 session_id: session_id.to_string(),
@@ -1686,7 +1822,47 @@ fn extract_antigravity_events(
                 },
             });
         }
+        emitted_calls_this_record = true;
+        *pending = AntigravityPending {
+            call_ids: fresh,
+            next_result_step: obj.step_index.map(|step| step + 1),
+        };
     }
+
+    // Update call/result pairing state for THIS record, independent of whether it
+    // emits a content event, so content-less and empty-content records still clear a
+    // stale pending call. A tool RESULT is strictly a MODEL-source record whose type
+    // does not end in `_RESPONSE` (the planner is the `_RESPONSE` record carrying the
+    // calls). Anything else interleaving a pending call fails closed.
+    let is_tool_result = source == "MODEL" && !event_type.ends_with("_RESPONSE");
+    let result_tool_call_id: Option<String> = if emitted_calls_this_record {
+        // Queue was just populated by this planner record — keep it; emit no id here.
+        None
+    } else if is_tool_result {
+        let adjacent = match (pending.next_result_step, obj.step_index) {
+            (Some(expected), Some(result_step)) => result_step == expected,
+            // step_index is guaranteed present for antigravity records; any absence
+            // is treated as a mismatch and fails closed.
+            _ => false,
+        };
+        if adjacent {
+            let id = pending.call_ids.pop_front();
+            if id.is_some() {
+                // Next call in this planner pairs to the following result step.
+                pending.next_result_step = obj.step_index.map(|step| step + 1);
+            }
+            id
+        } else {
+            // Result at an unexpected step — interleaving/mismatch; fail closed.
+            *pending = AntigravityPending::default();
+            None
+        }
+    } else {
+        // SYSTEM, assistant `_RESPONSE` content, or any other antigravity record
+        // interleaves a pending call; fail closed.
+        *pending = AntigravityPending::default();
+        None
+    };
 
     if let Some(content) = obj.content.as_deref() {
         let text = content.trim();
@@ -1702,6 +1878,8 @@ fn extract_antigravity_events(
             Role::Tool
         };
         let is_tool_role = matches!(role, Role::Tool);
+        let tool_call_id = result_tool_call_id;
+
         let (content_text, tool_name, tool_output_text, raw_type) = match &role {
             Role::Tool => (
                 None,
@@ -1729,7 +1907,7 @@ fn extract_antigravity_events(
             tool_name,
             tool_input_json: None,
             tool_output_text,
-            tool_call_id: None,
+            tool_call_id,
             source_offset: line_offset,
             raw_type: raw_type.to_string(),
             raw_line: if emitted_raw_line {
@@ -4172,12 +4350,241 @@ mod tests {
             result.events[2].tool_output_text.as_deref(),
             Some("Summary: files listed.")
         );
+        // The result must inherit the adjacent planner call's id even though the tool
+        // name alias differs (list_dir -> LIST_DIRECTORY). This is the core pairing fix.
+        let call_id = result.events[1].tool_call_id.clone();
+        assert_eq!(call_id.as_deref(), Some("antigravity-1-0"));
+        assert_eq!(result.events[2].tool_call_id, call_id);
         assert_eq!(result.events[3].role, Role::Assistant);
         assert_eq!(result.events[3].content_text.as_deref(), Some("Done."));
+        // The trailing FINAL_RESPONSE is an assistant content record, not a tool result.
+        assert_eq!(result.events[3].tool_call_id, None);
         assert!(result
             .events
             .iter()
             .all(|event| event.session_id == conversation_id));
+    }
+
+    /// Helper: write an antigravity transcript and return its path.
+    fn write_antigravity_transcript(
+        dir: &Path,
+        conversation_id: &str,
+        lines: &[String],
+    ) -> std::path::PathBuf {
+        let transcript_dir = dir
+            .join(".gemini")
+            .join("antigravity")
+            .join("brain")
+            .join(conversation_id)
+            .join(".system_generated")
+            .join("logs");
+        std::fs::create_dir_all(&transcript_dir).unwrap();
+        let path = transcript_dir.join("transcript.jsonl");
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        path
+    }
+
+    #[test]
+    fn test_antigravity_multi_tool_call_planner_pairs_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation_id = "11111111-1111-4111-8111-111111111111";
+        let lines = [
+            serde_json::json!({
+                "step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                "created_at": "2026-05-21T22:27:42Z",
+                "tool_calls": [
+                    {"name": "grep_search", "args": {"Query": "a"}},
+                    {"name": "view_file", "args": {"Path": "b"}}
+                ]
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 1, "source": "MODEL", "type": "GREP_SEARCH", "status": "DONE",
+                "created_at": "2026-05-21T22:27:43Z", "content": "grep output"
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 2, "source": "MODEL", "type": "VIEW_FILE", "status": "DONE",
+                "created_at": "2026-05-21T22:27:44Z", "content": "file output"
+            })
+            .to_string(),
+        ];
+        let path = write_antigravity_transcript(dir.path(), conversation_id, &lines);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        // 2 calls + 2 results
+        let tool_results: Vec<_> = result
+            .events
+            .iter()
+            .filter(|e| e.role == Role::Tool)
+            .collect();
+        assert_eq!(tool_results.len(), 2);
+        // Queue order: first result pairs to first call, second to second.
+        assert_eq!(
+            tool_results[0].tool_call_id.as_deref(),
+            Some("antigravity-0-0")
+        );
+        assert_eq!(
+            tool_results[1].tool_call_id.as_deref(),
+            Some("antigravity-0-1")
+        );
+    }
+
+    #[test]
+    fn test_antigravity_result_without_planner_stays_unpaired() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation_id = "22222222-2222-4222-8222-222222222222";
+        let lines = [serde_json::json!({
+            "step_index": 0, "source": "MODEL", "type": "GREP_SEARCH", "status": "DONE",
+            "created_at": "2026-05-21T22:27:43Z", "content": "orphan result, no planner before it"
+        })
+        .to_string()];
+        let path = write_antigravity_transcript(dir.path(), conversation_id, &lines);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        let tool = result
+            .events
+            .iter()
+            .find(|e| e.role == Role::Tool)
+            .unwrap();
+        assert_eq!(tool.tool_call_id, None);
+    }
+
+    #[test]
+    fn test_antigravity_interleaving_record_clears_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation_id = "33333333-3333-4333-8333-333333333333";
+        let lines = [
+            serde_json::json!({
+                "step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                "created_at": "2026-05-21T22:27:42Z",
+                "tool_calls": [{"name": "grep_search", "args": {"Query": "a"}}]
+            })
+            .to_string(),
+            // A user turn interleaves before any result — the call had no result.
+            serde_json::json!({
+                "step_index": 1, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+                "created_at": "2026-05-21T22:27:43Z",
+                "content": "<USER_REQUEST>\nnevermind\n</USER_REQUEST>"
+            })
+            .to_string(),
+            // A later result must NOT steal the cleared call id.
+            serde_json::json!({
+                "step_index": 2, "source": "MODEL", "type": "GREP_SEARCH", "status": "DONE",
+                "created_at": "2026-05-21T22:27:44Z", "content": "late result"
+            })
+            .to_string(),
+        ];
+        let path = write_antigravity_transcript(dir.path(), conversation_id, &lines);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        let tool = result
+            .events
+            .iter()
+            .find(|e| e.role == Role::Tool)
+            .unwrap();
+        assert_eq!(tool.tool_call_id, None);
+    }
+
+    #[test]
+    fn test_antigravity_non_model_record_between_planner_and_result_clears_pending() {
+        // A non-MODEL antigravity record interleaving a pending call must fail closed,
+        // so a later genuine result does not steal the call id.
+        let dir = tempfile::tempdir().unwrap();
+        let conversation_id = "55555555-5555-4555-8555-555555555555";
+        let lines = [
+            serde_json::json!({
+                "step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                "created_at": "2026-05-21T22:27:42Z",
+                "tool_calls": [{"name": "grep_search", "args": {"Query": "a"}}]
+            })
+            .to_string(),
+            // A SYSTEM record interleaves (not a MODEL tool result).
+            serde_json::json!({
+                "step_index": 1, "source": "SYSTEM", "type": "CHECKPOINT", "status": "DONE",
+                "created_at": "2026-05-21T22:27:43Z", "content": "checkpoint saved"
+            })
+            .to_string(),
+            serde_json::json!({
+                "step_index": 2, "source": "MODEL", "type": "GREP_SEARCH", "status": "DONE",
+                "created_at": "2026-05-21T22:27:44Z", "content": "late result"
+            })
+            .to_string(),
+        ];
+        let path = write_antigravity_transcript(dir.path(), conversation_id, &lines);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        let tool = result
+            .events
+            .iter()
+            .find(|e| e.role == Role::Tool)
+            .unwrap();
+        assert_eq!(tool.tool_call_id, None);
+    }
+
+    #[test]
+    fn test_antigravity_result_at_wrong_step_does_not_pair() {
+        // A MODEL result whose step_index is not the expected next step must not pair,
+        // and must clear pending so nothing else pairs to it either.
+        let dir = tempfile::tempdir().unwrap();
+        let conversation_id = "66666666-6666-4666-8666-666666666666";
+        let lines = [
+            serde_json::json!({
+                "step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                "created_at": "2026-05-21T22:27:42Z",
+                "tool_calls": [{"name": "grep_search", "args": {"Query": "a"}}]
+            })
+            .to_string(),
+            // Result jumps to step 5 (expected was 1) — treat as non-adjacent.
+            serde_json::json!({
+                "step_index": 5, "source": "MODEL", "type": "GREP_SEARCH", "status": "DONE",
+                "created_at": "2026-05-21T22:27:44Z", "content": "far result"
+            })
+            .to_string(),
+        ];
+        let path = write_antigravity_transcript(dir.path(), conversation_id, &lines);
+
+        let result = parse_session_file(&path, 0).unwrap();
+        let tool = result
+            .events
+            .iter()
+            .find(|e| e.role == Role::Tool)
+            .unwrap();
+        assert_eq!(tool.tool_call_id, None);
+    }
+
+    #[test]
+    fn test_antigravity_seeds_pending_across_resume_offset() {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation_id = "44444444-4444-4444-8444-444444444444";
+        let planner = serde_json::json!({
+            "step_index": 5, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+            "created_at": "2026-05-21T22:27:42Z",
+            "tool_calls": [{"name": "grep_search", "args": {"Query": "a"}}]
+        })
+        .to_string();
+        let result_line = serde_json::json!({
+            "step_index": 6, "source": "MODEL", "type": "GREP_SEARCH", "status": "DONE",
+            "created_at": "2026-05-21T22:27:43Z", "content": "result in the next batch"
+        })
+        .to_string();
+        let path = write_antigravity_transcript(
+            dir.path(),
+            conversation_id,
+            &[planner.clone(), result_line],
+        );
+
+        // Resume offset lands right after the planner line — simulating the shipper
+        // having already acked the planner in a prior batch.
+        let resume_offset = (planner.len() + 1) as u64;
+        let result = parse_session_file(&path, resume_offset).unwrap();
+
+        let tool = result
+            .events
+            .iter()
+            .find(|e| e.role == Role::Tool)
+            .expect("result event present in resumed batch");
+        assert_eq!(tool.tool_call_id.as_deref(), Some("antigravity-5-0"));
     }
 
     #[test]
