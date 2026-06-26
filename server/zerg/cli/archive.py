@@ -687,6 +687,37 @@ def scan_orphan_tool_results_command(
     )
 
 
+@app.command("ensure-tool-result-repair-indexes")
+def ensure_tool_result_repair_indexes_command(
+    database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Create the optional indexes used by orphan tool-result repair scans."""
+
+    settings = get_settings()
+    effective_database_url = database_url or settings.database_url
+
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+    from zerg.services.tool_result_repair import ensure_tool_result_repair_indexes
+
+    started = time.monotonic()
+    engine = make_engine(effective_database_url)
+    SessionLocal = make_sessionmaker(engine)
+    try:
+        with SessionLocal() as db:
+            indexes = ensure_tool_result_repair_indexes(db)
+            db.commit()
+    finally:
+        engine.dispose()
+
+    payload = {"ok": True, "indexes": indexes, "elapsed_seconds": round(time.monotonic() - started, 3)}
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    typer.echo("tool-result repair indexes ready: " f"indexes={','.join(indexes)} elapsed_seconds={payload['elapsed_seconds']}")
+
+
 @app.command("repair-orphan-tool-results")
 def repair_orphan_tool_results_command(
     database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override."),

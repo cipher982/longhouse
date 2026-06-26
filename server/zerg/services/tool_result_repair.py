@@ -14,6 +14,7 @@ from typing import Any
 from typing import Literal
 from uuid import UUID
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import aliased
 
@@ -29,6 +30,29 @@ from zerg.services.shipper.parser import ParsedEvent
 from zerg.services.shipper.parser import parse_tool_result_events_from_raw_line
 
 _RECOVERED_OUTPUT_PREVIEW_CHARS = 500
+_TOOL_RESULT_REPAIR_INDEXES: tuple[tuple[str, str], ...] = (
+    (
+        "ix_events_orphan_tool_call_scan",
+        """
+        CREATE INDEX IF NOT EXISTS ix_events_orphan_tool_call_scan
+        ON events(id, session_id, branch_id, tool_call_id)
+        WHERE event_origin = 'durable'
+          AND role = 'assistant'
+          AND tool_name IS NOT NULL
+          AND tool_call_id IS NOT NULL
+        """,
+    ),
+    (
+        "ix_events_tool_result_pair",
+        """
+        CREATE INDEX IF NOT EXISTS ix_events_tool_result_pair
+        ON events(session_id, branch_id, tool_call_id)
+        WHERE event_origin = 'durable'
+          AND role = 'tool'
+          AND tool_call_id IS NOT NULL
+        """,
+    ),
+)
 
 ToolResultFindingStatus = Literal[
     "recoverable",
@@ -84,6 +108,15 @@ class _OrphanToolResultEvaluation:
     finding: OrphanToolResultFinding
     parsed_event: ParsedEvent | None = None
     raw_json_for_event: str | None = None
+
+
+def ensure_tool_result_repair_indexes(db: Session) -> list[str]:
+    """Create the optional heavy indexes used by orphan tool-result repair scans."""
+    created: list[str] = []
+    for name, ddl in _TOOL_RESULT_REPAIR_INDEXES:
+        db.execute(text(ddl))
+        created.append(name)
+    return created
 
 
 def scan_orphan_tool_results(

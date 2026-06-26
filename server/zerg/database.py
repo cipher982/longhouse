@@ -1463,29 +1463,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 )
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_event_origin ON events(event_origin)"))
                 conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_provisional_state ON events(provisional_state)"))
-                conn.execute(
-                    text(
-                        """
-                        CREATE INDEX IF NOT EXISTS ix_events_orphan_tool_call_scan
-                        ON events(id, session_id, branch_id, tool_call_id)
-                        WHERE event_origin = 'durable'
-                          AND role = 'assistant'
-                          AND tool_name IS NOT NULL
-                          AND tool_call_id IS NOT NULL
-                        """
-                    )
-                )
-                conn.execute(
-                    text(
-                        """
-                        CREATE INDEX IF NOT EXISTS ix_events_tool_result_pair
-                        ON events(session_id, branch_id, tool_call_id)
-                        WHERE event_origin = 'durable'
-                          AND role = 'tool'
-                          AND tool_call_id IS NOT NULL
-                        """
-                    )
-                )
                 if "event_origin" in columns:
                     conn.execute(text("DELETE FROM events WHERE event_origin = 'live_provisional'"))
                 conn.commit()

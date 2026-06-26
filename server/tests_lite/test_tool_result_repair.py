@@ -8,6 +8,7 @@ from datetime import timezone
 from uuid import UUID
 from uuid import uuid4
 
+from sqlalchemy import text
 from typer.testing import CliRunner
 
 from zerg.cli.main import app
@@ -622,6 +623,67 @@ def test_archive_scan_orphan_tool_results_cli_rejects_bad_session_id(tmp_path):
 
     assert result.exit_code != 0
     assert "--session-id must be a valid UUID" in _strip_ansi(result.output)
+
+
+def test_archive_ensure_tool_result_repair_indexes_cli_creates_missing_indexes(tmp_path):
+    db_path = tmp_path / "longhouse.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(text("DROP INDEX IF EXISTS ix_events_orphan_tool_call_scan"))
+        conn.execute(text("DROP INDEX IF EXISTS ix_events_tool_result_pair"))
+        before = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'index'
+                      AND name IN ('ix_events_orphan_tool_call_scan', 'ix_events_tool_result_pair')
+                    """
+                )
+            ).fetchall()
+        }
+    engine.dispose()
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "archive",
+            "ensure-tool-result-repair-indexes",
+            "--database-url",
+            f"sqlite:///{db_path}",
+            "--json",
+        ],
+    )
+
+    assert before == set()
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is True
+    assert set(payload["indexes"]) == {
+        "ix_events_orphan_tool_call_scan",
+        "ix_events_tool_result_pair",
+    }
+
+    engine = make_engine(f"sqlite:///{db_path}")
+    with engine.connect() as conn:
+        after = {
+            row[0]
+            for row in conn.execute(
+                text(
+                    """
+                    SELECT name
+                    FROM sqlite_master
+                    WHERE type = 'index'
+                      AND name IN ('ix_events_orphan_tool_call_scan', 'ix_events_tool_result_pair')
+                    """
+                )
+            ).fetchall()
+        }
+    engine.dispose()
+    assert after == set(payload["indexes"])
 
 
 def test_archive_repair_orphan_tool_results_cli_defaults_to_dry_run(tmp_path):
