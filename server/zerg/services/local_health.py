@@ -99,6 +99,7 @@ LAUNCH_CAPABILITY_BY_PROVIDER = machine_control_launch_capability_by_provider()
 CODEX_BIN_ENV = PROVIDER_CLI_ENV_BY_PROVIDER["codex"]
 OPENCODE_BIN_ENV = PROVIDER_CLI_ENV_BY_PROVIDER["opencode"]
 ANTIGRAVITY_BIN_ENV = PROVIDER_CLI_ENV_BY_PROVIDER["antigravity"]
+_ZOMBIE_PROCESS_STATUSES = frozenset({"z", "zombie"})
 
 
 def _utc_now() -> datetime:
@@ -1489,7 +1490,14 @@ def _codex_bridge_live_runtime_ingest_health(log_file: str | None) -> dict[str, 
             _update_max_health_number(health, "slow_max_queue_wait_ms", _extract_log_number(line, "queue_wait_ms"))
             _update_max_health_number(health, "slow_max_exec_ms", _extract_log_number(line, "exec_ms"))
 
-    terminal_failures = health["network_error_count"] + health["failed_count"] + health["dropped_count"] + health["cloudflare_502_count"]
+    terminal_failures = sum(
+        [
+            health["network_error_count"],
+            health["failed_count"],
+            health["dropped_count"],
+            health["cloudflare_502_count"],
+        ]
+    )
     if terminal_failures:
         health["status"] = "broken"
     elif health["retry_count"] or health["slow_count"]:
@@ -1524,15 +1532,16 @@ def _compute_process_snapshot() -> tuple[list[dict[str, Any]], list[dict[str, An
     process_rows: list[dict[str, Any]] = []
     provider_processes: list[dict[str, Any]] = []
 
-    for proc in psutil.process_iter(["pid", "ppid", "cmdline", "create_time"]):
+    for proc in psutil.process_iter(["pid", "ppid", "cmdline", "create_time", "status"]):
         try:
             info = proc.info
             cmdline = [str(arg) for arg in (info.get("cmdline") or []) if str(arg)]
             command = " ".join(cmdline)
             pid = int(info.get("pid") or 0)
             ppid = int(info.get("ppid") or 0)
+            status = _normalize_optional_string(info.get("status"))
             if pid > 0 and command:
-                process_rows.append({"pid": pid, "ppid": ppid, "command": command})
+                process_rows.append({"pid": pid, "ppid": ppid, "command": command, "status": status})
 
             if proc.uids().real != me:
                 continue
@@ -2009,6 +2018,14 @@ def _process_row_by_pid(process_rows: list[dict[str, Any]], pid: object) -> dict
     return None
 
 
+def _process_row_is_zombie(row: Mapping[str, Any] | None) -> bool:
+    status = _normalize_optional_string(row.get("status") if row else None)
+    if status is None:
+        return False
+    normalized = status.lower()
+    return normalized in _ZOMBIE_PROCESS_STATUSES or normalized.startswith("z")
+
+
 def _find_codex_app_server_process(
     process_rows: list[dict[str, Any]],
     *,
@@ -2016,9 +2033,16 @@ def _find_codex_app_server_process(
     state: dict[str, Any],
 ) -> dict[str, Any] | None:
     by_recorded_pid = _process_row_by_pid(process_rows, state.get("app_server_pid"))
-    if by_recorded_pid is not None and " app-server " in str(by_recorded_pid.get("command") or ""):
+    if (
+        by_recorded_pid is not None
+        and not _process_row_is_zombie(by_recorded_pid)
+        and " app-server " in str(by_recorded_pid.get("command") or "")
+    ):
         return by_recorded_pid
-    return _find_bridge_child_process(process_rows, bridge_pid=bridge_pid, needle=" app-server ")
+    child = _find_bridge_child_process(process_rows, bridge_pid=bridge_pid, needle=" app-server ")
+    if _process_row_is_zombie(child):
+        return None
+    return child
 
 
 def _binding_by_session_id(base_dir: Path) -> dict[str, dict[str, str | None]]:
@@ -2744,6 +2768,45 @@ def _collect_resolved_sessions_from_engine_status(
         reverse=True,
     )
     return managed_sessions, unmanaged_processes
+
+
+def _mark_managed_session_degraded(row: dict[str, Any], reason: str) -> dict[str, Any]:
+    reason_codes = list(row.get("reason_codes") or []) if isinstance(row.get("reason_codes"), list) else []
+    if reason not in reason_codes:
+        reason_codes.append(reason)
+    row["reason_codes"] = reason_codes
+    if row.get("state") == "attached":
+        row["state"] = "degraded"
+    if row.get("ui_presence") == "background":
+        row["ui_presence"] = "degraded"
+    return row
+
+
+def _resolved_engine_session_app_server_is_live(row: Mapping[str, Any], process_rows: list[dict[str, Any]]) -> bool:
+    app_server_pid = _normalize_optional_int(row.get("app_server_pid"))
+    if app_server_pid is None:
+        return False
+    process_row = _process_row_by_pid(process_rows, app_server_pid)
+    if process_row is None or _process_row_is_zombie(process_row):
+        return False
+    return " app-server " in str(process_row.get("command") or "")
+
+
+def _validate_resolved_engine_managed_sessions(
+    managed_sessions: list[dict[str, Any]],
+    *,
+    process_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not process_rows:
+        return managed_sessions
+    validated: list[dict[str, Any]] = []
+    for row in managed_sessions:
+        row = dict(row)
+        if row.get("provider") == "codex" and row.get("bridge_status") == "ready":
+            if not _resolved_engine_session_app_server_is_live(row, process_rows):
+                row = _mark_managed_session_degraded(row, "live_control_unavailable")
+        validated.append(row)
+    return validated
 
 
 def _resolved_sessions_unusable_summary(issue: str | None) -> dict[str, Any]:
@@ -4003,6 +4066,12 @@ def _collect_managed_session_sources(
     resolved_sessions = _collect_resolved_sessions_from_engine_status(engine_status)
     if resolved_sessions is not None:
         managed_sessions, unmanaged_processes = resolved_sessions
+        if not fast:
+            process_rows = _collect_process_rows()
+            managed_sessions = _validate_resolved_engine_managed_sessions(
+                managed_sessions,
+                process_rows=process_rows,
+            )
         managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
             bridge_sessions=[],
             bridge_orphans=[],

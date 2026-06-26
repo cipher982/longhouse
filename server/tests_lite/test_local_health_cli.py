@@ -1917,6 +1917,65 @@ def test_collect_local_health_treats_detached_ui_ready_codex_bridge_as_attached(
     assert snapshot["managed_sessions"][0]["ui_presence"] == "background"
 
 
+def test_collect_local_health_degrades_zombie_codex_app_server_from_bridge_state(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    rollout_path = tmp_path / "sessions" / "2026" / "05" / "13" / "rollout-zombie.jsonl"
+    rollout_path.parent.mkdir(parents=True, exist_ok=True)
+    rollout_path.write_text("{}\n")
+    _write_session_binding_rows(
+        tmp_path,
+        [(str(rollout_path), "sess-zombie", "codex", "2026-05-13T23:59:36Z")],
+    )
+
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
+    _write_codex_bridge_state(
+        state_dir,
+        "sess-zombie",
+        {
+            "session_id": "sess-zombie",
+            "pid": 7771,
+            "app_server_pid": 7772,
+            "codex_bin": "/opt/homebrew/bin/codex",
+            "launch_mode": "detached_ui",
+            "ws_url": "ws://127.0.0.1:49760",
+            "cwd": "/Users/test/git/zerg",
+            "status": "ready",
+            "thread_id": "thread-zombie",
+            "thread_path": str(rollout_path),
+            "updated_at": "2026-05-13T23:59:39Z",
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-zombie"},
+            {
+                "pid": 7772,
+                "ppid": 7771,
+                "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0",
+                "status": "zombie",
+            },
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["managed_summary"]["attached_count"] == 0
+    assert snapshot["managed_summary"]["degraded_count"] == 1
+    assert "managed_session_control_degraded" in snapshot["reasons"]
+    session = snapshot["managed_sessions"][0]
+    assert session["session_id"] == "sess-zombie"
+    assert session["state"] == "degraded"
+    assert session["ui_presence"] == "degraded"
+    assert session["reason_codes"] == ["live_control_unavailable"]
+
+
 def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
@@ -3842,7 +3901,7 @@ def test_collect_local_health_deep_prefers_resolved_engine_sessions(monkeypatch,
     monkeypatch.setattr(
         local_health_service,
         "_compute_process_snapshot",
-        lambda: (_ for _ in ()).throw(AssertionError("resolved engine sessions are canonical")),
+        lambda: ([], []),
     )
     now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
@@ -3885,6 +3944,75 @@ def test_collect_local_health_deep_prefers_resolved_engine_sessions(monkeypatch,
     assert snapshot["managed_summary"]["degraded_count"] == 0
     assert "managed_session_control_degraded" not in snapshot["reasons"]
     assert snapshot["managed_sessions"][0]["liveness_model"] == "engine_status"
+
+
+def test_collect_local_health_deep_degrades_resolved_codex_zombie_app_server(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (
+            [
+                {"pid": 4202, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-zombie"},
+                {
+                    "pid": 4203,
+                    "ppid": 4202,
+                    "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0",
+                    "status": "zombie",
+                },
+            ],
+            [],
+        ),
+    )
+    now = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    _write_engine_status(
+        tmp_path,
+        age_seconds=1,
+        payload={
+            "sessions": [
+                {
+                    "session_id": "sess-zombie",
+                    "provider": "codex",
+                    "provider_session_id": "thread-codex",
+                    "control_path": "managed",
+                    "presentation_state": "managed_attached",
+                    "state": "attached",
+                    "phase": "thinking",
+                    "tool_name": None,
+                    "phase_observed_at": "2026-05-05T11:59:58Z",
+                    "last_activity_at": "2026-05-05T11:59:58Z",
+                    "workspace": {"cwd": "/Users/test/git/zerg", "label": "zerg"},
+                    "process": {"pid": 4201},
+                    "bridge": {
+                        "bridge_pid": 4202,
+                        "app_server_pid": 4203,
+                        "heartbeat_at": "2026-05-05T11:59:58Z",
+                        "status": "ready",
+                        "thread_subscription_status": "subscribed",
+                        "launch_mode": "detached_ui",
+                        "ui_attached": False,
+                        "ui_presence": "background",
+                    },
+                    "evidence": {"process_observed": True, "transcript_observed": True},
+                    "reason_codes": [],
+                }
+            ],
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["collection_tier"] == "deep"
+    assert snapshot["managed_summary"]["attached_count"] == 0
+    assert snapshot["managed_summary"]["degraded_count"] == 1
+    assert "managed_session_control_degraded" in snapshot["reasons"]
+    session = snapshot["managed_sessions"][0]
+    assert session["liveness_model"] == "engine_status"
+    assert session["state"] == "degraded"
+    assert session["ui_presence"] == "degraded"
+    assert session["reason_codes"] == ["live_control_unavailable"]
 
 
 def test_collect_local_health_deep_falls_back_when_resolved_sessions_absent(monkeypatch, tmp_path: Path):
@@ -3953,7 +4081,8 @@ def test_collect_local_health_surfaces_codex_bridge_live_runtime_ingest_health(m
     log_file.write_text(
         "\n".join(
             [
-                "[codex-bridge] live runtime ingest slow elapsed_ms=1200 queue_wait_ms=Some(980.5) exec_ms=Some(8.0) event_count=1",
+                "[codex-bridge] live runtime ingest slow elapsed_ms=1200 "
+                "queue_wait_ms=Some(980.5) exec_ms=Some(8.0) event_count=1",
                 "[codex-bridge] live runtime ingest retrying after error: error sending request for url (https://example.longhouse.ai/api/agents/runtime/events/batch)",
                 "[codex-bridge] runtime ingest network error: error sending request for url (https://example.longhouse.ai/api/agents/runtime/events/batch)",
             ]
