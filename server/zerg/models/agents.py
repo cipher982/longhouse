@@ -300,6 +300,21 @@ class AgentEvent(AgentsBase):
         Index("ix_events_session_timestamp", "session_id", "timestamp"),
         Index("ix_events_session_branch_timestamp", "session_id", "branch_id", "timestamp"),
         Index("ix_events_role_tool", "role", "tool_name"),
+        Index(
+            "ix_events_orphan_tool_call_scan",
+            "id",
+            "session_id",
+            "branch_id",
+            "tool_call_id",
+            sqlite_where=text("event_origin = 'durable' AND role = 'assistant' " "AND tool_name IS NOT NULL AND tool_call_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_events_tool_result_pair",
+            "session_id",
+            "branch_id",
+            "tool_call_id",
+            sqlite_where=text("event_origin = 'durable' AND role = 'tool' AND tool_call_id IS NOT NULL"),
+        ),
     )
 
 

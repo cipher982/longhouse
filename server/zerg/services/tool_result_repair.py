@@ -14,8 +14,6 @@ from typing import Any
 from typing import Literal
 from uuid import UUID
 
-from sqlalchemy import and_
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import aliased
 
@@ -59,6 +57,7 @@ class OrphanToolResultFinding:
 @dataclass(frozen=True)
 class OrphanToolResultScanResult:
     scanned_orphan_calls: int
+    last_event_id: int | None
     recoverable: int
     no_source_evidence: int
     no_result_in_source: int
@@ -70,6 +69,7 @@ class OrphanToolResultScanResult:
 class OrphanToolResultRepairResult:
     dry_run: bool
     scanned_orphan_calls: int
+    last_event_id: int | None
     recoverable: int
     inserted: int
     skipped_existing: int
@@ -90,6 +90,7 @@ def scan_orphan_tool_results(
     db: Session,
     *,
     session_id: UUID | str | None = None,
+    after_event_id: int | None = None,
     limit: int = 500,
     max_source_lines_per_call: int = 500,
     archive_store: FilesystemArchiveStore | None = None,
@@ -97,11 +98,14 @@ def scan_orphan_tool_results(
     """Classify orphaned assistant tool calls without mutating the database."""
     if limit < 1:
         raise ValueError("limit must be at least 1")
+    if after_event_id is not None and after_event_id < 0:
+        raise ValueError("after_event_id must be non-negative")
     if max_source_lines_per_call < 1:
         raise ValueError("max_source_lines_per_call must be at least 1")
 
     findings: list[OrphanToolResultFinding] = []
-    for call in _orphan_tool_calls(db, session_id=session_id, limit=limit):
+    calls = _orphan_tool_calls(db, session_id=session_id, after_event_id=after_event_id, limit=limit)
+    for call in calls:
         try:
             evaluation = _evaluate_orphan_call(
                 db,
@@ -115,6 +119,7 @@ def scan_orphan_tool_results(
     counts = _finding_counts(findings)
     return OrphanToolResultScanResult(
         scanned_orphan_calls=len(findings),
+        last_event_id=max((int(call.id) for call in calls), default=None),
         recoverable=counts["recoverable"],
         no_source_evidence=counts["no_source_evidence"],
         no_result_in_source=counts["no_result_in_source"],
@@ -127,6 +132,7 @@ def repair_orphan_tool_results(
     db: Session,
     *,
     session_id: UUID | str | None = None,
+    after_event_id: int | None = None,
     limit: int = 500,
     max_source_lines_per_call: int = 500,
     archive_store: FilesystemArchiveStore | None = None,
@@ -139,13 +145,16 @@ def repair_orphan_tool_results(
     """
     if limit < 1:
         raise ValueError("limit must be at least 1")
+    if after_event_id is not None and after_event_id < 0:
+        raise ValueError("after_event_id must be non-negative")
     if max_source_lines_per_call < 1:
         raise ValueError("max_source_lines_per_call must be at least 1")
 
     findings: list[OrphanToolResultFinding] = []
     inserted = 0
     skipped_existing = 0
-    for call in _orphan_tool_calls(db, session_id=session_id, limit=limit):
+    calls = _orphan_tool_calls(db, session_id=session_id, after_event_id=after_event_id, limit=limit)
+    for call in calls:
         try:
             evaluation = _evaluate_orphan_call(
                 db,
@@ -173,6 +182,7 @@ def repair_orphan_tool_results(
     return OrphanToolResultRepairResult(
         dry_run=not apply,
         scanned_orphan_calls=len(findings),
+        last_event_id=max((int(call.id) for call in calls), default=None),
         recoverable=counts["recoverable"],
         inserted=inserted,
         skipped_existing=skipped_existing,
@@ -187,13 +197,11 @@ def _orphan_tool_calls(
     db: Session,
     *,
     session_id: UUID | str | None,
+    after_event_id: int | None,
     limit: int,
 ) -> list[AgentEvent]:
     result = aliased(AgentEvent)
-    same_branch = or_(
-        result.branch_id == AgentEvent.branch_id,
-        and_(result.branch_id.is_(None), AgentEvent.branch_id.is_(None)),
-    )
+    same_branch = result.branch_id.is_not_distinct_from(AgentEvent.branch_id)
     has_matching_result = (
         db.query(result.id)
         .filter(result.session_id == AgentEvent.session_id)
@@ -213,7 +221,9 @@ def _orphan_tool_calls(
     )
     if session_id is not None:
         query = query.filter(AgentEvent.session_id == UUID(str(session_id)))
-    query = query.order_by(AgentEvent.session_id, AgentEvent.timestamp, AgentEvent.id).limit(limit)
+    if after_event_id is not None:
+        query = query.filter(AgentEvent.id > int(after_event_id))
+    query = query.order_by(AgentEvent.id.asc()).limit(limit)
     return query.all()
 
 

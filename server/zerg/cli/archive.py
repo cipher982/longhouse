@@ -628,6 +628,7 @@ def backfill_compaction_kind_command(
 def scan_orphan_tool_results_command(
     database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override."),
     session_id: str | None = typer.Option(None, "--session-id", help="Limit scan to one session UUID."),
+    after_event_id: int | None = typer.Option(None, "--after-event-id", min=0, help="Only scan orphan calls after this events.id cursor."),
     limit: int = typer.Option(500, "--limit", min=1, help="Maximum orphan calls to classify."),
     max_source_lines_per_call: int = typer.Option(
         500,
@@ -664,6 +665,7 @@ def scan_orphan_tool_results_command(
             result = scan_orphan_tool_results(
                 db,
                 session_id=effective_session_id,
+                after_event_id=after_event_id,
                 limit=limit,
                 max_source_lines_per_call=max_source_lines_per_call,
                 archive_store=archive_store,
@@ -678,7 +680,8 @@ def scan_orphan_tool_results_command(
 
     typer.echo(
         "orphan tool-result scan: "
-        f"scanned={result.scanned_orphan_calls} recoverable={result.recoverable} "
+        f"scanned={result.scanned_orphan_calls} last_event_id={result.last_event_id or 'none'} "
+        f"recoverable={result.recoverable} "
         f"no_source={result.no_source_evidence} no_result={result.no_result_in_source} "
         f"unparseable={result.unparseable_result}"
     )
@@ -688,6 +691,7 @@ def scan_orphan_tool_results_command(
 def repair_orphan_tool_results_command(
     database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override."),
     session_id: str | None = typer.Option(None, "--session-id", help="Limit repair to one session UUID."),
+    after_event_id: int | None = typer.Option(None, "--after-event-id", min=0, help="Only scan orphan calls after this events.id cursor."),
     limit: int = typer.Option(500, "--limit", min=1, help="Maximum orphan calls to classify."),
     max_source_lines_per_call: int = typer.Option(
         500,
@@ -726,6 +730,7 @@ def repair_orphan_tool_results_command(
                 result = repair_orphan_tool_results(
                     db,
                     session_id=effective_session_id,
+                    after_event_id=after_event_id,
                     limit=limit,
                     max_source_lines_per_call=max_source_lines_per_call,
                     archive_store=archive_store,
@@ -749,7 +754,8 @@ def repair_orphan_tool_results_command(
     mode = "apply" if apply else "dry-run"
     typer.echo(
         "orphan tool-result repair: "
-        f"mode={mode} scanned={result.scanned_orphan_calls} recoverable={result.recoverable} "
+        f"mode={mode} scanned={result.scanned_orphan_calls} last_event_id={result.last_event_id or 'none'} "
+        f"recoverable={result.recoverable} "
         f"inserted={result.inserted} skipped_existing={result.skipped_existing} "
         f"no_source={result.no_source_evidence} no_result={result.no_result_in_source} "
         f"unparseable={result.unparseable_result}"

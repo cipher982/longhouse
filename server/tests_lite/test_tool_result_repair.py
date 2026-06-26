@@ -238,6 +238,29 @@ def test_scan_recovers_json_object_tool_result(tmp_path):
     assert result.findings[0].recovered_tool_output_text == '{"status":"ok","count":0}'
 
 
+def test_scan_pages_after_event_id_cursor(tmp_path):
+    factory = _factory(tmp_path)
+    session_id = uuid4()
+
+    with factory() as db:
+        _seed_session(db, session_id)
+        first_call = _seed_tool_call(db, session_id, tool_call_id="toolu_first")
+        second_call = _seed_tool_call(db, session_id, tool_call_id="toolu_second")
+        _seed_source_line(db, session_id, raw=_tool_result_raw("toolu_first", "first output"), source_offset=100)
+        _seed_source_line(db, session_id, raw=_tool_result_raw("toolu_second", "second output"), source_offset=200)
+        db.commit()
+
+        first_page = scan_orphan_tool_results(db, session_id=session_id, limit=1)
+        second_page = scan_orphan_tool_results(db, session_id=session_id, after_event_id=first_page.last_event_id, limit=10)
+
+    assert first_page.scanned_orphan_calls == 1
+    assert first_page.last_event_id == first_call.id
+    assert first_page.findings[0].tool_call_id == "toolu_first"
+    assert second_page.scanned_orphan_calls == 1
+    assert second_page.last_event_id == second_call.id
+    assert second_page.findings[0].tool_call_id == "toolu_second"
+
+
 def test_scan_contains_corrupt_source_line_without_aborting_batch(tmp_path):
     factory = _factory(tmp_path)
     session_id = uuid4()
