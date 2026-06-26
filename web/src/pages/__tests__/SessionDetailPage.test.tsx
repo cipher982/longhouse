@@ -1676,6 +1676,7 @@ function renderSessionDetailPageAt(
   initialEntry: string,
   options: {
     session?: AgentSession;
+    projectionItems?: AgentSessionProjectionItem[];
     /** Override the default return value of useAuth for this test. */
     user?: { id: number; email: string; display_name?: string | null } | null;
   } = {},
@@ -1710,7 +1711,7 @@ function renderSessionDetailPageAt(
   });
 
   const session = options.session ?? makeSession();
-  const model = buildTimelineModel([]);
+  const model = buildTimelineModel(options.projectionItems ?? []);
   mockWorkspaceState({ session, model });
 
   return render(
@@ -1829,6 +1830,44 @@ describe("SessionDetailPage — signed copy link + shared attribution", () => {
         share_token: "lhshr_shared",
       }),
     );
+  });
+
+  it("suppresses media tiles on share_token views until media bytes support share auth", () => {
+    renderSessionDetailPageAt("/timeline/session-codex?share_token=lhshr_shared", {
+      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
+      projectionItems: [
+        {
+          kind: "event",
+          session_id: "session-codex",
+          timestamp: "2026-03-22T22:00:01Z",
+          event: {
+            id: 40,
+            role: "assistant",
+            content_text: "Shared transcript row with media.",
+            tool_name: null,
+            tool_input_json: null,
+            tool_output_text: null,
+            tool_call_id: null,
+            timestamp: "2026-03-22T22:00:01Z",
+            in_active_context: true,
+            media_refs: [
+              {
+                sha256: "abc123def4567890",
+                blob_url: "/api/media/abc123/blob",
+                thumb_url: "/api/media/abc123/thumb",
+                mime_type: "image/png",
+                bytes: 1024,
+                media_state: "present",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(screen.getByText("Shared transcript row with media.")).toBeInTheDocument();
+    expect(screen.queryByTestId("session-event-media")).not.toBeInTheDocument();
+    expect(screen.queryByAltText("Session media abc123def456")).not.toBeInTheDocument();
   });
 
   it("does not render the Shared by pill when ?shared_by is absent", () => {

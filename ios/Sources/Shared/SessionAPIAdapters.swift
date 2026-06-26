@@ -223,7 +223,25 @@ extension APIEventResponse {
             inActiveContext: inActiveContext ?? true,
             isHeadBranch: isHeadBranch ?? true,
             inputOrigin: inputOrigin?.sessionInputOrigin,
-            eventOrigin: eventOrigin
+            eventOrigin: eventOrigin,
+            mediaRefs: mediaRefs?.map(\.sessionEventMediaRef) ?? []
+        )
+    }
+}
+
+extension APIEventMediaRefResponse {
+    var sessionEventMediaRef: SessionEventMediaRef {
+        SessionEventMediaRef(
+            sha256: sha256,
+            mediaState: mediaState,
+            mimeType: mimeType,
+            byteSize: byteSize,
+            blobUrl: blobUrl,
+            thumbUrl: thumbUrl,
+            sourcePath: sourcePath,
+            sourceOffset: sourceOffset,
+            jsonPointer: jsonPointer,
+            originalKind: originalKind
         )
     }
 }

@@ -6,6 +6,7 @@ import OSLog
 /// Renders the transcript body in WebKit while leaving the session chrome,
 /// runtime controls, and composer native.
 struct WebTranscriptView: UIViewRepresentable {
+    let serverURL: String
     let items: [TimelineItem]
     let submittedInputs: [SubmittedInput]
     let errorMessage: String?
@@ -18,6 +19,7 @@ struct WebTranscriptView: UIViewRepresentable {
     let onLifecycle: ((String) -> Void)?
 
     init(
+        serverURL: String,
         items: [TimelineItem],
         submittedInputs: [SubmittedInput],
         errorMessage: String?,
@@ -26,6 +28,7 @@ struct WebTranscriptView: UIViewRepresentable {
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
         onLifecycle: ((String) -> Void)? = nil
     ) {
+        self.serverURL = serverURL
         self.items = items
         self.submittedInputs = submittedInputs
         self.errorMessage = errorMessage
@@ -57,21 +60,19 @@ struct WebTranscriptView: UIViewRepresentable {
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
         context.coordinator.webView = webView
-        context.coordinator.isLoaded = pooled.isLoaded
+        context.coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
+        context.coordinator.isLoaded = false
         let lifecycleStage = pooled.reused ? "webview_reused" : "webview_make"
         Task { @MainActor in
             onLifecycle?(lifecycleStage)
-            if pooled.reused && pooled.isLoaded {
-                onLifecycle?("webview_html_loaded")
-            }
         }
-        if !pooled.isLoaded {
-            webView.loadHTMLString(Self.documentHTML, baseURL: nil)
-        }
+        context.coordinator.loadDocument(serverURL: serverURL, on: webView)
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.configureMediaAuth(serverURL: serverURL, on: webView)
+        context.coordinator.ensureDocumentServerURL(serverURL, on: webView)
         context.coordinator.updateBottomInset(bottomInset, on: webView)
         context.coordinator.send(
             preparedPayload(),
@@ -85,6 +86,7 @@ struct WebTranscriptView: UIViewRepresentable {
 
     private func preparedPayload() -> WebTranscriptPreparedPayload {
         Self.preparedPayload(
+            serverURL: serverURL,
             timelineItems: items,
             submittedInputs: submittedInputs,
             errorMessage: errorMessage
@@ -92,6 +94,7 @@ struct WebTranscriptView: UIViewRepresentable {
     }
 
     nonisolated static func preparedPayload(
+        serverURL: String? = nil,
         timelineItems: [TimelineItem],
         submittedInputs: [SubmittedInput],
         errorMessage: String?
@@ -99,6 +102,7 @@ struct WebTranscriptView: UIViewRepresentable {
         let payload = WebTranscriptPayload(
             errorMessage: errorMessage,
             items: Self.payloadItems(
+                serverURL: serverURL,
                 timelineItems: timelineItems,
                 submittedInputs: submittedInputs
             )
@@ -124,13 +128,14 @@ struct WebTranscriptView: UIViewRepresentable {
     }
 
     nonisolated static func payloadItems(
+        serverURL: String? = nil,
         timelineItems: [TimelineItem],
         submittedInputs: [SubmittedInput]
     ) -> [WebTranscriptPayloadItem] {
         let durableUserInputs = durableUserInputIdentities(timelineItems)
         let visibleSubmittedInputs = submittedInputs.filter { !durableUserInputs.contains($0) }
         guard !visibleSubmittedInputs.isEmpty else {
-            return timelineItems.map(payloadItem)
+            return timelineItems.map { payloadItem($0, serverURL: serverURL) }
         }
 
         var rows: [WebTranscriptPayloadItem] = []
@@ -147,7 +152,7 @@ struct WebTranscriptView: UIViewRepresentable {
                     remainingSubmittedInputs.removeAll { insertionIds.contains($0.id) }
                 }
             }
-            rows.append(payloadItem(item))
+            rows.append(payloadItem(item, serverURL: serverURL))
         }
 
         rows.append(contentsOf: remainingSubmittedInputs.map(payloadSubmittedInput))
@@ -199,18 +204,30 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
-    private nonisolated static func payloadItem(_ item: TimelineItem) -> WebTranscriptPayloadItem {
+    private nonisolated static func payloadItem(_ item: TimelineItem, serverURL: String?) -> WebTranscriptPayloadItem {
         switch item {
         case .user(let event):
-            return messagePayload(id: item.id, role: "user", text: event.contentText ?? "", origin: event.inputOrigin?.authoredVia)
+            return messagePayload(
+                id: item.id,
+                role: "user",
+                text: event.contentText ?? "",
+                origin: event.inputOrigin?.authoredVia,
+                mediaRefs: payloadMediaRefs(event.mediaRefs, serverURL: serverURL)
+            )
         case .assistant(let event):
-            return messagePayload(id: item.id, role: "assistant", text: event.contentText ?? "", origin: nil)
+            return messagePayload(
+                id: item.id,
+                role: "assistant",
+                text: event.contentText ?? "",
+                origin: nil,
+                mediaRefs: payloadMediaRefs(event.mediaRefs, serverURL: serverURL)
+            )
         case .tool(let call, let result, _):
-            return toolPayload(id: item.id, call: call, result: result)
+            return toolPayload(id: item.id, call: call, result: result, serverURL: serverURL)
         case .orphanTool(let event):
-            return toolPayload(id: item.id, call: event, result: event, orphan: true)
+            return toolPayload(id: item.id, call: event, result: event, orphan: true, serverURL: serverURL)
         case .passiveGroup(let calls):
-            return passiveGroupPayload(id: item.id, calls: calls)
+            return passiveGroupPayload(id: item.id, calls: calls, serverURL: serverURL)
         }
     }
 
@@ -218,7 +235,8 @@ struct WebTranscriptView: UIViewRepresentable {
         id: String,
         role: String,
         text: String,
-        origin: SessionInputAuthoredVia?
+        origin: SessionInputAuthoredVia?,
+        mediaRefs: [WebTranscriptMediaRef]? = nil
     ) -> WebTranscriptPayloadItem {
         let displayText = text
         let collapsed = TranscriptTextPolicy.shouldCollapseMessage(displayText)
@@ -236,7 +254,8 @@ struct WebTranscriptView: UIViewRepresentable {
             input: nil,
             output: nil,
             calls: [],
-            origin: origin?.payloadValue
+            origin: origin?.payloadValue,
+            media: mediaRefs
         )
     }
 
@@ -255,7 +274,8 @@ struct WebTranscriptView: UIViewRepresentable {
             input: nil,
             output: nil,
             calls: [],
-            origin: nil
+            origin: nil,
+            media: nil
         )
     }
 
@@ -333,7 +353,8 @@ struct WebTranscriptView: UIViewRepresentable {
         id: String,
         call: SessionEvent,
         result: SessionEvent?,
-        orphan: Bool = false
+        orphan: Bool = false,
+        serverURL: String?
     ) -> WebTranscriptPayloadItem {
         let toolName = call.toolName ?? "Tool"
         if toolName == "AskUserQuestion" {
@@ -366,7 +387,8 @@ struct WebTranscriptView: UIViewRepresentable {
             input: prettyJSON(call.toolInputJSON) ?? TimelineBuilder.inputSummary(for: call),
             output: truncatedOutput(result?.toolOutputText),
             calls: [],
-            origin: nil
+            origin: nil,
+            media: payloadMediaRefs(call.mediaRefs + (result?.mediaRefs ?? []), serverURL: serverURL)
         )
     }
 
@@ -384,7 +406,8 @@ struct WebTranscriptView: UIViewRepresentable {
                 subtitle: option.description ?? "",
                 status: "option",
                 input: nil,
-                output: nil
+                output: nil,
+                media: nil
             )
         }
         return WebTranscriptPayloadItem(
@@ -401,13 +424,15 @@ struct WebTranscriptView: UIViewRepresentable {
             input: nil,
             output: nil,
             calls: options,
-            origin: nil
+            origin: nil,
+            media: nil
         )
     }
 
     private nonisolated static func passiveGroupPayload(
         id: String,
-        calls: [PassiveCall]
+        calls: [PassiveCall],
+        serverURL: String?
     ) -> WebTranscriptPayloadItem {
         var counts: [(String, Int)] = []
         for passive in calls {
@@ -433,7 +458,8 @@ struct WebTranscriptView: UIViewRepresentable {
                 subtitle: TimelineBuilder.inputSummary(for: passive.call),
                 status: status,
                 input: prettyJSON(passive.call.toolInputJSON) ?? TimelineBuilder.inputSummary(for: passive.call),
-                output: truncatedOutput(passive.result?.toolOutputText)
+                output: truncatedOutput(passive.result?.toolOutputText),
+                media: payloadMediaRefs(passive.call.mediaRefs + (passive.result?.mediaRefs ?? []), serverURL: serverURL)
             )
         }
 
@@ -451,8 +477,55 @@ struct WebTranscriptView: UIViewRepresentable {
             input: nil,
             output: nil,
             calls: childCalls,
-            origin: nil
+            origin: nil,
+            media: nil
         )
+    }
+
+    private nonisolated static func payloadMediaRefs(
+        _ refs: [SessionEventMediaRef],
+        serverURL: String?
+    ) -> [WebTranscriptMediaRef]? {
+        var seen = Set<String>()
+        let media = refs.compactMap { ref -> WebTranscriptMediaRef? in
+            let dedupeURL = ref.thumbUrl ?? ref.blobUrl ?? ""
+            let dedupeKey = "\(ref.sha256):\(dedupeURL)"
+            guard !seen.contains(dedupeKey) else {
+                return nil
+            }
+            seen.insert(dedupeKey)
+            let imageLike = ref.mimeType?.hasPrefix("image/") ?? true
+            let visibleURL = ref.mediaState == "present" && imageLike
+                ? absoluteMediaURL(ref.thumbUrl ?? ref.blobUrl, serverURL: serverURL)
+                : nil
+            if visibleURL == nil && ref.mediaState == "present" {
+                return nil
+            }
+            return WebTranscriptMediaRef(
+                sha256: ref.sha256,
+                url: visibleURL,
+                blobUrl: absoluteMediaURL(ref.blobUrl, serverURL: serverURL),
+                mediaState: ref.mediaState,
+                mimeType: ref.mimeType
+            )
+        }
+        return media.isEmpty ? nil : media
+    }
+
+    private nonisolated static func absoluteMediaURL(_ rawURL: String?, serverURL: String?) -> String? {
+        guard let rawURL = rawURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rawURL.isEmpty else {
+            return nil
+        }
+        if URL(string: rawURL)?.scheme != nil {
+            return rawURL
+        }
+        guard let serverURL,
+              let base = URL(string: serverURL),
+              let resolved = URL(string: rawURL, relativeTo: base) else {
+            return rawURL
+        }
+        return resolved.absoluteURL.absoluteString
     }
 
     private nonisolated static func prettyJSON(_ value: [String: JSONValue]?) -> String? {
@@ -500,6 +573,8 @@ struct WebTranscriptView: UIViewRepresentable {
         private var onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
         private var onLifecycle: ((String) -> Void)?
         private var lastNearTopRequestAt = Date.distantPast
+        private var documentServerURL: String?
+        private var mediaAuthSignature: String?
         /// Last bottom inset (pt) pushed to JS; re-applied on load and only
         /// re-sent when it changes by ≥0.5pt to avoid churn during streaming.
         private var lastBottomInset: CGFloat = 18
@@ -549,7 +624,39 @@ struct WebTranscriptView: UIViewRepresentable {
             inFlightPayload = nil
             lastPayload = nil
             lastDuplicatePayload = nil
-            webView.loadHTMLString(WebTranscriptView.documentHTML, baseURL: nil)
+            loadDocument(serverURL: documentServerURL, on: webView)
+        }
+
+        func loadDocument(serverURL: String?, on webView: WKWebView) {
+            documentServerURL = serverURL
+            isLoaded = false
+            webView.loadHTMLString(
+                WebTranscriptView.documentHTML,
+                baseURL: serverURL.flatMap { URL(string: $0) }
+            )
+        }
+
+        func ensureDocumentServerURL(_ serverURL: String, on webView: WKWebView) {
+            guard documentServerURL != serverURL else { return }
+            pendingPayload = inFlightPayload ?? lastRenderedPayload ?? pendingPayload
+            inFlightPayload = nil
+            lastPayload = nil
+            lastDuplicatePayload = nil
+            loadDocument(serverURL: serverURL, on: webView)
+        }
+
+        func configureMediaAuth(serverURL: String, on webView: WKWebView) {
+            let cookies = SharedAuthStore.managedCookies(for: serverURL)
+            let signature = cookies
+                .sorted { $0.name < $1.name }
+                .map { "\($0.name)=\($0.value)@\($0.domain)" }
+                .joined(separator: "|")
+            guard signature != mediaAuthSignature else { return }
+            mediaAuthSignature = signature
+            let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
+            for cookie in cookies {
+                cookieStore.setCookie(cookie)
+            }
         }
 
         func updateBottomInset(_ inset: CGFloat, on webView: WKWebView) {
@@ -911,6 +1018,7 @@ struct WebTranscriptPayloadItem: Encodable {
     let output: String?
     let calls: [WebTranscriptToolCall]
     let origin: String?
+    let media: [WebTranscriptMediaRef]?
 }
 
 struct WebTranscriptToolCall: Encodable {
@@ -919,6 +1027,15 @@ struct WebTranscriptToolCall: Encodable {
     let status: String
     let input: String?
     let output: String?
+    let media: [WebTranscriptMediaRef]?
+}
+
+struct WebTranscriptMediaRef: Encodable {
+    let sha256: String
+    let url: String?
+    let blobUrl: String?
+    let mediaState: String
+    let mimeType: String?
 }
 
 private extension SessionInputAuthoredVia {
@@ -1062,6 +1179,49 @@ private extension WebTranscriptView {
 
     .message-content {
       line-height: 1.45;
+    }
+
+    .media-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
+      gap: 8px;
+      margin-top: 8px;
+      max-width: 100%;
+    }
+
+    .message.user .media-strip {
+      justify-content: end;
+    }
+
+    .media-item {
+      display: block;
+      min-width: 0;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--rule);
+      background: var(--code);
+    }
+
+    .media-item img {
+      display: block;
+      width: 100%;
+      max-height: 240px;
+      object-fit: contain;
+      background: rgba(0, 0, 0, 0.16);
+    }
+
+    .media-placeholder {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px dashed var(--rule);
+      color: var(--secondary);
+      background: var(--code);
+      font-size: 12px;
+      font-weight: 600;
     }
 
     p {
@@ -1609,6 +1769,7 @@ private extension WebTranscriptView {
         : (item.status === 'orphan' ? 'orphan' : ''));
       const status = item.duration || item.status || '';
       const input = item.input ? '<div class="section-label">Input</div><pre><code>' + escapeHtml(item.input) + '</code></pre>' : '';
+      const media = mediaStrip(item.media || []);
       let output = '';
       if (item.output) {
         output = '<div class="section-label">Output</div><pre><code>' + escapeHtml(item.output) + '</code></pre>';
@@ -1624,7 +1785,7 @@ private extension WebTranscriptView {
             <span class="tool-subtitle">${escapeHtml(item.subtitle || '')}</span>
             <span class="tool-meta ${meta}">${escapeHtml(status)}</span>
           </summary>
-          <div class="details-body">${input}${output}</div>
+          <div class="details-body">${input}${output}${media}</div>
         </details>
       `;
     }
@@ -1633,11 +1794,12 @@ private extension WebTranscriptView {
       const calls = (item.calls || []).map(call => {
         const input = call.input ? '<div class="section-label">Input</div><pre><code>' + escapeHtml(call.input) + '</code></pre>' : '';
         const output = call.output ? '<div class="section-label">Output</div><pre><code>' + escapeHtml(call.output) + '</code></pre>' : '';
+        const media = mediaStrip(call.media || []);
         return `
           <div class="passive-call">
             <div class="passive-call-title">${escapeHtml(call.title || 'Tool')}</div>
             <div class="passive-call-subtitle">${escapeHtml(call.subtitle || '')}</div>
-            ${input}${output}
+            ${input}${output}${media}
           </div>
         `;
       }).join('');
@@ -1650,6 +1812,23 @@ private extension WebTranscriptView {
           <div class="details-body">${calls}</div>
         </details>
       `;
+    }
+
+    function mediaStrip(media) {
+      const items = (media || []).map(ref => {
+        if (!ref || !ref.url) {
+          const label = ref && ref.mediaState === 'pending' ? 'Media pending' : 'Media unavailable';
+          return `<span class="media-placeholder">${escapeHtml(label)}</span>`;
+        }
+        const href = ref.blobUrl || ref.url;
+        const alt = 'Session media ' + String(ref.sha256 || '').slice(0, 12);
+        return `
+          <a class="media-item" href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">
+            <img src="${escapeHtml(ref.url)}" alt="${escapeHtml(alt)}" loading="lazy">
+          </a>
+        `;
+      }).join('');
+      return items ? `<div class="media-strip">${items}</div>` : '';
     }
 
     function question(item) {
@@ -1677,6 +1856,7 @@ private extension WebTranscriptView {
       const expand = item.collapsed
         ? `<button class="expand" data-expand-index="${index}">Show full message</button>`
         : '';
+      const media = mediaStrip(item.media || []);
       if (item.role === 'user') {
         const origin = item.origin === 'longhouse'
           ? '<div id="session-chat-input-origin-longhouse" class="origin" aria-label="Sent via Longhouse">Longhouse</div>'
@@ -1685,6 +1865,7 @@ private extension WebTranscriptView {
           <div class="row message user">
             <div>
               <div class="bubble">${body}</div>
+              ${media}
               ${expand}
               ${origin}
             </div>
@@ -1694,6 +1875,7 @@ private extension WebTranscriptView {
       return `
         <article class="row message assistant" data-message-index="${index}">
           <div class="message-content">${body}</div>
+          ${media}
           ${expand}
         </article>
       `;

@@ -145,6 +145,7 @@ export type RuntimeActivityRecency = components["schemas"]["ActivityRecency"];
 export type RuntimeLifecycle = components["schemas"]["Lifecycle"];
 export type RuntimeHostState = components["schemas"]["HostState"];
 export type RuntimeTerminalReason = components["schemas"]["TerminalReason"];
+export type AgentEventMediaRef = components["schemas"]["EventMediaRefResponse"];
 export type SessionPauseQuestionOption =
   components["schemas"]["SessionPauseQuestionOptionResponse"];
 export type SessionPauseQuestion =
@@ -436,6 +437,7 @@ export interface AgentEvent {
   in_active_context?: boolean;
   branch_id?: number | null;
   is_head_branch?: boolean;
+  media_refs?: AgentEventMediaRef[];
 }
 
 export interface AgentEventsListResponse {

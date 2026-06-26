@@ -916,6 +916,19 @@ enum ToolCallState: String, Codable, Hashable, Sendable, CaseIterable {
     case dropped
 }
 
+struct SessionEventMediaRef: Codable, Hashable, Sendable {
+    let sha256: String
+    let mediaState: String
+    let mimeType: String?
+    let byteSize: Int?
+    let blobUrl: String
+    let thumbUrl: String?
+    let sourcePath: String?
+    let sourceOffset: Int?
+    let jsonPointer: String?
+    let originalKind: String
+}
+
 struct SessionEvent: Codable, Identifiable, Sendable {
     let id: Int
     let role: String
@@ -930,6 +943,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let isHeadBranch: Bool
     let inputOrigin: SessionInputOrigin?
     let eventOrigin: String?
+    let mediaRefs: [SessionEventMediaRef]
 
     init(
         id: Int,
@@ -944,7 +958,8 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         inActiveContext: Bool,
         isHeadBranch: Bool,
         inputOrigin: SessionInputOrigin?,
-        eventOrigin: String? = nil
+        eventOrigin: String? = nil,
+        mediaRefs: [SessionEventMediaRef] = []
     ) {
         self.id = id
         self.role = role
@@ -959,6 +974,25 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         self.isHeadBranch = isHeadBranch
         self.inputOrigin = inputOrigin
         self.eventOrigin = eventOrigin
+        self.mediaRefs = mediaRefs
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int.self, forKey: .id)
+        role = try container.decode(String.self, forKey: .role)
+        contentText = try container.decodeIfPresent(String.self, forKey: .contentText)
+        toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+        toolInputJSON = try container.decodeIfPresent([String: JSONValue].self, forKey: .toolInputJSON)
+        toolOutputText = try container.decodeIfPresent(String.self, forKey: .toolOutputText)
+        toolCallId = try container.decodeIfPresent(String.self, forKey: .toolCallId)
+        toolCallState = try container.decodeIfPresent(ToolCallState.self, forKey: .toolCallState)
+        timestamp = try container.decode(String.self, forKey: .timestamp)
+        inActiveContext = try container.decode(Bool.self, forKey: .inActiveContext)
+        isHeadBranch = try container.decode(Bool.self, forKey: .isHeadBranch)
+        inputOrigin = try container.decodeIfPresent(SessionInputOrigin.self, forKey: .inputOrigin)
+        eventOrigin = try container.decodeIfPresent(String.self, forKey: .eventOrigin)
+        mediaRefs = try container.decodeIfPresent([SessionEventMediaRef].self, forKey: .mediaRefs) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -975,6 +1009,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case isHeadBranch
         case inputOrigin
         case eventOrigin
+        case mediaRefs
     }
 
     /// Lookup a top-level key from the tool input JSON as a string.

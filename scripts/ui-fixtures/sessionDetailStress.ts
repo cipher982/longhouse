@@ -37,6 +37,18 @@ type AgentEvent = {
   in_active_context?: boolean;
   branch_id?: number | null;
   is_head_branch?: boolean;
+  media_refs?: Array<{
+    sha256: string;
+    media_state: string;
+    mime_type?: string | null;
+    byte_size?: number | null;
+    blob_url: string;
+    thumb_url?: string | null;
+    source_path?: string | null;
+    source_offset?: number | null;
+    json_pointer?: string | null;
+    original_kind: string;
+  }>;
 };
 
 type AgentSessionProjectionItem = {
@@ -185,6 +197,9 @@ function toolOutput(exitCode: number, wallTime: string, output: string): string 
     output,
   ].join("\n");
 }
+
+const MEDIA_REF_FIXTURE_IMAGE =
+  "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='360'%20height='220'%20viewBox='0%200%20360%20220'%3E%3Crect%20width='360'%20height='220'%20fill='%23120f0c'/%3E%3Crect%20x='26'%20y='26'%20width='308'%20height='168'%20rx='12'%20fill='%23231a12'%20stroke='%23d4b87a'%20stroke-width='3'/%3E%3Ccircle%20cx='82'%20cy='82'%20r='22'%20fill='%23cc9054'/%3E%3Crect%20x='124'%20y='64'%20width='154'%20height='16'%20rx='4'%20fill='%23f5dfb2'/%3E%3Crect%20x='124'%20y='94'%20width='112'%20height='12'%20rx='4'%20fill='%239e7c5a'/%3E%3Cpath%20d='M42%20170%20l72-58%2054%2040%2045-34%20105%2052z'%20fill='%233b705f'/%3E%3C/svg%3E";
 
 export function buildSessionDetailStressFixture(): {
   session: AgentSession;
@@ -476,6 +491,20 @@ export function buildSessionDetailStressFixture(): {
     makeEvent(209, "assistant", "2026-04-15T15:19:00Z", {
       content_text:
         "The first cut is wired. I am checking it with the capture harness now, then I will look at the screenshot for density and obvious layout waste.",
+      media_refs: [
+        {
+          sha256: "4f0c5ef9b2d44d589a8cb6fd1f20b9ccdfc1855d2f680663187c3f67f4f7a5b8",
+          media_state: "present",
+          mime_type: "image/svg+xml",
+          byte_size: 512,
+          blob_url: MEDIA_REF_FIXTURE_IMAGE,
+          thumb_url: MEDIA_REF_FIXTURE_IMAGE,
+          source_path: "/Users/example/.codex/sessions/session-detail-stress.jsonl",
+          source_offset: 209,
+          json_pointer: "/message/content/0/image",
+          original_kind: "ui_fixture",
+        },
+      ],
     }),
     makeEvent(210, "assistant", "2026-04-15T15:19:35Z", {
       tool_name: "exec_command",

@@ -160,6 +160,42 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertEqual(rows.map(\.body), ["already streaming", "queue after this turn"])
     }
 
+    func testPayloadCarriesPresentMediaRefsWithAbsoluteThumbnailURL() {
+        let mediaRef = SessionEventMediaRef(
+            sha256: "abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+            mediaState: "present",
+            mimeType: "image/png",
+            byteSize: 1024,
+            blobUrl: "/api/media/abc123/blob",
+            thumbUrl: "/api/media/abc123/thumb",
+            sourcePath: nil,
+            sourceOffset: nil,
+            jsonPointer: nil,
+            originalKind: "data_url_backfill"
+        )
+        let rows = WebTranscriptView.payloadItems(
+            serverURL: "https://david010.longhouse.ai",
+            timelineItems: [
+                .assistant(makeAssistantEvent(
+                    id: 21,
+                    content: "screenshot",
+                    timestamp: "2026-05-02T20:00:05Z",
+                    eventOrigin: nil,
+                    mediaRefs: [
+                        mediaRef,
+                        mediaRef,
+                    ]
+                )),
+            ],
+            submittedInputs: []
+        )
+
+        XCTAssertEqual(rows.first?.media?.count, 1)
+        XCTAssertEqual(rows.first?.media?.first?.sha256, "abc123def456abc123def456abc123def456abc123def456abc123def456abcd")
+        XCTAssertEqual(rows.first?.media?.first?.url, "https://david010.longhouse.ai/api/media/abc123/thumb")
+        XCTAssertEqual(rows.first?.media?.first?.blobUrl, "https://david010.longhouse.ai/api/media/abc123/blob")
+    }
+
     private func makeSubmittedInput(
         text: String,
         clientRequestId: String,
@@ -205,7 +241,8 @@ final class WebTranscriptViewTests: XCTestCase {
         id: Int,
         content: String,
         timestamp: String,
-        eventOrigin: String?
+        eventOrigin: String?,
+        mediaRefs: [SessionEventMediaRef] = []
     ) -> SessionEvent {
         SessionEvent(
             id: id,
@@ -220,7 +257,8 @@ final class WebTranscriptViewTests: XCTestCase {
             inActiveContext: true,
             isHeadBranch: true,
             inputOrigin: nil,
-            eventOrigin: eventOrigin
+            eventOrigin: eventOrigin,
+            mediaRefs: mediaRefs
         )
     }
 

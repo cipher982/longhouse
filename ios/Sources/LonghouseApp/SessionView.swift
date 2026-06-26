@@ -267,6 +267,7 @@ struct SessionView: View {
 
         return ZStack {
             WebTranscriptView(
+                serverURL: appState.serverURL,
                 items: viewModel.items,
                 submittedInputs: viewModel.submittedInputs,
                 errorMessage: viewModel.errorMessage,

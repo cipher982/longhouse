@@ -29,6 +29,7 @@ import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useScrollToLoad } from "../../hooks/useScrollToLoad";
 import { collapseUnchanged, lineDiff } from "../../lib/sessionWorkspace/diff";
 import { SyntaxHighlighter, oneDark } from "../../lib/syntaxHighlighter";
+import type { AgentEvent, AgentEventMediaRef } from "../../services/api/agents";
 
 type EventFilter = "all" | "messages" | "tools";
 
@@ -66,6 +67,7 @@ interface TimelinePaneProps {
   headerRight?: ReactNode;
   dock?: ReactNode;
   listRef?: (node: HTMLDivElement | null) => void;
+  renderMedia?: boolean;
 }
 
 function nonEmptyText(value: unknown): string | null {
@@ -141,6 +143,67 @@ function messageLineCount(text: string): number {
   return text === "" ? 0 : text.split("\n").length;
 }
 
+function mediaRefsForEvents(...events: Array<AgentEvent | null | undefined>): AgentEventMediaRef[] {
+  const refs: AgentEventMediaRef[] = [];
+  const seen = new Set<string>();
+  for (const event of events) {
+    for (const ref of event?.media_refs ?? []) {
+      const key = `${ref.sha256}:${ref.thumb_url || ref.blob_url}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      refs.push(ref);
+    }
+  }
+  return refs;
+}
+
+function mediaRefSource(ref: AgentEventMediaRef): string {
+  return ref.thumb_url || ref.blob_url;
+}
+
+function MediaStrip({
+  mediaRefs,
+  variant = "message",
+}: {
+  mediaRefs: AgentEventMediaRef[];
+  variant?: "message" | "tool";
+}) {
+  if (mediaRefs.length === 0) return null;
+  return (
+    <div className={`tl-media tl-media--${variant}`} data-testid="session-event-media">
+      {mediaRefs.map((ref) => {
+        const key = `${ref.sha256}:${ref.blob_url}:${ref.thumb_url || ""}`;
+        const present = ref.media_state === "present";
+        const imageLike = !ref.mime_type || ref.mime_type.startsWith("image/");
+        if (!present || !imageLike) {
+          return (
+            <span key={key} className="tl-media__placeholder">
+              {ref.media_state === "pending" ? "Media pending" : "Media unavailable"}
+            </span>
+          );
+        }
+        const src = mediaRefSource(ref);
+        return (
+          <a
+            key={key}
+            className="tl-media__item"
+            href={ref.blob_url}
+            target="_blank"
+            rel="noreferrer noopener"
+          >
+            <img
+              className="tl-media__image"
+              src={src}
+              alt={`Session media ${ref.sha256.slice(0, 12)}`}
+              loading="lazy"
+            />
+          </a>
+        );
+      })}
+    </div>
+  );
+}
+
 function hiddenLineMarker(hiddenLines: number): string {
   return `... ${hiddenLines.toLocaleString()} line${hiddenLines === 1 ? "" : "s"} hidden ...`;
 }
@@ -185,8 +248,10 @@ function truncateMarkdown(text: string): string {
 
 function MessageRow({
   event,
+  renderMedia,
 }: {
   event: Extract<TimelineItem, { kind: "message" }>["event"];
+  renderMedia: boolean;
 }) {
   const preview = getTimelineMessagePreview(event);
   const outside = isOutsideActiveContext(event);
@@ -198,6 +263,7 @@ function MessageRow({
   const visible = isLong && !expanded
     ? truncateMarkdown(preview)
     : preview;
+  const mediaRefs = renderMedia ? mediaRefsForEvents(event) : [];
 
   return (
     <div
@@ -236,6 +302,7 @@ function MessageRow({
         ) : (
           <div className="tl-msg__plain">{visible}</div>
         )}
+        <MediaStrip mediaRefs={mediaRefs} />
         {isLong ? (
           <button
             type="button"
@@ -353,7 +420,13 @@ function EditDiffView({ patch }: { patch: { filePath: string | null; oldStr: str
 }
 
 /** Inline metadata row rendered underneath an expanded tool row. */
-function ToolDetail({ interaction }: { interaction: ToolInteraction }) {
+function ToolDetail({
+  interaction,
+  renderMedia,
+}: {
+  interaction: ToolInteraction;
+  renderMedia: boolean;
+}) {
   const rawInput = interaction.callEvent?.tool_input_json as Record<string, unknown> | null | undefined;
   const editPatch = editPatchFromInput(rawInput);
   const hasInput = rawInput != null && Object.keys(rawInput).length > 0;
@@ -365,6 +438,7 @@ function ToolDetail({ interaction }: { interaction: ToolInteraction }) {
     : interaction.resultEvent?.tool_output_text || null;
   const awaitingResult = !interaction.resultEvent && interaction.pairing !== "orphan";
   const dropped = isToolInteractionDropped(interaction);
+  const mediaRefs = renderMedia ? mediaRefsForEvents(interaction.callEvent, interaction.resultEvent) : [];
 
   return (
     <div className="tl-detail">
@@ -396,6 +470,7 @@ function ToolDetail({ interaction }: { interaction: ToolInteraction }) {
                 : "No output recorded."}
           </div>
         )}
+        <MediaStrip mediaRefs={mediaRefs} variant="tool" />
       </section>
     </div>
   );
@@ -408,6 +483,7 @@ function ActionCard({
   isSelected,
   onSelect,
   onToggleExpand,
+  renderMedia,
 }: {
   interaction: ToolInteraction;
   rowId: string;
@@ -415,6 +491,7 @@ function ActionCard({
   isSelected: boolean;
   onSelect: () => void;
   onToggleExpand: () => void;
+  renderMedia: boolean;
 }) {
   const info = getToolDisplayInfo(interaction.toolName);
   const summary = getToolSummary(interaction);
@@ -475,7 +552,7 @@ function ActionCard({
       </button>
       {expanded ? (
         <div id={detailId}>
-          <ToolDetail interaction={interaction} />
+          <ToolDetail interaction={interaction} renderMedia={renderMedia} />
         </div>
       ) : null}
     </div>
@@ -489,6 +566,7 @@ function ContextLine({
   isSelected,
   onSelect,
   onToggleExpand,
+  renderMedia,
 }: {
   interaction: ToolInteraction;
   rowId: string;
@@ -496,6 +574,7 @@ function ContextLine({
   isSelected: boolean;
   onSelect: () => void;
   onToggleExpand: () => void;
+  renderMedia: boolean;
 }) {
   const info = getToolDisplayInfo(interaction.toolName);
   const summary = getToolSummary(interaction);
@@ -540,7 +619,7 @@ function ContextLine({
       </button>
       {expanded ? (
         <div id={detailId}>
-          <ToolDetail interaction={interaction} />
+          <ToolDetail interaction={interaction} renderMedia={renderMedia} />
         </div>
       ) : null}
     </div>
@@ -556,6 +635,7 @@ function NoiseChip({
   onSelect,
   onToggleExpand,
   onToggleInteraction,
+  renderMedia,
 }: {
   group: NoiseGroup;
   rowId: string;
@@ -565,6 +645,7 @@ function NoiseChip({
   onSelect: () => void;
   onToggleExpand: () => void;
   onToggleInteraction: (key: string) => void;
+  renderMedia: boolean;
 }) {
   const counts = new Map<string, number>();
   for (const interaction of group.interactions) {
@@ -618,7 +699,7 @@ function NoiseChip({
                   </span>
                   <span className="tl-noise__item-summary">{sum || "—"}</span>
                 </button>
-                {isOpen ? <ToolDetail interaction={interaction} /> : null}
+                {isOpen ? <ToolDetail interaction={interaction} renderMedia={renderMedia} /> : null}
               </div>
             );
           })}
@@ -685,6 +766,7 @@ function ToolRow(props: {
   isSelected: boolean;
   onSelect: () => void;
   onToggleExpand: () => void;
+  renderMedia: boolean;
 }) {
   if (isAskUserQuestion(props.interaction)) {
     return <AskUserQuestionRow interaction={props.interaction} rowId={props.rowId} />;
@@ -717,6 +799,7 @@ export function TimelinePane({
   headerRight,
   dock = null,
   listRef,
+  renderMedia = true,
 }: TimelinePaneProps) {
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
@@ -1043,7 +1126,7 @@ export function TimelinePane({
             }
 
             if (item.kind === "message") {
-              return <MessageRow key={item.event.id} event={item.event} />;
+              return <MessageRow key={item.event.id} event={item.event} renderMedia={renderMedia} />;
             }
 
             if (item.kind === "tool") {
@@ -1057,6 +1140,7 @@ export function TimelinePane({
                   isSelected={selectedKey === selectionKey}
                   onSelect={() => onSelectKey(selectionKey)}
                   onToggleExpand={() => toggleTool(item.interaction.key)}
+                  renderMedia={renderMedia}
                 />
               );
             }
@@ -1076,6 +1160,7 @@ export function TimelinePane({
                 onSelect={() => onSelectKey(groupKey)}
                 onToggleExpand={() => toggleGroup(item.group.key)}
                 onToggleInteraction={(k) => toggleTool(k)}
+                renderMedia={renderMedia}
               />
             );
           })

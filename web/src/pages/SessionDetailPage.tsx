@@ -545,6 +545,7 @@ function SessionDetailWorkspaceRoute({
           onVisibleSelectionChange={handleVisibleSelectionChange}
           headerLeft={headerLeft}
           headerRight={headerRight}
+          renderMedia={!shareToken}
           listRef={registerTimelineList}
           dock={
             <div
