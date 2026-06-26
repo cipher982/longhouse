@@ -527,6 +527,17 @@ def _active_turn_survived_tui_exit(state_file: str | None) -> bool:
     return not _latest_rollout_turn_is_terminal(thread_path)
 
 
+def _native_codex_bridge_reattachable(state_file: str | None) -> bool:
+    state = _load_native_codex_bridge_state(state_file)
+    if not state:
+        return False
+    if str(state.get("status") or "").strip() != "ready":
+        return False
+    if not str(state.get("thread_id") or "").strip():
+        return False
+    return _bridge_readyz_healthy(state.get("ws_url"))
+
+
 def _stop_native_codex_bridge(
     *,
     session_id: str,
@@ -936,19 +947,55 @@ def codex(
             session_id=result.session_id,
             thread_id=attach_thread_id or None,
         )
-        _emit_warp_cli_agent_event(
-            event="status",
-            session_id=result.session_id,
-            cwd=cwd,
-            project=project,
-            response=(f"Managed Codex auto-attach exited with code {exit_code}; " "bridge left running for reattach."),
-        )
-        launch_ui.exit_bookend(
-            exit_code=exit_code,
-            machine_name=machine_name,
-            reattach_command=attach_cmd,
-            reattachable_on_nonzero_exit=True,
-        )
+        if _native_codex_bridge_reattachable(state_file):
+            reattach_status = " ".join(
+                (
+                    f"Managed Codex auto-attach exited with code {exit_code};",
+                    "bridge left running for reattach.",
+                )
+            )
+            _emit_warp_cli_agent_event(
+                event="status",
+                session_id=result.session_id,
+                cwd=cwd,
+                project=project,
+                response=reattach_status,
+            )
+            launch_ui.exit_bookend(
+                exit_code=exit_code,
+                machine_name=machine_name,
+                reattach_command=attach_cmd,
+                reattachable_on_nonzero_exit=True,
+            )
+        else:
+            stopped_status = " ".join(
+                (
+                    f"Managed Codex auto-attach exited with code {exit_code};",
+                    "bridge was not reattachable and will be stopped.",
+                )
+            )
+            _emit_warp_cli_agent_event(
+                event="status",
+                session_id=result.session_id,
+                cwd=cwd,
+                project=project,
+                response=stopped_status,
+            )
+            stop_error = bridge_stopper.stop_for_terminal_disconnect(
+                timeout_secs=_CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
+            )
+            remove_managed_provider_contract(
+                provider="codex",
+                session_id=result.session_id,
+                config_dir=resolved_config_dir,
+                config_dir_is_provider_home=True,
+            )
+            if stop_error is not None:
+                typer.secho(
+                    f"Managed bridge cleanup failed after Codex TUI exit: {stop_error}",
+                    fg=typer.colors.YELLOW,
+                )
+            launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name)
         return
 
     stop_error = bridge_stopper.stop(reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED)
