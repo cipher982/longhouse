@@ -35,11 +35,16 @@ app = typer.Typer(no_args_is_help=True)
 OPENCODE_REMOTE_LAUNCH_TOKEN_ENV = "LONGHOUSE_OPENCODE_REMOTE_LAUNCH_TOKEN"
 OPENCODE_SERVER_BRIDGE_TRANSPORT = "opencode_server_bridge"
 _DEFAULT_USERNAME = "opencode"
-# Stays 1: the identity / launch_mode / owner fields added for terminal-owned
-# lifecycle are all optional with safe defaults on read, so v1 readers (older
-# local components during a mixed dogfood) tolerate them. Bumping would make
-# those older readers reject otherwise-compatible state and lose attach/stop.
+# We WRITE schema 1: the identity / launch_mode / owner fields added for
+# terminal-owned lifecycle are all optional with safe defaults on read, so v1
+# readers (older local components during a mixed dogfood) tolerate them and
+# bumping would needlessly make them reject otherwise-compatible state.
 _STATE_SCHEMA_VERSION = 1
+# We READ up to schema 2: an interim build briefly wrote schema 2 with exactly
+# these additive fields. Tolerate it so an existing v2 state file (e.g. a
+# running server started by that build) stays attachable/stoppable instead of
+# being rejected as "newer than this build".
+_MAX_READABLE_STATE_SCHEMA_VERSION = 2
 
 # Lifecycle ownership of the backing `opencode serve` process.
 LAUNCH_MODE_ATTACHED_TUI = "attached_tui"  # server dies when the attach TUI exits
@@ -190,7 +195,7 @@ def read_opencode_server_bridge_state(
     except json.JSONDecodeError as exc:
         raise OpenCodeServerBridgeError(f"OpenCode server bridge state is not valid JSON: {path}") from exc
     state = OpenCodeServerBridgeState.from_mapping(payload)
-    if state.schema_version > _STATE_SCHEMA_VERSION:
+    if state.schema_version > _MAX_READABLE_STATE_SCHEMA_VERSION:
         message = f"OpenCode server bridge state schema {state.schema_version} is newer than this Longhouse build"
         raise OpenCodeServerBridgeError(message)
     if state.session_id != normalized:
