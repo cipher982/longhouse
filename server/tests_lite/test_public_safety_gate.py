@@ -9,6 +9,7 @@ B9: password-auth self-hosters must be able to enable auth by setting only
 """
 
 import os
+import socket
 from types import SimpleNamespace
 from unittest import mock
 
@@ -23,11 +24,20 @@ from zerg.cli.serve import app as serve_app
 # ---------------------------------------------------------------------------
 
 
+def _free_loopback_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
 def _run_serve(args, env):
     """Invoke `serve` with uvicorn mocked. Returns (result, uvicorn_called)."""
     runner = CliRunner()
     base = {"DATABASE_URL": "sqlite:///:memory:"}
     base.update(env)
+    run_args = list(args)
+    if "--port" not in run_args and "-p" not in run_args:
+        run_args.extend(["--port", str(_free_loopback_port())])
     with mock.patch.dict(os.environ, base, clear=False):
         # The lite-test harness exports TESTING=1 (and may set other auth-
         # disabling vars); clear the auth-disabling inputs unless this case
@@ -40,7 +50,7 @@ def _run_serve(args, env):
             mock.patch("zerg.cli.serve._get_lan_ip", return_value=None),
             mock.patch("zerg.cli.acquisition.emit_acquisition_event_once"),
         ):
-            result = runner.invoke(serve_app, ["serve"] + args)
+            result = runner.invoke(serve_app, ["serve"] + run_args)
             return result, uvicorn_run.called
 
 
