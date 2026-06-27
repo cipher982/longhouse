@@ -68,6 +68,12 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
         lambda **kwargs: bridge_calls.append(kwargs) or {},
     )
     monkeypatch.setattr(opencode_channel, "run_opencode_attach", lambda **kwargs: attach_calls.append(kwargs) or 0)
+    stop_calls: list[dict] = []
+    monkeypatch.setattr(
+        opencode_channel,
+        "stop_opencode_server_bridge",
+        lambda **kwargs: stop_calls.append(kwargs) or {},
+    )
 
     result = runner.invoke(
         app,
@@ -84,6 +90,8 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
     )
 
     assert result.exit_code == 0, result.output
+    # Default is terminal-owned: exiting the TUI stops the server.
+    assert stop_calls == [{"session_id": "session-123", "config_dir": None}]
     assert launch_calls[0]["cwd"] == tmp_path
     assert launch_calls[0]["machine_name"] == "work-laptop"
     assert bridge_calls == [
@@ -96,6 +104,8 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
             "opencode_bin": "/opt/homebrew/bin/opencode",
             "cwd": tmp_path,
             "config_dir": None,
+            "launch_mode": opencode_channel.LAUNCH_MODE_ATTACHED_TUI,
+            "owner_wrapper_pid": os.getpid(),
         }
     ]
     assert attach_calls == [
@@ -106,6 +116,53 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
             "extra_args": ("--log-level", "debug"),
         }
     ]
+
+
+def test_opencode_keep_server_does_not_stop_on_exit(monkeypatch, tmp_path):
+    runner = CliRunner()
+    bridge_calls: list[dict] = []
+    stop_calls: list[dict] = []
+    _stub_managed_launch(monkeypatch)
+    monkeypatch.setattr(opencode_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(
+        opencode_channel,
+        "launch_opencode_server_bridge",
+        lambda **kwargs: bridge_calls.append(kwargs) or {},
+    )
+    monkeypatch.setattr(opencode_channel, "run_opencode_attach", lambda **_kwargs: 0)
+    monkeypatch.setattr(
+        opencode_channel,
+        "stop_opencode_server_bridge",
+        lambda **kwargs: stop_calls.append(kwargs) or {},
+    )
+
+    result = runner.invoke(app, ["opencode", "--keep-server", "--cwd", str(tmp_path), "--", "serve"])
+
+    assert result.exit_code == 0, result.output
+    assert bridge_calls[0]["launch_mode"] == opencode_channel.LAUNCH_MODE_KEEP_SERVER
+    # keep_server is not terminal-owned, so no owner pid is recorded.
+    assert bridge_calls[0]["owner_wrapper_pid"] is None
+    # Server is left running for reattach: no stop on exit.
+    assert stop_calls == []
+
+
+def test_opencode_no_attach_uses_detached_launch_mode(monkeypatch, tmp_path):
+    runner = CliRunner()
+    bridge_calls: list[dict] = []
+    _stub_managed_launch(monkeypatch)
+    monkeypatch.setattr(opencode_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(
+        opencode_channel,
+        "launch_opencode_server_bridge",
+        lambda **kwargs: bridge_calls.append(kwargs) or {},
+    )
+    monkeypatch.setattr(opencode_channel, "run_opencode_attach", lambda **_kwargs: pytest.fail("should not attach"))
+
+    result = runner.invoke(app, ["opencode", "--no-attach", "--cwd", str(tmp_path), "--", "serve"])
+
+    assert result.exit_code == 0, result.output
+    assert bridge_calls[0]["launch_mode"] == opencode_channel.LAUNCH_MODE_DETACHED
+    assert "left running for reattach" in result.output
 
 
 def test_ensure_managed_serve_args_defaults_when_empty():

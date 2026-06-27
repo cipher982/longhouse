@@ -705,6 +705,15 @@ def opencode(
         "--attach/--no-attach",
         help="Launch OpenCode after creating the Longhouse session when running interactively.",
     ),
+    keep_server: bool = typer.Option(
+        False,
+        "--keep-server/--no-keep-server",
+        help=(
+            "Keep the OpenCode server running after the attached TUI exits so the "
+            "session stays reattachable. By default the server is terminal-owned and "
+            "stops when you exit the TUI."
+        ),
+    ),
     open_browser: bool = typer.Option(
         False,
         "--open/--no-open",
@@ -792,12 +801,30 @@ def opencode(
 
     opencode_args = tuple(str(arg) for arg in (ctx.args or ()))
     is_interactive = _interactive_stdio()
+
+    from zerg.cli.opencode_channel import LAUNCH_MODE_ATTACHED_TUI
+    from zerg.cli.opencode_channel import LAUNCH_MODE_DETACHED
+    from zerg.cli.opencode_channel import LAUNCH_MODE_KEEP_SERVER
+    from zerg.cli.opencode_channel import OpenCodeServerBridgeError
+    from zerg.cli.opencode_channel import OpenCodeServerBridgeStopper
+    from zerg.cli.opencode_channel import _install_opencode_signal_cleanup
+    from zerg.cli.opencode_channel import _restore_signal_handlers
+    from zerg.cli.opencode_channel import launch_opencode_server_bridge
+    from zerg.cli.opencode_channel import run_opencode_attach
+
+    # Decide who owns the server's lifetime. The server starts before we attach,
+    # so the only path that binds it to this terminal is an interactive attach
+    # without --keep-server. --no-attach and non-TTY launches necessarily leave
+    # a reattachable background server; treat that as implied keep_server and
+    # say so, rather than silently orphaning it.
+    will_attach = attach and is_interactive
+    if will_attach:
+        launch_mode = LAUNCH_MODE_KEEP_SERVER if keep_server else LAUNCH_MODE_ATTACHED_TUI
+    else:
+        launch_mode = LAUNCH_MODE_DETACHED
+
     launch_ui.progress("Starting native OpenCode bridge…")
     try:
-        from zerg.cli.opencode_channel import OpenCodeServerBridgeError
-        from zerg.cli.opencode_channel import launch_opencode_server_bridge
-        from zerg.cli.opencode_channel import run_opencode_attach
-
         launch_opencode_server_bridge(
             session_id=result.session_id,
             cwd=cwd,
@@ -807,6 +834,8 @@ def opencode(
             display_name=name,
             opencode_bin=resolved_opencode_bin,
             config_dir=resolved_config_dir,
+            launch_mode=launch_mode,
+            owner_wrapper_pid=os.getpid() if launch_mode == LAUNCH_MODE_ATTACHED_TUI else None,
         )
     except (_OpenCodeLaunchError, OpenCodeServerBridgeError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED)
@@ -829,24 +858,50 @@ def opencode(
             typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
 
     if not attach:
+        typer.secho(
+            "Server left running for reattach (use `longhouse opencode-channel stop` to end it).",
+            fg=typer.colors.YELLOW,
+        )
         typer.echo(f"Run: {attach_command}")
         return
     if not is_interactive:
-        typer.secho("Skipping OpenCode attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
+        typer.secho(
+            "Skipping OpenCode attach because stdin/stdout are not TTYs; " "server left running for reattach.",
+            fg=typer.colors.YELLOW,
+        )
         typer.echo(f"Run: {attach_command}")
         return
 
     launch_ui.progress("Attaching OpenCode…")
-    exit_code = run_opencode_attach(
-        session_id=result.session_id,
-        opencode_bin=resolved_opencode_bin,
-        config_dir=resolved_config_dir,
-        extra_args=opencode_args,
-    )
-    launch_ui.exit_bookend(
-        exit_code=exit_code,
-        machine_name=machine_name,
-        reattach_command=attach_command,
-    )
+    # Terminal-owned: stop the server when the attach TUI exits, unless the user
+    # asked to keep it. Signal cleanup covers SIGHUP/SIGTERM (terminal closed).
+    stopper = OpenCodeServerBridgeStopper(result.session_id, config_dir=resolved_config_dir)
+    previous_handlers = _install_opencode_signal_cleanup(stopper) if launch_mode == LAUNCH_MODE_ATTACHED_TUI else {}
+    try:
+        exit_code = run_opencode_attach(
+            session_id=result.session_id,
+            opencode_bin=resolved_opencode_bin,
+            config_dir=resolved_config_dir,
+            extra_args=opencode_args,
+        )
+    finally:
+        _restore_signal_handlers(previous_handlers)
+
+    if launch_mode == LAUNCH_MODE_ATTACHED_TUI:
+        stop_error = stopper.stop_for_terminal_disconnect()
+        if stop_error is not None:
+            typer.secho(
+                f"Managed OpenCode server cleanup failed after TUI exit: {stop_error}",
+                fg=typer.colors.YELLOW,
+            )
+        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name)
+    else:
+        # keep_server: leave it running and tell the user how to reattach.
+        launch_ui.exit_bookend(
+            exit_code=exit_code,
+            machine_name=machine_name,
+            reattach_command=attach_command,
+            reattachable_on_nonzero_exit=True,
+        )
     if exit_code != 0:
         raise typer.Exit(code=exit_code)

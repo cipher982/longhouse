@@ -36,6 +36,12 @@ OPENCODE_REMOTE_LAUNCH_TOKEN_ENV = "LONGHOUSE_OPENCODE_REMOTE_LAUNCH_TOKEN"
 OPENCODE_SERVER_BRIDGE_TRANSPORT = "opencode_server_bridge"
 _DEFAULT_USERNAME = "opencode"
 _STATE_SCHEMA_VERSION = 2
+
+# Lifecycle ownership of the backing `opencode serve` process.
+LAUNCH_MODE_ATTACHED_TUI = "attached_tui"  # server dies when the attach TUI exits
+LAUNCH_MODE_KEEP_SERVER = "keep_server"  # persistent reattachable background server
+LAUNCH_MODE_DETACHED = "detached"  # no TUI in this process; server left for reattach
+_VALID_LAUNCH_MODES = frozenset({LAUNCH_MODE_ATTACHED_TUI, LAUNCH_MODE_KEEP_SERVER, LAUNCH_MODE_DETACHED})
 _SERVER_LOG_RE = re.compile(r"opencode server listening on (?P<url>http://127\.0\.0\.1:\d+)")
 _HTTP_TIMEOUT_SECONDS = 10
 
@@ -62,6 +68,13 @@ class OpenCodeServerBridgeState:
     # state files, which then fall back to a bare liveness check.
     process_start_time: str = ""
     process_command: str = ""
+    # Lifecycle ownership (schema v2+). launch_mode is one of
+    # attached_tui | keep_server | detached. owner_wrapper_* identify the
+    # `longhouse opencode` wrapper process whose exit should stop an
+    # attached_tui server; used by the engine reaper as a crash backstop.
+    launch_mode: str = ""
+    owner_wrapper_pid: int = 0
+    owner_wrapper_start_time: str = ""
 
     @classmethod
     def from_mapping(cls, payload: dict) -> "OpenCodeServerBridgeState":
@@ -80,6 +93,9 @@ class OpenCodeServerBridgeState:
             updated_at=str(payload.get("updated_at") or ""),
             process_start_time=str(payload.get("process_start_time") or ""),
             process_command=str(payload.get("process_command") or ""),
+            launch_mode=str(payload.get("launch_mode") or ""),
+            owner_wrapper_pid=int(payload.get("owner_wrapper_pid") or 0),
+            owner_wrapper_start_time=str(payload.get("owner_wrapper_start_time") or ""),
         )
 
     def redacted(self) -> dict:
@@ -398,8 +414,12 @@ def launch_opencode_server_bridge(
     opencode_bin: str | None = None,
     config_dir: Path | None = None,
     wait_ready_secs: int = 45,
+    launch_mode: str = LAUNCH_MODE_ATTACHED_TUI,
+    owner_wrapper_pid: int | None = None,
 ) -> dict:
     normalized_session_id = _validate_session_id(session_id)
+    if launch_mode not in _VALID_LAUNCH_MODES:
+        raise OpenCodeServerBridgeError(f"unknown launch_mode: {launch_mode!r}")
     if not cwd.is_absolute() or not cwd.is_dir():
         raise OpenCodeServerBridgeError("cwd must be an existing absolute directory")
     if not str(api_token or "").strip():
@@ -467,6 +487,8 @@ def launch_opencode_server_bridge(
             )
             now = _utc_now()
             identity = _process_identity(int(process.pid))
+            resolved_owner_pid = int(owner_wrapper_pid or 0)
+            owner_identity = _process_identity(resolved_owner_pid) if resolved_owner_pid > 0 else None
             state = OpenCodeServerBridgeState(
                 schema_version=_STATE_SCHEMA_VERSION,
                 session_id=normalized_session_id,
@@ -482,6 +504,9 @@ def launch_opencode_server_bridge(
                 updated_at=now,
                 process_start_time=identity[0] if identity else "",
                 process_command=identity[1] if identity else "",
+                launch_mode=launch_mode,
+                owner_wrapper_pid=resolved_owner_pid,
+                owner_wrapper_start_time=owner_identity[0] if owner_identity else "",
             )
             _write_private_json(_opencode_server_state_path(normalized_session_id, config_dir), asdict(state))
         except Exception:
@@ -582,6 +607,53 @@ def stop_opencode_server_bridge(
         "pid": state.pid,
         "stopped": matched,
     }
+
+
+class OpenCodeServerBridgeStopper:
+    """Stops the backing OpenCode server when the attach TUI exits.
+
+    Mirrors the Codex ``_CodexBridgeStopper`` shape (idempotent stop, signal
+    cleanup) but deliberately has NO active-turn-survival check: OpenCode keeps
+    no durable local turn state, and the terminal-owned contract is "TUI exited
+    => server stops". An in-flight remote send is best-effort protected only by
+    the engine reaper's optional busy preflight, not here.
+    """
+
+    def __init__(self, session_id: str, *, config_dir: Path | None = None) -> None:
+        self.session_id = session_id
+        self.config_dir = config_dir
+        self._stopped = False
+
+    def stop_for_terminal_disconnect(self) -> str | None:
+        if self._stopped:
+            return None
+        self._stopped = True
+        try:
+            stop_opencode_server_bridge(session_id=self.session_id, config_dir=self.config_dir)
+        except OpenCodeServerBridgeError as exc:
+            return str(exc)
+        return None
+
+
+def _install_opencode_signal_cleanup(stopper: OpenCodeServerBridgeStopper) -> dict:
+    """Stop the server on SIGHUP/SIGTERM so closing the terminal tears it down."""
+    previous_handlers: dict = {}
+
+    def cleanup_and_exit(signum: int, _frame: object) -> None:
+        stopper.stop_for_terminal_disconnect()
+        raise SystemExit(128 + signum)
+
+    for signame in ("SIGHUP", "SIGTERM"):
+        sig = getattr(signal, signame, None)
+        if sig is None:
+            continue
+        previous_handlers[sig] = signal.signal(sig, cleanup_and_exit)
+    return previous_handlers
+
+
+def _restore_signal_handlers(previous_handlers: dict) -> None:
+    for sig, handler in previous_handlers.items():
+        signal.signal(sig, handler)
 
 
 def run_opencode_attach(
@@ -730,10 +802,14 @@ def stop_command(
 
 
 __all__ = [
+    "LAUNCH_MODE_ATTACHED_TUI",
+    "LAUNCH_MODE_DETACHED",
+    "LAUNCH_MODE_KEEP_SERVER",
     "OPENCODE_REMOTE_LAUNCH_TOKEN_ENV",
     "OPENCODE_SERVER_BRIDGE_TRANSPORT",
     "OpenCodeServerBridgeError",
     "OpenCodeServerBridgeState",
+    "OpenCodeServerBridgeStopper",
     "interrupt_opencode_session",
     "launch_opencode_server_bridge",
     "read_opencode_server_bridge_state",

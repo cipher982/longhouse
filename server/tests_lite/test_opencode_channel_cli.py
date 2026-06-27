@@ -321,6 +321,121 @@ def test_pid_matches_recorded_identity_when_ps_cannot_confirm(monkeypatch, tmp_p
     assert opencode_channel._pid_matches_recorded_identity(state) is False
 
 
+def test_stopper_is_idempotent_and_stops_once(monkeypatch, tmp_path):
+    session_id = str(uuid4())
+    stop_calls: list[dict] = []
+    monkeypatch.setattr(
+        opencode_channel,
+        "stop_opencode_server_bridge",
+        lambda **kwargs: stop_calls.append(kwargs) or {},
+    )
+    stopper = opencode_channel.OpenCodeServerBridgeStopper(session_id, config_dir=tmp_path / "config")
+
+    assert stopper.stop_for_terminal_disconnect() is None
+    assert stopper.stop_for_terminal_disconnect() is None  # second call no-ops
+    assert stop_calls == [{"session_id": session_id, "config_dir": tmp_path / "config"}]
+
+
+def test_stopper_returns_error_message_on_failure(monkeypatch, tmp_path):
+    session_id = str(uuid4())
+
+    def boom(**_kwargs):
+        raise opencode_channel.OpenCodeServerBridgeError("no state")
+
+    monkeypatch.setattr(opencode_channel, "stop_opencode_server_bridge", boom)
+    stopper = opencode_channel.OpenCodeServerBridgeStopper(session_id, config_dir=tmp_path / "config")
+
+    assert stopper.stop_for_terminal_disconnect() == "no state"
+
+
+def test_signal_cleanup_install_and_restore(monkeypatch):
+    import signal as signal_module
+
+    session_id = str(uuid4())
+    stopped: list[bool] = []
+
+    class _Stopper:
+        def stop_for_terminal_disconnect(self):
+            stopped.append(True)
+            return None
+
+    original_sighup = signal_module.getsignal(signal_module.SIGHUP)
+    original_sigterm = signal_module.getsignal(signal_module.SIGTERM)
+
+    previous = opencode_channel._install_opencode_signal_cleanup(_Stopper())
+    # Handlers were replaced.
+    assert signal_module.getsignal(signal_module.SIGHUP) is not original_sighup
+    assert signal_module.getsignal(signal_module.SIGTERM) is not original_sigterm
+
+    opencode_channel._restore_signal_handlers(previous)
+    assert signal_module.getsignal(signal_module.SIGHUP) is original_sighup
+    assert signal_module.getsignal(signal_module.SIGTERM) is original_sigterm
+    assert session_id  # keep linter calm about unused
+    assert stopped == []  # install/restore alone never fires the stop
+
+
+def test_launch_mode_and_owner_persisted_then_read_back(monkeypatch, tmp_path):
+    session_id = str(uuid4())
+    config_path = tmp_path / "config-content.json"
+    config_path.write_text("{}\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        opencode_channel,
+        "_resolve_opencode_binary",
+        lambda explicit=None: "/opt/homebrew/bin/opencode",
+    )
+    monkeypatch.setattr(opencode_channel, "_write_opencode_runtime_config_content", lambda **_kwargs: config_path)
+    monkeypatch.setattr(opencode_channel.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
+    monkeypatch.setattr(opencode_channel, "_wait_for_server_url", lambda *_a, **_k: "http://127.0.0.1:57777")
+    monkeypatch.setattr(opencode_channel, "_assert_health_ready", lambda **_k: None)
+    monkeypatch.setattr(opencode_channel, "_pid_is_running", lambda _pid: True)
+    monkeypatch.setattr(opencode_channel, "_create_opencode_session", lambda **_k: "ses_test123")
+    monkeypatch.setattr(
+        opencode_channel,
+        "_process_identity",
+        lambda pid: ("Mon May 27 00:00:00 2026", f"cmd-for-{pid}"),
+    )
+
+    opencode_channel.launch_opencode_server_bridge(
+        session_id=session_id,
+        cwd=tmp_path,
+        api_url="https://longhouse.test",
+        api_token="zdt_test_token",
+        device_id="work-laptop",
+        config_dir=tmp_path / "config",
+        launch_mode=opencode_channel.LAUNCH_MODE_KEEP_SERVER,
+        owner_wrapper_pid=9988,
+    )
+
+    state = opencode_channel.read_opencode_server_bridge_state(session_id, config_dir=tmp_path / "config")
+    assert state.launch_mode == opencode_channel.LAUNCH_MODE_KEEP_SERVER
+    assert state.owner_wrapper_pid == 9988
+    assert state.owner_wrapper_start_time == "Mon May 27 00:00:00 2026"
+
+
+def test_launch_rejects_unknown_launch_mode(tmp_path):
+    import pytest
+
+    with pytest.raises(opencode_channel.OpenCodeServerBridgeError, match="launch_mode"):
+        opencode_channel.launch_opencode_server_bridge(
+            session_id=str(uuid4()),
+            cwd=tmp_path,
+            api_url="https://longhouse.test",
+            api_token="zdt_test_token",
+            device_id="work-laptop",
+            launch_mode="bogus",
+        )
+
+
+def test_legacy_state_without_launch_mode_reads_as_empty(tmp_path):
+    session_id = str(uuid4())
+    _write_state(tmp_path, session_id=session_id)  # schema_version 1, no new fields
+    state = opencode_channel.read_opencode_server_bridge_state(session_id, config_dir=tmp_path / "config")
+    assert state.launch_mode == ""
+    assert state.owner_wrapper_pid == 0
+    assert state.process_command == ""
+
+
 def test_run_opencode_attach_uses_state_password_in_env_not_argv(monkeypatch, tmp_path):
     session_id = str(uuid4())
     _write_state(tmp_path, session_id=session_id)
