@@ -59,6 +59,15 @@ script continued from the last recorded `last_source_line_id` and completed the
 corpus. This is the strongest operational lesson from the investigation: apply
 must be cursor-resumable and log every page.
 
+The checked-in runner was then run in dry-run mode on 2026-06-27. It completed
+against live hosted `david010`, recovered from transient request timeouts, and
+matched the media totals from the prototype sweep exactly: 9,894 candidates,
+4,127,942,117 decoded bytes, 719 rejected, and 0 budget skips. The live corpus
+boundary had moved because new source lines landed between sweeps: 13,858 pages,
+13,857,449 rows scanned, final cursor `16,326,182`, final page 449 rows. Treat
+this checked-in runner output as the current canonical dry-run baseline; the
+older `/tmp` prototype artifact remains useful as historical evidence.
+
 ## Endpoint Contract
 
 Endpoint:
