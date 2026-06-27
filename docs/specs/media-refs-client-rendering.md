@@ -2,6 +2,7 @@
 
 **Status:** implemented in branch, pending review/backfill decision.
 **Branch:** `feat/media-refs-renderer` off `6c0d260b9`.
+**Backfill rollout:** `docs/specs/media-refs-backfill-rollout.md`.
 
 ## Why
 
@@ -135,10 +136,10 @@ Run plan:
 1. Run the backfill dry-run FIRST — if `candidate_refs` is ~0 across the corpus, there
    is little/no historical media to render and the renderer's value drops sharply.
    Gate the effort on real numbers.
-   - 2026-06-26 partial dry-run: first 300,000 `source_lines` rows on hosted
-     `david010` found 77 candidate refs, 21,318,153 decoded bytes, and 6
-     rejected refs; sweep stopped at the explicit page limit. This is enough
-     signal to build renderers before applying any write backfill.
+   - Full hosted dry-run completed: 13,835,553 `source_lines` scanned, 9,894
+     candidate refs, 4,127,942,117 decoded bytes (~3.84 GiB), 719 rejected refs,
+     and 0 budget skips. See `docs/specs/media-refs-backfill-rollout.md` for the
+     rollout plan and evidence artifacts.
 2. Web renderer (thread model → render `<img>` from blob/thumb url, present-state gate).
 3. iOS renderer (model → adapter → WebTranscriptPayloadItem → WebView `<img>`, solve
    the WebView auth wrinkle).
