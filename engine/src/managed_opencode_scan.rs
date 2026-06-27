@@ -37,6 +37,10 @@ pub struct OpenCodeServerObservation {
     pub launch_mode: String,
     pub owner_wrapper_pid: Option<u32>,
     pub owner_wrapper_start_time: String,
+    /// `ps`-style start time of the `opencode serve` process the wrapper
+    /// launched. Empty on legacy state. Lets the reaper reject a recycled
+    /// server pid before signaling.
+    pub process_start_time: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,6 +60,8 @@ struct OpenCodeServerStateFile {
     owner_wrapper_pid: Option<u32>,
     #[serde(default)]
     owner_wrapper_start_time: Option<String>,
+    #[serde(default)]
+    process_start_time: Option<String>,
 }
 
 pub fn collect_observations() -> Vec<OpenCodeServerObservation> {
@@ -123,6 +129,7 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<OpenCodeServerObservat
             launch_mode: state.launch_mode.unwrap_or_default().trim().to_string(),
             owner_wrapper_pid: state.owner_wrapper_pid,
             owner_wrapper_start_time: state.owner_wrapper_start_time.unwrap_or_default(),
+            process_start_time: state.process_start_time.unwrap_or_default(),
         });
     }
     out.sort_by(|a, b| a.session_id.cmp(&b.session_id));

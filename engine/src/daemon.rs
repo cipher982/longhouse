@@ -32,6 +32,7 @@ use crate::heartbeat;
 use crate::managed_bridge_scan;
 use crate::managed_claude_scan;
 use crate::managed_opencode_scan;
+use crate::managed_opencode_reaper::ManagedOpenCodeReaper;
 use crate::managed_reaper::ManagedBridgeReaper;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
@@ -529,6 +530,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut managed_codex_transcript_paths: HashSet<PathBuf> = HashSet::new();
     let mut bridge_reaper = ManagedBridgeReaper::from_env();
+    let mut opencode_reaper = ManagedOpenCodeReaper::from_env();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
@@ -1091,6 +1093,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &mut session_snapshot_state,
                         );
                         bridge_reaper.tick(&result.codex_observations);
+                        opencode_reaper.tick(&result.opencode_observations);
                         let signature = runtime_truth_signature(&payload);
                         if !runtime_truth_bootstrapped {
                             last_runtime_truth_signature = Some(signature);

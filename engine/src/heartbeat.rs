@@ -1660,6 +1660,7 @@ mod tests {
             launch_mode: launch_mode.to_string(),
             owner_wrapper_pid: Some(9000),
             owner_wrapper_start_time: "Mon May  5 11:58:00 2026".to_string(),
+            process_start_time: "Mon May  5 11:59:00 2026".to_string(),
         }
     }
 
@@ -2192,6 +2193,7 @@ mod tests {
             launch_mode: "attached_tui".to_string(),
             owner_wrapper_pid: Some(9000),
             owner_wrapper_start_time: "Mon May  5 11:58:00 2026".to_string(),
+            process_start_time: "Mon May  5 11:59:00 2026".to_string(),
         };
 
         let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs]);
