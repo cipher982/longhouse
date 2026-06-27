@@ -8,7 +8,7 @@
 
 The renderer branch makes `media_refs` visible in web and iOS, but historical
 value depends on repairing legacy inline `data:image/...` payloads into real
-media objects. A full hosted dry-run against `david010` found enough media to
+media objects. A full hosted dry-run against a tenant corpus found enough media to
 justify the work:
 
 - 13,835,553 `source_lines` rows scanned.
@@ -27,8 +27,8 @@ clients cannot render them until those inline payloads are converted into
 The risk is operational, not architectural. The server endpoint already exists
 and has guardrails; the missing piece is a controlled, resumable operator runner
 instead of manually curling 13,836 batches. The apply run also needs explicit
-backup, idempotency, and live-ingest contention gates before touching hosted
-`david010`.
+backup, idempotency, and live-ingest contention gates before touching a hosted
+tenant.
 
 ## What Is Already Accomplished
 
@@ -60,7 +60,7 @@ corpus. This is the strongest operational lesson from the investigation: apply
 must be cursor-resumable and log every page.
 
 The checked-in runner was then run in dry-run mode on 2026-06-27. It completed
-against live hosted `david010`, recovered from transient request timeouts, and
+against a live hosted tenant, recovered from transient request timeouts, and
 matched the media totals from the prototype sweep exactly: 9,894 candidates,
 4,127,942,117 decoded bytes, 719 rejected, and 0 budget skips. The live corpus
 boundary had moved because new source lines landed between sweeps: 13,858 pages,
@@ -245,7 +245,7 @@ hosted write run.
 Proceed in this order:
 
 1. Get review on this rollout spec and the renderer spec.
-2. Ask Hatch Opus to challenge the findings, safety gates, and PM tradeoffs.
+2. Ask a second reviewer to challenge the findings, safety gates, and PM tradeoffs.
 3. Incorporate review notes.
 4. Add the checked-in resumable runner.
 5. Run the runner dry-run against hosted and compare summary to this artifact.

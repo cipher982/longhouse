@@ -480,7 +480,7 @@ later pass; this follow-up establishes the read path they will reuse.
   section built from a guarded read-only `sqlite3` reader. local-health already
   reads a local SQLite DB directly via `sqlite3` (e.g. `_load_session_binding_rows`),
   so reuse that `mode=ro` path — do NOT introduce the app/ORM sessionmaker or any
-  dependency on hosted `david010` state into local-health. On `fast=True` the
+  dependency on any hosted tenant state into local-health. On `fast=True` the
   section is skipped. On a DB error in deep mode, emit
   `{"status": "unavailable", "skipped_reason": ...}` rather than omitting the
   key, so consumers cannot confuse "not checked" with "clean." Never fatal.
@@ -510,7 +510,7 @@ this pass to the CLI surface. Note it so the client work has an anchor.
 
 **Problem.** The migration only removes duplicate `provider_session_id` *aliases*
 that would block the routing index. The duplicate *session rows* from the
-original OpenCode incident still exist on hosted `david010`. The ghost row is
+original OpenCode incident still exist on a hosted tenant. The ghost row is
 still in the timeline.
 
 **Decision: ship a read-only detector now; defer the destructive merge.**
@@ -529,7 +529,7 @@ operator visibility immediately without rewriting any production rows.
   session rows that share one provider-native id.
 - Expose as `longhouse maintenance detect-provider-duplicates` (read-only,
   prints the candidate groups and why each was flagged). Safe to run against
-  `david010` anytime; it takes no write lock.
+  a hosted tenant anytime; it takes no write lock.
 
 **Deferred — the merge (`merge_duplicate_sessions_by_provider_binding`).** Do NOT
 implement until these four hazards are resolved in a dedicated design:

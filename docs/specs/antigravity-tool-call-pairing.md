@@ -2,8 +2,8 @@
 
 ## Problem
 
-On hosted `david010`, 100% of antigravity tool calls are orphaned (1537/1537 in the
-Jun 25–26 window) — every antigravity `role=tool` event is ingested with
+On a hosted tenant sample, 100% of antigravity tool calls were orphaned in the
+Jun 25-26 window — every antigravity `role=tool` event is ingested with
 `tool_call_id = NULL`, so it can never pair with its assistant tool call. This is
 distinct from the Bedrock/Claude empty-result fix (claude is now ~1.8%, codex ~0%).
 The orphan makes every antigravity tool call render as dropped/running forever and
@@ -94,13 +94,13 @@ differs from the old NULL-id orphan row's hash, so the repair job must update/re
 the stale orphan rather than insert a duplicate. This is a constraint on task #3, not
 this fix.
 
-## Review outcomes (Hatch Codex GPT-5.5, pre-impl gate, 2026-06-26)
+## Review outcomes (pre-impl gate, 2026-06-26)
 
 Adopted (pre-impl): queue over last-wins (multi-call safety); fail-closed clearing on
 interleaving records; per-source-record state update; step/source/type guard;
 prior-record seeding across offset boundaries; event_hash note for #3.
 
-Pre-merge gate (Hatch Codex GPT-5.5, on commit f51de954e) found three real
+Pre-merge gate review on commit f51de954e found three real
 fail-closed leaks, all fixed before merge:
 1. Records with no/empty content fell through without clearing pending → moved the
    pairing-state update out of the content block so every antigravity record updates
@@ -133,6 +133,6 @@ before emitting, so they still look unpaired — track if it appears in data.
 
 ## Verification after merge
 
-Re-run the david010 orphan-rate-by-provider query; antigravity should drop from
+Re-run the hosted orphan-rate-by-provider query; antigravity should drop from
 ~100% toward the claude/codex floor on **new** ingest. Historical rows need the
 backward-repair job (#3), which is gated on this fix.

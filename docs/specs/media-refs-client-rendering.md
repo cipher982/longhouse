@@ -106,7 +106,7 @@ hand-written models. The branch adds the missing media fields in these places:
   query-token path requires a `zdt_`-prefixed token, so the branch does not try to
   mint tokenized image URLs.
 
-## Backfill (run against hosted david010)
+## Backfill (run against hosted tenant)
 
 `POST /api/agents/media/backfill-inline-data-urls` — machine token, **query params**:
 
