@@ -31,16 +31,19 @@ _MANAGED_LOCAL_NAME_MAX = 64
 # Providers whose Machine Agent emits managed-control lease snapshots in the
 # heartbeat, so the server reconciler observes channel readiness and promotes
 # the launcher's birth connection detached -> attached once the bridge is up.
-# Engine truth: only codex and claude leases are shipped (see
+# Engine truth: codex, claude, and opencode leases are shipped (see
 # engine/src/daemon.rs payload.managed_sessions = leases_from_observations
-# (codex) + leases_from_claude_channel_observations (claude)). For these, the
-# launcher births the connection ``detached`` so liveness reflects an observed
-# ready channel, not a birth-time assertion. Providers WITHOUT a lease observer
-# (opencode, antigravity) have no promotion path, so they must be born
-# ``attached`` with a fresh health stamp — there is no later signal to flip
+# (codex) + leases_from_claude_channel_observations (claude) +
+# leases_from_opencode_server_observations (opencode)). For these, the launcher
+# births the connection ``detached`` so liveness reflects an observed ready
+# channel, not a birth-time assertion — important for OpenCode, where the server
+# bridge can fail to start AFTER the API session is created, and a birth-time
+# ``attached`` would briefly claim live control with no server. Providers
+# WITHOUT a lease observer (antigravity) have no promotion path, so they must be
+# born ``attached`` with a fresh health stamp — there is no later signal to flip
 # them live, and the read-time freshness clamp still degrades them after the
 # lease TTL if no further evidence arrives.
-_HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex"})
+_HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex", "opencode"})
 
 
 class ManagedLocalLaunchError(RuntimeError):

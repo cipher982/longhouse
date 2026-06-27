@@ -131,14 +131,14 @@ def test_i1_launch_is_not_live_until_observer_promotes_same_row(tmp_path):
 
 
 def test_lease_unobserved_provider_is_born_live_with_health(tmp_path):
-    """OpenCode/Antigravity have no heartbeat lease observer, so the launch is
-    the only readiness evidence. They are born attached + fresh health (live)
-    rather than stranded detached forever."""
+    """Antigravity has no heartbeat lease observer, so the launch is the only
+    readiness evidence. It is born attached + fresh health (live) rather than
+    stranded detached forever."""
 
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
         user, runner = _seed_user_and_runner(db, device_name="cinder")
-        result = _launch(db, owner_id=user.id, device_name=runner.name, provider="opencode")
+        result = _launch(db, owner_id=user.id, device_name=runner.name, provider="antigravity")
         session = result.session
 
         conn = db.query(SessionConnection).one()
@@ -148,6 +148,25 @@ def test_lease_unobserved_provider_is_born_live_with_health(tmp_path):
         caps = project_session_capabilities(db, session_id=session.id)
         assert caps.live_control_available is True
         assert caps.control_label == "live"
+
+
+def test_opencode_is_born_detached_pending_lease_observation(tmp_path):
+    """OpenCode now ships heartbeat leases, so it is born ``detached`` and
+    promoted to ``attached`` only once the engine observes a live server. This
+    prevents a birth-time ``attached`` from claiming live control during the
+    window where the server bridge could still fail to start."""
+
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        user, runner = _seed_user_and_runner(db, device_name="cinder")
+        result = _launch(db, owner_id=user.id, device_name=runner.name, provider="opencode")
+        session = result.session
+
+        conn = db.query(SessionConnection).one()
+        assert conn.state == "detached"
+
+        caps = project_session_capabilities(db, session_id=session.id)
+        assert caps.live_control_available is False
 
 
 def test_i2_attached_connection_past_ttl_is_not_live(tmp_path):

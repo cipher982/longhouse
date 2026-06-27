@@ -725,9 +725,13 @@ fn resolved_managed_opencode_session(
                 .filter(|value| !value.trim().is_empty()),
             status: lease.bridge_status.clone(),
             thread_subscription_status: None,
-            launch_mode: Some("server_bridge".to_string()),
+            launch_mode: obs
+                .map(|obs| obs.launch_mode.trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| Some("server_bridge".to_string())),
             ui_attached: None,
-            ui_presence: None,
+            ui_presence: opencode_ui_presence(&lease.state, obs).map(str::to_string),
         },
         evidence: ResolvedEvidence {
             process_observed: obs.is_some_and(|obs| obs.server_alive),
@@ -737,6 +741,31 @@ fn resolved_managed_opencode_session(
             join_keys,
         },
         reason_codes: Vec::new(),
+    }
+}
+
+/// Project UI presence for an OpenCode managed session from its launch mode.
+///
+/// Crucially this does NOT influence the lease `state`: a live server stays
+/// `attached` for control-liveness purposes regardless of launch mode. Only the
+/// human-facing presence differs — a terminal-owned `attached_tui` server is a
+/// foreground TUI, while `keep_server` / `detached` servers are background and
+/// reattachable. Legacy state files (empty launch_mode) report no presence.
+fn opencode_ui_presence(
+    lease_state: &str,
+    obs: Option<&OpenCodeServerObservation>,
+) -> Option<&'static str> {
+    match lease_state {
+        "detached" => return Some("detached"),
+        "degraded" => return Some("degraded"),
+        _ => {}
+    }
+
+    let obs = obs?;
+    match obs.launch_mode.trim() {
+        "attached_tui" => Some("foreground_tui"),
+        "keep_server" | "detached" => Some("background"),
+        _ => None,
     }
 }
 
@@ -1617,6 +1646,81 @@ mod tests {
         );
     }
 
+    fn test_opencode_observation(session_id: &str, launch_mode: &str) -> OpenCodeServerObservation {
+        OpenCodeServerObservation {
+            session_id: session_id.to_string(),
+            provider_session_id: format!("provider-{session_id}"),
+            state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
+            cwd: Some("/Users/test/git/acme".to_string()),
+            server_url: Some("http://127.0.0.1:12345".to_string()),
+            pid: Some(9876),
+            started_at: "2026-05-05T11:59:00Z".to_string(),
+            updated_at: "2026-05-05T12:00:00Z".to_string(),
+            server_alive: true,
+            launch_mode: launch_mode.to_string(),
+            owner_wrapper_pid: Some(9000),
+            owner_wrapper_start_time: "Mon May  5 11:58:00 2026".to_string(),
+        }
+    }
+
+    fn opencode_lease(session_id: &str) -> ManagedSessionLease {
+        ManagedSessionLease {
+            session_id: session_id.to_string(),
+            provider: "opencode".to_string(),
+            machine_id: "cinder".to_string(),
+            sequence: 1,
+            state: "attached".to_string(),
+            phase: Some("idle".to_string()),
+            tool_name: None,
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: None,
+            observed_at: "2026-05-05T12:00:00Z".to_string(),
+            lease_ttl_ms: 900_000,
+        }
+    }
+
+    #[test]
+    fn resolved_sessions_project_opencode_ui_presence_without_changing_lease_state() {
+        // attached_tui -> foreground_tui; keep_server/detached -> background;
+        // every live launch mode keeps lease state "attached" so control
+        // liveness (send/interrupt) is never disabled by presence alone.
+        let cases = [
+            ("attached_tui", "foreground_tui"),
+            ("keep_server", "background"),
+            ("detached", "background"),
+        ];
+        for (launch_mode, expected_presence) in cases {
+            let lease = opencode_lease("managed-opencode");
+            let obs = test_opencode_observation("managed-opencode", launch_mode);
+            let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs]);
+            let session = &sessions[0];
+            assert_eq!(session.state, "attached", "launch_mode={launch_mode}");
+            assert_eq!(
+                session.bridge.ui_presence.as_deref(),
+                Some(expected_presence),
+                "launch_mode={launch_mode}"
+            );
+            assert_eq!(
+                session.bridge.launch_mode.as_deref(),
+                Some(launch_mode),
+                "launch_mode={launch_mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolved_sessions_opencode_legacy_state_has_no_ui_presence() {
+        // Legacy (schema v1) state files carry no launch_mode: presence is
+        // unknown rather than mislabeled, and lease state is untouched.
+        let lease = opencode_lease("legacy-opencode");
+        let obs = test_opencode_observation("legacy-opencode", "");
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs]);
+        let session = &sessions[0];
+        assert_eq!(session.state, "attached");
+        assert_eq!(session.bridge.ui_presence, None);
+        assert_eq!(session.bridge.launch_mode.as_deref(), Some("server_bridge"));
+    }
+
     #[test]
     fn leases_from_observations_classifies_degraded_and_detached() {
         let db = tempfile::NamedTempFile::new().unwrap();
@@ -2085,6 +2189,9 @@ mod tests {
             started_at: "2026-05-05T11:59:00Z".to_string(),
             updated_at: "2026-05-05T12:00:00Z".to_string(),
             server_alive: true,
+            launch_mode: "attached_tui".to_string(),
+            owner_wrapper_pid: Some(9000),
+            owner_wrapper_start_time: "Mon May  5 11:58:00 2026".to_string(),
         };
 
         let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs]);

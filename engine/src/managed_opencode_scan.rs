@@ -31,6 +31,12 @@ pub struct OpenCodeServerObservation {
     pub started_at: String,
     pub updated_at: String,
     pub server_alive: bool,
+    /// Lifecycle ownership: attached_tui | keep_server | detached. Empty on
+    /// legacy (schema v1) state files. Drives UI presence projection and gates
+    /// the reaper (only attached_tui servers are reapable).
+    pub launch_mode: String,
+    pub owner_wrapper_pid: Option<u32>,
+    pub owner_wrapper_start_time: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -44,6 +50,12 @@ struct OpenCodeServerStateFile {
     password: Option<String>,
     started_at: Option<String>,
     updated_at: Option<String>,
+    #[serde(default)]
+    launch_mode: Option<String>,
+    #[serde(default)]
+    owner_wrapper_pid: Option<u32>,
+    #[serde(default)]
+    owner_wrapper_start_time: Option<String>,
 }
 
 pub fn collect_observations() -> Vec<OpenCodeServerObservation> {
@@ -108,6 +120,9 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<OpenCodeServerObservat
             started_at: state.started_at.unwrap_or_default(),
             updated_at: state.updated_at.unwrap_or_default(),
             server_alive,
+            launch_mode: state.launch_mode.unwrap_or_default().trim().to_string(),
+            owner_wrapper_pid: state.owner_wrapper_pid,
+            owner_wrapper_start_time: state.owner_wrapper_start_time.unwrap_or_default(),
         });
     }
     out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
