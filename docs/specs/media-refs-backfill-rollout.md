@@ -150,14 +150,19 @@ machine-readable evidence is in the JSONL artifact.
    - Supports `--api-url`, `--token-file`, `--dry-run`, `--apply`,
      `--after-id`, `--max-rows`, `--max-bytes`, `--disk-floor-bytes`, and
      `--out`.
-   - Refuses apply unless an explicit confirmation flag is present.
+   - Refuses apply unless explicit apply confirmation and explicit backup
+     confirmation flags are present.
    - Writes one JSONL response per batch plus a final summary.
-   - Resumes from the last JSONL row by default.
+   - Resumes from the last non-null `last_source_line_id` in the JSONL by
+     default, so a trailing zero-row page cannot reset the cursor to zero.
    - Retries transient curl/network failures with backoff.
+   - Fails fast on non-retryable 4xx responses.
    - Stops cleanly when `scanned_source_lines < max_rows`.
+   - Treats nonzero `skipped_budget` as a loud failure unless the operator
+     explicitly acknowledges it.
    - Refuses `--apply` unless a dry-run summary matches the saved artifact's
-     final cursor and aggregate counts, or the operator explicitly supplies a
-     new accepted baseline.
+     completion state, final cursor, and aggregate counts, or the operator
+     explicitly supplies a new accepted baseline.
 4. Re-run checked-in runner in dry-run mode once, and make parity with the
    `/tmp` artifact a hard gate before apply.
 5. Before apply, verify and record a restorable DB backup plus media filesystem
