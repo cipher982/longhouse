@@ -35,7 +35,7 @@ app = typer.Typer(no_args_is_help=True)
 OPENCODE_REMOTE_LAUNCH_TOKEN_ENV = "LONGHOUSE_OPENCODE_REMOTE_LAUNCH_TOKEN"
 OPENCODE_SERVER_BRIDGE_TRANSPORT = "opencode_server_bridge"
 _DEFAULT_USERNAME = "opencode"
-_STATE_SCHEMA_VERSION = 1
+_STATE_SCHEMA_VERSION = 2
 _SERVER_LOG_RE = re.compile(r"opencode server listening on (?P<url>http://127\.0\.0\.1:\d+)")
 _HTTP_TIMEOUT_SECONDS = 10
 
@@ -58,6 +58,10 @@ class OpenCodeServerBridgeState:
     config_content_path: str
     started_at: str
     updated_at: str
+    # Process identity for PID-reuse-safe kills (schema v2+). Empty on legacy
+    # state files, which then fall back to a bare liveness check.
+    process_start_time: str = ""
+    process_command: str = ""
 
     @classmethod
     def from_mapping(cls, payload: dict) -> "OpenCodeServerBridgeState":
@@ -74,6 +78,8 @@ class OpenCodeServerBridgeState:
             config_content_path=str(payload.get("config_content_path") or ""),
             started_at=str(payload.get("started_at") or ""),
             updated_at=str(payload.get("updated_at") or ""),
+            process_start_time=str(payload.get("process_start_time") or ""),
+            process_command=str(payload.get("process_command") or ""),
         )
 
     def redacted(self) -> dict:
@@ -124,15 +130,30 @@ def _opencode_server_launch_lock(session_id: str, config_dir: Path | None = None
 
 
 def _write_private_json(path: Path, payload: dict) -> None:
+    """Atomically write private JSON state.
+
+    The engine scanner skips state files that fail to parse, so a truncating
+    in-place write can race the scanner and cause a transient false detach.
+    Write to a temp file, fsync, then atomically replace.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         path.parent.chmod(0o700)
     except OSError:
         pass
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as file:
-        json.dump(payload, file, indent=2, sort_keys=True)
-        file.write("\n")
+    tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(payload, file, indent=2, sort_keys=True)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp_path)
+        raise
 
 
 def read_opencode_server_bridge_state(
@@ -279,6 +300,60 @@ def _pid_is_running(pid: int) -> bool:
     return True
 
 
+def _process_identity(pid: int) -> tuple[str, str] | None:
+    """Return (lstart, command) for a live pid via ``ps``, or None if gone.
+
+    Used to defend kill paths against PID reuse: a recorded pid is only the
+    process we launched if its start time and command still match what we
+    recorded. ``lstart`` is the fixed-width 24-char start-time field, mirroring
+    the engine's ``managed_claude_scan`` PID-reuse defense.
+    """
+    if pid <= 0:
+        return None
+    try:
+        completed = subprocess.run(
+            ["ps", "-o", "lstart=,command=", "-p", str(pid)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    line = completed.stdout.strip()
+    if completed.returncode != 0 or len(line) <= 24:
+        return None
+    lstart = line[:24].strip()
+    command = line[24:].strip()
+    if not command:
+        return None
+    return (lstart, command)
+
+
+def _pid_matches_recorded_identity(state: "OpenCodeServerBridgeState") -> bool:
+    """True iff state.pid is live AND matches the recorded process identity.
+
+    When the recorded state predates identity capture (no recorded start time /
+    command), fall back to a bare liveness check so old state files still stop.
+    """
+    if not _pid_is_running(state.pid):
+        return False
+    recorded_start = (state.process_start_time or "").strip()
+    recorded_cmd = (state.process_command or "").strip()
+    if not recorded_start and not recorded_cmd:
+        return True
+    identity = _process_identity(state.pid)
+    if identity is None:
+        # ps could not confirm identity; do not kill a possibly-reused pid.
+        return False
+    live_start, live_cmd = identity
+    if recorded_start and recorded_start != live_start:
+        return False
+    if recorded_cmd and recorded_cmd != live_cmd:
+        return False
+    return True
+
+
 def _state_result(state: OpenCodeServerBridgeState) -> dict:
     return {
         "session_id": state.session_id,
@@ -300,12 +375,14 @@ def _existing_live_state_result(
         state = read_opencode_server_bridge_state(session_id, config_dir=config_dir)
     except OpenCodeServerBridgeError:
         return None
-    if not _pid_is_running(state.pid):
+    if not _pid_matches_recorded_identity(state):
         return None
     try:
         _assert_health_ready(server_url=state.server_url, username=state.username, password=state.password)
     except OpenCodeServerBridgeError:
-        _terminate_pid(state.pid)
+        # Only kill if the pid is provably still the server we launched.
+        if _pid_matches_recorded_identity(state):
+            _terminate_pid(state.pid)
         return None
     return _state_result(state)
 
@@ -389,6 +466,7 @@ def launch_opencode_server_bridge(
                 title=title,
             )
             now = _utc_now()
+            identity = _process_identity(int(process.pid))
             state = OpenCodeServerBridgeState(
                 schema_version=_STATE_SCHEMA_VERSION,
                 session_id=normalized_session_id,
@@ -402,6 +480,8 @@ def launch_opencode_server_bridge(
                 config_content_path=str(config_content_path),
                 started_at=now,
                 updated_at=now,
+                process_start_time=identity[0] if identity else "",
+                process_command=identity[1] if identity else "",
             )
             _write_private_json(_opencode_server_state_path(normalized_session_id, config_dir), asdict(state))
         except Exception:
@@ -487,7 +567,12 @@ def stop_opencode_server_bridge(
     config_dir: Path | None = None,
 ) -> dict:
     state = read_opencode_server_bridge_state(session_id, config_dir=config_dir)
-    _terminate_pid(state.pid)
+    # Defend against PID reuse: only signal the pid if it is provably still the
+    # OpenCode server we launched. A no-longer-matching pid is treated as an
+    # already-stopped bridge.
+    matched = _pid_matches_recorded_identity(state)
+    if matched:
+        _terminate_pid(state.pid)
     return {
         "exit_code": 0,
         "stdout": "",
@@ -495,6 +580,7 @@ def stop_opencode_server_bridge(
         "provider": "opencode",
         "transport": OPENCODE_SERVER_BRIDGE_TRANSPORT,
         "pid": state.pid,
+        "stopped": matched,
     }
 
 

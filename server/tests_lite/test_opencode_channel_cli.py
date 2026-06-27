@@ -87,6 +87,11 @@ def test_launch_opencode_server_bridge_writes_private_state_without_token_in_arg
     monkeypatch.setattr(opencode_channel, "_wait_for_server_url", lambda *_args, **_kwargs: "http://127.0.0.1:57777")
     monkeypatch.setattr(opencode_channel, "_assert_health_ready", lambda **_kwargs: None)
     monkeypatch.setattr(opencode_channel, "_pid_is_running", lambda _pid: True)
+    monkeypatch.setattr(
+        opencode_channel,
+        "_process_identity",
+        lambda _pid: ("Mon May 27 00:00:00 2026", "opencode serve --hostname 127.0.0.1 --port 0 --print-logs"),
+    )
 
     def fake_create(**kwargs):
         create_calls.append(kwargs)
@@ -128,6 +133,9 @@ def test_launch_opencode_server_bridge_writes_private_state_without_token_in_arg
     assert state["provider_session_id"] == "ses_test123"
     assert state["password"] == proc.env["OPENCODE_SERVER_PASSWORD"]
     assert "zdt_test_token" not in state_path.read_text(encoding="utf-8")
+    assert state["schema_version"] == 2
+    assert state["process_command"] == "opencode serve --hostname 127.0.0.1 --port 0 --print-logs"
+    assert state["process_start_time"] == "Mon May 27 00:00:00 2026"
 
     second = opencode_channel.launch_opencode_server_bridge(
         session_id=session_id,
@@ -194,6 +202,123 @@ def test_interrupt_opencode_session_posts_abort(monkeypatch, tmp_path):
     assert request.get_method() == "POST"
     assert "/session/ses_test123/abort" in request.full_url
     assert result["transport"] == "opencode_server_bridge"
+
+
+def test_write_private_json_is_atomic_and_leaves_no_tmp(tmp_path):
+    path = tmp_path / "nested" / "state.json"
+    opencode_channel._write_private_json(path, {"hello": "world"})
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"hello": "world"}
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    # No leftover temp files from the temp+replace dance.
+    siblings = [p.name for p in path.parent.iterdir()]
+    assert siblings == ["state.json"]
+
+
+def test_write_private_json_overwrite_never_truncates_in_place(monkeypatch, tmp_path):
+    path = tmp_path / "state.json"
+    opencode_channel._write_private_json(path, {"v": 1})
+
+    # If a writer crashes mid-write, os.replace guarantees the reader sees
+    # either the old or new full file, never a truncated one. Simulate a crash
+    # during serialization and confirm the original content survives intact.
+    real_dump = opencode_channel.json.dump
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(opencode_channel.json, "dump", boom)
+    try:
+        opencode_channel._write_private_json(path, {"v": 2})
+    except RuntimeError:
+        pass
+    monkeypatch.setattr(opencode_channel.json, "dump", real_dump)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"v": 1}
+    assert [p.name for p in path.parent.iterdir()] == ["state.json"]
+
+
+def test_stop_bridge_kills_when_identity_matches(monkeypatch, tmp_path):
+    session_id = str(uuid4())
+    _write_state(tmp_path, session_id=session_id)
+    killed: list[int] = []
+
+    monkeypatch.setattr(opencode_channel, "_pid_is_running", lambda _pid: True)
+    # No recorded identity on legacy state -> liveness-only fallback -> kill.
+    monkeypatch.setattr(opencode_channel, "_terminate_pid", lambda pid: killed.append(pid))
+
+    result = opencode_channel.stop_opencode_server_bridge(
+        session_id=session_id,
+        config_dir=tmp_path / "config",
+    )
+
+    assert killed == [4242]
+    assert result["stopped"] is True
+
+
+def test_stop_bridge_rejects_reused_pid(monkeypatch, tmp_path):
+    session_id = str(uuid4())
+    # State records a specific identity; the live pid reports a different one.
+    state = {
+        "schema_version": 2,
+        "session_id": session_id,
+        "provider_session_id": "ses_test123",
+        "server_url": "http://127.0.0.1:57777",
+        "pid": 4242,
+        "cwd": str(tmp_path),
+        "username": "opencode",
+        "password": "server-secret",
+        "log_path": str(tmp_path / "server.log"),
+        "config_content_path": str(tmp_path / "config.json"),
+        "started_at": "2026-05-27T00:00:00Z",
+        "updated_at": "2026-05-27T00:00:00Z",
+        "process_start_time": "Mon May 27 00:00:00 2026",
+        "process_command": "opencode serve --hostname 127.0.0.1 --port 0 --print-logs",
+    }
+    path = opencode_channel._opencode_server_state_path(session_id, tmp_path / "config")
+    opencode_channel._write_private_json(path, state)
+
+    killed: list[int] = []
+    monkeypatch.setattr(opencode_channel, "_pid_is_running", lambda _pid: True)
+    # PID was reused by an unrelated process: different start time + command.
+    monkeypatch.setattr(
+        opencode_channel,
+        "_process_identity",
+        lambda _pid: ("Tue Jun 02 12:00:00 2026", "/usr/bin/python some_other_proc"),
+    )
+    monkeypatch.setattr(opencode_channel, "_terminate_pid", lambda pid: killed.append(pid))
+
+    result = opencode_channel.stop_opencode_server_bridge(
+        session_id=session_id,
+        config_dir=tmp_path / "config",
+    )
+
+    assert killed == []  # never signalled the reused pid
+    assert result["stopped"] is False
+
+
+def test_pid_matches_recorded_identity_when_ps_cannot_confirm(monkeypatch, tmp_path):
+    state = opencode_channel.OpenCodeServerBridgeState(
+        schema_version=2,
+        session_id=str(uuid4()),
+        provider_session_id="ses_test123",
+        server_url="http://127.0.0.1:57777",
+        pid=4242,
+        cwd=str(tmp_path),
+        username="opencode",
+        password="server-secret",
+        log_path=str(tmp_path / "server.log"),
+        config_content_path=str(tmp_path / "config.json"),
+        started_at="2026-05-27T00:00:00Z",
+        updated_at="2026-05-27T00:00:00Z",
+        process_start_time="Mon May 27 00:00:00 2026",
+        process_command="opencode serve --hostname 127.0.0.1 --port 0 --print-logs",
+    )
+    monkeypatch.setattr(opencode_channel, "_pid_is_running", lambda _pid: True)
+    # ps returns nothing -> cannot confirm -> must NOT treat as a match.
+    monkeypatch.setattr(opencode_channel, "_process_identity", lambda _pid: None)
+
+    assert opencode_channel._pid_matches_recorded_identity(state) is False
 
 
 def test_run_opencode_attach_uses_state_password_in_env_not_argv(monkeypatch, tmp_path):
