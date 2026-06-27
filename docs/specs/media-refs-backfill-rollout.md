@@ -68,6 +68,17 @@ boundary had moved because new source lines landed between sweeps: 13,858 pages,
 this checked-in runner output as the current canonical dry-run baseline; the
 older `/tmp` prototype artifact remains useful as historical evidence.
 
+Fresh-backup preflight on 2026-06-27 found that the existing backup directory is
+not current for this operation: it contains March 2026 artifacts. A live SQLite
+online backup attempt into `backup-stage/media-backfill-...` did not converge
+under active hosted writes; progress repeatedly fell back while the partial file
+stalled around 6.2 GiB, so the attempt was stopped and the partial staged copy
+was removed. `/var/app-data` is ext4, not a snapshot-capable filesystem in this
+layout. The write-apply phase therefore needs a deliberate fresh-backup strategy
+before any production mutation: likely a short quiesce/offline backup window, or
+another operator-approved mechanism that yields a current restorable
+`longhouse.db` plus media directory copy.
+
 ## Endpoint Contract
 
 Endpoint:
@@ -176,7 +187,9 @@ machine-readable evidence is in the JSONL artifact.
    `/tmp` artifact a hard gate before apply.
 5. Before apply, verify and record a restorable DB backup plus media filesystem
    backup/snapshot. `confirmed_backup_gate=true` is only an API boolean; it does
-   not prove a backup exists.
+   not prove a backup exists. A live incremental SQLite backup was attempted and
+   rejected as not currently reliable under active writes; do not proceed until
+   a current backup is produced by a safer method.
 6. Run an apply preflight on a copy of the hosted DB/media directory:
    - apply one known candidate batch;
    - re-run the same batch and confirm `refs_upserted=0` and `stored_objects=0`
