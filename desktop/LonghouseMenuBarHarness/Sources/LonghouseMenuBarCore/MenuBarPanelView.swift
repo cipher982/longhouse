@@ -608,8 +608,8 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    private var backgroundManagedBulkStopTargets: [String] {
-        backgroundManagedSessionEntries.compactMap { entry -> String? in
+    private var backgroundManagedBulkStopTargets: [ManagedStopTarget] {
+        backgroundManagedSessionEntries.compactMap { entry -> ManagedStopTarget? in
             guard entry.stopAction != nil,
                   isIdleBulkStopCandidate(entry),
                   let sessionID = entry.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -617,19 +617,19 @@ public struct MenuBarPanelView: View {
             else {
                 return nil
             }
-            return sessionID
+            return ManagedStopTarget(sessionID: sessionID, provider: entry.provider)
         }
     }
 
-    private var backgroundBridgeBulkStopTargets: [String] {
-        backgroundBridgeEntries.compactMap { entry -> String? in
+    private var backgroundBridgeBulkStopTargets: [ManagedStopTarget] {
+        backgroundBridgeEntries.compactMap { entry -> ManagedStopTarget? in
             guard entry.stopAction != nil,
                   let sessionID = entry.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !sessionID.isEmpty
             else {
                 return nil
             }
-            return sessionID
+            return ManagedStopTarget(sessionID: sessionID, provider: entry.provider)
         }
     }
 
@@ -642,10 +642,12 @@ public struct MenuBarPanelView: View {
         }
 
         let workspace = session.workspaceLabel
+        let provider = session.provider
         return {
             setFeedback(
                 actionSink.handleStopManagedBridge(
                     sessionID: sessionID,
+                    provider: provider,
                     workspaceLabel: workspace,
                     snapshot: snapshot
                 )
@@ -661,10 +663,12 @@ public struct MenuBarPanelView: View {
         }
 
         let workspace = bridge.workspaceLabel
+        let provider = bridge.provider
         return {
             setFeedback(
                 actionSink.handleStopManagedBridge(
                     sessionID: sessionID,
+                    provider: provider,
                     workspaceLabel: workspace,
                     snapshot: snapshot
                 )
@@ -681,7 +685,7 @@ public struct MenuBarPanelView: View {
         return {
             setFeedback(
                 actionSink.handleStopManagedBridges(
-                    sessionIDs: targets,
+                    targets: targets,
                     label: "idle background managed sessions",
                     snapshot: snapshot
                 )
@@ -698,7 +702,7 @@ public struct MenuBarPanelView: View {
         return {
             setFeedback(
                 actionSink.handleStopManagedBridges(
-                    sessionIDs: targets,
+                    targets: targets,
                     label: "background bridges",
                     snapshot: snapshot
                 )

@@ -360,6 +360,7 @@ struct LonghouseMenuBarCoreTests {
         let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
         let feedback = sink.handleStopManagedBridge(
             sessionID: "session-123",
+            provider: "codex",
             workspaceLabel: "zerg",
             snapshot: snapshot
         )
@@ -367,6 +368,21 @@ struct LonghouseMenuBarCoreTests {
         #expect(feedback?.style == .warning)
         #expect(feedback?.title == "Stop dry run recorded")
         #expect(feedback?.detail.contains("zerg") == true)
+    }
+
+    @Test
+    func stopCommandDescriptionRoutesByProvider() throws {
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+
+        let opencode = sink.stopCommandDescriptionForTesting(sessionID: "s1", provider: "opencode")
+        #expect(opencode == "longhouse opencode-channel stop --session-id s1")
+
+        let codex = sink.stopCommandDescriptionForTesting(sessionID: "s2", provider: "codex")
+        #expect(codex == "longhouse-engine codex-bridge stop --session-id s2")
+
+        // Unknown/nil provider falls back to the engine codex-bridge path.
+        let unknown = sink.stopCommandDescriptionForTesting(sessionID: "s3", provider: nil)
+        #expect(unknown == "longhouse-engine codex-bridge stop --session-id s3")
     }
 
     @Test
@@ -388,7 +404,12 @@ struct LonghouseMenuBarCoreTests {
 
         let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
         let feedback = sink.handleStopManagedBridges(
-            sessionIDs: [" sess-a ", "", "sess-b", "sess-a"],
+            targets: [
+                ManagedStopTarget(sessionID: " sess-a ", provider: "codex"),
+                ManagedStopTarget(sessionID: "", provider: "codex"),
+                ManagedStopTarget(sessionID: "sess-b", provider: "opencode"),
+                ManagedStopTarget(sessionID: "sess-a", provider: "codex"),
+            ],
             label: "background managed sessions",
             snapshot: snapshot
         )
