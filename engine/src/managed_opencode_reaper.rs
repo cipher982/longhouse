@@ -19,13 +19,13 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 use crate::managed_opencode_scan::OpenCodeServerObservation;
+use crate::managed_reaper_core::{ReaperCore, ReaperCoreDecision};
+use crate::process_identity::{collect_process_facts_by_pid, lstart_matches_recorded, ProcessFact};
 
 pub const DEFAULT_OPENCODE_REAP_GRACE_SECS: u64 = 120;
 const OPENCODE_LAUNCH_MODE_ATTACHED_TUI: &str = "attached_tui";
@@ -39,16 +39,6 @@ pub enum ReapDecision {
     Track,
     /// Live attached_tui server whose owning wrapper is gone, past grace.
     Reap,
-}
-
-/// One live process's identity, parsed from `ps -axo pid=,lstart=,command=`.
-#[derive(Debug, Clone)]
-pub struct ProcessFact {
-    /// Raw fixed-width `lstart` field, e.g. `Sun Apr 27 10:15:23 2026`. Compared
-    /// verbatim against the wrapper's recorded start time, so no date parsing is
-    /// needed and a recycled PID (different start time) is rejected.
-    pub lstart: String,
-    pub command: String,
 }
 
 /// Is the owning wrapper for this server still alive AND the same process we
@@ -67,7 +57,7 @@ pub fn wrapper_alive(obs: &OpenCodeServerObservation, facts: &HashMap<u32, Proce
     let recorded = obs.owner_wrapper_start_time.trim();
     // If we have a recorded start time, it must match the live process exactly;
     // otherwise the PID has been reused and our wrapper is gone.
-    if !recorded.is_empty() && fact.lstart.trim() != recorded {
+    if !lstart_matches_recorded(fact, recorded) {
         return false;
     }
     true
@@ -109,16 +99,14 @@ pub fn decide(
 /// Grace tracking + in-flight guard shared across ticks.
 pub struct ManagedOpenCodeReaper {
     grace: Duration,
-    first_orphaned_at: HashMap<String, Instant>,
-    in_flight: Arc<Mutex<HashSet<String>>>,
+    core: ReaperCore<()>,
 }
 
 impl ManagedOpenCodeReaper {
     pub fn new(grace: Duration) -> Self {
         Self {
             grace,
-            first_orphaned_at: HashMap::new(),
-            in_flight: Arc::new(Mutex::new(HashSet::new())),
+            core: ReaperCore::new(),
         }
     }
 
@@ -135,39 +123,33 @@ impl ManagedOpenCodeReaper {
     pub fn tick(&mut self, observations: &[OpenCodeServerObservation]) {
         let now = Instant::now();
         let facts = collect_process_facts_by_pid();
-        let seen: HashSet<String> = observations.iter().map(|o| o.session_id.clone()).collect();
-
-        // Drop grace entries for sessions that disappeared (state file gone).
-        self.first_orphaned_at
-            .retain(|session_id, _| seen.contains(session_id));
+        let seen: Vec<String> = observations.iter().map(|o| o.session_id.clone()).collect();
+        self.core.retain_seen(&seen);
 
         for obs in observations {
-            let first = self.first_orphaned_at.get(&obs.session_id).copied();
+            let first = self.core.first_seen(&obs.session_id);
             let alive = wrapper_alive(obs, &facts);
-            match decide(obs, alive, first, now, self.grace) {
-                ReapDecision::Skip => {
-                    self.first_orphaned_at.remove(&obs.session_id);
-                }
-                ReapDecision::Track => {
-                    self.first_orphaned_at
-                        .entry(obs.session_id.clone())
-                        .or_insert(now);
-                }
-                ReapDecision::Reap => {
-                    self.first_orphaned_at.remove(&obs.session_id);
-                    spawn_reap(self.in_flight.clone(), obs.clone());
-                }
+            let decision = match decide(obs, alive, first, now, self.grace) {
+                ReapDecision::Skip => ReaperCoreDecision::Skip,
+                ReapDecision::Track => ReaperCoreDecision::Track,
+                ReapDecision::Reap => ReaperCoreDecision::Act(()),
+            };
+            if self.core.apply(&obs.session_id, decision, now).is_some() {
+                spawn_reap(self.core.in_flight(), obs.clone());
             }
         }
     }
 
     #[cfg(test)]
     pub fn tracked_count(&self) -> usize {
-        self.first_orphaned_at.len()
+        self.core.tracked_count()
     }
 }
 
-fn spawn_reap(in_flight: Arc<Mutex<HashSet<String>>>, obs: OpenCodeServerObservation) {
+fn spawn_reap(
+    in_flight: std::sync::Arc<tokio::sync::Mutex<HashSet<String>>>,
+    obs: OpenCodeServerObservation,
+) {
     tokio::spawn(async move {
         let session_id = obs.session_id.clone();
         {
@@ -222,7 +204,7 @@ fn server_pid_identity_matches(
         return false;
     }
     let recorded = obs.process_start_time.trim();
-    if !recorded.is_empty() && fact.lstart.trim() != recorded {
+    if !lstart_matches_recorded(fact, recorded) {
         return false;
     }
     true
@@ -253,52 +235,17 @@ fn reap_server_pid(obs: &OpenCodeServerObservation) {
 #[cfg(not(unix))]
 fn reap_server_pid(_obs: &OpenCodeServerObservation) {}
 
-fn collect_process_facts_by_pid() -> HashMap<u32, ProcessFact> {
-    let Ok(output) = std::process::Command::new("ps")
-        .args(["-axo", "pid=,lstart=,command="])
-        .output()
-    else {
-        return HashMap::new();
-    };
-    if !output.status.success() {
-        return HashMap::new();
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(parse_process_fact)
-        .collect()
-}
-
-/// Parse one `ps -axo pid=,lstart=,command=` line. `lstart` is a fixed-width
-/// 24-char field like `Sun Apr 27 10:15:23 2026`.
-fn parse_process_fact(line: &str) -> Option<(u32, ProcessFact)> {
-    let trimmed = line.trim_start();
-    let (pid_text, rest) = trimmed.split_once(char::is_whitespace)?;
-    let pid = pid_text.parse::<u32>().ok()?;
-    let rest = rest.trim_start();
-    if rest.len() <= 24 {
-        return None;
-    }
-    let (lstart_raw, command) = rest.split_at(24);
-    let command = command.trim().to_string();
-    if command.is_empty() {
-        return None;
-    }
-    Some((
-        pid,
-        ProcessFact {
-            lstart: lstart_raw.trim().to_string(),
-            command,
-        },
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process_identity::parse_process_fact;
     use std::path::PathBuf;
 
-    fn obs(launch_mode: &str, wrapper_pid: Option<u32>, wrapper_start: &str) -> OpenCodeServerObservation {
+    fn obs(
+        launch_mode: &str,
+        wrapper_pid: Option<u32>,
+        wrapper_start: &str,
+    ) -> OpenCodeServerObservation {
         OpenCodeServerObservation {
             session_id: "sess".to_string(),
             provider_session_id: "provider-sess".to_string(),
@@ -321,8 +268,10 @@ mod tests {
         m.insert(
             pid,
             ProcessFact {
+                pid,
                 lstart: lstart.to_string(),
                 command: "longhouse opencode".to_string(),
+                start_time: None,
             },
         );
         m
@@ -332,7 +281,13 @@ mod tests {
     fn keep_server_is_never_reaped() {
         let o = obs("keep_server", Some(9000), "Mon May  5 11:58:00 2026");
         // Even with no wrapper alive and grace elapsed.
-        let d = decide(&o, false, Some(Instant::now() - Duration::from_secs(999)), Instant::now(), Duration::from_secs(120));
+        let d = decide(
+            &o,
+            false,
+            Some(Instant::now() - Duration::from_secs(999)),
+            Instant::now(),
+            Duration::from_secs(120),
+        );
         assert_eq!(d, ReapDecision::Skip);
     }
 
@@ -348,21 +303,45 @@ mod tests {
         // attached_tui but no recorded owner pid / start -> cannot prove
         // ownership, so skip.
         let no_pid = obs("attached_tui", None, "");
-        assert_eq!(decide(&no_pid, false, None, Instant::now(), Duration::from_secs(120)), ReapDecision::Skip);
+        assert_eq!(
+            decide(
+                &no_pid,
+                false,
+                None,
+                Instant::now(),
+                Duration::from_secs(120)
+            ),
+            ReapDecision::Skip
+        );
         let no_start = obs("attached_tui", Some(9000), "");
-        assert_eq!(decide(&no_start, false, None, Instant::now(), Duration::from_secs(120)), ReapDecision::Skip);
+        assert_eq!(
+            decide(
+                &no_start,
+                false,
+                None,
+                Instant::now(),
+                Duration::from_secs(120)
+            ),
+            ReapDecision::Skip
+        );
     }
 
     #[test]
     fn empty_launch_mode_is_never_reaped() {
         let o = obs("", Some(9000), "Mon May  5 11:58:00 2026");
-        assert_eq!(decide(&o, false, None, Instant::now(), Duration::from_secs(120)), ReapDecision::Skip);
+        assert_eq!(
+            decide(&o, false, None, Instant::now(), Duration::from_secs(120)),
+            ReapDecision::Skip
+        );
     }
 
     #[test]
     fn live_wrapper_is_skipped() {
         let o = obs("attached_tui", Some(9000), "Mon May  5 11:58:00 2026");
-        assert_eq!(decide(&o, true, None, Instant::now(), Duration::from_secs(120)), ReapDecision::Skip);
+        assert_eq!(
+            decide(&o, true, None, Instant::now(), Duration::from_secs(120)),
+            ReapDecision::Skip
+        );
     }
 
     #[test]
@@ -373,17 +352,26 @@ mod tests {
         // First sighting: track, do not reap.
         assert_eq!(decide(&o, false, None, now, grace), ReapDecision::Track);
         // Within grace: still track.
-        assert_eq!(decide(&o, false, Some(now), now, grace), ReapDecision::Track);
+        assert_eq!(
+            decide(&o, false, Some(now), now, grace),
+            ReapDecision::Track
+        );
         // Past grace: reap.
         let earlier = now - Duration::from_secs(121);
-        assert_eq!(decide(&o, false, Some(earlier), now, grace), ReapDecision::Reap);
+        assert_eq!(
+            decide(&o, false, Some(earlier), now, grace),
+            ReapDecision::Reap
+        );
     }
 
     #[test]
     fn dead_server_is_skipped() {
         let mut o = obs("attached_tui", Some(9000), "Mon May  5 11:58:00 2026");
         o.server_alive = false;
-        assert_eq!(decide(&o, false, None, Instant::now(), Duration::from_secs(120)), ReapDecision::Skip);
+        assert_eq!(
+            decide(&o, false, None, Instant::now(), Duration::from_secs(120)),
+            ReapDecision::Skip
+        );
     }
 
     #[test]

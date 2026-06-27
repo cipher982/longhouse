@@ -25,18 +25,16 @@
 //! decision function is expressed in terms of `has_tui_attachment`
 //! abstractly so the signal can widen without changing the rule.
 
-use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::sync::Mutex;
 use tokio::time::Instant;
 
 use crate::codex_bridge::{self, BridgeStopConfig};
 use crate::managed_bridge_scan::{
     self, codex_tui_process_attached, collect_process_commands, pid_alive, CodexBridgeObservation,
 };
+use crate::managed_reaper_core::{ReaperCore, ReaperCoreDecision};
 
 pub const DEFAULT_REAP_GRACE_SECS: u64 = 120;
 
@@ -136,16 +134,14 @@ enum LiveBridgeReapSafety {
 /// Grace tracking + in-flight guard shared across ticks.
 pub struct ManagedBridgeReaper {
     grace: Duration,
-    first_unattached_at: HashMap<String, Instant>,
-    in_flight: Arc<Mutex<HashSet<String>>>,
+    core: ReaperCore<ReapClass>,
 }
 
 impl ManagedBridgeReaper {
     pub fn new(grace: Duration) -> Self {
         Self {
             grace,
-            first_unattached_at: HashMap::new(),
-            in_flight: Arc::new(Mutex::new(HashSet::new())),
+            core: ReaperCore::new(),
         }
     }
 
@@ -162,44 +158,29 @@ impl ManagedBridgeReaper {
     /// stop IPC or signal grace.
     pub fn tick(&mut self, observations: &[CodexBridgeObservation]) {
         let now = Instant::now();
-        let seen: HashSet<String> = observations.iter().map(|o| o.session_id.clone()).collect();
-
-        // Drop grace entries for sessions that disappeared entirely
-        // (state file gone — another cleanup path already handled it).
-        self.first_unattached_at
-            .retain(|session_id, _| seen.contains(session_id));
+        let seen: Vec<String> = observations.iter().map(|o| o.session_id.clone()).collect();
+        self.core.retain_seen(&seen);
 
         for obs in observations {
-            let first = self.first_unattached_at.get(&obs.session_id).copied();
+            let first = self.core.first_seen(&obs.session_id);
             let decision = decide(obs, first, now, self.grace);
-            match decision {
-                ReapDecision::Skip => {
-                    self.first_unattached_at.remove(&obs.session_id);
-                }
-                ReapDecision::Track => {
-                    self.first_unattached_at
-                        .entry(obs.session_id.clone())
-                        .or_insert(now);
-                }
-                ReapDecision::Reap => {
-                    self.first_unattached_at.remove(&obs.session_id);
-                    spawn_reap(self.in_flight.clone(), obs.clone(), ReapClass::LiveBridge);
-                }
+            let action = match decision {
+                ReapDecision::Skip => ReaperCoreDecision::Skip,
+                ReapDecision::Track => ReaperCoreDecision::Track,
+                ReapDecision::Reap => ReaperCoreDecision::Act(ReapClass::LiveBridge),
                 ReapDecision::StopOrphanAppServer => {
-                    self.first_unattached_at.remove(&obs.session_id);
-                    spawn_reap(
-                        self.in_flight.clone(),
-                        obs.clone(),
-                        ReapClass::OrphanAppServer,
-                    );
+                    ReaperCoreDecision::Act(ReapClass::OrphanAppServer)
                 }
+            };
+            if let Some(class) = self.core.apply(&obs.session_id, action, now) {
+                spawn_reap(self.core.in_flight(), obs.clone(), class);
             }
         }
     }
 
     #[cfg(test)]
     pub fn tracked_count(&self) -> usize {
-        self.first_unattached_at.len()
+        self.core.tracked_count()
     }
 }
 
@@ -218,7 +199,7 @@ fn terminal_disconnected_bridge_stop_config(session_id: String) -> BridgeStopCon
 }
 
 fn spawn_reap(
-    in_flight: Arc<Mutex<HashSet<String>>>,
+    in_flight: std::sync::Arc<tokio::sync::Mutex<HashSet<String>>>,
     obs: CodexBridgeObservation,
     class: ReapClass,
 ) {

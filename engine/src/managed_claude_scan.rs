@@ -24,12 +24,10 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde::Deserialize;
 
-/// A live process whose start time is more than this many seconds *after* the
-/// session's recorded `started_at` cannot be the original session process — the
-/// kernel has recycled the PID. The bridge writes `started_at` only after the
-/// provider process is already running, so a legitimate process always starts
-/// at or before `started_at`; the tolerance only absorbs clock granularity.
-const PID_REUSE_TOLERANCE_SECS: i64 = 120;
+use crate::process_identity::{
+    collect_process_facts_by_pid, command_contains_basename, parse_rfc3339,
+    started_before_or_near_recorded, ProcessFact,
+};
 
 /// Grace period before reaping a state file whose process is gone. Protects a
 /// just-launched session from being reaped if it is momentarily missing from
@@ -63,13 +61,6 @@ struct ClaudeChannelStateFile {
     updated_at: Option<String>,
 }
 
-/// A live process as observed by `ps`, including start time for identity.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ProcessFact {
-    command: String,
-    start_time: Option<DateTime<Utc>>,
-}
-
 pub fn collect_observations() -> Vec<ClaudeChannelObservation> {
     let Some(state_dir) = default_claude_channel_state_dir() else {
         return Vec::new();
@@ -97,60 +88,6 @@ pub fn default_claude_channel_state_dir() -> Option<PathBuf> {
 pub fn collect_observations_from(state_dir: &Path) -> Vec<ClaudeChannelObservation> {
     let process_facts = collect_process_facts_by_pid();
     collect_observations_from_with_processes(state_dir, &process_facts)
-}
-
-fn collect_process_facts_by_pid() -> HashMap<u32, ProcessFact> {
-    let Ok(output) = Command::new("ps")
-        .args(["-axo", "pid=,lstart=,command="])
-        .output()
-    else {
-        return HashMap::new();
-    };
-    if !output.status.success() {
-        return HashMap::new();
-    }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter_map(parse_process_fact)
-        .collect()
-}
-
-/// Parse one `ps -axo pid=,lstart=,command=` line.
-///
-/// `lstart` is a fixed-width 24-char field like `Sun Apr 27 10:15:23 2026`.
-fn parse_process_fact(line: &str) -> Option<(u32, ProcessFact)> {
-    let trimmed = line.trim_start();
-    let (pid_text, rest) = trimmed.split_once(char::is_whitespace)?;
-    let pid = pid_text.parse::<u32>().ok()?;
-    let rest = rest.trim_start();
-    if rest.len() <= 24 {
-        return None;
-    }
-    let (lstart_raw, command) = rest.split_at(24);
-    let command = command.trim().to_string();
-    if command.is_empty() {
-        return None;
-    }
-    Some((
-        pid,
-        ProcessFact {
-            command,
-            start_time: parse_lstart(lstart_raw.trim()),
-        },
-    ))
-}
-
-fn parse_lstart(value: &str) -> Option<DateTime<Utc>> {
-    // ps -o lstart= emits local time ("Mon Apr 27 10:15:23 2026"). Parse as
-    // naive and anchor to the system's local tz.
-    use chrono::Local;
-    use chrono::NaiveDateTime;
-    use chrono::TimeZone;
-    let naive = NaiveDateTime::parse_from_str(value, "%a %b %e %H:%M:%S %Y").ok()?;
-    Local
-        .from_local_datetime(&naive)
-        .single()
-        .map(|dt| dt.with_timezone(&Utc))
 }
 
 fn collect_observations_from_with_processes(
@@ -246,16 +183,6 @@ fn reap_dead_state_files(
     reaped
 }
 
-fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    DateTime::parse_from_rfc3339(trimmed)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
 /// True only if the PID currently runs Claude *and* it is the same process the
 /// session recorded — a process that started after `started_at` (beyond clock
 /// tolerance) is a recycled PID, not our session.
@@ -294,12 +221,7 @@ fn claude_channel_bridge_alive(
 /// recorded. If either timestamp is unknown we cannot prove reuse, so we fall
 /// back to the command-name check alone (prior behavior).
 fn process_identity_matches(fact: &ProcessFact, recorded_start: Option<DateTime<Utc>>) -> bool {
-    match (fact.start_time, recorded_start) {
-        (Some(proc_start), Some(recorded)) => {
-            (proc_start - recorded).num_seconds() <= PID_REUSE_TOLERANCE_SECS
-        }
-        _ => true,
-    }
+    started_before_or_near_recorded(fact, recorded_start)
 }
 
 fn process_cwd(pid: u32) -> Option<String> {
@@ -343,21 +265,14 @@ fn parse_lsof_cwd_output(output: &str) -> Option<String> {
     })
 }
 
-fn command_contains_basename(command: &str, expected: &str) -> bool {
-    command.split_whitespace().any(|part| {
-        Path::new(part)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == expected)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn fact(command: &str, start: Option<&str>) -> ProcessFact {
         ProcessFact {
+            pid: 0,
+            lstart: String::new(),
             command: command.to_string(),
             start_time: start.and_then(parse_rfc3339),
         }

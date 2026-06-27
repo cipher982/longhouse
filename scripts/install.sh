@@ -14,6 +14,10 @@ set -euo pipefail
 
 # Track if PATH was updated (for final message)
 PATH_UPDATED=0
+INSTALL_COMPLETED=0
+CURRENT_INSTALL_STAGE="startup"
+INSTALL_TELEMETRY_SOURCE=""
+INSTALL_TELEMETRY_PACKAGE_REF=""
 
 # Colors for output
 RED='\033[0;31m'
@@ -31,6 +35,170 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 step() { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 
+telemetry_enabled() {
+    local raw="${LONGHOUSE_TELEMETRY:-}"
+    raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+    case "$raw" in
+        0|false|no|off) return 1 ;;
+    esac
+    if [[ "${DO_NOT_TRACK:-}" == "1" ]]; then
+        return 1
+    fi
+    case "$(printf '%s' "${CI:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes) return 1 ;;
+    esac
+    return 0
+}
+
+telemetry_safe_label() {
+    printf '%s' "${1:-}" | tr -cd 'A-Za-z0-9_.:-' | cut -c1-80
+}
+
+telemetry_os_name() {
+    case "$(uname -s 2>/dev/null || true)" in
+        Darwin) printf 'darwin' ;;
+        Linux) printf 'linux' ;;
+        MINGW*|MSYS*|CYGWIN*) printf 'windows' ;;
+        *) printf 'unknown' ;;
+    esac
+}
+
+telemetry_arch() {
+    case "$(uname -m 2>/dev/null || true)" in
+        x86_64|amd64) printf 'x86_64' ;;
+        arm64|aarch64) printf 'arm64' ;;
+        *) printf 'unknown' ;;
+    esac
+}
+
+telemetry_libc() {
+    if [[ "$(uname -s 2>/dev/null || true)" != "Linux" ]]; then
+        printf 'n/a'
+        return 0
+    fi
+    local ldd_line
+    ldd_line="$(ldd --version 2>&1 | head -1 | tr '[:upper:]' '[:lower:]' || true)"
+    if [[ "$ldd_line" == *musl* ]]; then
+        printf 'musl'
+    elif [[ "$ldd_line" == *glibc* || "$ldd_line" == *"gnu libc"* ]]; then
+        printf 'glibc'
+    else
+        printf 'unknown'
+    fi
+}
+
+telemetry_package_ref_kind() {
+    local package_ref="${1:-}"
+    if [[ -z "$package_ref" ]]; then
+        printf 'unpinned_pypi'
+    elif [[ "$package_ref" == longhouse==* ]]; then
+        printf 'pypi_version'
+    elif [[ "$package_ref" == http://* || "$package_ref" == https://* || "$package_ref" == git+* ]]; then
+        printf 'url'
+    elif [[ "$package_ref" == /* || "$package_ref" == ./* || "$package_ref" == ../* ]]; then
+        printf 'local_path'
+    else
+        printf 'custom'
+    fi
+}
+
+telemetry_prior_installer() {
+    if has_command uv && uv tool list 2>/dev/null | grep -q "^longhouse"; then
+        printf 'uv_tool'
+    elif has_command pipx && pipx list 2>/dev/null | grep -qi "longhouse"; then
+        printf 'pipx'
+    elif has_command longhouse; then
+        printf 'path'
+    else
+        printf 'none'
+    fi
+}
+
+telemetry_install_id() {
+    local longhouse_home="${LONGHOUSE_HOME:-$HOME/.longhouse}"
+    local install_id_path="$longhouse_home/install-id"
+    local install_id=""
+
+    if [[ -f "$install_id_path" ]]; then
+        install_id="$(head -1 "$install_id_path" 2>/dev/null | tr -cd 'A-Za-z0-9_.:-' | cut -c1-128 || true)"
+        if [[ -n "$install_id" ]]; then
+            printf '%s' "$install_id"
+            return 0
+        fi
+    fi
+
+    if has_command uuidgen; then
+        install_id="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+    elif [[ -r /proc/sys/kernel/random/uuid ]]; then
+        install_id="$(cat /proc/sys/kernel/random/uuid)"
+    elif has_command openssl; then
+        install_id="$(openssl rand -hex 16 2>/dev/null || true)"
+    fi
+    if [[ -z "$install_id" ]]; then
+        install_id="$(date +%s)-$$-${RANDOM:-0}"
+    fi
+    install_id="$(telemetry_safe_label "$install_id")"
+
+    mkdir -p "$longhouse_home" 2>/dev/null || true
+    chmod 700 "$longhouse_home" 2>/dev/null || true
+    printf '%s\n' "$install_id" > "$install_id_path" 2>/dev/null || true
+    printf '%s' "$install_id"
+}
+
+emit_installer_telemetry() {
+    local event_name="$1"
+    local stage="${2:-unknown}"
+    local install_source="${3:-}"
+    local package_ref="${4:-}"
+    local exit_code="${5:-0}"
+
+    telemetry_enabled || return 0
+    has_command curl || return 0
+
+    local endpoint="${LONGHOUSE_TELEMETRY_ENDPOINT:-https://control.longhouse.ai/api/acquisition/events}"
+    [[ -z "$endpoint" ]] && return 0
+
+    local install_id os_name arch shell_name libc package_ref_kind prior_installer props exit_prop
+    install_id="$(telemetry_install_id)"
+    os_name="$(telemetry_os_name)"
+    arch="$(telemetry_arch)"
+    shell_name="$(telemetry_safe_label "$(basename "${SHELL:-unknown}")")"
+    libc="$(telemetry_libc)"
+    package_ref_kind="$(telemetry_package_ref_kind "$package_ref")"
+    prior_installer="$(telemetry_prior_installer)"
+    stage="$(telemetry_safe_label "$stage")"
+    install_source="$(telemetry_safe_label "$install_source")"
+
+    exit_prop=""
+    if [[ "$exit_code" =~ ^[0-9]+$ && "$exit_code" != "0" ]]; then
+        exit_prop=",\"exit_code\":$exit_code"
+    fi
+
+    props="\"stage\":\"$stage\",\"shell\":\"$shell_name\",\"libc\":\"$libc\",\"package_ref_kind\":\"$package_ref_kind\",\"prior_installer\":\"$prior_installer\"$exit_prop"
+    local payload
+    payload="{\"event_name\":\"$event_name\",\"install_id\":\"$install_id\",\"source\":\"installer\",\"version\":null,\"os_name\":\"$os_name\",\"arch\":\"$arch\",\"command\":\"install_sh\",\"install_method\":\"uv\",\"install_source\":\"$install_source\",\"channel\":\"stable\",\"topology\":null,\"ci\":false,\"props\":{$props}}"
+
+    curl -fsS --max-time 1.5 \
+        -H "Content-Type: application/json" \
+        -H "User-Agent: longhouse-installer/1.0" \
+        --data "$payload" \
+        "$endpoint" >/dev/null 2>&1 || true
+}
+
+record_install_failure() {
+    local status="${1:-1}"
+    if [[ "$INSTALL_COMPLETED" != "1" ]]; then
+        emit_installer_telemetry \
+            "install_failure" \
+            "$CURRENT_INSTALL_STAGE" \
+            "$INSTALL_TELEMETRY_SOURCE" \
+            "$INSTALL_TELEMETRY_PACKAGE_REF" \
+            "$status"
+    fi
+}
+
+trap 'record_install_failure "$?"' ERR
+
 # Detect platform
 detect_platform() {
     local os arch
@@ -39,13 +207,13 @@ detect_platform() {
         Darwin) os="darwin" ;;
         Linux) os="linux" ;;
         MINGW*|MSYS*|CYGWIN*) os="windows" ;;
-        *) error "Unsupported OS: $(uname -s)"; exit 1 ;;
+        *) error "Unsupported OS: $(uname -s)"; record_install_failure 1; exit 1 ;;
     esac
 
     case "$(uname -m)" in
         x86_64|amd64) arch="x86_64" ;;
         arm64|aarch64) arch="arm64" ;;
-        *) error "Unsupported architecture: $(uname -m)"; exit 1 ;;
+        *) error "Unsupported architecture: $(uname -m)"; record_install_failure 1; exit 1 ;;
     esac
 
     # Detect WSL
@@ -66,6 +234,7 @@ has_command() {
 
 # Install uv (Python package manager)
 install_uv() {
+    CURRENT_INSTALL_STAGE="uv_install"
     if has_command uv; then
         info "uv already installed: $(uv --version)"
         return 0
@@ -81,12 +250,14 @@ install_uv() {
         success "uv installed: $(uv --version)"
     else
         error "uv installation failed"
+        record_install_failure 1
         exit 1
     fi
 }
 
 # Install Python via uv
 install_python() {
+    CURRENT_INSTALL_STAGE="python_install"
     step "Ensuring Python 3.12+ is available"
 
     # Check if uv can already find Python
@@ -158,6 +329,11 @@ install_longhouse() {
         package_ref="$pkg_source"
     fi
 
+    CURRENT_INSTALL_STAGE="uv_tool_install"
+    INSTALL_TELEMETRY_SOURCE="$install_source"
+    INSTALL_TELEMETRY_PACKAGE_REF="$package_ref"
+    emit_installer_telemetry "uv_tool_install_attempt" "$CURRENT_INSTALL_STAGE" "$install_source" "$package_ref" "0"
+
     # Install the longhouse package as a tool
     if [[ "$custom_source" -eq 1 ]]; then
         info "Installing longhouse from configured source..."
@@ -201,9 +377,11 @@ install_longhouse() {
             warn "Could not write Longhouse install metadata"
         fi
     else
+        CURRENT_INSTALL_STAGE="path_verification"
         error "longhouse installation failed"
         error "Try adding ~/.local/bin to your PATH:"
         error "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+        record_install_failure 1
         exit 1
     fi
 }
@@ -308,10 +486,12 @@ install_macos_app() {
         return 0
     fi
 
+    CURRENT_INSTALL_STAGE="desktop_app_install"
     step "Installing Longhouse.app"
 
     if ! has_command longhouse; then
         error "longhouse command not found; cannot install Longhouse.app"
+        record_install_failure 1
         exit 1
     fi
 
@@ -327,15 +507,18 @@ install_macos_app() {
 
         printf '%s\n' "$install_output" >&2
         error "Could not install Longhouse.app into /Applications"
+        record_install_failure 1
         exit 1
     fi
 
     local cli_version=""
     if ! cli_version="$(resolve_longhouse_cli_version)"; then
         error "Could not determine installed Longhouse CLI version for app fallback"
+        record_install_failure 1
         exit 1
     fi
 
+    CURRENT_INSTALL_STAGE="desktop_app_release_fallback"
     if download_and_install_macos_app_release_asset "$cli_version"; then
         return 0
     fi
@@ -344,11 +527,13 @@ install_macos_app() {
     install_output="$(longhouse --version 2>&1 || true)"
     printf '%s\n' "$install_output" >&2
     error "Could not install Longhouse.app into /Applications via CLI or release fallback"
+    record_install_failure 1
     exit 1
 }
 
 # Update shell profile for PATH
 update_shell_profile() {
+    CURRENT_INSTALL_STAGE="shell_path_update"
     step "Updating shell PATH"
 
     local shell_name
@@ -426,6 +611,7 @@ update_shell_profile() {
 
 # Verify installation
 verify_installation() {
+    CURRENT_INSTALL_STAGE="verification"
     step "Verifying installation"
 
     local all_ok=true
@@ -472,6 +658,7 @@ verify_installation() {
 
     if ! $all_ok; then
         error "Installation verification failed"
+        record_install_failure 1
         exit 1
     fi
 
@@ -667,6 +854,7 @@ main() {
     local platform
     platform=$(detect_platform)
     info "Platform: $platform"
+    emit_installer_telemetry "install_attempt" "installer_start" "" "" "0"
 
     # Install dependencies
     install_uv
@@ -681,6 +869,7 @@ main() {
     verify_installation
 
     # Done!
+    INSTALL_COMPLETED=1
     print_success
 }
 

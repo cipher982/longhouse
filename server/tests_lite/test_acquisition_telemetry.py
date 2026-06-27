@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from zerg.cli import acquisition
 
 
@@ -88,3 +90,51 @@ def test_once_telemetry_marks_only_after_success(monkeypatch, tmp_path):
     assert len(calls) == 2
     assert [call["event_name"] for call in calls] == ["runtime_first_start", "runtime_first_start"]
     assert "runtime-first-start" in marker.read_text(encoding="utf-8")
+
+
+def test_install_metadata_event_classifies_package_ref_kind(monkeypatch, tmp_path):
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / ".longhouse"))
+    monkeypatch.delenv("LONGHOUSE_TELEMETRY", raising=False)
+    monkeypatch.delenv("DO_NOT_TRACK", raising=False)
+    monkeypatch.delenv("CI", raising=False)
+
+    calls = []
+
+    def fake_post(url, *, json, timeout, headers):
+        calls.append(json)
+        return _Response(202)
+
+    monkeypatch.setattr(acquisition.httpx, "post", fake_post)
+
+    acquisition.emit_install_metadata_event(
+        SimpleNamespace(
+            install_method="uv",
+            install_source="pypi",
+            channel="stable",
+            package_ref="longhouse==0.1.26",
+        )
+    )
+    acquisition.emit_install_metadata_event(
+        SimpleNamespace(
+            install_method="uv",
+            install_source="custom",
+            channel="stable",
+            package_ref="https://example.invalid/longhouse.whl",
+        )
+    )
+    acquisition.emit_install_metadata_event(
+        SimpleNamespace(
+            install_method="uv",
+            install_source="custom",
+            channel="stable",
+            package_ref="../dist/longhouse.whl",
+        )
+    )
+
+    assert [call["event_name"] for call in calls] == ["install_success"] * 3
+    assert [call["props"]["package_ref_kind"] for call in calls] == [
+        "pypi_version",
+        "url",
+        "local_path",
+    ]
+    assert all("longhouse.whl" not in str(call["props"]) for call in calls)

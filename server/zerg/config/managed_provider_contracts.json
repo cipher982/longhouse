@@ -8,7 +8,9 @@
       "requires_longhouse_cli": false,
       "managed_transport": "codex_app_server",
       "control_plane": "codex_bridge",
-      "control_plane_aliases": ["codex_app_server"],
+      "control_plane_aliases": [
+        "codex_app_server"
+      ],
       "launch_local": true,
       "launch_remote": true,
       "run_once": true,
@@ -260,7 +262,11 @@
           "next": "promote with release-canary assistant transcript assertion"
         }
       },
-      "machine_control_supports": ["opencode.send", "opencode.interrupt", "opencode.launch"]
+      "machine_control_supports": [
+        "opencode.send",
+        "opencode.interrupt",
+        "opencode.launch"
+      ]
     },
     {
       "provider": "antigravity",
@@ -338,7 +344,9 @@
           "next": "promote with real agy transcript assertion"
         }
       },
-      "machine_control_supports": ["antigravity.send"]
+      "machine_control_supports": [
+        "antigravity.send"
+      ]
     }
   ]
 }

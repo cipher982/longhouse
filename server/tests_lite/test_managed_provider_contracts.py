@@ -1,19 +1,24 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
+import yaml
 
 from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
 from zerg.managed_provider_contract_manifest import _validate_operation_evidence
+from zerg.managed_provider_contract_manifest import normalize_contract_manifest
+from zerg.managed_provider_contract_manifest import render_contract_manifest_json
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.services.managed_provider_contracts import _contracts_by_control_plane
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
 from zerg.services.managed_provider_contracts import continue_supported_providers
 from zerg.services.managed_provider_contracts import contract_for_control_plane
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
-from zerg.services.managed_provider_contracts import _contracts_by_control_plane
 from zerg.services.managed_provider_contracts import machine_control_capability_for_command
 from zerg.services.managed_provider_contracts import machine_control_launch_capability_by_provider
 from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
@@ -65,25 +70,32 @@ def test_managed_provider_contract_matrix_covers_launch_scope_providers():
     assert {contract.provider for contract in all_managed_provider_contracts()} == managed_provider_names()
 
 
+def test_managed_provider_contract_manifest_is_generated_from_schema():
+    repo_root = Path(__file__).resolve().parents[2]
+    schema_path = repo_root / "schemas" / "managed_providers.yml"
+    manifest_path = repo_root / "server" / "zerg" / "config" / "managed_provider_contracts.json"
+
+    schema_payload = yaml.safe_load(schema_path.read_text(encoding="utf-8"))
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert normalize_contract_manifest(schema_payload) == normalize_contract_manifest(manifest_payload)
+    assert render_contract_manifest_json(schema_payload) == manifest_path.read_text(encoding="utf-8")
+
+
 def test_provider_cli_catalog_matches_managed_provider_contracts():
     assert set(PROVIDER_CLI_BINARY_BY_PROVIDER) == managed_provider_names()
     assert set(PROVIDER_CLI_ENV_BY_PROVIDER) == managed_provider_names()
 
 
 def test_provider_identity_contracts_are_manifest_backed():
-    assert {
-        contract.provider: contract.requires_longhouse_cli
-        for contract in all_managed_provider_contracts()
-    } == {
+    assert {contract.provider: contract.requires_longhouse_cli for contract in all_managed_provider_contracts()} == {
         "codex": False,
         "claude": True,
         "opencode": True,
         "antigravity": True,
     }
     assert sorted(
-        control_plane
-        for contract in all_managed_provider_contracts()
-        for control_plane in contract.control_planes
+        control_plane for contract in all_managed_provider_contracts() for control_plane in contract.control_planes
     ) == sorted(
         {
             "codex_bridge",
@@ -205,8 +217,7 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
 
 def test_codex_and_managed_claude_advertise_remote_pause_answering():
     supports_by_provider = {
-        contract.provider: set(contract.machine_control_supports)
-        for contract in all_managed_provider_contracts()
+        contract.provider: set(contract.machine_control_supports) for contract in all_managed_provider_contracts()
     }
 
     assert "codex.answer_pause" in supports_by_provider["codex"]

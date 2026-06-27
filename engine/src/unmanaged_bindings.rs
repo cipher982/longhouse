@@ -39,6 +39,9 @@ use chrono::Utc;
 
 use crate::discovery;
 use crate::heartbeat::UnmanagedSessionBinding;
+use crate::process_identity::parse_process_fact;
+#[cfg(test)]
+use crate::process_identity::parse_lstart;
 use crate::state::unmanaged_process_binding::UnmanagedProcessBindingStore;
 
 /// Cap the number of bindings emitted per heartbeat. Provider roots with
@@ -186,45 +189,20 @@ fn run_lsof(pid: u32) -> Vec<PathBuf> {
 fn parse_ps(text: &str) -> Vec<ProcessInfo> {
     let mut out = Vec::new();
     for line in text.lines() {
-        let trimmed = line.trim_start();
-        let Some((pid_str, rest)) = trimmed.split_once(char::is_whitespace) else {
+        let Some((_pid, fact)) = parse_process_fact(line) else {
             continue;
         };
-        let Ok(pid) = pid_str.parse::<u32>() else {
-            continue;
-        };
-        let rest = rest.trim_start();
-        // lstart is always 24 chars.
-        if rest.len() <= 24 {
-            continue;
-        }
-        let (lstart_raw, command) = rest.split_at(24);
-        let lstart = lstart_raw.trim();
-        let command = command.trim().to_string();
-        let Some(start_time) = parse_lstart(lstart) else {
+        let Some(start_time) = fact.start_time else {
             continue;
         };
         out.push(ProcessInfo {
-            pid,
+            pid: fact.pid,
             start_time,
-            start_time_key: lstart.to_string(),
-            command,
+            start_time_key: fact.lstart,
+            command: fact.command,
         });
     }
     out
-}
-
-fn parse_lstart(value: &str) -> Option<DateTime<Utc>> {
-    // ps -o lstart= always emits local time ("Mon Apr 27 10:15:23 2026").
-    // Parse as naive and anchor to the system's local tz.
-    use chrono::Local;
-    use chrono::NaiveDateTime;
-    use chrono::TimeZone;
-    let naive = NaiveDateTime::parse_from_str(value, "%a %b %e %H:%M:%S %Y").ok()?;
-    Local
-        .from_local_datetime(&naive)
-        .single()
-        .map(|dt| dt.with_timezone(&Utc))
 }
 
 /// Parse `lsof -F n -p <pid>` output. `-F n` only prints `n<path>` records

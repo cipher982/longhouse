@@ -138,9 +138,12 @@ def emit_install_metadata_event(metadata_payload: Any) -> None:
     props: dict[str, Any] = {}
     package_ref = getattr(metadata_payload, "package_ref", None)
     if package_ref:
-        if str(package_ref).startswith(("http://", "https://")):
+        package_ref_text = str(package_ref)
+        if package_ref_text.startswith("longhouse=="):
+            props["package_ref_kind"] = "pypi_version"
+        elif package_ref_text.startswith(("http://", "https://", "git+")):
             props["package_ref_kind"] = "url"
-        elif str(package_ref).startswith("/"):
+        elif package_ref_text.startswith(("/", "./", "../")):
             props["package_ref_kind"] = "local_path"
         else:
             props["package_ref_kind"] = "custom"

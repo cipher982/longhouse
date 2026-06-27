@@ -126,22 +126,26 @@ def _validate_machine_control_supports(item: dict[str, Any]) -> None:
     for support in item.get("machine_control_supports") or ():
         prefix, separator, suffix = str(support).partition(".")
         if separator != "." or not prefix or not suffix:
-            raise ValueError(f"managed provider contract {provider}: machine_control_supports entry {support!r} must be provider.operation")
+            raise ValueError(
+                f"managed provider contract {provider}: machine_control_supports entry {support!r} " "must be provider.operation"
+            )
         if prefix != provider:
             raise ValueError(
-                f"managed provider contract {provider}: machine_control_supports entry {support!r} must use provider prefix {provider}"
+                f"managed provider contract {provider}: machine_control_supports entry {support!r} " f"must use provider prefix {provider}"
             )
         operation = MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX.get(suffix)
         if operation is None:
             raise ValueError(
-                f"managed provider contract {provider}: machine_control_supports entry {support!r} has unknown operation {suffix!r}"
+                f"managed provider contract {provider}: machine_control_supports entry {support!r} " f"has unknown operation {suffix!r}"
             )
         if item.get(operation) is not True:
-            raise ValueError(f"managed provider contract {provider}: machine_control_supports entry {support!r} requires {operation}=true")
+            raise ValueError(
+                f"managed provider contract {provider}: machine_control_supports entry {support!r} " f"requires {operation}=true"
+            )
         for extra_operation in _MACHINE_CONTROL_SUPPORT_EXTRA_REQUIREMENTS.get(suffix, ()):
             if item.get(extra_operation) is not True:
                 raise ValueError(
-                    f"managed provider contract {provider}: machine_control_supports entry {support!r} requires {extra_operation}=true"
+                    f"managed provider contract {provider}: machine_control_supports entry {support!r} " f"requires {extra_operation}=true"
                 )
 
 
@@ -149,16 +153,15 @@ def _validate_machine_control_supports(item: dict[str, Any]) -> None:
 def managed_provider_contract_manifest() -> dict[str, Any]:
     contract_path = Path(__file__).resolve().parent / "config" / "managed_provider_contracts.json"
     payload = json.loads(contract_path.read_text(encoding="utf-8"))
+    return normalize_contract_manifest(payload)
+
+
+def normalize_contract_manifest(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("managed provider contract manifest root must be an object")
     if payload.get("schema_version") != 1:
         raise ValueError("managed provider contract manifest schema_version must be 1")
-    return payload
-
-
-@lru_cache(maxsize=1)
-def managed_provider_contract_items() -> tuple[dict[str, Any], ...]:
-    providers = managed_provider_contract_manifest().get("providers")
+    providers = payload.get("providers")
     if not isinstance(providers, list):
         raise ValueError("managed provider contract manifest must contain providers[]")
     items: list[dict[str, Any]] = []
@@ -175,5 +178,25 @@ def managed_provider_contract_items() -> tuple[dict[str, Any], ...]:
             _validate_string_list_field(item, field)
         _validate_operation_evidence(item)
         _validate_machine_control_supports(item)
+        items.append(dict(item))
+    return {
+        "schema_version": 1,
+        "providers": items,
+    }
+
+
+def render_contract_manifest_json(payload: dict[str, Any]) -> str:
+    return json.dumps(normalize_contract_manifest(payload), indent=2, ensure_ascii=False) + "\n"
+
+
+@lru_cache(maxsize=1)
+def managed_provider_contract_items() -> tuple[dict[str, Any], ...]:
+    providers = managed_provider_contract_manifest().get("providers")
+    if not isinstance(providers, list):
+        raise ValueError("managed provider contract manifest must contain providers[]")
+    items: list[dict[str, Any]] = []
+    for item in providers:
+        if not isinstance(item, dict):
+            raise ValueError("managed provider contract provider entries must be objects")
         items.append(dict(item))
     return tuple(items)
