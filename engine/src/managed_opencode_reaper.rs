@@ -237,12 +237,15 @@ fn reap_server_pid(obs: &OpenCodeServerObservation) {
         Ok(value) if value > 0 => value,
         _ => return,
     };
-    // The server is launched with start_new_session=True, so it leads its own
-    // process group. Signal the group (matching the CLI stop path), falling back
-    // to the bare pid. SIGTERM first; the server handles it cleanly.
+    // The server is launched with start_new_session=True, so it is its own
+    // process-group leader (pgid == pid). Verify that invariant immediately
+    // before signaling: if getpgid(pid) != pid, the pid is no longer our
+    // session leader (exited and reused, or never a group leader) — skip rather
+    // than risk SIGTERM-ing an unrelated process group. No bare-pid fallback.
     unsafe {
-        if libc::killpg(pid_i, libc::SIGTERM) != 0 {
-            libc::kill(pid_i, libc::SIGTERM);
+        let pgid = libc::getpgid(pid_i);
+        if pgid == pid_i {
+            libc::killpg(pid_i, libc::SIGTERM);
         }
     }
 }

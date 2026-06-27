@@ -133,7 +133,7 @@ def test_launch_opencode_server_bridge_writes_private_state_without_token_in_arg
     assert state["provider_session_id"] == "ses_test123"
     assert state["password"] == proc.env["OPENCODE_SERVER_PASSWORD"]
     assert "zdt_test_token" not in state_path.read_text(encoding="utf-8")
-    assert state["schema_version"] == 2
+    assert state["schema_version"] == 1
     assert state["process_command"] == "opencode serve --hostname 127.0.0.1 --port 0 --print-logs"
     assert state["process_start_time"] == "Mon May 27 00:00:00 2026"
 
@@ -244,7 +244,13 @@ def test_stop_bridge_kills_when_identity_matches(monkeypatch, tmp_path):
     killed: list[int] = []
 
     monkeypatch.setattr(opencode_channel, "_pid_is_running", lambda _pid: True)
-    # No recorded identity on legacy state -> liveness-only fallback -> kill.
+    # No recorded identity on legacy state -> fall back to confirming the live
+    # pid is still an `opencode serve` process, then kill.
+    monkeypatch.setattr(
+        opencode_channel,
+        "_process_identity",
+        lambda _pid: ("Mon May 27 00:00:00 2026", "opencode serve --hostname 127.0.0.1 --port 0"),
+    )
     monkeypatch.setattr(opencode_channel, "_terminate_pid", lambda pid: killed.append(pid))
 
     result = opencode_channel.stop_opencode_server_bridge(
@@ -256,11 +262,31 @@ def test_stop_bridge_kills_when_identity_matches(monkeypatch, tmp_path):
     assert result["stopped"] is True
 
 
+def test_stop_bridge_legacy_state_rejects_reused_non_opencode_pid(monkeypatch, tmp_path):
+    # Legacy state (no recorded identity) whose pid is now an unrelated process
+    # must NOT be killed.
+    session_id = str(uuid4())
+    _write_state(tmp_path, session_id=session_id)
+    killed: list[int] = []
+    monkeypatch.setattr(opencode_channel, "_pid_is_running", lambda _pid: True)
+    monkeypatch.setattr(
+        opencode_channel,
+        "_process_identity",
+        lambda _pid: ("Tue Jun 02 12:00:00 2026", "/usr/bin/python unrelated.py"),
+    )
+    monkeypatch.setattr(opencode_channel, "_terminate_pid", lambda pid: killed.append(pid))
+
+    result = opencode_channel.stop_opencode_server_bridge(session_id=session_id, config_dir=tmp_path / "config")
+
+    assert killed == []
+    assert result["stopped"] is False
+
+
 def test_stop_bridge_rejects_reused_pid(monkeypatch, tmp_path):
     session_id = str(uuid4())
     # State records a specific identity; the live pid reports a different one.
     state = {
-        "schema_version": 2,
+        "schema_version": 1,
         "session_id": session_id,
         "provider_session_id": "ses_test123",
         "server_url": "http://127.0.0.1:57777",
@@ -299,7 +325,7 @@ def test_stop_bridge_rejects_reused_pid(monkeypatch, tmp_path):
 
 def test_pid_matches_recorded_identity_when_ps_cannot_confirm(monkeypatch, tmp_path):
     state = opencode_channel.OpenCodeServerBridgeState(
-        schema_version=2,
+        schema_version=1,
         session_id=str(uuid4()),
         provider_session_id="ses_test123",
         server_url="http://127.0.0.1:57777",

@@ -386,6 +386,19 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func stopTransportRoutesKnownProvidersAndRejectsUnsupported() throws {
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        #expect(sink.stopTransportForTesting(provider: "opencode") == "opencode")
+        #expect(sink.stopTransportForTesting(provider: "codex") == "codex")
+        // Legacy rows with no provider stay on the codex bridge path.
+        #expect(sink.stopTransportForTesting(provider: nil) == "codex")
+        #expect(sink.stopTransportForTesting(provider: "") == "codex")
+        // Claude / Antigravity must NOT silently run codex-bridge stop.
+        #expect(sink.stopTransportForTesting(provider: "claude") == "unsupported")
+        #expect(sink.stopTransportForTesting(provider: "antigravity") == "unsupported")
+    }
+
+    @Test
     func bulkStopManagedBridgesDryRunDeduplicatesTargets() throws {
         let snapshot = HealthSnapshot(
             schemaVersion: 1,

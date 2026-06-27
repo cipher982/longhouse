@@ -35,7 +35,11 @@ app = typer.Typer(no_args_is_help=True)
 OPENCODE_REMOTE_LAUNCH_TOKEN_ENV = "LONGHOUSE_OPENCODE_REMOTE_LAUNCH_TOKEN"
 OPENCODE_SERVER_BRIDGE_TRANSPORT = "opencode_server_bridge"
 _DEFAULT_USERNAME = "opencode"
-_STATE_SCHEMA_VERSION = 2
+# Stays 1: the identity / launch_mode / owner fields added for terminal-owned
+# lifecycle are all optional with safe defaults on read, so v1 readers (older
+# local components during a mixed dogfood) tolerate them. Bumping would make
+# those older readers reject otherwise-compatible state and lose attach/stop.
+_STATE_SCHEMA_VERSION = 1
 
 # Lifecycle ownership of the backing `opencode serve` process.
 LAUNCH_MODE_ATTACHED_TUI = "attached_tui"  # server dies when the attach TUI exits
@@ -347,22 +351,27 @@ def _process_identity(pid: int) -> tuple[str, str] | None:
 
 
 def _pid_matches_recorded_identity(state: "OpenCodeServerBridgeState") -> bool:
-    """True iff state.pid is live AND matches the recorded process identity.
+    """True iff state.pid is live AND is provably the server we launched.
 
-    When the recorded state predates identity capture (no recorded start time /
-    command), fall back to a bare liveness check so old state files still stop.
+    Never returns True on bare liveness alone — a reused PID must not be killed.
+    With recorded identity (schema v2), require an exact start-time + command
+    match. Without it (legacy v1 state, or a v2 launch where `ps` failed at
+    capture time), fall back to confirming the live PID is still an
+    `opencode serve` process, which is a weaker but real reuse defense.
     """
     if not _pid_is_running(state.pid):
         return False
-    recorded_start = (state.process_start_time or "").strip()
-    recorded_cmd = (state.process_command or "").strip()
-    if not recorded_start and not recorded_cmd:
-        return True
     identity = _process_identity(state.pid)
     if identity is None:
         # ps could not confirm identity; do not kill a possibly-reused pid.
         return False
     live_start, live_cmd = identity
+    recorded_start = (state.process_start_time or "").strip()
+    recorded_cmd = (state.process_command or "").strip()
+    if not recorded_start and not recorded_cmd:
+        # No recorded identity: only stop if the live process still looks like
+        # an OpenCode server, so a recycled PID for an unrelated process is safe.
+        return "opencode" in live_cmd and " serve" in live_cmd
     if recorded_start and recorded_start != live_start:
         return False
     if recorded_cmd and recorded_cmd != live_cmd:
@@ -414,7 +423,12 @@ def launch_opencode_server_bridge(
     opencode_bin: str | None = None,
     config_dir: Path | None = None,
     wait_ready_secs: int = 45,
-    launch_mode: str = LAUNCH_MODE_ATTACHED_TUI,
+    # Default to detached: a bare bridge launch (remote/headless control path)
+    # has no TUI in this process and is a background reattachable server. The
+    # interactive `longhouse opencode` wrapper passes attached_tui explicitly
+    # with its owner pid. Defaulting to attached_tui here would mislabel
+    # remote-launched servers as foreground TUIs.
+    launch_mode: str = LAUNCH_MODE_DETACHED,
     owner_wrapper_pid: int | None = None,
 ) -> dict:
     normalized_session_id = _validate_session_id(session_id)

@@ -238,21 +238,29 @@ public struct SpyHealthActionSink: HealthActionSink {
             )
         }
 
-        if startStopManagedBridge(sessionID: sessionID, provider: provider) != nil {
+        switch startStopManagedBridge(sessionID: sessionID, provider: provider) {
+        case .started:
             return feedback(
                 for: .stopManagedBridge,
                 style: .info,
                 title: "Stop requested",
                 detail: "Longhouse asked the local bridge for \(label.isEmpty ? sessionID : label) to stop in the background."
             )
+        case .unsupported(let unsupportedProvider):
+            return feedback(
+                for: .stopManagedBridge,
+                style: .warning,
+                title: "Stop not supported here",
+                detail: "Longhouse cannot stop \(unsupportedProvider) sessions from the menu bar yet. Stop it from its terminal."
+            )
+        case .failed:
+            return feedback(
+                for: .stopManagedBridge,
+                style: .failure,
+                title: "Stop could not start",
+                detail: "Longhouse could not start `\(stopCommandDescription(sessionID: sessionID, provider: provider))` on this Mac."
+            )
         }
-
-        return feedback(
-            for: .stopManagedBridge,
-            style: .failure,
-            title: "Stop could not start",
-            detail: "Longhouse could not start `\(stopCommandDescription(sessionID: sessionID, provider: provider))` on this Mac."
-        )
     }
 
     public func handleStopManagedBridges(
@@ -291,8 +299,12 @@ public struct SpyHealthActionSink: HealthActionSink {
         }
 
         var failed: [String] = []
+        var started = 0
         for target in deduped {
-            if startStopManagedBridge(sessionID: target.sessionID, provider: target.provider) == nil {
+            switch startStopManagedBridge(sessionID: target.sessionID, provider: target.provider) {
+            case .started:
+                started += 1
+            case .unsupported, .failed:
                 failed.append(target.sessionID)
             }
         }
@@ -310,7 +322,7 @@ public struct SpyHealthActionSink: HealthActionSink {
             for: .stopManagedBridge,
             style: .failure,
             title: "Some stops could not start",
-            detail: "Started \(count - failed.count) of \(count) stop requests. Failed: \(failed.joined(separator: ", "))."
+            detail: "Started \(started) of \(count) stop requests. Failed: \(failed.joined(separator: ", "))."
         )
     }
 
@@ -395,43 +407,60 @@ public struct SpyHealthActionSink: HealthActionSink {
         )
     }
 
-    private func startStopManagedBridge(sessionID: String, provider: String?) -> URL? {
+    enum ManagedStopOutcome {
+        case started(URL)
+        /// We have no stop transport for this provider — do not silently run the
+        /// Codex stop command against, e.g., a Claude session.
+        case unsupported(provider: String)
+        /// We know how to stop it but launching the command failed.
+        case failed
+    }
+
+    private func startStopManagedBridge(sessionID: String, provider: String?) -> ManagedStopOutcome {
         let normalizedProvider = (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         switch normalizedProvider {
         case "opencode":
             // OpenCode stop is a `longhouse` CLI command, not an engine command.
             guard let executable = LonghouseCLI.resolveExecutable() else {
-                return nil
+                return .failed
             }
-            return startBackgroundProcess(
+            let url = startBackgroundProcess(
                 launchPath: executable.path,
-                arguments: [
-                    "opencode-channel",
-                    "stop",
-                    "--session-id",
-                    sessionID,
-                ]
+                arguments: ["opencode-channel", "stop", "--session-id", sessionID]
             )
-        default:
-            // Codex (and any other engine-bridge provider) stop via the engine.
+            return url.map(ManagedStopOutcome.started) ?? .failed
+        case "", "codex":
+            // Codex and legacy rows with no provider stop via the engine bridge.
             guard let executable = LonghouseCLI.resolveEngineExecutable() else {
-                return nil
+                return .failed
             }
-            return startBackgroundProcess(
+            let url = startBackgroundProcess(
                 launchPath: executable.path,
-                arguments: [
-                    "codex-bridge",
-                    "stop",
-                    "--session-id",
-                    sessionID,
-                ]
+                arguments: ["codex-bridge", "stop", "--session-id", sessionID]
             )
+            return url.map(ManagedStopOutcome.started) ?? .failed
+        default:
+            // Claude, Antigravity, etc. have no menu-bar stop transport yet.
+            return .unsupported(provider: normalizedProvider)
         }
     }
 
     /// Test-only accessor for the provider-routed stop command description.
     func stopCommandDescriptionForTesting(sessionID: String, provider: String?) -> String {
         stopCommandDescription(sessionID: sessionID, provider: provider)
+    }
+
+    /// Test-only classifier for which stop transport a provider routes to,
+    /// without launching anything. "opencode" / "codex" / "unsupported".
+    func stopTransportForTesting(provider: String?) -> String {
+        switch (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "opencode":
+            return "opencode"
+        case "", "codex":
+            return "codex"
+        default:
+            return "unsupported"
+        }
     }
 
     /// Human-readable description of the stop command for a provider, used in
