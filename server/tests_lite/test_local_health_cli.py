@@ -5572,3 +5572,53 @@ def test_phase_freshness_rust_engine_matches_runtime_reducer() -> None:
     expected = {phase: int(window.total_seconds()) for phase, window in session_runtime.PHASE_FRESHNESS.items()}
     expected["finished"] = 10 * 60
     assert rust_map == expected, f"rust={rust_map} expected={expected}"
+
+
+def _opencode_managed_row(*, bridge_pid: int | None) -> dict[str, object]:
+    return {
+        "session_id": "11111111-1111-1111-1111-111111111111",
+        "provider": "opencode",
+        "bridge_status": "ready",
+        "bridge_pid": bridge_pid,
+        "state": "attached",
+        "reason_codes": [],
+    }
+
+
+def test_opencode_server_is_live_requires_live_opencode_serve_process():
+    row = _opencode_managed_row(bridge_pid=4242)
+    process_rows = [{"pid": 4242, "status": "S", "command": "/opt/homebrew/bin/opencode serve --hostname 127.0.0.1"}]
+    assert local_health_service._resolved_engine_opencode_server_is_live(row, process_rows) is True
+
+
+def test_opencode_server_not_live_when_pid_missing_from_processes():
+    row = _opencode_managed_row(bridge_pid=4242)
+    process_rows = [{"pid": 9999, "status": "S", "command": "opencode serve"}]
+    assert local_health_service._resolved_engine_opencode_server_is_live(row, process_rows) is False
+
+
+def test_opencode_server_not_live_when_zombie():
+    row = _opencode_managed_row(bridge_pid=4242)
+    process_rows = [{"pid": 4242, "status": "Z", "command": "opencode serve"}]
+    assert local_health_service._resolved_engine_opencode_server_is_live(row, process_rows) is False
+
+
+def test_opencode_server_not_live_when_pid_reused_by_other_command():
+    # PID present but the process is not an `opencode serve` — treat as dead.
+    row = _opencode_managed_row(bridge_pid=4242)
+    process_rows = [{"pid": 4242, "status": "S", "command": "/usr/bin/python unrelated.py"}]
+    assert local_health_service._resolved_engine_opencode_server_is_live(row, process_rows) is False
+
+
+def test_validate_marks_dead_opencode_server_degraded():
+    row = _opencode_managed_row(bridge_pid=4242)
+    process_rows = [{"pid": 1, "status": "S", "command": "launchd"}]
+    validated = local_health_service._validate_resolved_engine_managed_sessions([row], process_rows=process_rows)
+    assert validated[0]["reason_codes"] == ["live_control_unavailable"]
+
+
+def test_validate_keeps_live_opencode_server():
+    row = _opencode_managed_row(bridge_pid=4242)
+    process_rows = [{"pid": 4242, "status": "S", "command": "opencode serve --hostname 127.0.0.1 --port 0"}]
+    validated = local_health_service._validate_resolved_engine_managed_sessions([row], process_rows=process_rows)
+    assert validated[0]["reason_codes"] == []

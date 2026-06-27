@@ -2792,6 +2792,19 @@ def _resolved_engine_session_app_server_is_live(row: Mapping[str, Any], process_
     return " app-server " in str(process_row.get("command") or "")
 
 
+def _resolved_engine_opencode_server_is_live(row: Mapping[str, Any], process_rows: list[dict[str, Any]]) -> bool:
+    # OpenCode's resolved bridge_pid is the `opencode serve` process pid. The
+    # server is live only if that pid is a live, non-zombie opencode process.
+    server_pid = _normalize_optional_int(row.get("bridge_pid"))
+    if server_pid is None:
+        return False
+    process_row = _process_row_by_pid(process_rows, server_pid)
+    if process_row is None or _process_row_is_zombie(process_row):
+        return False
+    command = str(process_row.get("command") or "")
+    return "opencode" in command and " serve" in command
+
+
 def _validate_resolved_engine_managed_sessions(
     managed_sessions: list[dict[str, Any]],
     *,
@@ -2804,6 +2817,9 @@ def _validate_resolved_engine_managed_sessions(
         row = dict(row)
         if row.get("provider") == "codex" and row.get("bridge_status") == "ready":
             if not _resolved_engine_session_app_server_is_live(row, process_rows):
+                row = _mark_managed_session_degraded(row, "live_control_unavailable")
+        elif row.get("provider") == "opencode" and row.get("bridge_status") == "ready":
+            if not _resolved_engine_opencode_server_is_live(row, process_rows):
                 row = _mark_managed_session_degraded(row, "live_control_unavailable")
         validated.append(row)
     return validated
