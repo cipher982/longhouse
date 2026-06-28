@@ -845,6 +845,28 @@ fn codex_ui_presence(
     }
 }
 
+fn claude_ui_presence(
+    lease_state: &str,
+    obs: Option<&ClaudeChannelObservation>,
+) -> Option<&'static str> {
+    match lease_state {
+        "detached" => return Some("detached"),
+        "degraded" => return Some("degraded"),
+        _ => {}
+    }
+
+    // Claude has no bridge-owned launch_mode; foreground-ness is read from the
+    // live process's controlling terminal via the process scan.
+    let obs = obs?;
+    if obs.claude_foreground_tui {
+        Some("foreground_tui")
+    } else if obs.claude_alive {
+        Some("background")
+    } else {
+        None
+    }
+}
+
 fn resolved_managed_claude_session(
     lease: &ManagedSessionLease,
     obs: Option<&ClaudeChannelObservation>,
@@ -887,7 +909,7 @@ fn resolved_managed_claude_session(
             thread_subscription_status: None,
             launch_mode: None,
             ui_attached: None,
-            ui_presence: None,
+            ui_presence: claude_ui_presence(&lease.state, obs).map(str::to_string),
         },
         evidence: ResolvedEvidence {
             process_observed: obs.is_some_and(|obs| obs.claude_alive),
@@ -1646,6 +1668,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn claude_ui_presence_maps_foreground_background_and_lease_states() {
+        fn claude_obs(alive: bool, foreground: bool) -> ClaudeChannelObservation {
+            ClaudeChannelObservation {
+                session_id: "claude-presence".to_string(),
+                provider_session_id: Some("provider-claude".to_string()),
+                state_file: PathBuf::from("/tmp/claude-presence.json"),
+                cwd: None,
+                claude_pid: Some(123),
+                bridge_pid: Some(124),
+                ready: true,
+                started_at: "2026-05-07T20:03:50Z".to_string(),
+                updated_at: "2026-05-07T20:03:50Z".to_string(),
+                claude_alive: alive,
+                bridge_alive: alive,
+                claude_foreground_tui: foreground,
+            }
+        }
+
+        // Foreground controlling terminal -> attached interactive TUI.
+        assert_eq!(
+            claude_ui_presence("attached", Some(&claude_obs(true, true))),
+            Some("foreground_tui")
+        );
+        // Live but no foreground terminal -> background.
+        assert_eq!(
+            claude_ui_presence("attached", Some(&claude_obs(true, false))),
+            Some("background")
+        );
+        // Not alive and no observation -> no presence projected.
+        assert_eq!(claude_ui_presence("attached", Some(&claude_obs(false, false))), None);
+        assert_eq!(claude_ui_presence("attached", None), None);
+        // Lease-level states win over process signal.
+        assert_eq!(
+            claude_ui_presence("detached", Some(&claude_obs(true, true))),
+            Some("detached")
+        );
+        assert_eq!(
+            claude_ui_presence("degraded", Some(&claude_obs(true, true))),
+            Some("degraded")
+        );
+    }
+
     fn test_opencode_observation(session_id: &str, launch_mode: &str) -> OpenCodeServerObservation {
         OpenCodeServerObservation {
             session_id: session_id.to_string(),
@@ -1824,6 +1889,7 @@ mod tests {
             updated_at: "2026-05-07T20:03:50Z".to_string(),
             claude_alive: true,
             bridge_alive: true,
+            claude_foreground_tui: true,
         };
         let dead = ClaudeChannelObservation {
             session_id: "19b68f98-1e31-458e-b78a-6dfd062ead75".to_string(),
@@ -1837,6 +1903,7 @@ mod tests {
             updated_at: "2026-05-07T20:03:50Z".to_string(),
             claude_alive: false,
             bridge_alive: false,
+            claude_foreground_tui: false,
         };
 
         let leases = leases_from_claude_channel_observations(&conn, "cinder", &[live, dead], now);
@@ -1980,6 +2047,7 @@ mod tests {
             updated_at: "2026-05-07T20:03:50Z".to_string(),
             claude_alive: true,
             bridge_alive: true,
+            claude_foreground_tui: true,
         };
         let bindings = vec![
             test_binding("claude", "claude-provider-session", 999),
@@ -2101,6 +2169,7 @@ mod tests {
             updated_at: "2026-05-07T20:03:50Z".to_string(),
             claude_alive: true,
             bridge_alive: true,
+            claude_foreground_tui: true,
         };
         let lease = ManagedSessionLease {
             session_id: "managed-claude".to_string(),

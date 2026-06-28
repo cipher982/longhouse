@@ -3302,6 +3302,7 @@ mod tests {
             updated_at: "2026-05-12T19:59:59Z".to_string(),
             claude_alive: true,
             bridge_alive: true,
+            claude_foreground_tui: true,
         };
         let dead_obs = managed_claude_scan::ClaudeChannelObservation {
             claude_alive: false,
@@ -3360,6 +3361,7 @@ mod tests {
             updated_at: "2026-05-12T19:59:59Z".to_string(),
             claude_alive: true,
             bridge_alive: true,
+            claude_foreground_tui: true,
         };
 
         reconcile_claude_terminal_signals(
@@ -3400,6 +3402,7 @@ mod tests {
             updated_at: "2026-05-12T20:00:00Z".to_string(),
             claude_alive: false,
             bridge_alive: false,
+            claude_foreground_tui: false,
         };
 
         reconcile_claude_terminal_signals(

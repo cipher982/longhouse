@@ -269,6 +269,8 @@ mod tests {
             pid,
             ProcessFact {
                 pid,
+                tty: "??".to_string(),
+                stat: "S".to_string(),
                 lstart: lstart.to_string(),
                 command: "longhouse opencode".to_string(),
                 start_time: None,

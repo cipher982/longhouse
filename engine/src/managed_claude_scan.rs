@@ -47,6 +47,10 @@ pub struct ClaudeChannelObservation {
     pub updated_at: String,
     pub claude_alive: bool,
     pub bridge_alive: bool,
+    /// True when the live `claude` process owns a foreground controlling
+    /// terminal — an interactive, attached TUI. False when detached/background
+    /// or when the process is not alive. Drives `foreground_tui` UI presence.
+    pub claude_foreground_tui: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +125,12 @@ fn collect_observations_from_with_processes(
         let bridge_alive = state
             .bridge_pid
             .is_some_and(|pid| claude_channel_bridge_alive(process_facts, pid, recorded_start));
+        let claude_foreground_tui = claude_alive
+            && state.claude_pid.is_some_and(|pid| {
+                process_facts
+                    .get(&pid)
+                    .is_some_and(ProcessFact::is_foreground_tty)
+            });
         let cwd = state.cwd.or_else(|| {
             state
                 .claude_pid
@@ -140,6 +150,7 @@ fn collect_observations_from_with_processes(
             updated_at: state.updated_at.unwrap_or_default(),
             claude_alive,
             bridge_alive,
+            claude_foreground_tui,
         });
     }
     out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
@@ -270,8 +281,14 @@ mod tests {
     use super::*;
 
     fn fact(command: &str, start: Option<&str>) -> ProcessFact {
+        fact_with_tty(command, start, "ttys000", "S+")
+    }
+
+    fn fact_with_tty(command: &str, start: Option<&str>, tty: &str, stat: &str) -> ProcessFact {
         ProcessFact {
             pid: 0,
+            tty: tty.to_string(),
+            stat: stat.to_string(),
             lstart: String::new(),
             command: command.to_string(),
             start_time: start.and_then(parse_rfc3339),
@@ -320,6 +337,7 @@ mod tests {
         assert!(obs.ready);
         assert!(!obs.claude_alive);
         assert!(!obs.bridge_alive);
+        assert!(!obs.claude_foreground_tui);
     }
 
     #[test]
@@ -359,6 +377,40 @@ mod tests {
         assert_eq!(observations.len(), 1);
         assert!(observations[0].claude_alive);
         assert!(observations[0].bridge_alive);
+        // Foreground TTY (ttys000 / S+) -> attached interactive TUI.
+        assert!(observations[0].claude_foreground_tui);
+    }
+
+    #[test]
+    fn scan_reports_background_claude_as_not_foreground() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("session.json"),
+            r#"{
+                  "session_id": "09b68f98-1e31-458e-b78a-6dfd062ead75",
+                  "claude_pid": 101,
+                  "ready": true,
+                  "started_at": "2026-05-07T20:03:50Z",
+                  "updated_at": "2026-05-07T20:03:50Z"
+                }"#,
+        )
+        .unwrap();
+        // Live claude, but no controlling terminal (detached / backgrounded).
+        let process_facts = HashMap::from([(
+            101,
+            fact_with_tty(
+                "claude --dangerously-skip-permissions",
+                Some("2026-05-07T20:03:48Z"),
+                "??",
+                "Ss",
+            ),
+        )]);
+
+        let observations = collect_observations_from_with_processes(tmp.path(), &process_facts);
+
+        assert_eq!(observations.len(), 1);
+        assert!(observations[0].claude_alive);
+        assert!(!observations[0].claude_foreground_tui);
     }
 
     #[test]
