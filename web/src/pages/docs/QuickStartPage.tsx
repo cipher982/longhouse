@@ -82,15 +82,15 @@ export default function QuickStartPage() {
         {`longhouse claude       # Claude Code with control channel
 longhouse codex        # Codex CLI with control channel
 longhouse agy          # Antigravity CLI, managed observe-only
-longhouse opencode     # OpenCode, managed live send`}
+longhouse opencode     # OpenCode, managed live control`}
       </CodeBlock>
       <p>
         When Longhouse launches the session, it owns the session record and
         local observation path. Claude is the strongest managed path today, and{" "}
         <code>longhouse codex</code> also keeps a Codex session steerable.
-        OpenCode supports managed live send and interrupt. Antigravity starts
-        as managed observe-only: archive, transcript, and phase signals without
-        remote send controls yet.
+        OpenCode supports managed send, interrupt, launch, and terminate but
+        not active-turn steer. Antigravity starts as managed observe-only:
+        archive, transcript, and phase signals without remote send controls yet.
       </p>
       <div className="docs-callout">
         <p>
@@ -98,7 +98,7 @@ longhouse opencode     # OpenCode, managed live send`}
           but managed sessions keep Longhouse ownership of the launch and
           observation path. Use <code>longhouse claude</code> or{" "}
           <code>longhouse codex</code> for steerable sessions,{" "}
-          <code>longhouse opencode</code> for managed live send, and{" "}
+          <code>longhouse opencode</code> for managed OpenCode control, and{" "}
           <code>longhouse agy</code> for managed observe-only archive and signals.
         </p>
       </div>

@@ -106,9 +106,10 @@ export default function IntegrationsPage() {
       <h2>OpenCode</h2>
       <p>
         OpenCode lands in the timeline alongside the other CLIs. Launch through
-        Longhouse with <code>longhouse opencode</code> for a managed live-send
-        session: archive, transcript, process-level health, remote send, and
-        interrupt. Active-turn steer is not advertised yet.
+        Longhouse with <code>longhouse opencode</code> for a managed-control
+        session: archive, transcript, process-level health, remote send,
+        interrupt, and lifecycle terminate. Active-turn steer and pause-answer
+        are not advertised yet.
       </p>
       <CodeBlock title="terminal">
         {`longhouse opencode             # start OpenCode with Longhouse session ownership`}
@@ -124,7 +125,7 @@ export default function IntegrationsPage() {
           <tr><td>Session import</td><td>Full</td></tr>
           <tr><td>Search & detail</td><td>Full</td></tr>
           <tr><td>Launch through Longhouse</td><td>Supported</td></tr>
-          <tr><td>Live control</td><td>Live send and interrupt</td></tr>
+          <tr><td>Live control</td><td>Send, interrupt, and lifecycle control</td></tr>
           <tr><td>Continue / branch</td><td>Not yet</td></tr>
         </tbody>
       </table>

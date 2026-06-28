@@ -43,8 +43,8 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   opencode: {
     id: "opencode",
     marketingName: "OpenCode",
-    cardDescription: "Archive, launch, and managed live send",
-    statusLabel: "Live send",
+    cardDescription: "Archive, launch, send, interrupt, terminate",
+    statusLabel: "Lifecycle control",
     archiveVisibility: "live",
     cloudSessionStart: "live",
     hooksSupport: "none",

@@ -44,7 +44,7 @@ All three install the same product. On macOS the shell installer also drops `Lon
 longhouse claude       # managed session, steerable later
 longhouse codex        # same, for Codex CLI
 longhouse agy          # managed observe-only launch for Antigravity CLI
-longhouse opencode     # managed live-send launch for OpenCode
+longhouse opencode     # managed live-control launch for OpenCode
 ```
 
 Bare `claude`, `codex`, `antigravity`, and `opencode` still get ingested into the timeline — they just stay unmanaged (searchable, not steerable).
@@ -113,7 +113,7 @@ There are great tools for spinning up sandboxed cloud agents, and the model labs
 | Self-hostable | ✅ | ❌ | ❌ |
 | You own & can export the raw history | ✅ | ❌ | ❌ |
 
-Honest scope today: managed live control is strongest for **Claude Code and Codex**; **OpenCode supports managed live send/interrupt but not active-turn steer**; **Antigravity is observe-only** at the control layer. Bare CLI runs are imported and searchable but not steerable. See **Managed vs Unmanaged** in the docs.
+Honest scope today: managed live control is strongest for **Claude Code and Codex**; **OpenCode supports managed send, interrupt, launch, and terminate, but not active-turn steer or pause-answer**; **Antigravity is observe-only** at the control layer. Bare CLI runs are imported and searchable but not steerable. See **Managed vs Unmanaged** in the docs.
 
 ## Self-host (free) vs Hosted (paid)
 
@@ -145,7 +145,7 @@ Issues: <https://github.com/cipher982/longhouse/issues>
 
 ## Status
 
-Alpha. Actively developed. Claude Code, Codex, Antigravity, and OpenCode sessions sync today. Managed launch is live for Claude, Codex, Antigravity, and OpenCode (Antigravity is observe-only; OpenCode supports managed live send but not active-turn steer), and the native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
+Alpha. Actively developed. Claude Code, Codex, Antigravity, and OpenCode sessions sync today. Managed launch is live for Claude, Codex, Antigravity, and OpenCode (Antigravity is observe-only; OpenCode supports managed send, interrupt, launch, and terminate, but not active-turn steer or pause-answer), and the native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
 
 Built by [David Rose](https://github.com/cipher982). Apache-2.0.
 

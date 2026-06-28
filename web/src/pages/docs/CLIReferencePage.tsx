@@ -35,15 +35,15 @@ longhouse serve --demo         # start with demo data`}
         {`longhouse claude               # start Claude Code (steerable)
 longhouse codex                # start Codex CLI (steerable)
 longhouse agy                  # start Antigravity CLI (managed observe-only)
-longhouse opencode             # start OpenCode (managed live send)`}
+longhouse opencode             # start OpenCode (managed live control)`}
       </CodeBlock>
       <p>
         Use these as the default launch path for new work. Bare{" "}
         <code>claude</code>, <code>codex</code>, <code>antigravity</code>, and{" "}
         <code>opencode</code> runs still import into the timeline, but they
         remain unmanaged history. Claude and Codex support the strongest live control;{" "}
-        OpenCode supports managed live send and interrupt; Antigravity is managed
-        observe-only today.
+        OpenCode supports managed send, interrupt, launch, and terminate but
+        not active-turn steer; Antigravity is managed observe-only today.
       </p>
 
       <h3>longhouse ship</h3>

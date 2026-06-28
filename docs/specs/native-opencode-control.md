@@ -300,7 +300,7 @@ Scope:
 
 - Update README/status wording so OpenCode is described as managed live control for send, interrupt, launch, and terminate, while still explicitly excluding active-turn steer and pause-answer.
 - Update web landing/docs copy and repo-local agent skill guidance so user- and agent-facing surfaces use the same native-control wording.
-- Update `config/session-propagation-sla.toml` prose so OpenCode control is no longer called undefined or not first-class. Keep SLA status/CI gates blocked where the real missing piece is a profiler driver or stronger observer coverage.
+- Update `config/session-propagation-sla.toml` prose so OpenCode control is no longer called undefined or too immature for product use. Keep SLA status/CI gates blocked where the real missing piece is a profiler driver or stronger observer coverage.
 - Update release-proof and provider-roadmap wording where it still frames OpenCode control as pending migration rather than native with conservative proof levels.
 - Update existing web copy tests that currently enforce stale OpenCode labels, and add lightweight validation checks that catch stale OpenCode product/evidence wording.
 - Do not raise operation evidence levels without new proof artifacts.

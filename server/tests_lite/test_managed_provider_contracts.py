@@ -266,6 +266,8 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.answer_pause is False
     assert opencode.reattach is True
     assert opencode.can_resume is False
+    assert opencode.operation_evidence_for("launch_remote")["level"] == "hermetic"
+    assert opencode.operation_evidence_for("terminate")["level"] == "hermetic"
     assert opencode.machine_control_supports == (
         "opencode.send",
         "opencode.interrupt",

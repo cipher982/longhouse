@@ -73,14 +73,13 @@ Hard Codex contract:
 - `longhouse opencode` starts stock upstream `opencode serve` on localhost
   through Longhouse's `opencode_server_bridge`, then attaches the TUI with
   stock `opencode attach`.
-- OpenCode server-bridge send and interrupt are first-class local control
-  operations. Active-turn steer is not advertised until OpenCode exposes and
-  proves a true mid-turn injection semantic.
+- OpenCode server-bridge send, interrupt, launch, and terminate are first-class
+  Machine Agent control operations. Active-turn steer is not advertised until
+  OpenCode exposes and proves a true mid-turn injection semantic.
 - Bridge state lives under `~/.claude/managed-local/opencode-server/` and
   stores the local server password in a 0600 state file so `longhouse
-  opencode-channel attach/send/interrupt` can reconnect without printing
-  secrets. Runtime hook tokens must not be written to the bridge state or
-  server log.
+  opencode-channel attach` can reconnect without printing secrets. Runtime
+  hook tokens must not be written to the bridge state or server log.
 - OpenCode launch is idempotent per Longhouse session id. A retry must reuse a
   live state file instead of spawning a second `opencode serve`.
 - Machine Agent should only advertise `opencode.*` control support when the
