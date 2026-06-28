@@ -229,6 +229,7 @@ providers:
   - opencode.send
   - opencode.interrupt
   - opencode.launch
+  - opencode.terminate
 - provider: antigravity
   provider_cli_binary: agy
   provider_cli_env: LONGHOUSE_ANTIGRAVITY_BIN

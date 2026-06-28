@@ -374,6 +374,7 @@ def test_machine_control_command_projection_is_manifest_backed_for_every_provide
         "interrupt": "session.interrupt",
         "steer": "session.steer_text",
         "answer_pause": "session.answer_pause",
+        "terminate": "session.terminate",
         "run_once": "session.run_once",
     }
     launch_only_operations = {"launch", "continue", "resume_run_once"}
