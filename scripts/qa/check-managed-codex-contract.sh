@@ -178,64 +178,6 @@ PY
   esac
 }
 
-scan_legacy_headless_writers() {
-  local label="detached-ui writers must not persist legacy headless state"
-  local engine_src="$ROOT_DIR/engine/src"
-
-  if [[ ! -d "$engine_src" ]]; then
-    return 0
-  fi
-
-  set +e
-  python3 - "$engine_src" "$MATCHES_FILE" <<'PY'
-from __future__ import annotations
-
-import re
-import sys
-from pathlib import Path
-
-engine_src = Path(sys.argv[1])
-matches_file = Path(sys.argv[2])
-pattern = re.compile(
-    r"launch_mode\s*[:=]\s*Some\([^;}]*?(?:LEGACY_LAUNCH_MODE_HEADLESS|\"headless\")",
-    re.DOTALL,
-)
-matches: list[str] = []
-
-for path in sorted(engine_src.rglob("*.rs")):
-    text = path.read_text(encoding="utf-8")
-    for match in pattern.finditer(text):
-        snippet = text[match.start() : min(len(text), match.end() + 120)]
-        if "LEGACY_HEADLESS_COMPAT_OK" in snippet:
-            continue
-        line = text.count("\n", 0, match.start()) + 1
-        first_line = snippet.splitlines()[0].strip()
-        matches.append(f"{path}:{line}:{first_line}")
-
-if matches:
-    matches_file.write_text("\n".join(matches) + "\n", encoding="utf-8")
-    raise SystemExit(1)
-matches_file.write_text("", encoding="utf-8")
-PY
-  local rc=$?
-  set -e
-
-  case "$rc" in
-    0)
-      ;;
-    1)
-      echo "Forbidden managed Codex contract reference matched: $label" >&2
-      cat "$MATCHES_FILE" >&2
-      failed=1
-      ;;
-    *)
-      echo "managed Codex contract scan failed for: $label" >&2
-      cat "$MATCHES_FILE" >&2 || true
-      failed=1
-      ;;
-  esac
-}
-
 for path in \
   "scripts/release/download-managed-codex.sh" \
   "scripts/release/build-managed-codex.sh" \
@@ -260,14 +202,12 @@ scan_forbidden_pattern "legacy Codex start-thread flag" \
   "scripts/qa" \
   "scripts/ci"
 
-scan_forbidden_pattern "detached-ui persisted alias must not point at legacy headless" \
-  "PERSISTED_DETACHED_UI_LAUNCH_MODE[[:space:]]*:.*LEGACY_LAUNCH_MODE_HEADLESS" \
-  "engine/src/codex_bridge.rs"
+scan_forbidden_pattern "managed Codex must not persist a legacy headless launch mode" \
+  "launch_mode[[:space:]]*[:=][[:space:]]*Some\\([^;}]*\"headless\"" \
+  "engine/src"
 
-scan_legacy_headless_writers
-
-require_pattern "detached-ui writer persists detached_ui, not legacy headless" \
-  "PERSISTED_DETACHED_UI_LAUNCH_MODE[[:space:]]*:[^=]*=[[:space:]]*LAUNCH_MODE_DETACHED_UI" \
+require_pattern "detached-ui writer persists detached_ui" \
+  "Self::DetachedUi[[:space:]]*=>[[:space:]]*LAUNCH_MODE_DETACHED_UI" \
   "engine/src/codex_bridge.rs"
 
 if [[ "$failed" -ne 0 ]]; then

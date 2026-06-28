@@ -116,9 +116,6 @@ fn launch_mode_reap_safety(mode: Option<&str>) -> LiveBridgeReapSafety {
         Some(value) if value.eq_ignore_ascii_case(codex_bridge::LAUNCH_MODE_DETACHED_UI) => {
             LiveBridgeReapSafety::SkipDetachedUi
         }
-        Some(value) if value.eq_ignore_ascii_case(codex_bridge::LEGACY_LAUNCH_MODE_HEADLESS) => {
-            LiveBridgeReapSafety::SkipDetachedUi
-        }
         Some(_) => LiveBridgeReapSafety::SkipUnknown,
         None => LiveBridgeReapSafety::SkipUnknown,
     }
@@ -456,19 +453,6 @@ mod tests {
     fn skip_detached_ui_launch_without_tui_even_after_grace() {
         let mut obs = base_obs();
         obs.launch_mode = Some(codex_bridge::LAUNCH_MODE_DETACHED_UI.to_string());
-        let now = Instant::now();
-        let first = now - Duration::from_secs(130);
-
-        assert_eq!(
-            decide(&obs, Some(first), now, Duration::from_secs(120)),
-            ReapDecision::Skip
-        );
-    }
-
-    #[test]
-    fn skip_legacy_headless_launch_without_tui_even_after_grace() {
-        let mut obs = base_obs();
-        obs.launch_mode = Some(codex_bridge::LEGACY_LAUNCH_MODE_HEADLESS.to_string()); // LEGACY_HEADLESS_COMPAT_OK
         let now = Instant::now();
         let first = now - Duration::from_secs(130);
 

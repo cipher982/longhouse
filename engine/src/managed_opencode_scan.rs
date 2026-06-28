@@ -31,15 +31,14 @@ pub struct OpenCodeServerObservation {
     pub started_at: String,
     pub updated_at: String,
     pub server_alive: bool,
-    /// Lifecycle ownership: attached_tui | keep_server | detached. Empty on
-    /// legacy (schema v1) state files. Drives UI presence projection and gates
-    /// the reaper (only attached_tui servers are reapable).
+    /// Lifecycle ownership: attached_tui | keep_server | detached. Drives UI
+    /// presence projection and gates the reaper (only attached_tui servers are
+    /// reapable).
     pub launch_mode: String,
     pub owner_wrapper_pid: Option<u32>,
     pub owner_wrapper_start_time: String,
     /// `ps`-style start time of the `opencode serve` process the wrapper
-    /// launched. Empty on legacy state. Lets the reaper reject a recycled
-    /// server pid before signaling.
+    /// launched. Lets the reaper reject a recycled server pid before signaling.
     pub process_start_time: String,
 }
 

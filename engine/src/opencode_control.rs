@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 const DEFAULT_USERNAME: &str = "opencode";
-const MAX_READABLE_STATE_SCHEMA_VERSION: u64 = 2;
+const MAX_READABLE_STATE_SCHEMA_VERSION: u64 = 1;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub const OPENCODE_SERVER_BRIDGE_TRANSPORT: &str = "opencode_server_bridge";
@@ -399,12 +399,12 @@ mod tests {
         let temp = TempDir::new().unwrap();
 
         let mut newer_schema = base_state_payload("http://127.0.0.1:12345", Some("/tmp/project"));
-        newer_schema["schema_version"] = Value::Number(3.into());
+        newer_schema["schema_version"] = Value::Number(2.into());
         write_state_payload(temp.path(), SESSION_ID, newer_schema);
         let error = read_bridge_state(SESSION_ID, Some(temp.path())).unwrap_err();
         assert!(error
             .to_string()
-            .contains("state schema 3 is newer than this Longhouse build"));
+            .contains("state schema 2 is newer than this Longhouse build"));
 
         let mut incomplete = base_state_payload("http://127.0.0.1:12345", Some("/tmp/project"));
         incomplete.as_object_mut().unwrap().remove("password");

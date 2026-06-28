@@ -55,10 +55,9 @@ Codex launch modes:
 - **One-shot/batch**: prompt is passed to a provider process and the process exits after one turn. Do not call this "headless" in managed-session code or docs; it is a different execution model and is not equivalent to detached-ui managed control.
 - A nonzero `codex --remote` auto-attach exit is a foreground TUI/client-link failure, not proof the managed session ended. Preserve the bridge and print a reattach command; only explicit stop paths should terminate the bridge/app-server.
 
-Bridge state compatibility:
+Bridge state:
 
-- Treat `docs/specs/managed-codex-state-compat.md` as the contract before changing bridge state fields.
-- New bridge writers persist detached-UI managed sessions as `launch_mode=detached_ui`; readers still tolerate older dogfood `headless` state.
+- Bridge writers persist detached-UI managed sessions as `launch_mode=detached_ui` and TUI sessions as `launch_mode=tui`.
 - Reapers must skip live-bridge reaping for unknown launch modes or future bridge state schema versions.
 
 Hard Codex contract:

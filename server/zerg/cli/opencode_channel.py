@@ -35,16 +35,10 @@ app = typer.Typer(no_args_is_help=True)
 OPENCODE_REMOTE_LAUNCH_TOKEN_ENV = "LONGHOUSE_OPENCODE_REMOTE_LAUNCH_TOKEN"
 OPENCODE_SERVER_BRIDGE_TRANSPORT = "opencode_server_bridge"
 _DEFAULT_USERNAME = "opencode"
-# We WRITE schema 1: the identity / launch_mode / owner fields added for
-# terminal-owned lifecycle are all optional with safe defaults on read, so v1
-# readers (older local components during a mixed dogfood) tolerate them and
-# bumping would needlessly make them reject otherwise-compatible state.
+# Bridge state schema. Writers emit this; readers reject anything higher as
+# "newer than this build" forward-protection.
 _STATE_SCHEMA_VERSION = 1
-# We READ up to schema 2: an interim build briefly wrote schema 2 with exactly
-# these additive fields. Tolerate it so an existing v2 state file (e.g. a
-# running server started by that build) stays attachable/stoppable instead of
-# being rejected as "newer than this build".
-_MAX_READABLE_STATE_SCHEMA_VERSION = 2
+_MAX_READABLE_STATE_SCHEMA_VERSION = _STATE_SCHEMA_VERSION
 
 # Lifecycle ownership of the backing `opencode serve` process.
 LAUNCH_MODE_ATTACHED_TUI = "attached_tui"  # server dies when the attach TUI exits
@@ -73,11 +67,11 @@ class OpenCodeServerBridgeState:
     config_content_path: str
     started_at: str
     updated_at: str
-    # Process identity for PID-reuse-safe kills (schema v2+). Empty on legacy
-    # state files, which then fall back to a bare liveness check.
+    # Process identity for PID-reuse-safe kills. Empty only when `ps` failed to
+    # capture identity at launch, which then falls back to a bare liveness check.
     process_start_time: str = ""
     process_command: str = ""
-    # Lifecycle ownership (schema v2+). launch_mode is one of
+    # Lifecycle ownership. launch_mode is one of
     # attached_tui | keep_server | detached. owner_wrapper_* identify the
     # `longhouse opencode` wrapper process whose exit should stop an
     # attached_tui server; used by the engine reaper as a crash backstop.
@@ -359,10 +353,10 @@ def _pid_matches_recorded_identity(state: "OpenCodeServerBridgeState") -> bool:
     """True iff state.pid is live AND is provably the server we launched.
 
     Never returns True on bare liveness alone — a reused PID must not be killed.
-    With recorded identity (schema v2), require an exact start-time + command
-    match. Without it (legacy v1 state, or a v2 launch where `ps` failed at
-    capture time), fall back to confirming the live PID is still an
-    `opencode serve` process, which is a weaker but real reuse defense.
+    With recorded identity, require an exact start-time + command match. Without
+    it (a launch where `ps` failed at capture time), fall back to confirming the
+    live PID is still an `opencode serve` process, which is a weaker but real
+    reuse defense.
     """
     if not _pid_is_running(state.pid):
         return False

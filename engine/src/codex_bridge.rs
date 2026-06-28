@@ -38,10 +38,6 @@ pub const CODEX_BRIDGE_TOKEN_ENV: &str = "LONGHOUSE_CODEX_BRIDGE_TOKEN";
 pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 1;
 pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";
 pub const LAUNCH_MODE_TUI: &str = "tui";
-pub const LEGACY_LAUNCH_MODE_HEADLESS: &str = "headless";
-// Readers accept the old dogfood `headless` value, but writers emit the product
-// lifecycle name directly.
-pub const PERSISTED_DETACHED_UI_LAUNCH_MODE: &str = LAUNCH_MODE_DETACHED_UI;
 const PAUSE_KIND_STRUCTURED_QUESTION: &str = "structured_question";
 const PAUSE_KIND_PERMISSION_PROMPT: &str = "permission_prompt";
 const PAUSE_KIND_PLAN_APPROVAL: &str = "plan_approval";
@@ -68,7 +64,7 @@ impl BridgeLaunchMode {
     pub fn persisted_state_value(self) -> &'static str {
         match self {
             Self::Tui => LAUNCH_MODE_TUI,
-            Self::DetachedUi => PERSISTED_DETACHED_UI_LAUNCH_MODE,
+            Self::DetachedUi => LAUNCH_MODE_DETACHED_UI,
         }
     }
 
@@ -86,7 +82,6 @@ impl BridgeLaunchMode {
         }
         if value.eq_ignore_ascii_case(LAUNCH_MODE_DETACHED_UI)
             || value.eq_ignore_ascii_case("detached-ui")
-            || value.eq_ignore_ascii_case(LEGACY_LAUNCH_MODE_HEADLESS)
         {
             return Some(Self::DetachedUi);
         }
@@ -235,8 +230,7 @@ pub struct BridgeStateFile {
     pub codex_bin: String,
     /// Managed Codex launch mode. `detached_ui` means long-running app-server
     /// control without a visible terminal TUI; it is not one-shot/batch
-    /// prompt-and-exit execution. Legacy state files may still contain
-    /// `headless`, which is interpreted as equivalent to `detached_ui`.
+    /// prompt-and-exit execution.
     #[serde(default)]
     pub launch_mode: Option<String>,
     pub ws_url: Option<String>,
@@ -5307,7 +5301,7 @@ mod tests {
             session_id: "session-123".to_string(),
             cwd: temp.path().display().to_string(),
             codex_bin: "codex".to_string(),
-            launch_mode: Some(PERSISTED_DETACHED_UI_LAUNCH_MODE.to_string()),
+            launch_mode: Some(LAUNCH_MODE_DETACHED_UI.to_string()),
             ws_url: None,
             thread_id: None,
             thread_path: None,

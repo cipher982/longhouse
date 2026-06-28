@@ -262,8 +262,8 @@ def test_stop_bridge_kills_when_identity_matches(monkeypatch, tmp_path):
     assert result["stopped"] is True
 
 
-def test_stop_bridge_legacy_state_rejects_reused_non_opencode_pid(monkeypatch, tmp_path):
-    # Legacy state (no recorded identity) whose pid is now an unrelated process
+def test_stop_bridge_without_recorded_identity_rejects_reused_non_opencode_pid(monkeypatch, tmp_path):
+    # State with no recorded identity whose pid is now an unrelated process
     # must NOT be killed.
     session_id = str(uuid4())
     _write_state(tmp_path, session_id=session_id)
@@ -453,34 +453,11 @@ def test_launch_rejects_unknown_launch_mode(tmp_path):
         )
 
 
-def test_schema_v2_state_is_still_readable(tmp_path):
-    # An interim build wrote schema 2 with additive fields; the reader must
-    # still accept it so a running server stays attachable/stoppable.
+def test_state_with_missing_optional_fields_reads_as_empty(tmp_path):
+    # Defensive parse: a state file missing the optional identity/launch_mode
+    # fields (e.g. a partial write) reads back as safe empty defaults.
     session_id = str(uuid4())
-    state = {
-        "schema_version": 2,
-        "session_id": session_id,
-        "provider_session_id": "ses_test123",
-        "server_url": "http://127.0.0.1:57777",
-        "pid": 4242,
-        "cwd": str(tmp_path),
-        "username": "opencode",
-        "password": "server-secret",
-        "log_path": str(tmp_path / "server.log"),
-        "config_content_path": str(tmp_path / "config.json"),
-        "started_at": "2026-05-27T00:00:00Z",
-        "updated_at": "2026-05-27T00:00:00Z",
-        "launch_mode": "attached_tui",
-    }
-    path = opencode_channel._opencode_server_state_path(session_id, tmp_path / "config")
-    opencode_channel._write_private_json(path, state)
-    read = opencode_channel.read_opencode_server_bridge_state(session_id, config_dir=tmp_path / "config")
-    assert read.launch_mode == "attached_tui"
-
-
-def test_legacy_state_without_launch_mode_reads_as_empty(tmp_path):
-    session_id = str(uuid4())
-    _write_state(tmp_path, session_id=session_id)  # schema_version 1, no new fields
+    _write_state(tmp_path, session_id=session_id)
     state = opencode_channel.read_opencode_server_bridge_state(session_id, config_dir=tmp_path / "config")
     assert state.launch_mode == ""
     assert state.owner_wrapper_pid == 0
