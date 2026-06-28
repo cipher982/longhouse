@@ -92,7 +92,9 @@ fn read_bridge_state_from_path(
             path.display()
         )
     })?;
-    let schema_version = payload.schema_version.unwrap_or(0);
+    let Some(schema_version) = payload.schema_version else {
+        bail!("OpenCode server bridge state is missing schema_version");
+    };
     if schema_version > MAX_READABLE_STATE_SCHEMA_VERSION {
         bail!("OpenCode server bridge state schema {schema_version} is newer than this Longhouse build");
     }
@@ -405,6 +407,14 @@ mod tests {
         assert!(error
             .to_string()
             .contains("state schema 2 is newer than this Longhouse build"));
+
+        let mut missing_schema = base_state_payload("http://127.0.0.1:12345", Some("/tmp/project"));
+        missing_schema.as_object_mut().unwrap().remove("schema_version");
+        write_state_payload(temp.path(), SESSION_ID, missing_schema);
+        let error = read_bridge_state(SESSION_ID, Some(temp.path())).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("OpenCode server bridge state is missing schema_version"));
 
         let mut incomplete = base_state_payload("http://127.0.0.1:12345", Some("/tmp/project"));
         incomplete.as_object_mut().unwrap().remove("password");

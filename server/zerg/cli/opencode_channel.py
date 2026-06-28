@@ -189,6 +189,8 @@ def read_opencode_server_bridge_state(
     except json.JSONDecodeError as exc:
         raise OpenCodeServerBridgeError(f"OpenCode server bridge state is not valid JSON: {path}") from exc
     state = OpenCodeServerBridgeState.from_mapping(payload)
+    if state.schema_version < 1:
+        raise OpenCodeServerBridgeError("OpenCode server bridge state is missing schema_version")
     if state.schema_version > _MAX_READABLE_STATE_SCHEMA_VERSION:
         message = f"OpenCode server bridge state schema {state.schema_version} is newer than this Longhouse build"
         raise OpenCodeServerBridgeError(message)
