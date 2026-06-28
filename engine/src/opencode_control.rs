@@ -548,14 +548,56 @@ fn opencode_server_state_dir(config_dir: Option<&Path>) -> Result<PathBuf> {
 }
 
 fn opencode_runtime_dir(config_dir: Option<&Path>) -> Result<PathBuf> {
-    let provider_home = match config_dir {
-        Some(path) => path.to_path_buf(),
-        None => env::var_os("CLAUDE_CONFIG_DIR")
-            .map(PathBuf::from)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")))
-            .ok_or_else(|| anyhow!("OpenCode provider config directory could not be resolved"))?,
-    };
-    Ok(provider_home.join("managed-local").join("opencode"))
+    Ok(resolve_longhouse_home(config_dir)?
+        .join("managed-local")
+        .join("opencode"))
+}
+
+fn resolve_longhouse_home(base_dir: Option<&Path>) -> Result<PathBuf> {
+    if let Some(path) = base_dir {
+        return Ok(normalize_longhouse_home(path));
+    }
+    if let Some(path) = env::var_os("LONGHOUSE_HOME").filter(|value| !value.is_empty()) {
+        return Ok(expand_tilde(&path.to_string_lossy()));
+    }
+    if let Some(provider_home) = env::var_os("CLAUDE_CONFIG_DIR").filter(|value| !value.is_empty())
+    {
+        return Ok(resolve_longhouse_home_from_provider_home(Path::new(
+            &provider_home,
+        )));
+    }
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("Longhouse home directory could not be resolved"))?;
+    Ok(home.join(".longhouse"))
+}
+
+fn normalize_longhouse_home(path: &Path) -> PathBuf {
+    let path = PathBuf::from(path);
+    if is_provider_home_name(&path) {
+        if let Some(parent) = path.parent().filter(|parent| *parent != path) {
+            return parent.join(".longhouse");
+        }
+    }
+    path
+}
+
+fn resolve_longhouse_home_from_provider_home(provider_home: &Path) -> PathBuf {
+    if provider_home.file_name().and_then(OsStr::to_str) == Some(".longhouse") {
+        return provider_home.to_path_buf();
+    }
+    let parent = provider_home.parent().unwrap_or(provider_home);
+    if parent == provider_home {
+        return provider_home.join(".longhouse");
+    }
+    parent.join(".longhouse")
+}
+
+fn is_provider_home_name(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(OsStr::to_str),
+        Some(".claude") | Some(".codex") | Some(".gemini")
+    )
 }
 
 #[cfg(unix)]
@@ -1273,6 +1315,52 @@ mod tests {
         assert!(error
             .to_string()
             .contains("OPENCODE_CONFIG_CONTENT plugin field must be an array"));
+    }
+
+    #[test]
+    fn runtime_dir_uses_longhouse_home_not_provider_home() {
+        let temp = TempDir::new().unwrap();
+        let provider_home = temp.path().join(".claude");
+        assert_eq!(
+            opencode_runtime_dir(Some(&provider_home)).unwrap(),
+            temp.path().join(".longhouse/managed-local/opencode")
+        );
+        assert_eq!(
+            opencode_runtime_dir(Some(temp.path())).unwrap(),
+            temp.path().join("managed-local/opencode")
+        );
+
+        let explicit_longhouse = temp.path().join("explicit-longhouse");
+        let vars = vec![
+            (
+                "LONGHOUSE_HOME".to_string(),
+                Some(explicit_longhouse.display().to_string()),
+            ),
+            (
+                "CLAUDE_CONFIG_DIR".to_string(),
+                Some(provider_home.display().to_string()),
+            ),
+        ];
+        temp_env::with_vars(vars, || {
+            assert_eq!(
+                opencode_runtime_dir(None).unwrap(),
+                explicit_longhouse.join("managed-local/opencode")
+            );
+        });
+
+        let vars = vec![
+            ("LONGHOUSE_HOME".to_string(), None),
+            (
+                "CLAUDE_CONFIG_DIR".to_string(),
+                Some(provider_home.display().to_string()),
+            ),
+        ];
+        temp_env::with_vars(vars, || {
+            assert_eq!(
+                opencode_runtime_dir(None).unwrap(),
+                temp.path().join(".longhouse/managed-local/opencode")
+            );
+        });
     }
 
     #[test]
