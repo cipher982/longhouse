@@ -299,18 +299,20 @@ Goal: Align public copy, operator docs, SLA config, and proof guardrails with th
 Scope:
 
 - Update README/status wording so OpenCode is described as managed live control for send, interrupt, launch, and terminate, while still explicitly excluding active-turn steer and pause-answer.
-- Update `config/session-propagation-sla.toml` so OpenCode remote send/interrupt is no longer marked undefined, and lifecycle notes no longer say managed OpenCode control is not first-class.
+- Update web landing/docs copy and repo-local agent skill guidance so user- and agent-facing surfaces use the same native-control wording.
+- Update `config/session-propagation-sla.toml` prose so OpenCode control is no longer called undefined or not first-class. Keep SLA status/CI gates blocked where the real missing piece is a profiler driver or stronger observer coverage.
 - Update release-proof and provider-roadmap wording where it still frames OpenCode control as pending migration rather than native with conservative proof levels.
-- Add lightweight tests or validation checks that catch stale OpenCode product/evidence wording.
+- Update existing web copy tests that currently enforce stale OpenCode labels, and add lightweight validation checks that catch stale OpenCode product/evidence wording.
 - Do not raise operation evidence levels without new proof artifacts.
 - Do not add new browser/iOS stop UX in this cleanup phase.
 
 Success criteria:
 
 - Repo docs no longer say OpenCode send, interrupt, launch, or terminate are future, undefined, or Python-shellout-owned.
+- Web landing/docs copy no longer describes OpenCode as only "live send" or "send/interrupt" when referring to the managed control scope.
 - Public copy remains honest that OpenCode active-turn steer and pause-answer are unsupported.
 - Provider contract manifests still advertise `opencode.send`, `opencode.interrupt`, `opencode.launch`, and `opencode.terminate`, with `requires_longhouse_cli=false`.
-- SLA/proof docs distinguish native ownership from proof maturity.
+- SLA/proof docs distinguish native ownership from proof maturity and do not unblock profiler cases without new profiler coverage.
 - Tests fail on the stale phrases that caused this cleanup.
 
 Validation:
