@@ -359,6 +359,46 @@ def test_machine_control_capability_for_command_uses_provider_contract(provider,
     assert machine_control_capability_for_command(provider, command_type) == capability
 
 
+def test_machine_control_command_projection_is_manifest_backed_for_every_provider():
+    command_by_operation = {
+        "send": "session.send_text",
+        "interrupt": "session.interrupt",
+        "steer": "session.steer_text",
+        "answer_pause": "session.answer_pause",
+        "run_once": "session.run_once",
+    }
+    launch_only_operations = {"launch", "continue", "resume_run_once"}
+
+    for contract in all_managed_provider_contracts():
+        supports = set(contract.machine_control_supports)
+        for operation, command_type in command_by_operation.items():
+            capability = f"{contract.provider}.{operation}"
+            assert machine_control_capability_for_command(contract.provider, command_type) == (
+                capability if capability in supports else None
+            )
+
+        for support in supports:
+            provider, operation = support.split(".", 1)
+            assert provider == contract.provider
+            assert operation in command_by_operation or operation in launch_only_operations
+
+    assert machine_control_launch_capability_by_provider() == {
+        contract.provider: f"{contract.provider}.launch"
+        for contract in all_managed_provider_contracts()
+        if f"{contract.provider}.launch" in contract.machine_control_supports
+    }
+    assert continue_supported_providers() == frozenset(
+        contract.provider
+        for contract in all_managed_provider_contracts()
+        if f"{contract.provider}.continue" in contract.machine_control_supports
+    )
+    assert run_once_supported_providers() == frozenset(
+        contract.provider
+        for contract in all_managed_provider_contracts()
+        if f"{contract.provider}.run_once" in contract.machine_control_supports
+    )
+
+
 def test_machine_control_launch_capability_map_comes_from_provider_contracts():
     assert machine_control_launch_capability_by_provider() == {
         "codex": "codex.launch",

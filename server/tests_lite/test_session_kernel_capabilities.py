@@ -245,6 +245,32 @@ def test_known_provider_control_plane_clamps_capability_bits_to_contract(db):
     assert coverage["observe_transcript"].state == ActionCoverageState.SUPPORTED
 
 
+@pytest.mark.parametrize("contract", all_managed_provider_contracts(), ids=lambda contract: contract.provider)
+def test_all_manifest_control_planes_clamp_session_capabilities_to_contract(db, contract):
+    s = _make_session(db, provider=contract.provider)
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    _make_conn(
+        db,
+        r,
+        control_plane=contract.control_plane,
+        state="attached",
+        caps={"send": 1, "interrupt": 1, "terminate": 1, "tail": 1, "resume": 1},
+    )
+    db.commit()
+
+    caps = project_session_capabilities(db, session_id=s.id)
+
+    assert caps.live_control_available is True
+    assert caps.managed_transport == contract.managed_transport
+    assert caps.can_send_input is contract.send_input
+    assert caps.can_interrupt is contract.interrupt
+    assert caps.can_terminate is contract.terminate
+    assert caps.can_tail_output is contract.tail_output
+    assert caps.can_resume is contract.reattach
+    assert caps.can_steer_active_turn is (contract.steer_active_turn and contract.send_input)
+
+
 @pytest.mark.parametrize(
     ("provider", "control_plane", "expected"),
     [
@@ -477,7 +503,8 @@ def test_latest_run_wins_over_old_run(db):
     s = _make_session(db)
     t = _make_thread(db, s)
     old_run = _make_run(
-        db, t,
+        db,
+        t,
         started_at=datetime.now(timezone.utc) - timedelta(hours=2),
         ended_at=datetime.now(timezone.utc) - timedelta(hours=1),
     )
@@ -543,7 +570,8 @@ def test_observe_only_with_stale_send_bit_does_not_project_live(db):
     t = _make_thread(db, s)
     r = _make_run(db, t, launch_origin="external_adopted")
     _make_conn(
-        db, r,
+        db,
+        r,
         control_plane="log_tail",
         acquisition_kind="observe_only",
         state="attached",
@@ -585,9 +613,17 @@ def test_imported_returns_full_payload_shape(db):
     caps = project_session_capabilities(db, session_id=s.id)
     assert isinstance(caps, KernelSessionCapabilities)
     # All boolean fields populated, no None
-    for field in ("live_control_available", "host_reattach_available", "observe_only",
-                  "search_only", "can_send_input", "can_interrupt", "can_terminate",
-                  "can_tail_output", "can_resume"):
+    for field in (
+        "live_control_available",
+        "host_reattach_available",
+        "observe_only",
+        "search_only",
+        "can_send_input",
+        "can_interrupt",
+        "can_terminate",
+        "can_tail_output",
+        "can_resume",
+    ):
         assert isinstance(getattr(caps, field), bool)
 
 

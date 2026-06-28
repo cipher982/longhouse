@@ -2149,6 +2149,39 @@ mod tests {
         }
     }
 
+    fn manifest_machine_control_supports() -> Vec<String> {
+        managed_provider_contract_items()
+            .iter()
+            .flat_map(|contract| {
+                contract
+                    .get("machine_control_supports")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    fn support_dispatch_command(provider: &str, operation: &str) -> Option<&'static str> {
+        match operation {
+            "send" if matches!(provider, "codex" | "claude" | "opencode" | "antigravity") => {
+                Some(COMMAND_SEND_TEXT)
+            }
+            "interrupt" if matches!(provider, "codex" | "claude" | "opencode") => {
+                Some(COMMAND_INTERRUPT)
+            }
+            "steer" if matches!(provider, "codex" | "claude") => Some(COMMAND_STEER_TEXT),
+            "answer_pause" if matches!(provider, "codex" | "claude") => Some(COMMAND_ANSWER_PAUSE),
+            "launch" if matches!(provider, "codex" | "claude" | "opencode") => Some(COMMAND_LAUNCH),
+            "continue" if matches!(provider, "codex" | "claude") => Some(COMMAND_LAUNCH),
+            "run_once" if provider == "codex" => Some(COMMAND_RUN_ONCE),
+            "resume_run_once" if provider == "codex" => Some(COMMAND_RUN_ONCE),
+            _ => None,
+        }
+    }
+
     #[test]
     fn control_ws_url_converts_http_and_https() {
         assert_eq!(
@@ -2424,6 +2457,19 @@ mod tests {
     }
 
     #[test]
+    fn manifest_machine_control_supports_have_engine_dispatch_paths() {
+        for support in manifest_machine_control_supports() {
+            let (provider, operation) = support
+                .split_once('.')
+                .unwrap_or_else(|| panic!("support {support} must be provider.operation"));
+            assert!(
+                support_dispatch_command(provider, operation).is_some(),
+                "manifest advertises {support}, but engine dispatch has no provider operation path"
+            );
+        }
+    }
+
+    #[test]
     fn control_supports_are_gated_by_installed_provider_commands() {
         let unique = format!(
             "lh-control-supports-{}-{}",
@@ -2479,6 +2525,23 @@ mod tests {
         write_executable(&dir, "claude");
         write_executable(&dir, "agy");
         let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
+        let mut expected = vec!["archive.backlog_control".to_string()];
+        for contract in managed_provider_contract_items() {
+            expected.extend(
+                contract
+                    .get("machine_control_supports")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string),
+            );
+            let provider = contract.get("provider").and_then(Value::as_str).unwrap();
+            if provider_live_proof_supported_provider(provider) {
+                expected.push(format!("{provider}.live_proof"));
+            }
+        }
+        assert_eq!(supports, expected);
         assert!(supports.contains(&"codex.launch".to_string()));
         assert!(supports.contains(&"codex.continue".to_string()));
         assert!(supports.contains(&"codex.run_once".to_string()));
