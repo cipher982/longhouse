@@ -207,6 +207,7 @@ def test_manual_deploy_recovery_supersedes_failed_push_deploy() -> None:
 
 def test_runtime_image_paths_include_docker_context_rules() -> None:
     assert ".dockerignore" in ship_monitor.RUNTIME_IMAGE_PATHS
+    assert "schemas" in ship_monitor.RUNTIME_IMAGE_PATHS
 
 
 if __name__ == "__main__":

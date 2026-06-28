@@ -43,6 +43,7 @@ RUNTIME_IMAGE_PATHS = (
     "docker/entrypoint.sh",
     "docker/runtime.dockerfile",
     "engine",
+    "schemas",
     "server",
     "web",
     ".github/workflows/runtime-image.yml",
