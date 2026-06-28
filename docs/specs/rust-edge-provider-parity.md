@@ -1,4 +1,4 @@
-# Rust Edge Provider Parity
+# No-Python Device Provider Parity
 
 Status: Phase 0 spec draft
 Branch: `epic/rust-edge-provider-parity`
@@ -6,54 +6,71 @@ Base: `ea8c141a2 Cover opencode managed contract wording`
 
 ## Executive Summary
 
-The grand vision is not "remove Python from Longhouse." The practical goal is
-to remove Python-owned live-control paths from user devices where doing so buys
-reliability, simpler repair, safer secrets handling, or more honest capability
-advertising.
+The grand vision is no Python dependency in the shipped on-device Longhouse
+control path. The product reason is packaging, not language aesthetics: once the
+user's Mac/dev box needs one Python entrypoint, Longhouse inherits virtualenv,
+pip/uv, interpreter, native wheel, PATH, and repair burden.
 
-Python remains acceptable for the Runtime Host, public CLI ergonomics, QA
-harnesses, install/update glue, and provider adapters whose stable surface is
-itself script/hook-shaped. The Rust Machine Agent should own the device-side
-live-control edge whenever the control loop is long-running, security-sensitive,
-or required for browser/iOS remote control.
+This spec is scoped to provider-control and managed-session device paths. The
+Runtime Host may still be implemented in Python while it is operated by hosted,
+Docker, or an explicit server install track, but Python must not be a hidden
+dependency for the normal device product: Machine Agent, Desktop App, local
+health/repair, managed provider launch, attach, send, interrupt, terminate, and
+provider proof.
 
-OpenCode is now the reference implementation: the Machine Agent owns native
-launch, send, interrupt, and terminate through Rust. Codex is already mostly at
-the right boundary: Python starts the human CLI flow, but the long-lived bridge,
-app-server relay, send, interrupt, steer, pause-answer, stop, and detached
-remote launch are Rust. Claude is the main remaining native-control candidate:
-the Machine Agent advertises Claude support, but launch/send/interrupt/steer
-still shell out to `longhouse claude-channel`, and the bridge server itself is
-Python. Antigravity should stay narrow until the provider exposes a stable
-control surface beyond hook-inbox send.
+OpenCode is the best live-control reference implementation because the Machine
+Agent owns native remote launch, send, interrupt, and terminate. It is not yet a
+complete no-Python device story if local attach or human launch still requires
+the Python CLI. Codex is similar: the bridge/control loop is Rust, but
+`longhouse codex` is still Python and therefore remains a device packaging
+liability. Claude is the largest remaining native-control port because both the
+provider channel bridge and remote control operations still shell out to Python.
+Antigravity should remain narrow, but its hook-inbox adapter is also Python and
+must be either replaced, embedded as provider-owned hook text without a Python
+runtime, or explicitly excluded from the no-Python launch promise until `agy`
+offers a better surface.
 
 ## Definitions
 
-- **Rust edge**: Device-side live-control logic owned by `longhouse-engine`.
-- **Python glue**: CLI/API/install/orchestration code that does not own the live
-  provider process control loop.
+- **No-Python device path**: A user can install, repair, launch, observe, and
+  remotely control managed sessions on a dev machine without a Longhouse-shipped
+  Python runtime or Python package environment.
+- **Rust edge**: Device-side live-control and provider-launch logic owned by
+  `longhouse-engine`, `Longhouse.app`, or another compiled Longhouse binary.
+- **Transitional Python**: Any Python entrypoint used by the device product
+  before the no-Python replacement exists. Transitional is allowed only with an
+  owner, replacement phase, and test plan.
 - **Managed provider parity**: Providers share session identity, capability
   language, local-health axes, and proof/evidence rules. It does not mean every
   provider supports the same operations.
 - **Live-control path**: The path that launches, sends, interrupts, steers,
   answers, terminates, or keeps a control bridge alive for an active managed
   session.
+- **Server Python**: Python that runs inside the Runtime Host packaging lane.
+  Server Python is out of scope for this provider-control spec, but it must not
+  be required for the normal on-device Machine Agent/Desktop/provider-control
+  path.
 
 ## Decision Log
 
-### Decision: Keep the goal as Rust-owned live control, not no-Python
+### Decision: Correct the north star to no Python on the device path
 
-**Context:** The product still intentionally has a Python Runtime Host and CLI
-surface. Removing all Python would blur the actual launch goal.
+**Context:** The original Phase 0 draft treated Python CLI wrappers as
+acceptable glue if Rust owned the long-running control loop. That misses the
+product wedge: any Python shipped to the user's machine brings the Python
+ecosystem management burden.
 
-**Choice:** Target Python-owned live-control paths on devices, while preserving
-Python where it is product glue or test infrastructure.
+**Choice:** Treat all Python in the device install/control path as
+transitional. The provider-control roadmap must retire or replace Python
+entrypoints, not merely move the long-running daemon pieces to Rust.
 
-**Rationale:** This maximizes reliability and install clarity without turning a
-focused provider-control epic into a language rewrite.
+**Rationale:** A robust Mac/dev-machine product cannot depend on users having a
+working Python packaging environment. The native path is an install/support
+strategy, not just an implementation preference.
 
-**Revisit if:** The packaged Python CLI becomes the main source of install or
-repair failures after the live-control paths are native.
+**Revisit if:** Longhouse intentionally chooses a Python-bundled native app or
+single-file embedded runtime as the shipping artifact. That would be a packaging
+decision, not permission to leave ambient Python dependencies.
 
 ### Decision: Claude is the next real port candidate
 
@@ -62,8 +79,8 @@ interrupt, steer, and answer-pause by spawning `longhouse claude-channel`. The
 Python command owns the MCP stdio bridge, HTTP inject endpoint, state file, and
 SIGINT interrupt.
 
-**Choice:** Plan a Claude-native Rust channel bridge stage after Phase 1
-guardrails.
+**Choice:** Plan a Claude-native Rust channel bridge and launcher stage after
+the no-Python device inventory and guardrails.
 
 **Rationale:** Claude is advertised as first-class managed live control, but the
 Machine Agent is still a subprocess proxy for the important operations.
@@ -71,17 +88,19 @@ Machine Agent is still a subprocess proxy for the important operations.
 **Revisit if:** Claude removes or materially changes the development channel/MCP
 surface before implementation.
 
-### Decision: Do not port Codex just for symmetry
+### Decision: Codex bridge is native, but Codex device launch is not done
 
 **Context:** The Codex Rust bridge already starts `codex app-server`, fronts it
 with a WebSocket relay, persists bridge/session state, and owns remote send,
 interrupt, steer, pause-answer, stop, and detached-ui launch.
 
-**Choice:** Keep the current Python/Rust seam. Add hardening tests instead of a
-new port.
+**Choice:** Do not port Codex's Rust bridge again, but do port or replace the
+Python `longhouse codex` launcher/attach/doctor wrapper as part of the no-Python
+device path.
 
-**Rationale:** Moving the human launcher or version probes to Rust does not buy
-meaningful capability or reliability. The durable control loop is already Rust.
+**Rationale:** The durable control loop is already Rust, so the next Codex work
+is packaging-boundary work: remove Python as the user-facing way to start and
+reattach managed Codex sessions.
 
 **Revisit if:** The Python launcher starts owning long-lived bridge behavior
 again, or if install packaging makes the CLI unavailable while the engine is
@@ -93,24 +112,26 @@ healthy.
 provider does not expose stable launch, reattach, interrupt, steer, or terminate
 semantics.
 
-**Choice:** Keep Antigravity send narrow and proof-gated. Do not port the
-adapter to Rust until a stable provider control surface exists.
+**Choice:** Keep Antigravity capability narrow and proof-gated, but do not call
+the Python adapter acceptable long term. Either replace the hook-inbox adapter
+with a no-Python implementation or exclude Antigravity managed send from the
+no-Python launch promise until `agy` exposes a stable provider surface.
 
-**Rationale:** A Rust rewrite of a hook script would add churn without changing
-the provider guarantee. The better investment is capability honesty and canary
-coverage.
+**Rationale:** A Rust rewrite does not create new provider guarantees, but a
+Python hook adapter still violates the device packaging goal. Capability honesty
+and no-Python packaging both need to be true.
 
 **Revisit if:** `agy` exposes an app-server, socket, channel, or durable session
 control API.
 
 ## Current Provider Map
 
-| Provider | Current live-control ownership | Recommendation | Why |
+| Provider | Current device Python exposure | Recommendation | Why |
 |---|---|---|---|
-| OpenCode | Rust owns remote launch, send, interrupt, terminate through `opencode_control`; Python remains the local attach/human CLI surface. | Treat as completed baseline. | This is the desired edge shape: Machine Agent support no longer requires the Python CLI for remote live control. |
-| Codex | Rust bridge owns app-server, relay, state, IPC send, interrupt, steer, pause-answer, stop, run-once, and detached remote launch. Python owns user-facing launch/attach glue. | Keep seam; harden tests. | The live-control loop is already Rust. Further porting is mostly symmetry work. |
-| Claude | Rust control channel shells out to `longhouse claude-channel` for launch, send, interrupt, steer, and answer-pause. Python owns bridge server, state, inject, MCP config install, PTY detached launch, and SIGINT. | Next native port candidate. | Claude is first-class in product copy, but the device-side live-control edge is not yet native. |
-| Antigravity | Python hook-inbox adapter; Rust discovers/ships sessions and routes send through the Python channel command. No remote launch, reattach, interrupt, steer, or terminate. | Freeze narrow; improve proof/gating. | Provider mechanics are unstable and hook-shaped; porting now would not create real parity. |
+| OpenCode | Remote live-control is Rust, but local `longhouse opencode`/attach surfaces still pass through Python CLI code. | Finish no-Python local launch/attach wrappers. | Remote control is good; packaging is not done until the user path avoids Python. |
+| Codex | Bridge/control loop is Rust, but `longhouse codex` launch/attach/doctor glue is Python. | Port launcher/attach UX to a compiled Longhouse entrypoint; keep Rust bridge. | The bridge is not the problem; the shipped user entrypoint is. |
+| Claude | Python owns `claude-channel` bridge, launch, send, interrupt, steer, answer-pause, MCP config install, and PTY detached launch. | Highest priority provider-control port. | Claude has both live-control and packaging debt. |
+| Antigravity | Python wrapper and hook-inbox adapter own managed launch/send. | Keep capabilities narrow; replace adapter or exclude from no-Python launch promise. | The provider surface is unstable, but Python cannot be treated as a permanent device dependency. |
 
 ## Cross-Provider Invariants
 
@@ -129,6 +150,8 @@ control API.
 7. Provider binary ownership stays with the user. Longhouse may wrap/control a
    session, but does not vendor or patch provider CLIs unless there is an
    explicit product decision.
+8. The user-facing device product must not require `uv`, `pip`, a virtualenv, or
+   an ambient Python interpreter for managed provider control.
 
 ## Phase Plan
 
@@ -155,7 +178,7 @@ Success criteria:
 ### Phase 1: Contract Guardrails and Test Coverage
 
 Goal: Make the current cross-provider contract harder to accidentally lie about
-before moving more code.
+and make Python device dependencies visible before moving more code.
 
 Steps:
 
@@ -173,7 +196,9 @@ Steps:
 5. Add projection tests preserving the separation between
    `live_control_available`, `host_reattach_available`, `control_path`, and
    `can_resume`.
-6. Add doc coverage linking provider parity to the existing managed/unmanaged
+6. Add a no-Python device inventory test or script that lists provider-control
+   commands still implemented only by Python entrypoints.
+7. Add doc coverage linking provider parity to the existing managed/unmanaged
    product language.
 
 Success criteria:
@@ -188,6 +213,8 @@ Success criteria:
 - The manifest remains the single source of machine-control operation ceilings;
   proof maturity, release readiness, and local live-proof freshness remain
   separate support-state inputs.
+- The Phase 1 artifact names every Python command still on the device path and
+  assigns it to a later phase.
 - No provider behavior changes except clearer errors where tests require them.
 
 Suggested checks:
@@ -196,9 +223,44 @@ Suggested checks:
 - `make test-engine`
 - Existing script tests that validate provider release proof coverage.
 
-### Phase 2: Claude Native Channel Bridge Design Spike
+### Phase 2: No-Python Device Entrypoint Design
 
-Goal: Decide the exact Rust implementation shape for Claude before porting.
+Goal: Replace the Python CLI as the normal provider-control entrypoint without
+changing the managed-session UX.
+
+Steps:
+
+1. Decide which compiled binary owns `longhouse <provider>` equivalents:
+   `longhouse-engine`, a small native launcher, or `Longhouse.app` helper.
+2. Define compatibility shims for existing `longhouse` commands while the
+   package transition is in progress.
+3. Specify provider binary resolution, env handling, cwd validation, and token
+   secrecy once Python is gone.
+4. Specify how local health, doctor, repair, provider-live proof, and managed
+   launch share the same native support library.
+5. Specify what remains in the Python Runtime Host lane and how it is isolated
+   from the normal device install.
+
+Success criteria:
+
+- The normal Mac/dev-machine install can start provider sessions without
+  invoking Python.
+- Any remaining Python command is labeled server-only, test-only, or legacy
+  compatibility with a removal phase.
+- The design preserves existing CLI UX and machine-control APIs.
+- Hatch Codex or Claude review approves the packaging boundary before provider
+  porting starts.
+
+Suggested checks:
+
+- New inventory test for Python entrypoints on the device path.
+- Existing provider CLI tests used as behavior fixtures for the native
+  replacement.
+
+### Phase 3: Claude Native Channel Bridge and Launcher
+
+Goal: Move Claude provider-control operations from Python subprocess proxy to
+Rust-owned Machine Agent/native launcher behavior.
 
 Steps:
 
@@ -209,43 +271,26 @@ Steps:
    pause-answer.
 4. Specify PID/start-time validation for interrupt.
 5. Specify migration compatibility with existing Claude state files.
-6. Build a tiny isolated Rust bridge proof if the MCP crate surface is unclear.
+6. Implement or spike the Rust bridge if the MCP crate surface is unclear.
+7. Replace the Python `longhouse claude` / `claude-channel` device path with the
+   native entrypoint from Phase 2.
 
 Success criteria:
 
-- The design proves a Rust bridge can replace `longhouse claude-channel serve`
+- The native bridge replaces `longhouse claude-channel serve`
   without changing the user-facing `longhouse claude` UX.
 - The design includes token secrecy and state permission requirements.
 - The design has a rollback path: Python bridge can remain behind an explicit
   debug flag until the Rust bridge is proven.
-- Hatch Codex or Claude review approves the design before implementation.
-
-Suggested checks:
-
-- Rust unit tests for state parsing and command construction.
-- Python CLI tests that continue to pass while the CLI delegates to the new
-  bridge shape.
-
-### Phase 3: Native Claude Launch, Send, Interrupt, Steer
-
-Goal: Move Claude remote live-control operations from Python subprocess proxy to
-Rust-owned Machine Agent behavior.
-
-Steps:
-
-1. Implement Rust Claude channel bridge process or module.
-2. Route Machine Agent `claude.launch` through Rust, preserving PTY behavior,
-   `--dangerously-load-development-channels`, hook env, and readiness wait.
-3. Route `claude.send`, `claude.steer`, and `claude.answer_pause` through the
-   Rust bridge.
-4. Route `claude.interrupt` through Rust with process identity validation.
-5. Keep the Python CLI as a user entrypoint or compatibility wrapper, not the
-   live-control implementation.
-6. Update provider contracts only if evidence level changes are earned by
-   tests/canaries.
-
-Success criteria:
-
+- Route Machine Agent `claude.launch` through Rust, preserving PTY behavior,
+  `--dangerously-load-development-channels`, hook env, and readiness wait.
+- Route `claude.send`, `claude.steer`, and `claude.answer_pause` through the
+  Rust bridge.
+- Route `claude.interrupt` through Rust with process identity validation.
+- Keep any Python Claude CLI path as legacy compatibility only, not the normal
+  device entrypoint.
+- Update provider contracts only if evidence level changes are earned by
+  tests/canaries.
 - `control_channel.rs` no longer shells out to `longhouse claude-channel` for
   remote launch/send/interrupt/steer/answer-pause.
 - Tokens are absent from argv and logs.
@@ -260,48 +305,81 @@ Suggested checks:
 - `make test-engine`
 - `make managed-claude-poc` when local provider credentials are available.
 
-### Phase 4: Codex Hardening
+### Phase 4: Codex Native Entrypoint and Hardening
 
-Goal: Preserve the good Codex boundary while closing test gaps.
+Goal: Preserve the good Rust bridge boundary while removing Python from the
+normal Codex launch/attach path.
 
 Steps:
 
-1. Add or confirm tests for token absence in bridge state, logs, and local
+1. Port or replace `longhouse codex` launch/attach UX with the native entrypoint
+   from Phase 2.
+2. Preserve stock upstream `codex` resolution from PATH plus explicit
+   `--codex-bin` / `LONGHOUSE_CODEX_BIN` debug overrides.
+3. Add or confirm tests for token absence in bridge state, logs, and local
    health output.
-2. Confirm future bridge state schema versions and unknown launch modes are
+4. Confirm future bridge state schema versions and unknown launch modes are
    skipped by reapers.
-3. Add detached-ui failure/liveness tests for app-server death or bridge stall.
-4. Add subagent-thread rejection fixtures for plausible upstream payload shape
+5. Add detached-ui failure/liveness tests for app-server death or bridge stall.
+6. Add subagent-thread rejection fixtures for plausible upstream payload shape
    drift.
 
 Success criteria:
 
-- No Codex code is ported for symmetry.
+- Codex launch/attach from the normal device product no longer invokes Python.
 - Reapers skip unknown/future state rather than performing destructive cleanup.
 - Detached-ui sessions surface failures rather than silently appearing live.
-- Codex remains the model for Rust-owned live control plus Python human CLI
-  glue.
+- Codex remains the model for Rust-owned live control plus native human CLI
+  entrypoint.
 
 Suggested checks:
 
 - `make test-engine`
 - `cd server && uv run pytest tests_lite/test_codex_cli.py tests_lite/test_local_runtime_installer.py`
 
-### Phase 5: Antigravity Proof and Freeze
+### Phase 5: OpenCode Native Entrypoint Completion
 
-Goal: Keep Antigravity honest and narrow until provider mechanics justify more.
+Goal: Finish the OpenCode no-Python story now that remote control is native.
 
 Steps:
 
-1. Add plugin install idempotency/concurrency tests.
-2. Add hook schema drift tests against captured live/fake `agy` hook payloads.
-3. Add capability/error tests proving only send is advertised.
-4. Document that launch is local observe/send only; remote launch, reattach,
+1. Replace local `longhouse opencode` launch/attach/stop compatibility paths
+   with the native entrypoint where they are still Python-owned.
+2. Preserve the current Rust remote launch/send/interrupt/terminate behavior.
+3. Keep active-turn steer and answer-pause unsupported unless provider
+   semantics change and proof is added.
+
+Success criteria:
+
+- Normal OpenCode managed launch and attach no longer invoke Python.
+- Remote live-control behavior remains unchanged.
+- Unsupported operations remain explicit in capabilities and UI/API responses.
+
+Suggested checks:
+
+- `make test-engine`
+- Focused OpenCode CLI/bridge tests for launch/attach behavior.
+
+### Phase 6: Antigravity Proof and No-Python Decision
+
+Goal: Decide whether Antigravity ships in the no-Python device path or remains
+excluded/narrow until provider mechanics justify a native adapter.
+
+Steps:
+
+1. Replace the hook-inbox adapter with a no-Python implementation, or document
+   Antigravity managed send as excluded from the no-Python launch promise.
+2. Add plugin install idempotency/concurrency tests.
+3. Add hook schema drift tests against captured live/fake `agy` hook payloads.
+4. Add capability/error tests proving only send is advertised.
+5. Document that launch is local observe/send only; remote launch, reattach,
    interrupt, steer, answer-pause, and terminate remain unsupported.
 
 Success criteria:
 
-- `antigravity.send` stays proof-gated.
+- `antigravity.send` stays proof-gated if it remains shipped.
+- No shipped Antigravity managed-control path requires Python unless the product
+  explicitly excludes it from the no-Python device promise.
 - Capability output cannot imply reattach or active steering.
 - Hook failures produce specific actionable errors.
 - The spec records Antigravity as frozen, not neglected.
@@ -312,9 +390,10 @@ Suggested checks:
 - `python scripts/tests/provider-control-e2e-canary.test.py` if the repo test
   runner supports it directly.
 
-### Phase 6: Product and Evidence Cleanup
+### Phase 7: Product, Packaging, and Evidence Cleanup
 
-Goal: Make product wording, docs, and proof levels match the new ownership.
+Goal: Make product wording, docs, packaging, and proof levels match the new
+ownership.
 
 Steps:
 
@@ -323,12 +402,16 @@ Steps:
 3. Update provider release proof docs only when canary evidence improves.
 4. Confirm local-health and doctor output distinguish native control,
    provider support, proof freshness, and release warnings.
+5. Update install/repair docs so the normal device path does not mention Python,
+   `uv`, `pip`, or virtualenv management.
 
 Success criteria:
 
 - Public copy remains capability-honest.
 - `managed-provider-cli` guidance matches the shipped control paths.
 - Evidence levels do not get promoted by implementation alone.
+- A clean machine can install the device product and launch managed provider
+  sessions without Python.
 
 ## Testing Strategy
 
@@ -337,6 +420,8 @@ Minimum coverage before implementation:
 - Manifest parity tests for provider support bits and operation evidence keys.
 - Capability projection tests for true and false provider operations.
 - Engine dispatch tests for every support bit.
+- Device-path inventory tests that fail when a normal managed-provider command
+  can only be satisfied by a Python entrypoint.
 
 Minimum coverage during a provider port:
 
@@ -354,9 +439,11 @@ the operation works or the unsupported state is explicit.
 
 ## Non-Goals
 
-- Rewriting the Runtime Host out of Python.
-- Removing the Python CLI as a human/power-user entrypoint.
-- Porting provider launchers just for language symmetry.
+- Rewriting the Runtime Host out of Python inside this provider-control epic.
+  Runtime Host packaging is a separate no-Python/server-bundle track.
+- Keeping the Python CLI as the normal human/power-user entrypoint.
+- Porting provider internals for language symmetry after the device path is
+  already Python-free.
 - Vendoring, pinning, or patching provider CLIs.
 - Advertising provider operations before the provider exposes stable semantics
   and Longhouse has proof.
@@ -370,5 +457,7 @@ Phase 0 used four Hatch DeepSeek audits:
 - Antigravity managed-provider path audit.
 - Cross-provider contract/proof/local-health audit.
 
-Their outputs are advisory. The decisions above are grounded in the local code
-paths and the current provider contract manifest.
+Those audits were advisory and initially over-weighted live-control ownership.
+After the product goal was clarified as no Python on the device path, this spec
+was corrected to treat Python provider CLI wrappers as transitional debt, even
+where the underlying live-control bridge is already native.
