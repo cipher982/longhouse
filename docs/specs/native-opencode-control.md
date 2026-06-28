@@ -1,12 +1,12 @@
 # Native OpenCode Control
 
-Status: Phase 1 approved
+Status: Native OpenCode control implemented; evidence cleanup planned
 
 ## Executive Summary
 
-Longhouse currently treats OpenCode managed sessions as first-class from the Runtime Host, but the Machine Agent still shells out to the Python `longhouse opencode-channel` command for OpenCode send and interrupt. The migration target is engine-native OpenCode control while preserving the existing user-owned provider model: stock `opencode serve` remains the execution owner, Longhouse owns only the bridge state and control path.
+Longhouse treats OpenCode managed sessions as first-class from the Runtime Host, and the Machine Agent now owns the OpenCode send, interrupt, launch, and terminate control path natively in Rust. The migration target remains engine-native OpenCode control while preserving the user-owned provider model: stock `opencode serve` remains the execution owner, and Longhouse owns only the bridge state and control path.
 
-The first shippable phase moves only OpenCode send and interrupt into Rust. Remote launch, attach, stop, and lifecycle cleanup stay on the existing Python-backed path until later phases.
+The remaining work in this campaign is evidence and documentation cleanup: update public/product wording, SLA/proof notes, and guardrails so they no longer describe OpenCode launch, send, interrupt, or terminate as undefined, Python-owned, or future work. Local attach/TUI helpers remain on the Python CLI path until a separate edge-migration phase decides whether to move them.
 
 ## Decision Log
 
@@ -31,9 +31,16 @@ The first shippable phase moves only OpenCode send and interrupt into Rust. Remo
 **Rationale:** Splitting per-operation dependency gates would be more precise for send/interrupt, but it adds contract complexity that should disappear once launch moves into the engine.
 **Revisit if:** Phase 3 is deferred or users need native send/interrupt on machines with stock `opencode` but no `longhouse` CLI.
 
+### Decision: Keep Evidence Conservative After Native Control
+
+**Context:** OpenCode send, interrupt, launch, and terminate are now Machine Agent operations, but proof levels still vary by operation. Some lanes are hermetic or live-no-token rather than full live-token provider proof.
+**Choice:** Update ownership and product-scope wording without inflating proof levels.
+**Rationale:** Native ownership is a runtime/control-path fact; proof maturity is a separate evidence fact. Mixing them would make release status look stronger than the canaries actually prove.
+**Revisit if:** release-proof lanes promote OpenCode remote launch, terminate, or transcript/active-turn behavior to stronger live-token evidence.
+
 ## Architecture
 
-Phase 1 adds a Rust OpenCode control adapter in the Machine Agent:
+The Rust OpenCode control adapter in the Machine Agent:
 
 - read `~/.claude/managed-local/opencode-server/{session_id}.json`
 - tolerate the existing readable state schema range
@@ -42,9 +49,11 @@ Phase 1 adds a Rust OpenCode control adapter in the Machine Agent:
 - reject non-local or non-HTTP server URLs before sending credentials
 - POST send input to `/session/{provider_session_id}/prompt_async?directory={cwd}`
 - POST interrupt to `/session/{provider_session_id}/abort?directory={cwd}`
+- start/reuse stock `opencode serve` for remote launch using private runtime config and state files
+- stop only identity-matched OpenCode server process groups for managed terminate
 - return the same control result shape the Runtime Host already expects
 
-The Runtime Host and provider contract manifest stay capability-driven. OpenCode active-turn steer remains unsupported.
+The Runtime Host and provider contract manifest stay capability-driven. OpenCode active-turn steer and pause-answer remain unsupported.
 
 ## Implementation Phases
 
@@ -98,7 +107,7 @@ Acceptance criteria:
 
 ### Phase 3: Native OpenCode Launch
 
-Status: Implemented in branch `epic/native-opencode-launch`
+Status: Implemented
 
 Verification: `make test-engine` and `make test` passed after adding native launch and gate coverage.
 
@@ -180,7 +189,9 @@ make test
 
 ### Phase 4: Native Stop/Terminate
 
-Status: Planned
+Status: Implemented
+
+Verification: `make test-engine`, `make test`, and `make test-ci` passed after adding native terminate routing, PID identity safety coverage, provider contract tests, and ship validation.
 
 Goal: Port OpenCode stop/terminate behavior into Rust.
 
@@ -279,7 +290,37 @@ make test-engine
 make test
 ```
 
-### Phase 5: Full Edge Migration
+### Phase 5: Evidence And Docs Cleanup
+
+Status: Planned
+
+Goal: Align public copy, operator docs, SLA config, and proof guardrails with the native OpenCode control path that has shipped.
+
+Scope:
+
+- Update README/status wording so OpenCode is described as managed live control for send, interrupt, launch, and terminate, while still explicitly excluding active-turn steer and pause-answer.
+- Update `config/session-propagation-sla.toml` so OpenCode remote send/interrupt is no longer marked undefined, and lifecycle notes no longer say managed OpenCode control is not first-class.
+- Update release-proof and provider-roadmap wording where it still frames OpenCode control as pending migration rather than native with conservative proof levels.
+- Add lightweight tests or validation checks that catch stale OpenCode product/evidence wording.
+- Do not raise operation evidence levels without new proof artifacts.
+- Do not add new browser/iOS stop UX in this cleanup phase.
+
+Success criteria:
+
+- Repo docs no longer say OpenCode send, interrupt, launch, or terminate are future, undefined, or Python-shellout-owned.
+- Public copy remains honest that OpenCode active-turn steer and pause-answer are unsupported.
+- Provider contract manifests still advertise `opencode.send`, `opencode.interrupt`, `opencode.launch`, and `opencode.terminate`, with `requires_longhouse_cli=false`.
+- SLA/proof docs distinguish native ownership from proof maturity.
+- Tests fail on the stale phrases that caused this cleanup.
+
+Validation:
+
+```bash
+make test
+make test-ci
+```
+
+### Phase 6: Full Edge Migration
 
 Goal: Retire Python ownership of managed OpenCode control once send, interrupt, launch, attach, stop, and proof paths are native.
 
