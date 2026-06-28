@@ -24,6 +24,7 @@ mod managed_reaper_core;
 mod media_redaction;
 mod media_upload;
 mod observability;
+mod opencode_control;
 mod opencode_db;
 mod outbox;
 mod pipeline;

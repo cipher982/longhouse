@@ -987,12 +987,17 @@ async fn execute_command(
                 .map(|output| cli_output_result(output, "claude", "claude_channel_bridge"));
             }
             if provider == "opencode" {
-                return run_opencode_channel_command(
-                    opencode_channel_args(COMMAND_SEND_TEXT, &session_id, Some(text))?,
-                    LAUNCH_START_TIMEOUT_SECS,
-                )
-                .await
-                .map(|output| cli_output_result(output, "opencode", "opencode_server_bridge"));
+                let summary = crate::opencode_control::send_text(&session_id, &text)
+                    .await
+                    .map_err(CommandError::command_failed)?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "opencode",
+                    "transport": crate::opencode_control::OPENCODE_SERVER_BRIDGE_TRANSPORT,
+                    "provider_session_id": summary.provider_session_id,
+                }));
             }
             if provider == "antigravity" {
                 return run_antigravity_channel_command(
@@ -1038,12 +1043,17 @@ async fn execute_command(
                 .map(|output| cli_output_result(output, "claude", "claude_channel_bridge"));
             }
             if provider == "opencode" {
-                return run_opencode_channel_command(
-                    opencode_channel_args(COMMAND_INTERRUPT, &session_id, None)?,
-                    LAUNCH_START_TIMEOUT_SECS,
-                )
-                .await
-                .map(|output| cli_output_result(output, "opencode", "opencode_server_bridge"));
+                let summary = crate::opencode_control::interrupt(&session_id)
+                    .await
+                    .map_err(CommandError::command_failed)?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "opencode",
+                    "transport": crate::opencode_control::OPENCODE_SERVER_BRIDGE_TRANSPORT,
+                    "provider_session_id": summary.provider_session_id,
+                }));
             }
             if provider == "antigravity" {
                 return Err(CommandError {
@@ -1387,36 +1397,6 @@ fn claude_pause_answer_values(value: &Value) -> Vec<String> {
     }
 }
 
-fn opencode_channel_args(
-    command_type: &str,
-    session_id: &str,
-    text: Option<String>,
-) -> std::result::Result<Vec<String>, CommandError> {
-    match command_type {
-        COMMAND_SEND_TEXT => Ok(vec![
-            "opencode-channel".to_string(),
-            "send".to_string(),
-            "--session-id".to_string(),
-            session_id.to_string(),
-            "--text".to_string(),
-            text.ok_or_else(|| CommandError {
-                code: "invalid_command".to_string(),
-                message: "text is required".to_string(),
-            })?,
-        ]),
-        COMMAND_INTERRUPT => Ok(vec![
-            "opencode-channel".to_string(),
-            "interrupt".to_string(),
-            "--session-id".to_string(),
-            session_id.to_string(),
-        ]),
-        _ => Err(CommandError {
-            code: "unsupported_command".to_string(),
-            message: format!("unsupported OpenCode channel command {command_type}"),
-        }),
-    }
-}
-
 fn antigravity_channel_args(
     command_type: &str,
     session_id: &str,
@@ -1486,20 +1466,6 @@ async fn run_longhouse_command(
 }
 
 async fn run_claude_channel_command(
-    args: Vec<String>,
-    timeout_secs: u64,
-) -> std::result::Result<CliCommandOutput, CommandError> {
-    let output = run_longhouse_command(args, timeout_secs, Vec::new()).await?;
-    if output.exit_code != 0 {
-        return Err(CommandError {
-            code: "command_failed".to_string(),
-            message: nonempty_cli_error(&output),
-        });
-    }
-    Ok(output)
-}
-
-async fn run_opencode_channel_command(
     args: Vec<String>,
     timeout_secs: u64,
 ) -> std::result::Result<CliCommandOutput, CommandError> {
@@ -1757,14 +1723,10 @@ async fn launch_claude_channel_session(
     resume_provider_session_id: Option<String>,
 ) -> std::result::Result<Value, CommandError> {
     let resume = resume_provider_session_id.is_some();
-    let provider_session_id = resume_provider_session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
-    let args = claude_channel_launch_args(
-        &session_id,
-        &cwd,
-        &api_url,
-        &provider_session_id,
-        resume,
-    );
+    let provider_session_id =
+        resume_provider_session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+    let args =
+        claude_channel_launch_args(&session_id, &cwd, &api_url, &provider_session_id, resume);
     let output = run_longhouse_command(
         args,
         LAUNCH_START_TIMEOUT_SECS * 2,
@@ -3320,50 +3282,6 @@ exit 1
         assert_eq!(
             claude_pause_response_text(&payload).unwrap(),
             "success_metric: Real users + feedback; timeline: Two weeks, Show HN"
-        );
-    }
-
-    #[test]
-    fn opencode_channel_args_route_send_and_interrupt_without_steer() {
-        assert_eq!(
-            opencode_channel_args(
-                COMMAND_SEND_TEXT,
-                "11111111-1111-4111-8111-111111111111",
-                Some("hello".to_string())
-            )
-            .unwrap(),
-            vec![
-                "opencode-channel",
-                "send",
-                "--session-id",
-                "11111111-1111-4111-8111-111111111111",
-                "--text",
-                "hello",
-            ]
-        );
-        assert_eq!(
-            opencode_channel_args(
-                COMMAND_INTERRUPT,
-                "11111111-1111-4111-8111-111111111111",
-                None
-            )
-            .unwrap(),
-            vec![
-                "opencode-channel",
-                "interrupt",
-                "--session-id",
-                "11111111-1111-4111-8111-111111111111",
-            ]
-        );
-        assert_eq!(
-            opencode_channel_args(
-                COMMAND_STEER_TEXT,
-                "11111111-1111-4111-8111-111111111111",
-                Some("course correct".to_string())
-            )
-            .unwrap_err()
-            .code,
-            "unsupported_command"
         );
     }
 

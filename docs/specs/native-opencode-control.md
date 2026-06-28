@@ -1,6 +1,6 @@
 # Native OpenCode Control
 
-Status: Phase 1 in progress
+Status: Phase 1 implemented; review pending
 
 ## Executive Summary
 
@@ -42,6 +42,8 @@ The Runtime Host and provider contract manifest stay capability-driven. OpenCode
 ## Implementation Phases
 
 ### Phase 1: Native OpenCode Send/Interrupt
+
+Status: Implemented; review pending
 
 Goal: Remove the Python CLI shellout for OpenCode `session.send_text` and `session.interrupt`.
 
