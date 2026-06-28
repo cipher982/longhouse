@@ -353,6 +353,124 @@ def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
     asyncio.run(_run())
 
 
+def test_dispatch_managed_control_command_routes_opencode_send_over_engine_channel():
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            websocket = await _connect_fake_engine(owner_id=42, supports=["opencode.send"])
+            session = _session(
+                provider="opencode",
+                managed_transport="opencode_server_bridge",
+                source_runner_id=None,
+            )
+            completer = asyncio.create_task(
+                _complete_first_machine_command(
+                    websocket,
+                    {
+                        "ok": True,
+                        "result": {
+                            "exit_code": 0,
+                            "stdout": "",
+                            "stderr": "",
+                            "provider": "opencode",
+                            "transport": "opencode_server_bridge",
+                            "provider_session_id": "ses_test",
+                        },
+                    },
+                )
+            )
+            result = await dispatch_managed_control_command(
+                db=object(),
+                owner_id=42,
+                session=session,
+                timeout_secs=1,
+                command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                payload={"text": "hello from browser"},
+                commis_id="req-opencode-send",
+            )
+            await completer
+
+            assert result.ok is True
+            assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            assert result.data == {
+                "exit_code": 0,
+                "stdout": "",
+                "stderr": "",
+                "provider": "opencode",
+                "transport": "opencode_server_bridge",
+                "provider_session_id": "ses_test",
+            }
+            assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_SEND_TEXT
+            assert websocket.sent[0]["payload"] == {
+                "provider": "opencode",
+                "text": "hello from browser",
+            }
+            assert (
+                websocket.sent[0]["command_id"] == f"managed-control:{session.id}:session.send_text:req-opencode-send"
+            )
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
+def test_dispatch_managed_control_command_routes_opencode_interrupt_over_engine_channel():
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            websocket = await _connect_fake_engine(owner_id=42, supports=["opencode.interrupt"])
+            session = _session(
+                provider="opencode",
+                managed_transport="opencode_server_bridge",
+                source_runner_id=None,
+            )
+            completer = asyncio.create_task(
+                _complete_first_machine_command(
+                    websocket,
+                    {
+                        "ok": True,
+                        "result": {
+                            "exit_code": 0,
+                            "stdout": "",
+                            "stderr": "",
+                            "provider": "opencode",
+                            "transport": "opencode_server_bridge",
+                            "provider_session_id": "ses_test",
+                        },
+                    },
+                )
+            )
+            result = await dispatch_managed_control_command(
+                db=object(),
+                owner_id=42,
+                session=session,
+                timeout_secs=1,
+                command_type=MANAGED_CONTROL_COMMAND_INTERRUPT,
+                commis_id="req-opencode-interrupt",
+            )
+            await completer
+
+            assert result.ok is True
+            assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            assert result.data == {
+                "exit_code": 0,
+                "stdout": "",
+                "stderr": "",
+                "provider": "opencode",
+                "transport": "opencode_server_bridge",
+                "provider_session_id": "ses_test",
+            }
+            assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_INTERRUPT
+            assert websocket.sent[0]["payload"] == {"provider": "opencode"}
+            assert websocket.sent[0]["command_id"] == (
+                f"managed-control:{session.id}:session.interrupt:req-opencode-interrupt"
+            )
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
 def test_dispatch_managed_control_command_sends_antigravity_provider_to_engine_channel():
     async def _run():
         await _clear_machine_registry()

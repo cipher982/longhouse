@@ -431,6 +431,10 @@ fn control_supports_for_path_with_env(
             .get("requires_longhouse_cli")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        // OpenCode send/interrupt are native Rust now, but OpenCode launch is
+        // still CLI-backed. Keep the provider-wide gate conservative until
+        // Phase 3 moves launch into the engine or the manifest gains explicit
+        // per-operation dependency gates.
         if requires_longhouse && !longhouse_available {
             continue;
         }
@@ -2558,8 +2562,11 @@ mod tests {
             }
         }
 
-        write_executable(&dir, "longhouse");
         write_executable(&dir, "opencode");
+        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
+        assert_eq!(supports, vec!["archive.backlog_control".to_string()]);
+
+        write_executable(&dir, "longhouse");
         let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
         assert_eq!(
             supports,
@@ -2871,6 +2878,57 @@ mod tests {
                 "parts": [{"type": "text", "text": "hello native"}],
             })
         );
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_routes_opencode_interrupt_through_native_control() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let empty_path = temp.path().join("empty-path");
+        let config_dir = temp.path().join("claude-config");
+        std::fs::create_dir_all(&empty_path).unwrap();
+        let (server_url, request_rx) = spawn_single_http_request_server().await;
+        let session_id = "11111111-1111-4111-8111-111111111111";
+        write_opencode_control_state(&config_dir, session_id, &server_url);
+
+        let old_path = std::env::var_os("PATH");
+        let old_claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+        std::env::set_var("PATH", empty_path.as_os_str());
+        std::env::set_var("CLAUDE_CONFIG_DIR", config_dir.as_os_str());
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-opencode-native-interrupt",
+                "session_id": session_id,
+                "command_type": COMMAND_INTERRUPT,
+                "payload": {"provider": "opencode"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        if let Some(value) = old_path {
+            std::env::set_var("PATH", value);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(value) = old_claude_config_dir {
+            std::env::set_var("CLAUDE_CONFIG_DIR", value);
+        } else {
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+        }
+
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["provider"], "opencode");
+        assert_eq!(result["result"]["transport"], "opencode_server_bridge");
+        assert_eq!(result["result"]["provider_session_id"], "ses_native");
+        let request = request_rx.await.unwrap();
+        assert_eq!(
+            request.target,
+            "/session/ses_native/abort?directory=%2Ftmp%2Fnative+opencode"
+        );
+        assert!(request.body.is_empty());
     }
 
     #[tokio::test]

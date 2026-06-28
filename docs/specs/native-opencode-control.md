@@ -24,6 +24,13 @@ The first shippable phase moves only OpenCode send and interrupt into Rust. Remo
 **Rationale:** Send/interrupt are bounded request adapters; launch has broader lifecycle blast radius and should be ported as its own phase.
 **Revisit if:** send/interrupt require state fields that only a native launch writer can safely provide.
 
+### Decision: Keep OpenCode Capability Gating Conservative In Phase 2
+
+**Context:** OpenCode send and interrupt are now native Rust operations, but OpenCode launch still shells out through `longhouse opencode-channel launch`.
+**Choice:** Keep the provider-wide `requires_longhouse_cli` gate conservative until native launch lands.
+**Rationale:** Splitting per-operation dependency gates would be more precise for send/interrupt, but it adds contract complexity that should disappear once launch moves into the engine.
+**Revisit if:** Phase 3 is deferred or users need native send/interrupt on machines with stock `opencode` but no `longhouse` CLI.
+
 ## Architecture
 
 Phase 1 adds a Rust OpenCode control adapter in the Machine Agent:
@@ -76,13 +83,18 @@ make test-engine
 
 ### Phase 2: Contract And Gate Cleanup
 
+Status: Implemented
+
 Goal: Make capability advertisement reflect native operation ownership without pretending launch is native.
+
+Verification: `make test-engine` and `make test` passed after adding engine gating/routing coverage and Runtime Host OpenCode dispatch tests.
 
 Acceptance criteria:
 
 - Provider support bits still require stock `opencode` on PATH.
-- Any provider-wide `requires_longhouse_cli` semantics are split or kept conservative until launch is native.
+- Provider-wide `requires_longhouse_cli` semantics stay conservative until launch is native.
 - Runtime Host tests prove browser/iOS sends route through Machine Agent supports for `opencode.send` and `opencode.interrupt`.
+- Engine tests prove OpenCode send/interrupt command frames route natively, and that `opencode` without `longhouse` does not advertise OpenCode support while launch remains CLI-backed.
 
 ### Phase 3: Native OpenCode Launch
 
