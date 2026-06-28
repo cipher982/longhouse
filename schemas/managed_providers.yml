@@ -158,7 +158,7 @@ providers:
 - provider: opencode
   provider_cli_binary: opencode
   provider_cli_env: LONGHOUSE_OPENCODE_BIN
-  requires_longhouse_cli: true
+  requires_longhouse_cli: false
   managed_transport: opencode_server_bridge
   control_plane: opencode_server_bridge
   control_plane_aliases: []
