@@ -78,10 +78,16 @@ The inventory should fail when:
 - A provider has `requires_longhouse_cli: true` in
   `schemas/managed_providers.yml` but has no `transitional_device` inventory
   entry. This manifest field is the current authoritative marker that the
-  provider still depends on the Python-packaged `longhouse` CLI.
+  provider still depends on the Python-packaged `longhouse` CLI for Machine
+  Agent remote-control shellouts. Providers with `requires_longhouse_cli:
+  false` may still have Python entrypoint, health, proof, or shared-scaffold
+  debt; the inventory must classify those separately rather than treating the
+  provider as fully no-Python.
 - A known `transitional_device` item has no provider, owner area, replacement
   phase, or reason.
 - A scanned provider-control Python file is not in the inventory.
+- A packaged Python console script under `server/pyproject.toml`
+  `[project.scripts]` maps to a device module without an inventory stance.
 - A normal device command maps to Python but is marked `server_only` or
   `test_only`.
 - A new provider manifest support bit implies a Python-backed device path
@@ -105,6 +111,9 @@ caller that turns those Python files into active device dependencies.
 
 Expected transitional device items:
 
+- Shared device CLI entrypoint/scaffold: `server/zerg/cli/main.py`,
+  `server/zerg/cli/_common.py`, `server/zerg/cli/_launch_ui.py`,
+  `server/zerg/cli/_managed_contract.py`
 - Claude: `server/zerg/cli/claude.py`
 - Claude channel: `server/zerg/cli/claude_channel.py`
 - Claude channel helpers: `server/zerg/services/claude_channel_bridge.py`
@@ -114,8 +123,14 @@ Expected transitional device items:
 - Antigravity launcher: `server/zerg/cli/antigravity.py`
 - Antigravity channel: `server/zerg/cli/antigravity_channel.py`
 - Antigravity hook inbox: `server/zerg/services/antigravity_hook_inbox.py`
-- Local health/doctor/repair pieces used by the device install, if scanner
-  confirms they are still Python-only.
+- Local health/menu-bar/doctor/repair pieces used by the device install:
+  `server/zerg/cli/local_health.py`,
+  `server/zerg/cli/local_health_fast.py`,
+  `server/zerg/services/local_health.py`,
+  `server/zerg/services/desktop_app.py`,
+  `server/zerg/cli/doctor.py`,
+  `server/zerg/cli/machine.py`
+- Provider proof entrypoint: `server/zerg/cli/provider_live.py`
 - Rust-to-Python transit call sites in `engine/src/control_channel.rs`.
 
 Expected allowed non-device items:

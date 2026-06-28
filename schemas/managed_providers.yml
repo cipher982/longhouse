@@ -1,4 +1,8 @@
 schema_version: 1
+# requires_longhouse_cli means the Machine Agent still needs the
+# Python-packaged longhouse CLI for remote-control shellouts. It does not mean
+# all device Python has been removed; the no-Python device inventory separately
+# tracks entrypoint, health/repair, proof, and scaffold debt.
 providers:
 - provider: codex
   provider_cli_binary: codex

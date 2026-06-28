@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -196,6 +197,17 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "python_dependency_kind": "health_repair",
     },
     {
+        "id": "local-health-fast-cli-python",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/cli/local_health_fast.py",
+        "owner_area": "native-health-repair",
+        "replacement_phase": "phase7",
+        "reason": "Python longhouse-local-health console script backs the macOS menu bar refresh loop.",
+        "device_command": True,
+        "python_dependency_kind": "health_repair",
+    },
+    {
         "id": "local-health-service-python",
         "category": "transitional_device",
         "provider": "all",
@@ -203,6 +215,17 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "owner_area": "native-health-repair",
         "replacement_phase": "phase7",
         "reason": "Python local-health service backs the device doctor/repair surface.",
+        "device_command": True,
+        "python_dependency_kind": "health_repair",
+    },
+    {
+        "id": "desktop-app-health-launcher-python",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/services/desktop_app.py",
+        "owner_area": "native-health-repair",
+        "replacement_phase": "phase7",
+        "reason": "Python desktop app helper launches the menu-bar local-health snapshot command.",
         "device_command": True,
         "python_dependency_kind": "health_repair",
     },
@@ -270,7 +293,7 @@ PROVIDER_CONTROL_PYTHON_GLOBS = (
     "server/zerg/cli/_common.py",
     "server/zerg/cli/_launch_ui.py",
     "server/zerg/cli/_managed_contract.py",
-    "server/zerg/cli/local_health.py",
+    "server/zerg/cli/local_health*.py",
     "server/zerg/cli/machine.py",
     "server/zerg/cli/provider_live.py",
     "server/zerg/cli/*claude*.py",
@@ -278,6 +301,7 @@ PROVIDER_CONTROL_PYTHON_GLOBS = (
     "server/zerg/cli/*opencode*.py",
     "server/zerg/cli/*antigravity*.py",
     "server/zerg/services/local_health.py",
+    "server/zerg/services/desktop_app.py",
     "server/zerg/services/*claude_channel*.py",
     "server/zerg/services/*opencode*.py",
     "server/zerg/services/*antigravity*.py",
@@ -337,12 +361,34 @@ def _contract_items(root: Path) -> list[dict[str, Any]]:
     return [dict(item) for item in providers if isinstance(item, dict)]
 
 
+def _packaged_console_script_modules(root: Path) -> set[str]:
+    path = root / "server/pyproject.toml"
+    if not path.exists():
+        return set()
+    payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    scripts = payload.get("project", {}).get("scripts", {})
+    if not isinstance(scripts, dict):
+        return set()
+
+    scanned: set[str] = set()
+    for target in scripts.values():
+        if not isinstance(target, str):
+            continue
+        module = target.split(":", 1)[0].strip()
+        if not module.startswith("zerg."):
+            continue
+        path_parts = module.split(".")
+        scanned.add(("server/" + "/".join(path_parts) + ".py").replace("//", "/"))
+    return scanned
+
+
 def _scanned_provider_control_files(root: Path) -> set[str]:
     scanned: set[str] = set()
     for pattern in PROVIDER_CONTROL_PYTHON_GLOBS:
         for path in root.glob(pattern):
             if path.is_file():
                 scanned.add(_rel(path, root))
+    scanned.update(path for path in _packaged_console_script_modules(root) if (root / path).is_file())
     return scanned
 
 

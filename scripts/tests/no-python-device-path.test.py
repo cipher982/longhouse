@@ -43,6 +43,12 @@ def _write_root(root: Path) -> None:
     _write(root / "engine/src/control_channel.rs", "fn run_claude_channel_command() {}\n")
 
 
+def _write_pyproject_scripts(root: Path, scripts: dict[str, str]) -> None:
+    lines = ["[project]", 'name = "longhouse-test"', "", "[project.scripts]"]
+    lines.extend(f'{name} = "{target}"' for name, target in scripts.items())
+    _write(root / "server/pyproject.toml", "\n".join(lines) + "\n")
+
+
 def _inventory(*entries: dict) -> list[dict]:
     return [
         {
@@ -148,6 +154,22 @@ def test_unclassified_generic_device_python_fails() -> None:
         )
 
 
+def test_packaged_console_script_python_requires_inventory_stance() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        _write(root / "server/zerg/cli/local_health_fast.py", "def main(): pass\n")
+        _write_pyproject_scripts(
+            root,
+            {"longhouse-local-health": "zerg.cli.local_health_fast:main"},
+        )
+
+        _assert_fails(
+            _run(root, _inventory()),
+            "server/zerg/cli/local_health_fast.py is provider-control Python but is missing",
+        )
+
+
 def test_transitional_python_entries_require_dependency_kind() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -216,6 +238,7 @@ def main() -> int:
         test_requires_longhouse_cli_provider_must_have_transitional_entry,
         test_unclassified_provider_control_python_fails,
         test_unclassified_generic_device_python_fails,
+        test_packaged_console_script_python_requires_inventory_stance,
         test_transitional_python_entries_require_dependency_kind,
         test_requires_longhouse_cli_false_rejects_remote_control_shellout_debt,
         test_rust_shellout_symbol_must_exist,
