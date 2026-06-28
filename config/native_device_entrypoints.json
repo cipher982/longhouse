@@ -1,0 +1,204 @@
+{
+  "schema_version": 1,
+  "native_owner": {
+    "binary": "longhouse-engine",
+    "namespace": "device",
+    "status": "planned"
+  },
+  "compatibility_shims": [
+    {
+      "script": "longhouse",
+      "target": "zerg.cli.main:main",
+      "status": "transitional_shim",
+      "delegates_to": "longhouse-engine device",
+      "phase1_inventory_ids": [
+        "cli-main-provider-entrypoints"
+      ],
+      "removal_phase": "phase7"
+    },
+    {
+      "script": "longhouse-local-health",
+      "target": "zerg.cli.local_health_fast:main",
+      "status": "transitional_shim",
+      "delegates_to": "longhouse-engine device local-health",
+      "phase1_inventory_ids": [
+        "local-health-fast-cli-python"
+      ],
+      "removal_phase": "phase7"
+    }
+  ],
+  "commands": [
+    {
+      "id": "device-root",
+      "status": "planned",
+      "implementation_phase": "phase2",
+      "legacy_commands": [
+        "longhouse",
+        "longhouse --help"
+      ],
+      "native_target_command": "longhouse-engine device",
+      "phase1_inventory_ids": [
+        "cli-main-provider-entrypoints",
+        "cli-common-scaffold",
+        "cli-launch-ui-scaffold",
+        "cli-managed-contract-scaffold"
+      ],
+      "providers": "all",
+      "provider_binary_ownership": "not_applicable",
+      "token_policy": "not_applicable",
+      "cwd_policy": "not_applicable",
+      "notes": "Native root namespace and shared device CLI support library. Phase 2 is contract-only; implementation comes later."
+    },
+    {
+      "id": "local-health",
+      "status": "planned",
+      "implementation_phase": "phase7",
+      "legacy_commands": [
+        "longhouse local-health",
+        "longhouse-local-health",
+        "Longhouse.app menu-bar health refresh"
+      ],
+      "native_target_command": "longhouse-engine device local-health",
+      "phase1_inventory_ids": [
+        "local-health-cli-python",
+        "local-health-fast-cli-python",
+        "local-health-service-python",
+        "desktop-app-health-launcher-python"
+      ],
+      "providers": "all",
+      "provider_binary_ownership": "not_applicable",
+      "token_policy": "no_token",
+      "cwd_policy": "not_applicable",
+      "notes": "Menu bar, fast local health, and human local-health output must share the same native health collector."
+    },
+    {
+      "id": "doctor-repair",
+      "status": "planned",
+      "implementation_phase": "phase7",
+      "legacy_commands": [
+        "longhouse doctor",
+        "longhouse machine repair",
+        "longhouse connect --install"
+      ],
+      "native_target_command": "longhouse-engine device repair",
+      "phase1_inventory_ids": [
+        "doctor-cli-python",
+        "machine-cli-python"
+      ],
+      "providers": "all",
+      "provider_binary_ownership": "not_applicable",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "not_applicable",
+      "notes": "Install/repair may read or write machine tokens, but token values must stay out of argv and logs."
+    },
+    {
+      "id": "provider-live-proof",
+      "status": "planned",
+      "implementation_phase": "phase7",
+      "legacy_commands": [
+        "longhouse provider-live publish",
+        "longhouse provider-live canary"
+      ],
+      "native_target_command": "longhouse-engine device provider-live",
+      "phase1_inventory_ids": [
+        "provider-live-cli-python"
+      ],
+      "providers": "all",
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "not_applicable",
+      "notes": "Native provider proof should keep provider CLIs user-owned and keep proof upload tokens out of argv."
+    },
+    {
+      "id": "claude-managed",
+      "status": "planned",
+      "implementation_phase": "phase3",
+      "legacy_commands": [
+        "longhouse claude",
+        "longhouse claude-channel serve",
+        "longhouse claude-channel send",
+        "longhouse claude-channel interrupt"
+      ],
+      "native_target_command": "longhouse-engine device claude",
+      "phase1_inventory_ids": [
+        "claude-launch-wrapper",
+        "claude-channel-bridge",
+        "claude-channel-helpers",
+        "control-channel-claude-shellout"
+      ],
+      "providers": [
+        "claude"
+      ],
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Phase 3 owns Claude launch plus the native channel bridge. This does not change Claude capability claims in Phase 2."
+    },
+    {
+      "id": "codex-managed",
+      "status": "planned",
+      "implementation_phase": "phase4",
+      "legacy_commands": [
+        "longhouse codex"
+      ],
+      "native_target_command": "longhouse-engine device codex",
+      "phase1_inventory_ids": [
+        "codex-launch-wrapper"
+      ],
+      "providers": [
+        "codex"
+      ],
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Phase 4 should preserve the existing Rust Codex bridge and replace only the Python launch/attach wrapper."
+    },
+    {
+      "id": "opencode-managed",
+      "status": "planned",
+      "implementation_phase": "phase5",
+      "legacy_commands": [
+        "longhouse opencode",
+        "longhouse opencode-channel attach",
+        "longhouse opencode-bridge"
+      ],
+      "native_target_command": "longhouse-engine device opencode",
+      "phase1_inventory_ids": [
+        "opencode-launch-wrapper",
+        "opencode-channel-compat",
+        "opencode-bridge-cli"
+      ],
+      "providers": [
+        "opencode"
+      ],
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Phase 5 keeps native remote OpenCode control intact while replacing local Python launch/attach compatibility."
+    },
+    {
+      "id": "antigravity-managed",
+      "status": "planned",
+      "implementation_phase": "phase6",
+      "legacy_commands": [
+        "longhouse agy",
+        "longhouse antigravity",
+        "longhouse antigravity-channel send"
+      ],
+      "native_target_command": "longhouse-engine device antigravity",
+      "phase1_inventory_ids": [
+        "antigravity-launch-wrapper",
+        "antigravity-channel",
+        "antigravity-hook-inbox",
+        "control-channel-antigravity-shellout"
+      ],
+      "providers": [
+        "antigravity"
+      ],
+      "provider_binary_ownership": "user_owned",
+      "token_policy": "env_or_state_file",
+      "cwd_policy": "strict_absolute_or_existing",
+      "notes": "Phase 6 either replaces the hook-inbox adapter natively or explicitly excludes Antigravity from the no-Python launch promise."
+    }
+  ]
+}
