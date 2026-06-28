@@ -47,6 +47,8 @@ Status: Implemented and approved
 
 Review: Hatch DeepSeek approved commit `7dca166f3` against the Phase 1 acceptance criteria.
 
+Coverage hardening: Added focused regressions for control-channel routing, empty `cwd`, default username, provider-session path encoding, and invalid/incompatible state files.
+
 Goal: Remove the Python CLI shellout for OpenCode `session.send_text` and `session.interrupt`.
 
 Steps:

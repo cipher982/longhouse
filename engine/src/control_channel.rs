@@ -2085,6 +2085,7 @@ impl CommandError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -2142,6 +2143,108 @@ mod tests {
             "resume_run_once" if provider == "codex" => Some(COMMAND_RUN_ONCE),
             _ => None,
         }
+    }
+
+    #[derive(Debug)]
+    struct RecordedHttpRequest {
+        target: String,
+        body: String,
+    }
+
+    type RecordedHttpRequestRx = tokio::sync::oneshot::Receiver<RecordedHttpRequest>;
+
+    async fn spawn_single_http_request_server() -> (String, RecordedHttpRequestRx) {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut bytes = Vec::new();
+            let mut header_end = None;
+            let mut content_length = 0usize;
+            loop {
+                let mut chunk = [0u8; 1024];
+                let read = stream.read(&mut chunk).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&chunk[..read]);
+                if header_end.is_none() {
+                    header_end = http_header_end(&bytes);
+                    if let Some(end) = header_end {
+                        let head = String::from_utf8_lossy(&bytes[..end]);
+                        content_length = http_content_length(&head);
+                    }
+                }
+                if let Some(end) = header_end {
+                    if bytes.len() >= end + 4 + content_length {
+                        break;
+                    }
+                }
+            }
+            let request = parse_http_request(&bytes);
+            let _ = tx.send(request);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}",
+                )
+                .await
+                .unwrap();
+        });
+        (format!("http://{addr}"), rx)
+    }
+
+    fn http_header_end(bytes: &[u8]) -> Option<usize> {
+        bytes.windows(4).position(|window| window == b"\r\n\r\n")
+    }
+
+    fn http_content_length(head: &str) -> usize {
+        head.lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                if name.eq_ignore_ascii_case("content-length") {
+                    value.trim().parse::<usize>().ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0)
+    }
+
+    fn parse_http_request(bytes: &[u8]) -> RecordedHttpRequest {
+        let text = String::from_utf8_lossy(bytes);
+        let (head, body) = text.split_once("\r\n\r\n").unwrap_or((&text, ""));
+        let target = head
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap()
+            .to_string();
+        RecordedHttpRequest {
+            target,
+            body: body.to_string(),
+        }
+    }
+
+    fn write_opencode_control_state(config_dir: &Path, session_id: &str, server_url: &str) {
+        let state_dir = config_dir.join("managed-local").join("opencode-server");
+        std::fs::create_dir_all(&state_dir).unwrap();
+        std::fs::write(
+            state_dir.join(format!("{session_id}.json")),
+            serde_json::to_string(&json!({
+                "schema_version": 1,
+                "session_id": session_id,
+                "provider_session_id": "ses_native",
+                "server_url": server_url,
+                "cwd": "/tmp/native opencode",
+                "username": "opencode",
+                "password": "secret-password",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -2711,6 +2814,63 @@ mod tests {
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_routes_opencode_send_through_native_control() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let empty_path = temp.path().join("empty-path");
+        let config_dir = temp.path().join("claude-config");
+        std::fs::create_dir_all(&empty_path).unwrap();
+        let (server_url, request_rx) = spawn_single_http_request_server().await;
+        let session_id = "11111111-1111-4111-8111-111111111111";
+        write_opencode_control_state(&config_dir, session_id, &server_url);
+
+        let old_path = std::env::var_os("PATH");
+        let old_claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+        std::env::set_var("PATH", empty_path.as_os_str());
+        std::env::set_var("CLAUDE_CONFIG_DIR", config_dir.as_os_str());
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-opencode-native-send",
+                "session_id": session_id,
+                "command_type": COMMAND_SEND_TEXT,
+                "payload": {"provider": "opencode", "text": "hello native"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        if let Some(value) = old_path {
+            std::env::set_var("PATH", value);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(value) = old_claude_config_dir {
+            std::env::set_var("CLAUDE_CONFIG_DIR", value);
+        } else {
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+        }
+
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["provider"], "opencode");
+        assert_eq!(result["result"]["transport"], "opencode_server_bridge");
+        assert_eq!(result["result"]["provider_session_id"], "ses_native");
+        let request = request_rx.await.unwrap();
+        assert_eq!(
+            request.target,
+            "/session/ses_native/prompt_async?directory=%2Ftmp%2Fnative+opencode"
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(&request.body).unwrap(),
+            json!({
+                "noReply": true,
+                "parts": [{"type": "text", "text": "hello native"}],
+            })
+        );
     }
 
     #[tokio::test]

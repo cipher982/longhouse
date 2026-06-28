@@ -310,6 +310,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_text_omits_directory_query_when_cwd_is_empty() {
+        let (server_url, request_rx) = spawn_single_request_server().await;
+        let temp = TempDir::new().unwrap();
+        write_state(temp.path(), &server_url, None);
+
+        send_text_from_state_dir(temp.path(), SESSION_ID, "hello")
+            .await
+            .unwrap();
+        let request = request_rx.await.unwrap();
+
+        assert_eq!(request.target, "/session/ses_test123/prompt_async");
+    }
+
+    #[tokio::test]
+    async fn send_text_defaults_missing_username_to_opencode() {
+        let (server_url, request_rx) = spawn_single_request_server().await;
+        let temp = TempDir::new().unwrap();
+        let mut payload = base_state_payload(&server_url, Some("/tmp/project"));
+        payload.as_object_mut().unwrap().remove("username");
+        write_state_payload(temp.path(), SESSION_ID, payload);
+
+        send_text_from_state_dir(temp.path(), SESSION_ID, "hello")
+            .await
+            .unwrap();
+        let request = request_rx.await.unwrap();
+
+        assert_eq!(
+            request.headers.get("authorization").unwrap(),
+            &format!(
+                "Basic {}",
+                general_purpose::STANDARD.encode("opencode:secret-password")
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn send_text_encodes_provider_session_id_as_path_segment() {
+        let (server_url, request_rx) = spawn_single_request_server().await;
+        let temp = TempDir::new().unwrap();
+        let mut payload = base_state_payload(&server_url, Some("/tmp/project"));
+        payload["provider_session_id"] = Value::String("ses/test 123".to_string());
+        write_state_payload(temp.path(), SESSION_ID, payload);
+
+        send_text_from_state_dir(temp.path(), SESSION_ID, "hello")
+            .await
+            .unwrap();
+        let request = request_rx.await.unwrap();
+
+        assert_eq!(
+            request.target,
+            "/session/ses%2Ftest%20123/prompt_async?directory=%2Ftmp%2Fproject"
+        );
+    }
+
+    #[tokio::test]
     async fn send_text_rejects_non_local_server_url_before_request() {
         let temp = TempDir::new().unwrap();
         write_state(temp.path(), "https://example.com", Some("/tmp/project"));
@@ -339,6 +394,33 @@ mod tests {
             .contains("OpenCode server bridge state session_id mismatch"));
     }
 
+    #[test]
+    fn read_bridge_state_rejects_bad_or_incompatible_state_files() {
+        let temp = TempDir::new().unwrap();
+
+        let mut newer_schema = base_state_payload("http://127.0.0.1:12345", Some("/tmp/project"));
+        newer_schema["schema_version"] = Value::Number(3.into());
+        write_state_payload(temp.path(), SESSION_ID, newer_schema);
+        let error = read_bridge_state(SESSION_ID, Some(temp.path())).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("state schema 3 is newer than this Longhouse build"));
+
+        let mut incomplete = base_state_payload("http://127.0.0.1:12345", Some("/tmp/project"));
+        incomplete.as_object_mut().unwrap().remove("password");
+        write_state_payload(temp.path(), SESSION_ID, incomplete);
+        let error = read_bridge_state(SESSION_ID, Some(temp.path())).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("OpenCode server bridge state is incomplete"));
+
+        std::fs::write(temp.path().join(format!("{SESSION_ID}.json")), "{").unwrap();
+        let error = read_bridge_state(SESSION_ID, Some(temp.path())).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("OpenCode server bridge state is not valid JSON"));
+    }
+
     async fn send_text_from_state_dir(
         state_dir: &Path,
         session_id: &str,
@@ -363,7 +445,7 @@ mod tests {
     }
 
     fn write_state(state_dir: &Path, server_url: &str, cwd: Option<&str>) {
-        write_state_with_session_id(state_dir, SESSION_ID, SESSION_ID, server_url, cwd);
+        write_state_payload(state_dir, SESSION_ID, base_state_payload(server_url, cwd));
     }
 
     fn write_state_with_session_id(
@@ -373,22 +455,27 @@ mod tests {
         server_url: &str,
         cwd: Option<&str>,
     ) {
+        let mut payload = base_state_payload(server_url, cwd);
+        payload["session_id"] = Value::String(state_session_id.to_string());
+        write_state_payload(state_dir, filename_session_id, payload);
+    }
+
+    fn base_state_payload(server_url: &str, cwd: Option<&str>) -> Value {
+        json!({
+            "schema_version": 1,
+            "session_id": SESSION_ID,
+            "provider_session_id": "ses_test123",
+            "server_url": server_url,
+            "cwd": cwd.unwrap_or(""),
+            "username": "opencode",
+            "password": "secret-password",
+        })
+    }
+
+    fn write_state_payload(state_dir: &Path, filename_session_id: &str, payload: Value) {
         fs::create_dir_all(state_dir).unwrap();
         let path = state_dir.join(format!("{filename_session_id}.json"));
-        fs::write(
-            path,
-            serde_json::to_string(&json!({
-                "schema_version": 1,
-                "session_id": state_session_id,
-                "provider_session_id": "ses_test123",
-                "server_url": server_url,
-                "cwd": cwd.unwrap_or(""),
-                "username": "opencode",
-                "password": "secret-password",
-            }))
-            .unwrap(),
-        )
-        .unwrap();
+        fs::write(path, serde_json::to_string(&payload).unwrap()).unwrap();
     }
 
     async fn spawn_single_request_server() -> (String, oneshot::Receiver<RecordedRequest>) {
