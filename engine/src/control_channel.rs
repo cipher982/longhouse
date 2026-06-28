@@ -2629,6 +2629,42 @@ mod tests {
     }
 
     #[test]
+    fn managed_engine_dispatch_paths_are_manifest_backed() {
+        let supports = manifest_machine_control_supports();
+        for (provider, operation) in [
+            ("codex", "send"),
+            ("codex", "interrupt"),
+            ("codex", "steer"),
+            ("codex", "answer_pause"),
+            ("codex", "launch"),
+            ("codex", "continue"),
+            ("codex", "run_once"),
+            ("codex", "resume_run_once"),
+            ("claude", "send"),
+            ("claude", "interrupt"),
+            ("claude", "steer"),
+            ("claude", "answer_pause"),
+            ("claude", "launch"),
+            ("claude", "continue"),
+            ("opencode", "send"),
+            ("opencode", "interrupt"),
+            ("opencode", "launch"),
+            ("opencode", "terminate"),
+            ("antigravity", "send"),
+        ] {
+            let support = format!("{provider}.{operation}");
+            assert!(
+                supports.contains(&support),
+                "engine dispatch path {support} must be declared in managed provider manifest"
+            );
+            assert!(
+                support_dispatch_command(provider, operation).is_some(),
+                "engine dispatch path {support} must map to a control command"
+            );
+        }
+    }
+
+    #[test]
     fn control_supports_are_gated_by_installed_provider_commands() {
         let unique = format!(
             "lh-control-supports-{}-{}",
