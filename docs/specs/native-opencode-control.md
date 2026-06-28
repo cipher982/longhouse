@@ -180,13 +180,104 @@ make test
 
 ### Phase 4: Native Stop/Terminate
 
+Status: Planned
+
 Goal: Port OpenCode stop/terminate behavior into Rust.
+
+Scope:
+
+- Add a native OpenCode stop adapter in `engine/src/opencode_control.rs`.
+- Add `session.terminate` as the Machine Agent command type for managed
+  provider termination.
+- Add `terminate` to the machine-control operation mapping and advertise
+  `opencode.terminate` only when the upgraded Machine Agent sees stock
+  `opencode` on `PATH`.
+- Acknowledge that `can_terminate` is already part of the session capability
+  model for providers with `terminate=true`; this phase makes the OpenCode
+  Machine Agent support bit truthful rather than adding a new UI control.
+- Route provider=`opencode` `session.terminate` command frames through the
+  native adapter and return the same CLI-compatible shape:
+  `exit_code`, `stdout`, `stderr`, `provider`, `transport`, `pid`, `stopped`.
+- Preserve the existing Python `longhouse opencode-channel stop` command for
+  local CLI attach/TUI cleanup until the final edge-migration phase.
+- Do not add a new browser or iOS stop button in this phase. This phase creates
+  the truthful lower-level operation; product surfaces can consume it later.
+
+Implementation plan:
+
+1. Extend the provider contract support suffix mapping with `terminate`.
+2. Add `opencode.terminate` to the OpenCode manifest entry and update contract
+   tests so capability projection and dispatcher routing include terminate.
+3. Add `COMMAND_TERMINATE = "session.terminate"` to the Machine Agent control
+   channel.
+4. Add a Rust `stop_server_bridge(session_id)` adapter that:
+   - reads the existing schema-1 OpenCode bridge state,
+   - returns `stopped=false` when no recorded PID is present or the PID is no
+     longer live,
+   - requires recorded process start time and command to be present and to match
+     immediately before signaling,
+   - refuses to stop legacy state without process identity,
+   - never sends a signal when start time or command mismatches prove PID reuse,
+   - sends `SIGTERM` only to the process group when the recorded process is
+     still its own process-group leader (`getpgid(pid) == pid`),
+   - never uses a bare-PID fallback in the native stop path.
+5. Route OpenCode `session.terminate` in `control_channel.rs` through
+   `stop_server_bridge`.
+6. Leave `ManagedOpenCodeReaper` behavior unchanged: it remains an
+   `attached_tui` orphan backstop with its own stricter no-bare-PID signal
+   rule.
+
+Success criteria:
+
+- Runtime Host capability projection can derive `terminate` from
+  `opencode.terminate` in the live Machine Agent `supports[]` handshake.
+- `session.terminate` for provider `opencode` no longer shells out to
+  `longhouse opencode-channel stop`.
+- The native stop result remains compatible with the Python CLI stop payload.
+- PID reuse cannot terminate an unrelated process when recorded process start
+  time or command differs from the live PID.
+- Existing schema-1 bridge state from Python launch and Rust launch is readable.
+- Older state without process identity is treated conservatively and returns
+  `stopped=false`.
+- The terminal-owned reaper still ignores `detached`, `keep_server`, and legacy
+  state without owner-wrapper identity.
+- No user-facing stop UX is introduced without a separate product decision.
+
+Testing plan:
+
+- Add Rust unit coverage for:
+  - identity-matched stop returns `stopped=true`,
+  - missing PID / exited PID returns `stopped=false`,
+  - mismatched recorded start time returns `stopped=false`,
+  - mismatched recorded command returns `stopped=false`,
+  - legacy state without identity returns `stopped=false`,
+  - identity-matched PID with `getpgid(pid) != pid` returns `stopped=false`,
+  - reused PID that is not an OpenCode server is not signaled,
+  - control-channel `session.terminate` routes OpenCode through the native
+    adapter and rejects unsupported providers cleanly.
+- Add contract/dispatcher backend tests for:
+  - `machine_control_capability_for_command("opencode", "session.terminate")`
+    returns `opencode.terminate`,
+  - OpenCode terminate dispatch requires the engine channel support bit,
+  - the command frame sent to the Machine Agent has
+    `command_type="session.terminate"` and provider=`opencode`,
+  - machine directory/local-health operation projection includes terminate when
+    the live supports list advertises `opencode.terminate`.
+- Re-run existing Python OpenCode CLI stop tests unchanged to prove the
+  transitional CLI path still behaves.
 
 Acceptance criteria:
 
 - Stop uses recorded process identity before signaling.
 - PID reuse cannot kill an unrelated process.
 - Attached-TUI reaper behavior stays limited to the documented launch mode.
+
+Validation:
+
+```bash
+make test-engine
+make test
+```
 
 ### Phase 5: Full Edge Migration
 
