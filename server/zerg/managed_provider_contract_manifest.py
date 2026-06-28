@@ -47,6 +47,7 @@ MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX = {
     "interrupt": "interrupt",
     "steer": "steer_active_turn",
     "answer_pause": "answer_pause",
+    "terminate": "terminate",
     # Machine-control launch/continue are remote-channel operations; local
     # launch is a separate CLI path and never appears in machine supports[].
     "launch": "launch_remote",

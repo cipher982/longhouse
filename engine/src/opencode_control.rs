@@ -230,6 +230,12 @@ pub struct OpenCodeLaunchResult {
     pub log_path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenCodeStopResult {
+    pub pid: Option<u32>,
+    pub stopped: bool,
+}
+
 #[derive(Debug, Clone)]
 struct OpenCodeControlState {
     session_id: String,
@@ -299,6 +305,13 @@ pub async fn interrupt(session_id: &str) -> Result<OpenCodeControlResult> {
     Ok(OpenCodeControlResult {
         provider_session_id: state.provider_session_id,
     })
+}
+
+pub fn stop_server_bridge(session_id: &str) -> Result<OpenCodeStopResult> {
+    let state = read_bridge_state(session_id, None)?;
+    let pid = state.pid;
+    let stopped = terminate_recorded_opencode_server(&state)?;
+    Ok(OpenCodeStopResult { pid, stopped })
 }
 
 pub async fn launch_server_bridge(config: OpenCodeLaunchConfig) -> Result<OpenCodeLaunchResult> {
@@ -1112,6 +1125,74 @@ fn pid_matches_recorded_identity(state: &OpenCodeControlState) -> bool {
     true
 }
 
+fn pid_matches_strict_opencode_identity(state: &OpenCodeControlState) -> bool {
+    let Some(pid) = state.pid else {
+        return false;
+    };
+    if !pid_is_running(pid) {
+        return false;
+    }
+    let recorded_start = state.process_start_time.trim();
+    let recorded_cmd = state.process_command.trim();
+    if recorded_start.is_empty() || recorded_cmd.is_empty() {
+        return false;
+    }
+    if !(recorded_cmd.contains("opencode") && recorded_cmd.contains(" serve")) {
+        return false;
+    }
+    let Some((live_start, live_cmd)) = process_identity(pid) else {
+        return false;
+    };
+    recorded_start == live_start && recorded_cmd == live_cmd
+}
+
+fn terminate_recorded_opencode_server(state: &OpenCodeControlState) -> Result<bool> {
+    let Some(pid) = state.pid else {
+        return Ok(false);
+    };
+    if pid == 0 || pid > i32::MAX as u32 {
+        return Ok(false);
+    }
+    if !pid_matches_strict_opencode_identity(state) {
+        return Ok(false);
+    }
+    terminate_recorded_process_group(pid)
+}
+
+#[cfg(unix)]
+fn terminate_recorded_process_group(pid: u32) -> Result<bool> {
+    let pid_i = pid as i32;
+    unsafe {
+        let pgid = libc::getpgid(pid_i);
+        if pgid == -1 {
+            let err = std::io::Error::last_os_error();
+            if matches!(err.raw_os_error(), Some(code) if code == libc::ESRCH) {
+                return Ok(false);
+            }
+            return Err(err).with_context(|| {
+                format!("Could not inspect OpenCode server process group pid={pid}")
+            });
+        }
+        if pgid != pid_i {
+            return Ok(false);
+        }
+        let rc = libc::killpg(pid_i, libc::SIGTERM);
+        if rc == 0 {
+            return Ok(true);
+        }
+        let err = std::io::Error::last_os_error();
+        if matches!(err.raw_os_error(), Some(code) if code == libc::ESRCH) {
+            return Ok(false);
+        }
+        Err(err).with_context(|| format!("Could not terminate OpenCode server pid={pid}"))
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_recorded_process_group(_pid: u32) -> Result<bool> {
+    Ok(false)
+}
+
 fn terminate_pid(pid: u32) -> Result<()> {
     if pid == 0 || pid > i32::MAX as u32 {
         return Ok(());
@@ -1530,6 +1611,111 @@ mod tests {
         assert!(error.to_string().contains("must use http on localhost"));
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_server_bridge_stops_identity_matched_process_group() {
+        let temp = TempDir::new().unwrap();
+        let mut child = spawn_fake_opencode_stop_target(temp.path(), true);
+        let pid = child.id();
+        let (start, command) = wait_process_identity(pid);
+        write_stop_state(temp.path(), pid, &start, &command);
+
+        let result = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+
+        assert_eq!(result.pid, Some(pid));
+        assert!(result.stopped);
+        wait_until_pid_stops(pid).await;
+        let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_server_bridge_refuses_missing_or_legacy_identity() {
+        let temp = TempDir::new().unwrap();
+        write_state_payload(
+            temp.path(),
+            SESSION_ID,
+            base_state_payload("http://127.0.0.1:12345", Some("/tmp/project")),
+        );
+        let result = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+        assert_eq!(result.pid, None);
+        assert!(!result.stopped);
+
+        let mut child = spawn_fake_opencode_stop_target(temp.path(), true);
+        let pid = child.id();
+        let _ = wait_process_identity(pid);
+        let mut legacy = base_state_payload("http://127.0.0.1:12345", Some("/tmp/project"));
+        legacy["pid"] = json!(pid);
+        write_state_payload(temp.path(), SESSION_ID, legacy);
+
+        let result = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+
+        assert_eq!(result.pid, Some(pid));
+        assert!(!result.stopped);
+        assert!(pid_is_running(pid));
+        terminate_pid(pid).unwrap();
+        wait_until_pid_stops(pid).await;
+        let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_server_bridge_refuses_mismatched_recorded_identity() {
+        let temp = TempDir::new().unwrap();
+        let mut child = spawn_fake_opencode_stop_target(temp.path(), true);
+        let pid = child.id();
+        let (start, command) = wait_process_identity(pid);
+
+        write_stop_state(temp.path(), pid, "Sun Jan  1 00:00:00 2000", &command);
+        let wrong_start = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+        assert!(!wrong_start.stopped);
+        assert!(pid_is_running(pid));
+
+        write_stop_state(
+            temp.path(),
+            pid,
+            &start,
+            "opencode serve --hostname 127.0.0.1 --different",
+        );
+        let wrong_command = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+        assert!(!wrong_command.stopped);
+        assert!(pid_is_running(pid));
+
+        terminate_pid(pid).unwrap();
+        wait_until_pid_stops(pid).await;
+        let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_server_bridge_refuses_non_group_leader_and_non_opencode_recorded_command() {
+        let temp = TempDir::new().unwrap();
+        let mut child = spawn_fake_opencode_stop_target(temp.path(), false);
+        let pid = child.id();
+        let (start, command) = wait_process_identity(pid);
+        write_stop_state(temp.path(), pid, &start, &command);
+
+        let result = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+
+        assert_eq!(result.pid, Some(pid));
+        assert!(!result.stopped);
+        assert!(pid_is_running(pid));
+        child.kill().unwrap();
+        let _ = child.wait();
+
+        let mut child = spawn_fake_opencode_stop_target(temp.path(), true);
+        let pid = child.id();
+        let (start, _command) = wait_process_identity(pid);
+        write_stop_state(temp.path(), pid, &start, "sleep 60");
+        let result = stop_from_state_dir(temp.path(), SESSION_ID).unwrap();
+        assert_eq!(result.pid, Some(pid));
+        assert!(!result.stopped);
+        assert!(pid_is_running(pid));
+        terminate_pid(pid).unwrap();
+        wait_until_pid_stops(pid).await;
+        let _ = child.wait();
+    }
+
     #[test]
     fn read_bridge_state_rejects_mismatched_session_id() {
         let temp = TempDir::new().unwrap();
@@ -1831,6 +2017,15 @@ mod tests {
         })
     }
 
+    fn stop_from_state_dir(state_dir: &Path, session_id: &str) -> Result<OpenCodeStopResult> {
+        let state = read_bridge_state(session_id, Some(state_dir))?;
+        let pid = state.pid;
+        Ok(OpenCodeStopResult {
+            pid,
+            stopped: terminate_recorded_opencode_server(&state)?,
+        })
+    }
+
     fn write_state(state_dir: &Path, server_url: &str, cwd: Option<&str>) {
         write_state_payload(state_dir, SESSION_ID, base_state_payload(server_url, cwd));
     }
@@ -1943,6 +2138,98 @@ mod tests {
             argv_path,
             pid_path,
         }
+    }
+
+    #[cfg(unix)]
+    fn spawn_fake_opencode_stop_target(
+        root: &Path,
+        new_process_group: bool,
+    ) -> TestChild {
+        let script_dir = root.join("stop-bin");
+        fs::create_dir_all(&script_dir).unwrap();
+        let path = script_dir.join("opencode");
+        fs::write(
+            &path,
+            "#!/bin/sh\ntrap 'exit 0' TERM\nwhile :; do sleep 1; done\n",
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).unwrap();
+
+        let mut command = std::process::Command::new(&path);
+        command
+            .arg("serve")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        if new_process_group {
+            use std::os::unix::process::CommandExt;
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
+        TestChild::new(command.spawn().unwrap())
+    }
+
+    #[cfg(unix)]
+    struct TestChild {
+        child: std::process::Child,
+    }
+
+    #[cfg(unix)]
+    impl TestChild {
+        fn new(child: std::process::Child) -> Self {
+            Self { child }
+        }
+
+        fn id(&self) -> u32 {
+            self.child.id()
+        }
+
+        fn kill(&mut self) -> std::io::Result<()> {
+            self.child.kill()
+        }
+
+        fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+            self.child.wait()
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for TestChild {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    fn write_stop_state(
+        state_dir: &Path,
+        pid: u32,
+        process_start_time: &str,
+        process_command: &str,
+    ) {
+        let mut payload = base_state_payload("http://127.0.0.1:12345", Some("/tmp/project"));
+        payload["pid"] = json!(pid);
+        payload["process_start_time"] = json!(process_start_time);
+        payload["process_command"] = json!(process_command);
+        write_state_payload(state_dir, SESSION_ID, payload);
+    }
+
+    fn wait_process_identity(pid: u32) -> (String, String) {
+        for _ in 0..30 {
+            if let Some(identity) = process_identity(pid) {
+                return identity;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        panic!("pid {pid} identity was not visible");
     }
 
     fn shell_quote(value: impl AsRef<str>) -> String {

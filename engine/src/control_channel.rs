@@ -38,6 +38,7 @@ const COMMAND_INTERRUPT: &str = "session.interrupt";
 const COMMAND_STEER_TEXT: &str = "session.steer_text";
 const COMMAND_ANSWER_PAUSE: &str = "session.answer_pause";
 const COMMAND_LAUNCH: &str = "session.launch";
+const COMMAND_TERMINATE: &str = "session.terminate";
 const COMMAND_RUN_ONCE: &str = "session.run_once";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
@@ -1077,6 +1078,27 @@ async fn execute_command(
                 "provider": "codex",
                 "transport": "codex_app_server",
             }))
+        }
+        COMMAND_TERMINATE => {
+            let provider = payload_optional_string(&payload, "provider")
+                .unwrap_or_else(|| "codex".to_string());
+            if provider == "opencode" {
+                let summary = crate::opencode_control::stop_server_bridge(&session_id)
+                    .map_err(CommandError::command_failed)?;
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "provider": "opencode",
+                    "transport": crate::opencode_control::OPENCODE_SERVER_BRIDGE_TRANSPORT,
+                    "pid": summary.pid,
+                    "stopped": summary.stopped,
+                }));
+            }
+            Err(CommandError {
+                code: "unsupported_command".to_string(),
+                message: format!("{provider} terminate is not supported by this Machine Agent"),
+            })
         }
         COMMAND_STEER_TEXT => {
             let text = payload_required_string(&payload, "text")?;
@@ -2638,6 +2660,7 @@ mod tests {
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
                 "opencode.launch".to_string(),
+                "opencode.terminate".to_string(),
             ]
         );
 
@@ -2650,6 +2673,7 @@ mod tests {
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
                 "opencode.launch".to_string(),
+                "opencode.terminate".to_string(),
                 "opencode.live_proof".to_string(),
             ]
         );
@@ -2699,6 +2723,7 @@ mod tests {
         // `claude.continue in info.supports` check actually reads.
         assert!(supports.contains(&"claude.continue".to_string()));
         assert!(supports.contains(&"opencode.launch".to_string()));
+        assert!(supports.contains(&"opencode.terminate".to_string()));
         assert!(supports.contains(&"antigravity.send".to_string()));
         assert!(supports.contains(&"claude.live_proof".to_string()));
         assert!(supports.contains(&"opencode.live_proof".to_string()));
@@ -3004,6 +3029,71 @@ mod tests {
             "/session/ses_native/abort?directory=%2Ftmp%2Fnative+opencode"
         );
         assert!(request.body.is_empty());
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_routes_opencode_terminate_through_native_control() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let empty_path = temp.path().join("empty-path");
+        let config_dir = temp.path().join("claude-config");
+        std::fs::create_dir_all(&empty_path).unwrap();
+        let session_id = "11111111-1111-4111-8111-111111111111";
+        write_opencode_control_state(&config_dir, session_id, "http://127.0.0.1:12345");
+
+        let old_path = std::env::var_os("PATH");
+        let old_claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
+        std::env::set_var("PATH", empty_path.as_os_str());
+        std::env::set_var("CLAUDE_CONFIG_DIR", config_dir.as_os_str());
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-opencode-native-terminate",
+                "session_id": session_id,
+                "command_type": COMMAND_TERMINATE,
+                "payload": {"provider": "opencode"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        if let Some(value) = old_path {
+            std::env::set_var("PATH", value);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(value) = old_claude_config_dir {
+            std::env::set_var("CLAUDE_CONFIG_DIR", value);
+        } else {
+            std::env::remove_var("CLAUDE_CONFIG_DIR");
+        }
+
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["provider"], "opencode");
+        assert_eq!(result["result"]["transport"], "opencode_server_bridge");
+        assert_eq!(result["result"]["pid"], Value::Null);
+        assert_eq!(result["result"]["stopped"], false);
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_rejects_non_opencode_terminate() {
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-codex-terminate",
+                "session_id": "11111111-1111-4111-8111-111111111111",
+                "command_type": COMMAND_TERMINATE,
+                "payload": {"provider": "codex"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "unsupported_command");
     }
 
     #[tokio::test]

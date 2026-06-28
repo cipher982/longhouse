@@ -266,7 +266,12 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.answer_pause is False
     assert opencode.reattach is True
     assert opencode.can_resume is False
-    assert opencode.machine_control_supports == ("opencode.send", "opencode.interrupt", "opencode.launch")
+    assert opencode.machine_control_supports == (
+        "opencode.send",
+        "opencode.interrupt",
+        "opencode.launch",
+        "opencode.terminate",
+    )
     assert opencode.connection_capabilities == {
         "can_send_input": 1,
         "can_interrupt": 1,
@@ -339,20 +344,24 @@ def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
         ("codex", "session.interrupt", "codex.interrupt"),
         ("codex", "session.steer_text", "codex.steer"),
         ("codex", "session.answer_pause", "codex.answer_pause"),
+        ("codex", "session.terminate", None),
         ("codex", "session.run_once", "codex.run_once"),
         ("claude", "session.send_text", "claude.send"),
         ("claude", "session.interrupt", "claude.interrupt"),
         ("claude", "session.steer_text", "claude.steer"),
         ("claude", "session.answer_pause", "claude.answer_pause"),
+        ("claude", "session.terminate", None),
         ("claude", "session.run_once", None),
         ("opencode", "session.send_text", "opencode.send"),
         ("opencode", "session.interrupt", "opencode.interrupt"),
         ("opencode", "session.steer_text", None),
         ("opencode", "session.answer_pause", None),
+        ("opencode", "session.terminate", "opencode.terminate"),
         ("antigravity", "session.send_text", "antigravity.send"),
         ("antigravity", "session.interrupt", None),
         ("antigravity", "session.steer_text", None),
         ("antigravity", "session.answer_pause", None),
+        ("antigravity", "session.terminate", None),
     ],
 )
 def test_machine_control_capability_for_command_uses_provider_contract(provider, command_type, capability):
@@ -416,6 +425,7 @@ def test_machine_control_operations_by_provider_projects_live_supports():
             "codex.answer_pause",
             "codex.launch",
             "codex.run_once",
+            "opencode.terminate",
             "claude.answer_pause",
             "unknown.launch",
         ],
@@ -423,6 +433,7 @@ def test_machine_control_operations_by_provider_projects_live_supports():
     ) == {
         "codex": ("send", "answer_pause", "launch", "run_once"),
         "claude": ("steer", "answer_pause", "launch"),
+        "opencode": ("terminate",),
     }
 
 

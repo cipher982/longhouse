@@ -5,6 +5,7 @@ from zerg.services.provider_support_state import CONTRACT_OPERATIONS
 from zerg.services.provider_support_state import collect_provider_support_state
 
 CLAUDE_LIVE_CONTROL_OPERATIONS = ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]
+OPENCODE_LIVE_CONTROL_OPERATIONS = ["send", "interrupt", "launch", "terminate"]
 
 
 def _expected_supported_operations(contract) -> list[str]:
@@ -143,7 +144,7 @@ def test_support_state_uses_release_derived_action_coverage() -> None:
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"opencode": ["send", "interrupt", "launch"]},
+            "control_operations_by_provider": {"opencode": OPENCODE_LIVE_CONTROL_OPERATIONS},
         },
     )
 
@@ -197,7 +198,7 @@ def _collect_opencode_action_coverage(release_info: dict) -> dict:
         provider_release_status={"statuses": {"opencode": release_info}},
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"opencode": ["send", "interrupt", "launch"]},
+            "control_operations_by_provider": {"opencode": OPENCODE_LIVE_CONTROL_OPERATIONS},
         },
     )
     return support["providers"]["opencode"]
@@ -426,7 +427,7 @@ def test_support_state_surfaces_release_gaps_without_removing_capability() -> No
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"opencode": ["send", "interrupt", "launch"]},
+            "control_operations_by_provider": {"opencode": OPENCODE_LIVE_CONTROL_OPERATIONS},
         },
     )
 
@@ -653,7 +654,7 @@ def test_support_state_promotes_stronger_passing_local_live_proof_over_release_p
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"opencode": ["send", "interrupt", "launch"]},
+            "control_operations_by_provider": {"opencode": OPENCODE_LIVE_CONTROL_OPERATIONS},
         },
     )
 
@@ -686,7 +687,7 @@ def test_support_state_demotes_failed_matching_local_live_proof() -> None:
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"opencode": ["send", "interrupt", "launch"]},
+            "control_operations_by_provider": {"opencode": OPENCODE_LIVE_CONTROL_OPERATIONS},
         },
     )
 

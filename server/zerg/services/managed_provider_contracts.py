@@ -20,6 +20,7 @@ COMMAND_INTERRUPT = "session.interrupt"
 COMMAND_SEND_TEXT = "session.send_text"
 COMMAND_STEER_TEXT = "session.steer_text"
 COMMAND_ANSWER_PAUSE = "session.answer_pause"
+COMMAND_TERMINATE = "session.terminate"
 COMMAND_RUN_ONCE = "session.run_once"
 
 _MACHINE_CONTROL_SUFFIX_BY_COMMAND = {
@@ -27,6 +28,7 @@ _MACHINE_CONTROL_SUFFIX_BY_COMMAND = {
     COMMAND_INTERRUPT: "interrupt",
     COMMAND_STEER_TEXT: "steer",
     COMMAND_ANSWER_PAUSE: "answer_pause",
+    COMMAND_TERMINATE: "terminate",
     COMMAND_RUN_ONCE: "run_once",
 }
 

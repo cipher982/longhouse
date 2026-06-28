@@ -265,7 +265,8 @@
       "machine_control_supports": [
         "opencode.send",
         "opencode.interrupt",
-        "opencode.launch"
+        "opencode.launch",
+        "opencode.terminate"
       ]
     },
     {

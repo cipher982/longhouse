@@ -17,6 +17,7 @@ from zerg.services.machine_control_channel import get_machine_control_channel_re
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_TERMINATE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_STEER_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_NONE
@@ -464,6 +465,65 @@ def test_dispatch_managed_control_command_routes_opencode_interrupt_over_engine_
             assert websocket.sent[0]["payload"] == {"provider": "opencode"}
             assert websocket.sent[0]["command_id"] == (
                 f"managed-control:{session.id}:session.interrupt:req-opencode-interrupt"
+            )
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
+def test_dispatch_managed_control_command_routes_opencode_terminate_over_engine_channel():
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            websocket = await _connect_fake_engine(owner_id=42, supports=["opencode.terminate"])
+            session = _session(
+                provider="opencode",
+                managed_transport="opencode_server_bridge",
+                source_runner_id=None,
+            )
+            completer = asyncio.create_task(
+                _complete_first_machine_command(
+                    websocket,
+                    {
+                        "ok": True,
+                        "result": {
+                            "exit_code": 0,
+                            "stdout": "",
+                            "stderr": "",
+                            "provider": "opencode",
+                            "transport": "opencode_server_bridge",
+                            "pid": 1234,
+                            "stopped": True,
+                        },
+                    },
+                )
+            )
+            result = await dispatch_managed_control_command(
+                db=object(),
+                owner_id=42,
+                session=session,
+                timeout_secs=1,
+                command_type=MANAGED_CONTROL_COMMAND_TERMINATE,
+                commis_id="req-opencode-terminate",
+            )
+            await completer
+
+            assert result.ok is True
+            assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            assert result.data == {
+                "exit_code": 0,
+                "stdout": "",
+                "stderr": "",
+                "provider": "opencode",
+                "transport": "opencode_server_bridge",
+                "pid": 1234,
+                "stopped": True,
+            }
+            assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_TERMINATE
+            assert websocket.sent[0]["payload"] == {"provider": "opencode"}
+            assert websocket.sent[0]["command_id"] == (
+                f"managed-control:{session.id}:session.terminate:req-opencode-terminate"
             )
         finally:
             await _clear_machine_registry()
