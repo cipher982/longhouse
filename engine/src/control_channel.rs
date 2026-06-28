@@ -2127,23 +2127,35 @@ mod tests {
             .collect()
     }
 
+    const ENGINE_DISPATCH_SUPPORTS: &[(&str, &str, &str)] = &[
+        ("codex", "send", COMMAND_SEND_TEXT),
+        ("codex", "interrupt", COMMAND_INTERRUPT),
+        ("codex", "steer", COMMAND_STEER_TEXT),
+        ("codex", "answer_pause", COMMAND_ANSWER_PAUSE),
+        ("codex", "launch", COMMAND_LAUNCH),
+        ("codex", "continue", COMMAND_LAUNCH),
+        ("codex", "run_once", COMMAND_RUN_ONCE),
+        ("codex", "resume_run_once", COMMAND_RUN_ONCE),
+        ("claude", "send", COMMAND_SEND_TEXT),
+        ("claude", "interrupt", COMMAND_INTERRUPT),
+        ("claude", "steer", COMMAND_STEER_TEXT),
+        ("claude", "answer_pause", COMMAND_ANSWER_PAUSE),
+        ("claude", "launch", COMMAND_LAUNCH),
+        ("claude", "continue", COMMAND_LAUNCH),
+        ("opencode", "send", COMMAND_SEND_TEXT),
+        ("opencode", "interrupt", COMMAND_INTERRUPT),
+        ("opencode", "launch", COMMAND_LAUNCH),
+        ("opencode", "terminate", COMMAND_TERMINATE),
+        ("antigravity", "send", COMMAND_SEND_TEXT),
+    ];
+
     fn support_dispatch_command(provider: &str, operation: &str) -> Option<&'static str> {
-        match operation {
-            "send" if matches!(provider, "codex" | "claude" | "opencode" | "antigravity") => {
-                Some(COMMAND_SEND_TEXT)
-            }
-            "interrupt" if matches!(provider, "codex" | "claude" | "opencode") => {
-                Some(COMMAND_INTERRUPT)
-            }
-            "steer" if matches!(provider, "codex" | "claude") => Some(COMMAND_STEER_TEXT),
-            "answer_pause" if matches!(provider, "codex" | "claude") => Some(COMMAND_ANSWER_PAUSE),
-            "terminate" if provider == "opencode" => Some(COMMAND_TERMINATE),
-            "launch" if matches!(provider, "codex" | "claude" | "opencode") => Some(COMMAND_LAUNCH),
-            "continue" if matches!(provider, "codex" | "claude") => Some(COMMAND_LAUNCH),
-            "run_once" if provider == "codex" => Some(COMMAND_RUN_ONCE),
-            "resume_run_once" if provider == "codex" => Some(COMMAND_RUN_ONCE),
-            _ => None,
-        }
+        ENGINE_DISPATCH_SUPPORTS
+            .iter()
+            .find(|(supported_provider, supported_operation, _command)| {
+                provider == *supported_provider && operation == *supported_operation
+            })
+            .map(|(_, _, command)| *command)
     }
 
     #[derive(Debug)]
@@ -2631,27 +2643,7 @@ mod tests {
     #[test]
     fn managed_engine_dispatch_paths_are_manifest_backed() {
         let supports = manifest_machine_control_supports();
-        for (provider, operation) in [
-            ("codex", "send"),
-            ("codex", "interrupt"),
-            ("codex", "steer"),
-            ("codex", "answer_pause"),
-            ("codex", "launch"),
-            ("codex", "continue"),
-            ("codex", "run_once"),
-            ("codex", "resume_run_once"),
-            ("claude", "send"),
-            ("claude", "interrupt"),
-            ("claude", "steer"),
-            ("claude", "answer_pause"),
-            ("claude", "launch"),
-            ("claude", "continue"),
-            ("opencode", "send"),
-            ("opencode", "interrupt"),
-            ("opencode", "launch"),
-            ("opencode", "terminate"),
-            ("antigravity", "send"),
-        ] {
+        for (provider, operation, _command) in ENGINE_DISPATCH_SUPPORTS {
             let support = format!("{provider}.{operation}");
             assert!(
                 supports.contains(&support),
@@ -2660,6 +2652,35 @@ mod tests {
             assert!(
                 support_dispatch_command(provider, operation).is_some(),
                 "engine dispatch path {support} must map to a control command"
+            );
+        }
+    }
+
+    #[test]
+    fn unsupported_engine_dispatch_paths_stay_unadvertised() {
+        let supports = manifest_machine_control_supports();
+        for (provider, operation) in [
+            ("opencode", "steer"),
+            ("opencode", "answer_pause"),
+            ("opencode", "run_once"),
+            ("opencode", "resume_run_once"),
+            ("antigravity", "interrupt"),
+            ("antigravity", "steer"),
+            ("antigravity", "answer_pause"),
+            ("antigravity", "launch"),
+            ("claude", "run_once"),
+            ("claude", "resume_run_once"),
+            ("codex", "terminate"),
+        ] {
+            let support = format!("{provider}.{operation}");
+            assert!(
+                !supports.contains(&support),
+                "manifest must not advertise unsupported dispatch path {support}"
+            );
+            assert_eq!(
+                support_dispatch_command(provider, operation),
+                None,
+                "engine dispatch table must not route unsupported path {support}"
             );
         }
     }
@@ -2896,7 +2917,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_command_frame_routes_claude_send_through_longhouse_cli() {
+    async fn handle_command_frame_routes_claude_control_through_longhouse_cli() {
         let _guard = ENV_LOCK.lock().unwrap();
         let unique = format!(
             "lh-claude-send-{}-{}",
@@ -2931,6 +2952,154 @@ mod tests {
             &test_config(),
         )
         .await;
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["provider"], "claude");
+        assert_eq!(result["result"]["transport"], "claude_channel_bridge");
+        let args = std::fs::read_to_string(&args_path).unwrap();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            vec![
+                "claude-channel",
+                "send",
+                "--session-id",
+                "session-1",
+                "--text",
+                "hello",
+            ]
+        );
+
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-claude-interrupt",
+                "session_id": "session-1",
+                "command_type": COMMAND_INTERRUPT,
+                "payload": {"provider": "claude"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        assert_eq!(result["ok"], true);
+        let args = std::fs::read_to_string(&args_path).unwrap();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            vec!["claude-channel", "interrupt", "--session-id", "session-1"]
+        );
+
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-claude-steer",
+                "session_id": "session-1",
+                "command_type": COMMAND_STEER_TEXT,
+                "payload": {"provider": "claude", "text": "course correct"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        assert_eq!(result["ok"], true);
+        let args = std::fs::read_to_string(&args_path).unwrap();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            vec![
+                "claude-channel",
+                "send",
+                "--session-id",
+                "session-1",
+                "--text",
+                "course correct",
+                "--meta",
+                "intent=steer",
+            ]
+        );
+
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-claude-answer-pause",
+                "session_id": "session-1",
+                "command_type": COMMAND_ANSWER_PAUSE,
+                "payload": {
+                    "provider": "claude",
+                    "request_key": "pause-key",
+                    "message": "Use the smaller plan",
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["pause_response"]["status"], "resolved");
+        let args = std::fs::read_to_string(&args_path).unwrap();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            vec![
+                "claude-channel",
+                "send",
+                "--session-id",
+                "session-1",
+                "--text",
+                "Use the smaller plan",
+                "--meta",
+                "intent=pause_response",
+                "--meta",
+                "request_key=pause-key",
+                "--meta",
+                "decision=answer",
+            ]
+        );
+        if let Some(value) = old_path {
+            std::env::set_var("PATH", value);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(value) = old_args_out {
+            std::env::set_var("LONGHOUSE_ARGS_OUT", value);
+        } else {
+            std::env::remove_var("LONGHOUSE_ARGS_OUT");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_routes_antigravity_send_through_longhouse_cli() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = format!(
+            "lh-antigravity-send-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let dir = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&dir).unwrap();
+        let args_path = dir.join("args.txt");
+        write_test_executable(
+            &dir.join("longhouse"),
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$LONGHOUSE_ARGS_OUT\"\nexit 0\n",
+        );
+
+        let old_path = std::env::var_os("PATH");
+        let old_args_out = std::env::var_os("LONGHOUSE_ARGS_OUT");
+        std::env::set_var("PATH", dir.as_os_str());
+        std::env::set_var("LONGHOUSE_ARGS_OUT", args_path.as_os_str());
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-antigravity-send",
+                "session_id": "session-1",
+                "command_type": COMMAND_SEND_TEXT,
+                "payload": {"provider": "antigravity", "text": "hello"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
         if let Some(value) = old_path {
             std::env::set_var("PATH", value);
         } else {
@@ -2943,13 +3112,13 @@ mod tests {
         }
 
         assert_eq!(result["ok"], true);
-        assert_eq!(result["result"]["provider"], "claude");
-        assert_eq!(result["result"]["transport"], "claude_channel_bridge");
+        assert_eq!(result["result"]["provider"], "antigravity");
+        assert_eq!(result["result"]["transport"], "antigravity_hook_inbox");
         let args = std::fs::read_to_string(&args_path).unwrap();
         assert_eq!(
             args.lines().collect::<Vec<_>>(),
             vec![
-                "claude-channel",
+                "antigravity-channel",
                 "send",
                 "--session-id",
                 "session-1",

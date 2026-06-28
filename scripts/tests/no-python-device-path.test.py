@@ -54,6 +54,7 @@ def _inventory(*entries: dict) -> list[dict]:
             "replacement_phase": "phase3",
             "reason": "test",
             "device_command": True,
+            "python_dependency_kind": "entrypoint",
         },
         {
             "id": "codex-wrapper",
@@ -64,6 +65,7 @@ def _inventory(*entries: dict) -> list[dict]:
             "replacement_phase": "phase4",
             "reason": "test",
             "device_command": True,
+            "python_dependency_kind": "entrypoint",
         },
         {
             "id": "claude-rust-shellout",
@@ -75,6 +77,7 @@ def _inventory(*entries: dict) -> list[dict]:
             "replacement_phase": "phase3",
             "reason": "test",
             "device_command": True,
+            "python_dependency_kind": "control_shellout",
         },
         *entries,
     ]
@@ -133,6 +136,55 @@ def test_unclassified_provider_control_python_fails() -> None:
         )
 
 
+def test_unclassified_generic_device_python_fails() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        _write(root / "server/zerg/cli/local_health.py", "def app(): pass\n")
+
+        _assert_fails(
+            _run(root, _inventory()),
+            "server/zerg/cli/local_health.py is provider-control Python but is missing",
+        )
+
+
+def test_transitional_python_entries_require_dependency_kind() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        inventory = _inventory()
+        inventory[0].pop("python_dependency_kind")
+
+        _assert_fails(
+            _run(root, inventory),
+            "claude-wrapper: transitional entries must include python_dependency_kind",
+        )
+
+
+def test_requires_longhouse_cli_false_rejects_remote_control_shellout_debt() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        inventory = _inventory(
+            {
+                "id": "codex-control-shellout",
+                "category": "transitional_device",
+                "provider": "codex",
+                "path": "engine/src/control_channel.rs",
+                "owner_area": "codex-native",
+                "replacement_phase": "phase4",
+                "reason": "test",
+                "device_command": True,
+                "python_dependency_kind": "control_shellout",
+            }
+        )
+
+        _assert_fails(
+            _run(root, inventory),
+            "provider codex has requires_longhouse_cli=false but codex-control-shellout is control_shellout",
+        )
+
+
 def test_rust_shellout_symbol_must_exist() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -156,3 +208,24 @@ def test_device_command_cannot_be_test_only() -> None:
             _run(root, inventory),
             "device_command=true cannot be classified as test_only",
         )
+
+
+def main() -> int:
+    tests = [
+        test_minimal_inventory_passes,
+        test_requires_longhouse_cli_provider_must_have_transitional_entry,
+        test_unclassified_provider_control_python_fails,
+        test_unclassified_generic_device_python_fails,
+        test_transitional_python_entries_require_dependency_kind,
+        test_requires_longhouse_cli_false_rejects_remote_control_shellout_debt,
+        test_rust_shellout_symbol_must_exist,
+        test_device_command_cannot_be_test_only,
+    ]
+    for test in tests:
+        test()
+        print(f"PASS {test.__name__}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -19,6 +19,40 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase2",
         "reason": "Python Typer app still owns normal longhouse provider command registration.",
         "device_command": True,
+        "python_dependency_kind": "entrypoint",
+    },
+    {
+        "id": "cli-common-scaffold",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/cli/_common.py",
+        "owner_area": "native-device-entrypoint",
+        "replacement_phase": "phase2",
+        "reason": "Shared Python CLI helpers still back device command behavior.",
+        "device_command": False,
+        "python_dependency_kind": "shared_scaffold",
+    },
+    {
+        "id": "cli-launch-ui-scaffold",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/cli/_launch_ui.py",
+        "owner_area": "native-device-entrypoint",
+        "replacement_phase": "phase2",
+        "reason": "Shared Python launch UI helpers still back managed provider launch flows.",
+        "device_command": False,
+        "python_dependency_kind": "shared_scaffold",
+    },
+    {
+        "id": "cli-managed-contract-scaffold",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/cli/_managed_contract.py",
+        "owner_area": "native-device-entrypoint",
+        "replacement_phase": "phase2",
+        "reason": "Shared Python managed-contract helpers still back provider command UX.",
+        "device_command": False,
+        "python_dependency_kind": "shared_scaffold",
     },
     {
         "id": "claude-launch-wrapper",
@@ -29,6 +63,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase3",
         "reason": "Python still launches stock Claude, installs hooks/channel config, and wraps PTY behavior.",
         "device_command": True,
+        "python_dependency_kind": "entrypoint",
     },
     {
         "id": "claude-channel-bridge",
@@ -39,6 +74,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase3",
         "reason": "Python owns Claude channel serve/send/interrupt bridge commands.",
         "device_command": True,
+        "python_dependency_kind": "control_shellout",
     },
     {
         "id": "claude-channel-helpers",
@@ -49,6 +85,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase3",
         "reason": "Python builds Claude channel command/state/config helper behavior.",
         "device_command": True,
+        "python_dependency_kind": "control_shellout",
     },
     {
         "id": "claude-channel-text-server-projection",
@@ -69,6 +106,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase4",
         "reason": "Python still owns the human Codex managed launch and attach wrapper.",
         "device_command": True,
+        "python_dependency_kind": "entrypoint",
     },
     {
         "id": "opencode-launch-wrapper",
@@ -79,6 +117,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase5",
         "reason": "Python still owns the local OpenCode managed launch UX.",
         "device_command": True,
+        "python_dependency_kind": "entrypoint",
     },
     {
         "id": "opencode-channel-compat",
@@ -89,6 +128,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase5",
         "reason": "Compatibility CLI remains for attach and local bridge operations while native entrypoint is designed.",
         "device_command": True,
+        "python_dependency_kind": "entrypoint",
     },
     {
         "id": "opencode-bridge-cli",
@@ -99,6 +139,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase5",
         "reason": "Python bridge helper remains reachable from the device CLI path.",
         "device_command": True,
+        "python_dependency_kind": "entrypoint",
     },
     {
         "id": "opencode-bridge-state",
@@ -119,6 +160,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase6",
         "reason": "Python still owns managed Antigravity launch and hook environment setup.",
         "device_command": True,
+        "python_dependency_kind": "entrypoint",
     },
     {
         "id": "antigravity-channel",
@@ -129,6 +171,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase6",
         "reason": "Python still owns Antigravity hook-inbox send.",
         "device_command": True,
+        "python_dependency_kind": "control_shellout",
     },
     {
         "id": "antigravity-hook-inbox",
@@ -139,16 +182,29 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase6",
         "reason": "Python installs and manages the hook-inbox adapter used by agy.",
         "device_command": True,
+        "python_dependency_kind": "control_shellout",
     },
     {
-        "id": "local-health-python",
+        "id": "local-health-cli-python",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/cli/local_health.py",
+        "owner_area": "native-health-repair",
+        "replacement_phase": "phase7",
+        "reason": "Python local-health CLI is still part of the device status/repair surface.",
+        "device_command": True,
+        "python_dependency_kind": "health_repair",
+    },
+    {
+        "id": "local-health-service-python",
         "category": "transitional_device",
         "provider": "all",
         "path": "server/zerg/services/local_health.py",
         "owner_area": "native-health-repair",
         "replacement_phase": "phase7",
-        "reason": "Python local-health is still part of the device doctor/repair surface.",
+        "reason": "Python local-health service backs the device doctor/repair surface.",
         "device_command": True,
+        "python_dependency_kind": "health_repair",
     },
     {
         "id": "doctor-cli-python",
@@ -159,6 +215,29 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase7",
         "reason": "Python doctor CLI is still part of device repair UX.",
         "device_command": True,
+        "python_dependency_kind": "health_repair",
+    },
+    {
+        "id": "machine-cli-python",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/cli/machine.py",
+        "owner_area": "native-health-repair",
+        "replacement_phase": "phase7",
+        "reason": "Python machine CLI is still the configured-machine repair/reconciliation entrypoint.",
+        "device_command": True,
+        "python_dependency_kind": "health_repair",
+    },
+    {
+        "id": "provider-live-cli-python",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/cli/provider_live.py",
+        "owner_area": "native-proof",
+        "replacement_phase": "phase7",
+        "reason": "Python provider-live proof CLI still runs managed-provider live canaries from the device.",
+        "device_command": True,
+        "python_dependency_kind": "proof",
     },
     {
         "id": "control-channel-claude-shellout",
@@ -170,6 +249,7 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase3",
         "reason": "Rust Machine Agent shells out to the Python-packaged longhouse CLI for Claude control.",
         "device_command": True,
+        "python_dependency_kind": "control_shellout",
     },
     {
         "id": "control-channel-antigravity-shellout",
@@ -181,14 +261,23 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "phase6",
         "reason": "Rust Machine Agent shells out to the Python-packaged longhouse CLI for Antigravity send.",
         "device_command": True,
+        "python_dependency_kind": "control_shellout",
     },
 )
 
 PROVIDER_CONTROL_PYTHON_GLOBS = (
+    "server/zerg/cli/main.py",
+    "server/zerg/cli/_common.py",
+    "server/zerg/cli/_launch_ui.py",
+    "server/zerg/cli/_managed_contract.py",
+    "server/zerg/cli/local_health.py",
+    "server/zerg/cli/machine.py",
+    "server/zerg/cli/provider_live.py",
     "server/zerg/cli/*claude*.py",
     "server/zerg/cli/*codex*.py",
     "server/zerg/cli/*opencode*.py",
     "server/zerg/cli/*antigravity*.py",
+    "server/zerg/services/local_health.py",
     "server/zerg/services/*claude_channel*.py",
     "server/zerg/services/*opencode*.py",
     "server/zerg/services/*antigravity*.py",
@@ -196,7 +285,21 @@ PROVIDER_CONTROL_PYTHON_GLOBS = (
 VALID_CATEGORIES = {"native_device", "transitional_device", "legacy_compat", "server_only", "test_only"}
 DEVICE_CATEGORIES = {"native_device", "transitional_device", "legacy_compat"}
 TRANSITIONAL_CATEGORIES = {"transitional_device", "legacy_compat"}
-INTERNAL_SUPPORTS = {"provider.live_proof", "archive.backlog_control"}
+PYTHON_DEPENDENCY_KINDS = {
+    "adapter",
+    "control_shellout",
+    "entrypoint",
+    "health_repair",
+    "proof",
+    "shared_scaffold",
+}
+REMOTE_NATIVE_ONLY_KINDS = {
+    "adapter",
+    "entrypoint",
+    "health_repair",
+    "proof",
+    "shared_scaffold",
+}
 
 
 def _load_inventory(path: Path | None) -> list[dict[str, Any]]:
@@ -255,6 +358,7 @@ def _validate_inventory(root: Path, inventory: list[dict[str, Any]]) -> list[str
         category = str(item.get("category") or "").strip()
         path_value = str(item.get("path") or "").strip()
         provider = item.get("provider")
+        dependency_kind = str(item.get("python_dependency_kind") or "").strip()
         if not item_id:
             errors.append("inventory entry is missing id")
             continue
@@ -279,6 +383,13 @@ def _validate_inventory(root: Path, inventory: list[dict[str, Any]]) -> list[str
             for required in ("owner_area", "replacement_phase", "reason"):
                 if not str(item.get(required) or "").strip():
                     errors.append(f"{item_id}: transitional entries must include {required}")
+            if not dependency_kind:
+                errors.append(f"{item_id}: transitional entries must include python_dependency_kind")
+            elif dependency_kind not in PYTHON_DEPENDENCY_KINDS:
+                errors.append(
+                    f"{item_id}: python_dependency_kind {dependency_kind!r} must be one of "
+                    f"{sorted(PYTHON_DEPENDENCY_KINDS)}"
+                )
         if item.get("device_command") is True and category not in DEVICE_CATEGORIES:
             errors.append(f"{item_id}: device_command=true cannot be classified as {category}")
         symbol = str(item.get("symbol") or "").strip()
@@ -301,6 +412,19 @@ def _validate_inventory(root: Path, inventory: list[dict[str, Any]]) -> list[str
             transitional = [item for item in entries if item.get("category") in TRANSITIONAL_CATEGORIES]
             if not transitional:
                 errors.append(f"provider {provider} requires_longhouse_cli=true but has no transitional_device inventory entry")
+        else:
+            native_remote_blockers = [
+                item
+                for item in entries
+                if item.get("category") in TRANSITIONAL_CATEGORIES
+                and item.get("python_dependency_kind") not in REMOTE_NATIVE_ONLY_KINDS
+            ]
+            for item in native_remote_blockers:
+                errors.append(
+                    f"provider {provider} has requires_longhouse_cli=false but {item['id']} is "
+                    f"{item.get('python_dependency_kind')}; use requires_longhouse_cli only for "
+                    "engine remote-control shellout requirements"
+                )
 
     return errors
 
@@ -320,7 +444,9 @@ def _print_report(root: Path, inventory: list[dict[str, Any]]) -> None:
             if item.get("category") in {"server_only", "test_only"}:
                 continue
             suffix = f"::{item['symbol']}" if item.get("symbol") else ""
-            print(f"  - {item['category']}: {item['path']}{suffix} ({item['replacement_phase']})")
+            dependency = item.get("python_dependency_kind")
+            dependency_suffix = f", {dependency}" if dependency else ""
+            print(f"  - {item['category']}: {item['path']}{suffix} ({item['replacement_phase']}{dependency_suffix})")
 
 
 def main() -> int:
