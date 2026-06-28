@@ -98,7 +98,9 @@ Acceptance criteria:
 
 ### Phase 3: Native OpenCode Launch
 
-Status: Planned in branch `epic/native-opencode-launch`
+Status: Implemented in branch `epic/native-opencode-launch`
+
+Verification: `make test-engine` and `make test` passed after adding native launch and gate coverage.
 
 Goal: Port idempotent OpenCode server-bridge launch into Rust.
 

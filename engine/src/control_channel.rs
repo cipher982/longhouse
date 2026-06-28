@@ -431,10 +431,6 @@ fn control_supports_for_path_with_env(
             .get("requires_longhouse_cli")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        // OpenCode send/interrupt are native Rust now, but OpenCode launch is
-        // still CLI-backed. Keep the provider-wide gate conservative until
-        // Phase 3 moves launch into the engine or the manifest gains explicit
-        // per-operation dependency gates.
         if requires_longhouse && !longhouse_available {
             continue;
         }
@@ -1778,57 +1774,34 @@ async fn launch_opencode_server_session(
     machine_name: String,
     display_name: Option<String>,
 ) -> std::result::Result<Value, CommandError> {
-    let mut args = vec![
-        "opencode-channel".to_string(),
-        "launch".to_string(),
-        "--session-id".to_string(),
-        session_id.clone(),
-        "--cwd".to_string(),
-        cwd.display().to_string(),
-        "--api-url".to_string(),
-        api_url,
-        "--device-id".to_string(),
-        machine_name,
-        "--wait-ready-secs".to_string(),
-        LAUNCH_START_TIMEOUT_SECS.to_string(),
-    ];
-    if let Some(display_name) = display_name {
-        args.push("--display-name".to_string());
-        args.push(display_name);
-    }
-    let output = run_longhouse_command(
-        args,
-        LAUNCH_START_TIMEOUT_SECS * 2,
-        vec![("LONGHOUSE_OPENCODE_REMOTE_LAUNCH_TOKEN", api_token)],
+    let summary = crate::opencode_control::launch_server_bridge(
+        crate::opencode_control::OpenCodeLaunchConfig {
+            session_id: session_id.clone(),
+            cwd,
+            api_url,
+            api_token,
+            device_id: machine_name,
+            display_name,
+            wait_ready: Duration::from_secs(LAUNCH_START_TIMEOUT_SECS),
+            config_dir: None,
+            opencode_bin: None,
+            opencode_config_content: std::env::var("OPENCODE_CONFIG_CONTENT").ok(),
+        },
     )
-    .await?;
-    if output.exit_code != 0 {
-        return Err(CommandError {
-            code: "provider_launch_failed".to_string(),
-            message: nonempty_cli_error(&output),
-        });
-    }
-    let payload: Value =
-        serde_json::from_str(output.stdout.trim()).map_err(|err| CommandError {
-            code: "provider_launch_failed".to_string(),
-            message: format!(
-                "OpenCode launch returned invalid JSON: {err}; stderr={}",
-                output.stderr.trim()
-            ),
-        })?;
+    .await
+    .map_err(|err| CommandError {
+        code: "provider_launch_failed".to_string(),
+        message: err.to_string(),
+    })?;
     Ok(json!({
-        "session_id": payload.get("session_id").and_then(Value::as_str).unwrap_or(&session_id),
+        "session_id": summary.session_id,
         "provider": "opencode",
         "transport": "opencode_server_bridge",
-        "provider_session_id": payload
-            .get("provider_session_id")
-            .and_then(Value::as_str),
-        "thread_id": payload
-            .get("provider_session_id")
-            .and_then(Value::as_str),
-        "server_url": payload.get("server_url").cloned().unwrap_or(Value::Null),
-        "pid": payload.get("pid").cloned().unwrap_or(Value::Null),
-        "log_path": payload.get("log_path").cloned().unwrap_or(Value::Null),
+        "provider_session_id": summary.provider_session_id,
+        "thread_id": summary.provider_session_id,
+        "server_url": summary.server_url,
+        "pid": summary.pid,
+        "log_path": summary.log_path,
     }))
 }
 
@@ -2092,6 +2065,7 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+    const OPENCODE_TEST_SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
 
     fn command_cache() -> CompletedCommandCache {
         CompletedCommandCache::new(16, Duration::from_secs(60))
@@ -2198,6 +2172,99 @@ mod tests {
                 .unwrap();
         });
         (format!("http://{addr}"), rx)
+    }
+
+    async fn spawn_opencode_launch_http_server(provider_session_id: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut bytes = Vec::new();
+                let mut header_end = None;
+                let mut content_length = 0usize;
+                loop {
+                    let mut chunk = [0u8; 1024];
+                    let read = stream.read(&mut chunk).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    bytes.extend_from_slice(&chunk[..read]);
+                    if header_end.is_none() {
+                        header_end = http_header_end(&bytes);
+                        if let Some(end) = header_end {
+                            let head = String::from_utf8_lossy(&bytes[..end]);
+                            content_length = http_content_length(&head);
+                        }
+                    }
+                    if let Some(end) = header_end {
+                        if bytes.len() >= end + 4 + content_length {
+                            break;
+                        }
+                    }
+                }
+                let request = parse_http_request(&bytes);
+                let body = if request.target.starts_with("/global/health") {
+                    r#"{"healthy":true}"#.to_string()
+                } else if request.target.starts_with("/session") {
+                    format!(r#"{{"id":"{provider_session_id}"}}"#)
+                } else {
+                    r#"{"error":"missing"}"#.to_string()
+                };
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn write_fake_opencode_launch_binary(
+        dir: &Path,
+        server_url: &str,
+        count_path: &Path,
+    ) -> PathBuf {
+        let path = dir.join("opencode");
+        write_test_executable(
+            &path,
+            &format!(
+                "#!/bin/sh\n\
+                 echo spawn >> {count}\n\
+                 echo {listen}\n\
+                 while :; do sleep 60; done\n",
+                count = shell_quote_path(count_path),
+                listen = shell_quote(&format!("opencode server listening on {server_url}")),
+            ),
+        );
+        path
+    }
+
+    fn shell_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+
+    fn shell_quote_path(path: &Path) -> String {
+        shell_quote(&path.display().to_string())
+    }
+
+    fn terminate_test_pid(pid: u32) {
+        if pid == 0 || pid > i32::MAX as u32 {
+            return;
+        }
+        let pid = pid as i32;
+        #[cfg(unix)]
+        unsafe {
+            libc::killpg(pid, libc::SIGTERM);
+        }
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
     }
 
     fn http_header_end(bytes: &[u8]) -> Option<usize> {
@@ -2564,7 +2631,15 @@ mod tests {
 
         write_executable(&dir, "opencode");
         let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
-        assert_eq!(supports, vec!["archive.backlog_control".to_string()]);
+        assert_eq!(
+            supports,
+            vec![
+                "archive.backlog_control".to_string(),
+                "opencode.send".to_string(),
+                "opencode.interrupt".to_string(),
+                "opencode.launch".to_string(),
+            ]
+        );
 
         write_executable(&dir, "longhouse");
         let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
@@ -3408,6 +3483,61 @@ exit 1
 
         assert_eq!(result["ok"], false);
         assert_eq!(result["error"]["code"], "provider_launch_failed");
+    }
+
+    #[test]
+    fn opencode_launch_routes_through_native_adapter() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let temp = tempfile::TempDir::new().unwrap();
+        let cwd = temp.path().join("project");
+        std::fs::create_dir(&cwd).unwrap();
+        let server_url = runtime.block_on(spawn_opencode_launch_http_server("ses_control"));
+        let count_path = temp.path().join("spawn-count.txt");
+        let bin_dir = temp.path().join("bin");
+        std::fs::create_dir(&bin_dir).unwrap();
+        let fake_bin = write_fake_opencode_launch_binary(&bin_dir, &server_url, &count_path);
+
+        let vars = vec![
+            (
+                "LONGHOUSE_OPENCODE_BIN".to_string(),
+                Some(fake_bin.display().to_string()),
+            ),
+            (
+                "CLAUDE_CONFIG_DIR".to_string(),
+                Some(temp.path().display().to_string()),
+            ),
+            ("OPENCODE_CONFIG_CONTENT".to_string(), None),
+        ];
+        let payload = temp_env::with_vars(vars, || {
+            runtime.block_on(launch_opencode_server_session(
+                OPENCODE_TEST_SESSION_ID.to_string(),
+                cwd.clone(),
+                "https://longhouse.test".to_string(),
+                "zdt_test_token".to_string(),
+                "test-machine".to_string(),
+                Some("Control Launch".to_string()),
+            ))
+        })
+        .unwrap();
+
+        assert_eq!(
+            payload["session_id"].as_str(),
+            Some(OPENCODE_TEST_SESSION_ID)
+        );
+        assert_eq!(payload["provider"].as_str(), Some("opencode"));
+        assert_eq!(
+            payload["transport"].as_str(),
+            Some("opencode_server_bridge")
+        );
+        assert_eq!(payload["provider_session_id"].as_str(), Some("ses_control"));
+        assert_eq!(payload["thread_id"].as_str(), Some("ses_control"));
+        assert_eq!(payload["server_url"].as_str(), Some(server_url.as_str()));
+        assert_eq!(std::fs::read_to_string(&count_path).unwrap(), "spawn\n");
+
+        if let Some(pid) = payload["pid"].as_u64() {
+            terminate_test_pid(pid as u32);
+        }
     }
 
     #[test]

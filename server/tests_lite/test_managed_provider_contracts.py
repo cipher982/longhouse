@@ -91,7 +91,7 @@ def test_provider_identity_contracts_are_manifest_backed():
     assert {contract.provider: contract.requires_longhouse_cli for contract in all_managed_provider_contracts()} == {
         "codex": False,
         "claude": True,
-        "opencode": True,
+        "opencode": False,
         "antigravity": True,
     }
     assert sorted(
