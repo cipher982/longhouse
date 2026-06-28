@@ -2137,6 +2137,7 @@ mod tests {
             }
             "steer" if matches!(provider, "codex" | "claude") => Some(COMMAND_STEER_TEXT),
             "answer_pause" if matches!(provider, "codex" | "claude") => Some(COMMAND_ANSWER_PAUSE),
+            "terminate" if provider == "opencode" => Some(COMMAND_TERMINATE),
             "launch" if matches!(provider, "codex" | "claude" | "opencode") => Some(COMMAND_LAUNCH),
             "continue" if matches!(provider, "codex" | "claude") => Some(COMMAND_LAUNCH),
             "run_once" if provider == "codex" => Some(COMMAND_RUN_ONCE),

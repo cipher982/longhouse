@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+"""Inventory Longhouse Python still used by the on-device provider-control path."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
+    {
+        "id": "cli-main-provider-entrypoints",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/cli/main.py",
+        "owner_area": "native-device-entrypoint",
+        "replacement_phase": "phase2",
+        "reason": "Python Typer app still owns normal longhouse provider command registration.",
+        "device_command": True,
+    },
+    {
+        "id": "claude-launch-wrapper",
+        "category": "transitional_device",
+        "provider": "claude",
+        "path": "server/zerg/cli/claude.py",
+        "owner_area": "claude-native",
+        "replacement_phase": "phase3",
+        "reason": "Python still launches stock Claude, installs hooks/channel config, and wraps PTY behavior.",
+        "device_command": True,
+    },
+    {
+        "id": "claude-channel-bridge",
+        "category": "transitional_device",
+        "provider": "claude",
+        "path": "server/zerg/cli/claude_channel.py",
+        "owner_area": "claude-native",
+        "replacement_phase": "phase3",
+        "reason": "Python owns Claude channel serve/send/interrupt bridge commands.",
+        "device_command": True,
+    },
+    {
+        "id": "claude-channel-helpers",
+        "category": "transitional_device",
+        "provider": "claude",
+        "path": "server/zerg/services/claude_channel_bridge.py",
+        "owner_area": "claude-native",
+        "replacement_phase": "phase3",
+        "reason": "Python builds Claude channel command/state/config helper behavior.",
+        "device_command": True,
+    },
+    {
+        "id": "claude-channel-text-server-projection",
+        "category": "server_only",
+        "provider": "claude",
+        "path": "server/zerg/services/claude_channel_text.py",
+        "owner_area": "runtime-host",
+        "replacement_phase": "server-track",
+        "reason": "Runtime Host text projection helper, not a device provider-control entrypoint.",
+        "device_command": False,
+    },
+    {
+        "id": "codex-launch-wrapper",
+        "category": "transitional_device",
+        "provider": "codex",
+        "path": "server/zerg/cli/codex.py",
+        "owner_area": "native-device-entrypoint",
+        "replacement_phase": "phase4",
+        "reason": "Python still owns the human Codex managed launch and attach wrapper.",
+        "device_command": True,
+    },
+    {
+        "id": "opencode-launch-wrapper",
+        "category": "transitional_device",
+        "provider": "opencode",
+        "path": "server/zerg/cli/opencode.py",
+        "owner_area": "native-device-entrypoint",
+        "replacement_phase": "phase5",
+        "reason": "Python still owns the local OpenCode managed launch UX.",
+        "device_command": True,
+    },
+    {
+        "id": "opencode-channel-compat",
+        "category": "legacy_compat",
+        "provider": "opencode",
+        "path": "server/zerg/cli/opencode_channel.py",
+        "owner_area": "native-device-entrypoint",
+        "replacement_phase": "phase5",
+        "reason": "Compatibility CLI remains for attach and local bridge operations while native entrypoint is designed.",
+        "device_command": True,
+    },
+    {
+        "id": "opencode-bridge-cli",
+        "category": "transitional_device",
+        "provider": "opencode",
+        "path": "server/zerg/cli/opencode_bridge.py",
+        "owner_area": "native-device-entrypoint",
+        "replacement_phase": "phase5",
+        "reason": "Python bridge helper remains reachable from the device CLI path.",
+        "device_command": True,
+    },
+    {
+        "id": "opencode-bridge-state",
+        "category": "server_only",
+        "provider": "opencode",
+        "path": "server/zerg/services/opencode_bridge_state.py",
+        "owner_area": "runtime-host",
+        "replacement_phase": "server-track",
+        "reason": "Runtime Host/server helper for bridge-state shape; native state handling lives in engine.",
+        "device_command": False,
+    },
+    {
+        "id": "antigravity-launch-wrapper",
+        "category": "transitional_device",
+        "provider": "antigravity",
+        "path": "server/zerg/cli/antigravity.py",
+        "owner_area": "antigravity-decision",
+        "replacement_phase": "phase6",
+        "reason": "Python still owns managed Antigravity launch and hook environment setup.",
+        "device_command": True,
+    },
+    {
+        "id": "antigravity-channel",
+        "category": "transitional_device",
+        "provider": "antigravity",
+        "path": "server/zerg/cli/antigravity_channel.py",
+        "owner_area": "antigravity-decision",
+        "replacement_phase": "phase6",
+        "reason": "Python still owns Antigravity hook-inbox send.",
+        "device_command": True,
+    },
+    {
+        "id": "antigravity-hook-inbox",
+        "category": "transitional_device",
+        "provider": "antigravity",
+        "path": "server/zerg/services/antigravity_hook_inbox.py",
+        "owner_area": "antigravity-decision",
+        "replacement_phase": "phase6",
+        "reason": "Python installs and manages the hook-inbox adapter used by agy.",
+        "device_command": True,
+    },
+    {
+        "id": "local-health-python",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/services/local_health.py",
+        "owner_area": "native-health-repair",
+        "replacement_phase": "phase7",
+        "reason": "Python local-health is still part of the device doctor/repair surface.",
+        "device_command": True,
+    },
+    {
+        "id": "doctor-cli-python",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/cli/doctor.py",
+        "owner_area": "native-health-repair",
+        "replacement_phase": "phase7",
+        "reason": "Python doctor CLI is still part of device repair UX.",
+        "device_command": True,
+    },
+    {
+        "id": "control-channel-claude-shellout",
+        "category": "transitional_device",
+        "provider": "claude",
+        "path": "engine/src/control_channel.rs",
+        "symbol": "run_claude_channel_command",
+        "owner_area": "claude-native",
+        "replacement_phase": "phase3",
+        "reason": "Rust Machine Agent shells out to the Python-packaged longhouse CLI for Claude control.",
+        "device_command": True,
+    },
+    {
+        "id": "control-channel-antigravity-shellout",
+        "category": "transitional_device",
+        "provider": "antigravity",
+        "path": "engine/src/control_channel.rs",
+        "symbol": "run_antigravity_channel_command",
+        "owner_area": "antigravity-decision",
+        "replacement_phase": "phase6",
+        "reason": "Rust Machine Agent shells out to the Python-packaged longhouse CLI for Antigravity send.",
+        "device_command": True,
+    },
+)
+
+PROVIDER_CONTROL_PYTHON_GLOBS = (
+    "server/zerg/cli/*claude*.py",
+    "server/zerg/cli/*codex*.py",
+    "server/zerg/cli/*opencode*.py",
+    "server/zerg/cli/*antigravity*.py",
+    "server/zerg/services/*claude_channel*.py",
+    "server/zerg/services/*opencode*.py",
+    "server/zerg/services/*antigravity*.py",
+)
+VALID_CATEGORIES = {"native_device", "transitional_device", "legacy_compat", "server_only", "test_only"}
+DEVICE_CATEGORIES = {"native_device", "transitional_device", "legacy_compat"}
+TRANSITIONAL_CATEGORIES = {"transitional_device", "legacy_compat"}
+INTERNAL_SUPPORTS = {"provider.live_proof", "archive.backlog_control"}
+
+
+def _load_inventory(path: Path | None) -> list[dict[str, Any]]:
+    if path is None:
+        return [dict(item) for item in DEFAULT_INVENTORY]
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, list):
+        raise ValueError("inventory override must be a JSON array")
+    return [dict(item) for item in payload]
+
+
+def _provider_matches(entry_provider: Any, provider: str) -> bool:
+    if entry_provider == "all":
+        return True
+    if isinstance(entry_provider, str):
+        return entry_provider == provider
+    if isinstance(entry_provider, list):
+        return provider in entry_provider or "all" in entry_provider
+    return False
+
+
+def _rel(path: Path, root: Path) -> str:
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _contract_items(root: Path) -> list[dict[str, Any]]:
+    path = root / "server/zerg/config/managed_provider_contracts.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    providers = payload.get("providers")
+    if not isinstance(providers, list):
+        raise ValueError(f"{_rel(path, root)} must contain providers[]")
+    return [dict(item) for item in providers if isinstance(item, dict)]
+
+
+def _scanned_provider_control_files(root: Path) -> set[str]:
+    scanned: set[str] = set()
+    for pattern in PROVIDER_CONTROL_PYTHON_GLOBS:
+        for path in root.glob(pattern):
+            if path.is_file():
+                scanned.add(_rel(path, root))
+    return scanned
+
+
+def _validate_inventory(root: Path, inventory: list[dict[str, Any]]) -> list[str]:
+    errors: list[str] = []
+    contracts = _contract_items(root)
+    providers = {str(item.get("provider") or "").strip() for item in contracts}
+    inventory_paths = {str(item.get("path") or "").strip() for item in inventory}
+
+    seen_ids: set[str] = set()
+    for item in inventory:
+        item_id = str(item.get("id") or "").strip()
+        category = str(item.get("category") or "").strip()
+        path_value = str(item.get("path") or "").strip()
+        provider = item.get("provider")
+        if not item_id:
+            errors.append("inventory entry is missing id")
+            continue
+        if item_id in seen_ids:
+            errors.append(f"inventory id {item_id} is duplicated")
+        seen_ids.add(item_id)
+        if category not in VALID_CATEGORIES:
+            errors.append(f"{item_id}: category {category!r} must be one of {sorted(VALID_CATEGORIES)}")
+        if not path_value:
+            errors.append(f"{item_id}: path is required")
+        elif not (root / path_value).exists():
+            errors.append(f"{item_id}: path does not exist: {path_value}")
+        if provider != "all":
+            provider_values = provider if isinstance(provider, list) else [provider]
+            for value in provider_values:
+                if value not in providers:
+                    errors.append(f"{item_id}: provider {value!r} is not in managed provider manifest")
+        for required in ("owner_area", "replacement_phase", "reason"):
+            if not str(item.get(required) or "").strip():
+                errors.append(f"{item_id}: {required} is required")
+        if category in TRANSITIONAL_CATEGORIES:
+            for required in ("owner_area", "replacement_phase", "reason"):
+                if not str(item.get(required) or "").strip():
+                    errors.append(f"{item_id}: transitional entries must include {required}")
+        if item.get("device_command") is True and category not in DEVICE_CATEGORIES:
+            errors.append(f"{item_id}: device_command=true cannot be classified as {category}")
+        symbol = str(item.get("symbol") or "").strip()
+        if symbol and path_value:
+            text = (root / path_value).read_text(encoding="utf-8", errors="ignore") if (root / path_value).exists() else ""
+            if symbol not in text:
+                errors.append(f"{item_id}: symbol {symbol!r} was not found in {path_value}")
+
+    for path in sorted(_scanned_provider_control_files(root)):
+        if path not in inventory_paths:
+            errors.append(f"{path} is provider-control Python but is missing from no-Python device inventory")
+
+    for contract in contracts:
+        provider = str(contract.get("provider") or "").strip()
+        entries = [item for item in inventory if _provider_matches(item.get("provider"), provider)]
+        stance_entries = [item for item in entries if item.get("category") in DEVICE_CATEGORIES]
+        if not stance_entries:
+            errors.append(f"provider {provider} has no no-Python device inventory stance")
+        if contract.get("requires_longhouse_cli") is True:
+            transitional = [item for item in entries if item.get("category") in TRANSITIONAL_CATEGORIES]
+            if not transitional:
+                errors.append(f"provider {provider} requires_longhouse_cli=true but has no transitional_device inventory entry")
+
+    return errors
+
+
+def _print_report(root: Path, inventory: list[dict[str, Any]]) -> None:
+    contracts = _contract_items(root)
+    print("no-Python device path inventory")
+    print("")
+    for contract in contracts:
+        provider = str(contract.get("provider") or "").strip()
+        entries = [item for item in inventory if _provider_matches(item.get("provider"), provider)]
+        transitional = [item for item in entries if item.get("category") in TRANSITIONAL_CATEGORIES]
+        native = [item for item in entries if item.get("category") == "native_device"]
+        status = "native" if native and not transitional else "transitional"
+        print(f"- {provider}: {status}; requires_longhouse_cli={bool(contract.get('requires_longhouse_cli'))}")
+        for item in entries:
+            if item.get("category") in {"server_only", "test_only"}:
+                continue
+            suffix = f"::{item['symbol']}" if item.get("symbol") else ""
+            print(f"  - {item['category']}: {item['path']}{suffix} ({item['replacement_phase']})")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument("--inventory", type=Path, default=None, help="JSON inventory override for tests")
+    parser.add_argument("--json", action="store_true", help="Emit inventory JSON instead of text report")
+    args = parser.parse_args()
+
+    root = args.root.resolve()
+    inventory = _load_inventory(args.inventory)
+    errors = _validate_inventory(root, inventory)
+    if args.json:
+        print(json.dumps({"inventory": inventory, "errors": errors}, indent=2))
+    else:
+        _print_report(root, inventory)
+    if errors:
+        for error in errors:
+            print(error, file=sys.stderr)
+        print("no-Python device path check failed", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
