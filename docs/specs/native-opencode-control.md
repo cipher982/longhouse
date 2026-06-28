@@ -52,7 +52,7 @@ The Runtime Host and provider contract manifest stay capability-driven. OpenCode
 
 Status: Implemented and approved
 
-Review: Hatch DeepSeek approved commit `7dca166f3` against the Phase 1 acceptance criteria.
+Verification: Phase 1 acceptance criteria were covered by focused engine tests.
 
 Coverage hardening: Added focused regressions for control-channel routing, empty `cwd`, default username, provider-session path encoding, and invalid/incompatible state files.
 
