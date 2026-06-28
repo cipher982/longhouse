@@ -38,6 +38,10 @@ EXPECTED_COPY = {
         "Native OpenCode launch/send/interrupt/terminate exists",
         "Managed OpenCode remote send/interrupt is a product contract",
     ],
+    "docs/specs/managed-provider-session-contract.md": [
+        "OpenCode server-bridge sessions support managed send, interrupt, launch, and",
+        "terminate through the local `opencode serve` bridge",
+    ],
 }
 
 
@@ -72,6 +76,9 @@ FORBIDDEN_COPY = {
     "config/session-propagation-sla.toml": [
         "OpenCode managed launch/control is not first-class enough",
         "Remote send/interrupt is not a defined OpenCode product contract yet",
+    ],
+    "docs/specs/managed-provider-session-contract.md": [
+        "OpenCode server-bridge sessions support live send and interrupt",
     ],
 }
 
