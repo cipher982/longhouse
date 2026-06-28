@@ -98,13 +98,83 @@ Acceptance criteria:
 
 ### Phase 3: Native OpenCode Launch
 
+Status: Planned in branch `epic/native-opencode-launch`
+
 Goal: Port idempotent OpenCode server-bridge launch into Rust.
+
+Scope:
+
+- Replace the Machine Agent's `longhouse opencode-channel launch` shellout for remote `session.launch`.
+- Keep `longhouse opencode` attach/TUI, explicit inspect, and explicit stop on the existing Python CLI path until later phases.
+- Keep the provider execution owner as stock upstream `opencode serve`.
+- Keep the state file schema at version 1 for this stage.
+- Do not add an unmanaged import fallback when launch fails.
+
+Implementation plan:
+
+1. Add a Rust launch configuration/result type in `engine/src/opencode_control.rs`.
+2. Normalize and validate the Longhouse session id before any process work.
+3. Resolve the stock `opencode` binary from `PATH`; explicit debug overrides remain outside this remote launch stage.
+4. Acquire a per-session advisory lock under `~/.claude/managed-local/opencode-server/{session_id}.lock`.
+5. Under the lock, read existing bridge state and reuse it only when:
+   - the state belongs to the same Longhouse session id,
+   - the recorded process identity still matches,
+   - the local OpenCode health endpoint reports healthy.
+6. For a fresh launch:
+   - create the runtime plugin/config-content file with the Longhouse runtime events URL, device token, Longhouse session id, and device id,
+   - generate the bridge password from the OS CSPRNG,
+   - start `opencode serve --hostname 127.0.0.1 --port 0 --print-logs` in the requested cwd,
+   - pass credentials and runtime config through environment variables only,
+   - tail the server log until it prints the localhost server URL,
+   - confirm `/global/health`,
+   - call `POST /session?directory={cwd}` with the display title,
+   - write private bridge state atomically with dir mode `0700` and file mode `0600`,
+   - include every schema-1 field already emitted by the Python writer, including process identity, launch mode, owner wrapper fields, log path, and config content path,
+   - return the existing managed-launch payload shape to the Runtime Host.
+7. On launch failure after spawning, terminate only the process that was just spawned.
+8. Update control capability gating so OpenCode no longer requires the `longhouse` CLI once launch, send, and interrupt are all native. The advertised supports are still computed by the Machine Agent, so old agents keep their old conservative behavior until they are upgraded.
+
+Success criteria:
+
+- `session.launch` for provider `opencode` no longer shells out to `longhouse opencode-channel launch`.
+- Launch command argv contains no API token, bridge password, or config content.
+- Runtime config content and bridge state are written with private permissions.
+- Rust writes to the same `~/.claude/managed-local/opencode-server` state path scanned by `managed_opencode_scan`.
+- Existing-live state reuse does not create a second `opencode serve` process.
+- Two concurrent launch requests for the same Longhouse session id serialize through the lock and converge on one backing OpenCode server.
+- Stale, unhealthy, mismatched, or newer-schema state does not get reused.
+- The schema-1 state written by Rust remains readable by the existing scanner and Python CLI attach/stop paths.
+- Launch failure returns `provider_launch_failed` and never silently imports an unmanaged session.
+- The returned payload remains compatible: `provider=opencode`, `transport=opencode_server_bridge`, `provider_session_id`, `thread_id`, `server_url`, `pid`, and `log_path`.
+- Capability advertisement includes `opencode.send`, `opencode.interrupt`, and `opencode.launch` on machines with stock `opencode` even when `longhouse` is absent from `PATH`.
+
+Testing plan:
+
+- Unit-test pure launch helpers: server-log URL parsing, runtime config content composition, state result shape, private atomic JSON write permissions, and provider command resolution.
+- Unit-test state parity by deserializing Rust-written bridge state through the scanner-facing state shape.
+- Add a fake `opencode` executable integration test that starts a tiny local HTTP server, prints the expected `opencode server listening on ...` log line, and verifies:
+  - health and session.create are called with Basic auth,
+  - `directory` and title are preserved,
+  - secret values are present in env/config where required but absent from argv/state redactions,
+  - bridge state is written with schema 1, `launch_mode=detached`, cwd, pid, process identity, log path, and config content path.
+- Add a reuse test with a live fake bridge state proving the second launch returns the existing provider session id and does not execute the fake provider again.
+- Add a concurrent-launch test proving the lock prevents duplicate backing servers for the same session.
+- Add failure tests for missing provider binary, bad cwd/token, server never becoming ready, invalid health, invalid session.create, and newer/mismatched state.
+- Add cleanup tests for both spawned-but-unready and already-exited child processes.
+- Add control-channel tests proving OpenCode launch routes through the native adapter and provider support no longer requires the `longhouse` CLI.
 
 Acceptance criteria:
 
 - Launch preserves token secrecy, private state permissions, idempotent session locks, and lifecycle modes.
 - Existing `attached_tui`, `keep_server`, and `detached` behavior remains compatible with older state files.
 - Launch has no hidden fallback to unmanaged import.
+
+Validation:
+
+```bash
+make test-engine
+make test
+```
 
 ### Phase 4: Native Stop/Terminate
 
