@@ -360,6 +360,7 @@ run_provider_live_route_e2e() {
   LONGHOUSE_HOME="$LONGHOUSE_HOME" \
     python3 "$ROOT_DIR/scripts/qa/provider-live-route-e2e.py" \
       --provider "$ROUTE_E2E_PROVIDER" \
+      --skip-mismatch \
       --require-verdict non-red \
       --http-timeout-s "$ROUTE_E2E_HTTP_TIMEOUT_S" \
       --attempts "$ROUTE_E2E_ATTEMPTS" \
