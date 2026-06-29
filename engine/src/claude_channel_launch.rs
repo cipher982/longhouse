@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use serde_json::json;
+use serde_json::Map;
 use serde_json::Value;
 use thiserror::Error;
 use tokio::time::sleep;
@@ -82,6 +84,8 @@ pub struct ClaudeLaunchCommandPlan {
 pub enum ClaudeChannelLaunchError {
     #[error("Claude launch config is invalid: {0}")]
     InvalidConfig(String),
+    #[error("failed to prepare Claude channel config: {0}")]
+    ConfigFailed(String),
     #[error("failed to start Claude launch process: {0}")]
     SpawnFailed(String),
     #[error("Claude channel state did not become ready: {0}")]
@@ -92,6 +96,7 @@ pub async fn launch_detached(
     config: ClaudeChannelLaunchConfig,
 ) -> Result<ClaudeChannelLaunchResult, ClaudeChannelLaunchError> {
     validate_launch_config(&config)?;
+    ensure_claude_channel_mcp_server(config.claude_dir.as_deref())?;
     let plan = build_launch_command_plan(&config)?;
     let log_path = launch_log_path(&config)?;
     if let Some(parent) = log_path.parent() {
@@ -310,6 +315,94 @@ fn launch_log_path(
         .join(format!("{}.log", config.session_id)))
 }
 
+fn ensure_claude_channel_mcp_server(
+    claude_dir: Option<&Path>,
+) -> Result<(), ClaudeChannelLaunchError> {
+    let config_path = claude_user_config_path(claude_dir);
+    let mut settings = read_json_object_or_empty(&config_path)?;
+    let desired = json!({
+        "type": "stdio",
+        "command": "longhouse",
+        "args": ["claude-channel", "serve"],
+        "env": {},
+    });
+
+    let root = settings.as_object_mut().ok_or_else(|| {
+        ClaudeChannelLaunchError::ConfigFailed("Claude config root is not an object".to_string())
+    })?;
+    let mcp_servers = root
+        .entry("mcpServers")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !mcp_servers.is_object() {
+        *mcp_servers = Value::Object(Map::new());
+    }
+    mcp_servers
+        .as_object_mut()
+        .expect("mcpServers normalized to object")
+        .insert(CLAUDE_CHANNEL_SERVER_NAME.to_string(), desired);
+
+    if let Some(projects) = root.get_mut("projects").and_then(Value::as_object_mut) {
+        for project_settings in projects.values_mut() {
+            if let Some(project_mcp_servers) = project_settings
+                .get_mut("mcpServers")
+                .and_then(Value::as_object_mut)
+            {
+                project_mcp_servers.remove(CLAUDE_CHANNEL_SERVER_NAME);
+            }
+        }
+    }
+
+    write_json_object(&config_path, &settings)
+}
+
+fn claude_user_config_path(claude_dir: Option<&Path>) -> PathBuf {
+    let resolved = claude_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_claude_dir);
+    let parent = resolved.parent().unwrap_or_else(|| Path::new("."));
+    let name = resolved
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(".claude");
+    parent.join(format!("{name}.json"))
+}
+
+fn read_json_object_or_empty(path: &Path) -> Result<Value, ClaudeChannelLaunchError> {
+    if !path.exists() {
+        return Ok(Value::Object(Map::new()));
+    }
+    let raw = std::fs::read_to_string(path).map_err(|err| {
+        ClaudeChannelLaunchError::ConfigFailed(format!("reading {}: {err}", path.display()))
+    })?;
+    let value: Value = serde_json::from_str(&raw).map_err(|err| {
+        ClaudeChannelLaunchError::ConfigFailed(format!("parsing {}: {err}", path.display()))
+    })?;
+    if value.is_object() {
+        Ok(value)
+    } else {
+        Err(ClaudeChannelLaunchError::ConfigFailed(format!(
+            "{} is not a JSON object",
+            path.display()
+        )))
+    }
+}
+
+fn write_json_object(path: &Path, value: &Value) -> Result<(), ClaudeChannelLaunchError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            ClaudeChannelLaunchError::ConfigFailed(format!("creating {}: {err}", parent.display()))
+        })?;
+    }
+    let raw = serde_json::to_vec_pretty(value).map_err(|err| {
+        ClaudeChannelLaunchError::ConfigFailed(format!("serializing {}: {err}", path.display()))
+    })?;
+    let mut with_newline = raw;
+    with_newline.push(b'\n');
+    std::fs::write(path, with_newline).map_err(|err| {
+        ClaudeChannelLaunchError::ConfigFailed(format!("writing {}: {err}", path.display()))
+    })
+}
+
 async fn wait_for_channel_state(
     session_id: &str,
     state_root: Option<&Path>,
@@ -439,6 +532,45 @@ mod tests {
             log_dir: Some(temp.join("logs")),
             script_bin: "script".to_string(),
         }
+    }
+
+    #[test]
+    fn ensures_user_mcp_config_and_removes_project_shadow() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let config_path = claude_user_config_path(Some(&claude_dir));
+        std::fs::write(
+            &config_path,
+            serde_json::to_vec_pretty(&json!({
+                "projects": {
+                    "/tmp/work": {
+                        "mcpServers": {
+                            "longhouse-channel": {
+                                "type": "stdio",
+                                "command": "old"
+                            }
+                        }
+                    }
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        ensure_claude_channel_mcp_server(Some(&claude_dir)).unwrap();
+
+        let updated: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+        assert_eq!(
+            updated["mcpServers"]["longhouse-channel"]["command"],
+            "longhouse"
+        );
+        assert_eq!(
+            updated["mcpServers"]["longhouse-channel"]["args"],
+            json!(["claude-channel", "serve"])
+        );
+        assert!(updated["projects"]["/tmp/work"]["mcpServers"]
+            .get("longhouse-channel")
+            .is_none());
     }
 
     #[test]
