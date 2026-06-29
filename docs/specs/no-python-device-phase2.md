@@ -168,6 +168,36 @@ Phase 2A marks only `native_owner.status` as `native`. Command entries start as
 corresponding Phase 1 Python inventory item is no longer
 `transitional_device`/`legacy_compat`.
 
+## Phase 2B Native Fast Local Health
+
+Phase 2B adds the first real device behavior under the Rust namespace:
+
+```text
+longhouse-engine device local-health [--json] [--state-root <path>]
+```
+
+This command is intentionally a fast, read-only status projection. It reads the
+Machine Agent status file at `~/.longhouse/agent/engine-status.json` or
+`<state-root>/agent/engine-status.json`, computes freshness from file metadata,
+and reports a small native health snapshot without invoking Python.
+
+The JSON contract includes:
+
+- `schema_version`
+- `collection_tier: native_fast`
+- `health_state`, `headline`, and reason codes
+- `engine_status` path/existence/freshness/error details
+- synthesized `spool` pending/dead counts from the engine payload
+- managed-session count from the engine payload
+- `control_channel` and `build` only when already present in
+  `engine-status.json`
+
+Phase 2B does not replace the rich Python `longhouse local-health` collector,
+the `longhouse-local-health` menu bar helper, doctor, repair, provider proof,
+or provider launch behavior. The `local-health` command plan therefore remains
+`planned`; its notes record that native fast status exists while full parity
+remains future work.
+
 Add a validation target:
 
 ```text
@@ -196,6 +226,9 @@ surface that later phases will implement.
   strategy.
 - `longhouse-engine device plan` and `longhouse-engine device status` report
   the embedded native device-entrypoint contract without invoking Python.
+- `longhouse-engine device local-health [--json] [--state-root <path>]` reports
+  a read-only native fast health snapshot from `engine-status.json` without
+  invoking Python.
 - `config/native_device_entrypoints.json` names the native target for every
   normal device command category from the Phase 1 inventory.
 - `make validate-native-device-entrypoints` passes and is included in
@@ -203,8 +236,10 @@ surface that later phases will implement.
 - Tests fail if a new packaged Python console script or Phase 2 inventory item
   lacks a native plan.
 - Tests fail if a native target command points back through Python.
-- No runtime behavior changes ship in Phase 2; `longhouse-engine device ...`
-  remains a planned namespace until later implementation phases.
+- Phase 2B local-health tests cover fresh, missing, stale, unreadable, and
+  alternate state-root status files.
+- Provider launch, repair, provider proof, and rich local-health/menu-bar
+  behavior remain planned until their implementation phases.
 
 ## Suggested Checks
 

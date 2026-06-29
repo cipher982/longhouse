@@ -572,6 +572,17 @@ enum DeviceCommands {
         #[arg(long)]
         json: bool,
     },
+
+    /// Print a native fast local health snapshot from engine-status.json
+    LocalHealth {
+        /// Emit the native fast local health snapshot as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Longhouse state root override; reads <state-root>/agent/engine-status.json
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -949,6 +960,7 @@ fn command_name(command: &Commands) -> &'static str {
         Commands::Device { command } => match command {
             DeviceCommands::Plan { .. } => "device-plan",
             DeviceCommands::Status { .. } => "device-status",
+            DeviceCommands::LocalHealth { .. } => "device-local-health",
         },
         Commands::Bench { .. } => "bench",
         Commands::Ship { .. } => "ship",
@@ -1350,6 +1362,9 @@ fn main() -> anyhow::Result<()> {
             }
             DeviceCommands::Status { json } => {
                 device::cmd_device_status(json)?;
+            }
+            DeviceCommands::LocalHealth { json, state_root } => {
+                device::cmd_device_local_health(json, state_root.as_deref())?;
             }
         },
         Commands::ClaudeChannel { command } => match command {
@@ -1785,6 +1800,29 @@ mod tests {
                 command: DeviceCommands::Status { json },
             } => assert!(json),
             _ => panic!("expected device status command"),
+        }
+    }
+
+    #[test]
+    fn device_local_health_cli_parses() {
+        let cli = Cli::try_parse_from([
+            "longhouse-engine",
+            "device",
+            "local-health",
+            "--json",
+            "--state-root",
+            "/tmp/longhouse-state",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Device {
+                command: DeviceCommands::LocalHealth { json, state_root },
+            } => {
+                assert!(json);
+                assert_eq!(state_root.unwrap(), PathBuf::from("/tmp/longhouse-state"));
+            }
+            _ => panic!("expected device local-health command"),
         }
     }
 

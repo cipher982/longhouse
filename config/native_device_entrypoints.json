@@ -69,7 +69,7 @@
       "provider_binary_ownership": "not_applicable",
       "token_policy": "no_token",
       "cwd_policy": "not_applicable",
-      "notes": "Menu bar, fast local health, and human local-health output must share the same native health collector."
+      "notes": "Phase 2B adds read-only native fast status via longhouse-engine device local-health over engine-status.json. Full menu bar, rich local-health, and repair behavior remain planned until the Python collector is replaced."
     },
     {
       "id": "doctor-repair",
