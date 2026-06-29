@@ -399,10 +399,9 @@ def write_summary_markdown(artifact: dict[str, Any], path: Path) -> None:
     )
     parse_metrics = ((benches.get("shipper_parse_compress") or {}).get("metrics") or {})
     lines.append(
-        "| Shipper parse+compress | {status} | {throughput} MB/s, RSS {rss} MB |".format(
+        "| Shipper parse+compress | {status} | {signal} |".format(
             status=(benches.get("shipper_parse_compress") or {}).get("status", "unknown"),
-            throughput=_fmt_float(parse_metrics.get("throughput_mb_s")),
-            rss=_fmt_float(parse_metrics.get("peak_rss_mb")),
+            signal=_shipper_signal(parse_metrics),
         )
     )
     mixed_metrics = ((benches.get("mixed_live_archive") or {}).get("metrics") or {})
@@ -438,6 +437,18 @@ def _provider_signal(provider: dict[str, Any]) -> str:
     if provider.get("status") == "skipped":
         return provider.get("reason") or "skipped"
     return f"wall {_fmt_float(provider.get('wall_ms'))} ms"
+
+
+def _shipper_signal(metrics: dict[str, Any]) -> str:
+    signal = f"{_fmt_float(metrics.get('throughput_mb_s'))} MB/s"
+    rss = metrics.get("peak_rss_mb")
+    try:
+        rss_value = float(rss)
+    except (TypeError, ValueError):
+        rss_value = 0.0
+    if rss_value > 0:
+        return f"{signal}, RSS {_fmt_float(rss)} MB"
+    return f"{signal}, RSS unavailable"
 
 
 def failed_surfaces(artifact: dict[str, Any]) -> list[str]:

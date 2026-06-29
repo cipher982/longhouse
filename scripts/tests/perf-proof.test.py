@@ -138,6 +138,12 @@ def test_summary_markdown_contains_core_surfaces() -> None:
     assert "LONGHOUSE_DEVICE_TOKEN is not set" in text
 
 
+def test_shipper_signal_treats_zero_rss_as_unavailable() -> None:
+    perf = _module()
+    assert perf._shipper_signal({"throughput_mb_s": 480.5, "peak_rss_mb": 0.0}) == "480.5 MB/s, RSS unavailable"
+    assert perf._shipper_signal({"throughput_mb_s": 480.5, "peak_rss_mb": 32.6}) == "480.5 MB/s, RSS 32.6 MB"
+
+
 def test_provider_live_route_passes_artifact_and_temp_token_file() -> None:
     perf = _module()
     captured: dict[str, object] = {}
@@ -212,6 +218,7 @@ def main() -> int:
         test_percentile_handles_empty_single_and_interpolated_samples,
         test_startup_summary_is_partial_when_probe_skipped,
         test_summary_markdown_contains_core_surfaces,
+        test_shipper_signal_treats_zero_rss_as_unavailable,
         test_provider_live_route_passes_artifact_and_temp_token_file,
         test_failed_surfaces_ignores_skips_but_reports_failures,
     ]
