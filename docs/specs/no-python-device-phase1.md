@@ -144,7 +144,7 @@ Expected allowed non-device items:
 
 ## Implementation Steps
 
-1. Add the detailed Phase 1 spec and review it with Hatch DeepSeek.
+1. Add the detailed Phase 1 spec and run an independent architecture review.
 2. Add or extend contract guardrail tests in the existing Python and Rust test
    files.
 3. Add the no-Python device inventory script with a reviewed baseline.

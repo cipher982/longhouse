@@ -163,9 +163,9 @@ Steps:
 
 1. Audit provider contracts, control dispatch, local-health, and provider
    bridge code.
-2. Fan out concise provider audits through Hatch DeepSeek.
+2. Run concise provider audits against each managed-provider path.
 3. Write this spec with decisions, stages, tests, and success criteria.
-4. Have Hatch review the spec.
+4. Review the spec before implementation.
 5. Commit the reviewed spec.
 
 Success criteria:
@@ -248,8 +248,7 @@ Success criteria:
 - Any remaining Python command is labeled server-only, test-only, or legacy
   compatibility with a removal phase.
 - The design preserves existing CLI UX and machine-control APIs.
-- Hatch Codex or Claude review approves the packaging boundary before provider
-  porting starts.
+- The packaging boundary is reviewed before provider porting starts.
 
 Suggested checks:
 
@@ -448,9 +447,9 @@ the operation works or the unsupported state is explicit.
 - Advertising provider operations before the provider exposes stable semantics
   and Longhouse has proof.
 
-## Hatch Audit Inputs
+## Architecture Review Inputs
 
-Phase 0 used four Hatch DeepSeek audits:
+Phase 0 used four focused provider-path reviews:
 
 - Claude managed-provider path audit.
 - Codex managed-provider path audit.
