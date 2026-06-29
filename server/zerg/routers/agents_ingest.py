@@ -105,12 +105,11 @@ _ARCHIVE_INGEST_BACKPRESSURE_KIND = "archive_ingest_backpressure"
 _ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS = 5
 _ARCHIVE_INGEST_MAX_RETRY_AFTER_SECONDS = 60
 _ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS = 15
-_ARCHIVE_INGEST_WRITE_TIMEOUT_RETRY_AFTER_SECONDS = 30
 _ARCHIVE_INGEST_MAX_IN_FLIGHT = 4
 _ARCHIVE_INGEST_WRITER_QUEUE_HARD_LIMIT = 50
 _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 1000.0
-_ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS = 60.0
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
+_ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS = 64
 _INGEST_STAGE_HEADER_LIMIT = 8
 _UNTRACED_INGEST_MAX_EVENTS = 200
 _UNTRACED_INGEST_MAX_SOURCE_LINES = 200
@@ -129,6 +128,71 @@ def _ingest_lane_for_label(label: str) -> str:
     if label in _ARCHIVE_INGEST_LABELS:
         return "archive"
     return "default"
+
+
+def _copy_session_ingest(
+    data: SessionIngest,
+    *,
+    events: list,
+    source_lines: list,
+    rewind_hints: list,
+) -> SessionIngest:
+    update = {
+        "events": events,
+        "source_lines": source_lines,
+        "rewind_hints": rewind_hints,
+    }
+    if hasattr(data, "model_copy"):
+        return data.model_copy(update=update)
+    return data.copy(update=update)
+
+
+def _archive_ingest_batches(data: SessionIngest, *, max_items: int = _ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS) -> list[SessionIngest]:
+    """Split cold archive ingest into serializer-sized cooperative units."""
+    max_items = max(1, max_items)
+    events = list(data.events)
+    source_lines = list(data.source_lines or [])
+    rewind_hints = list(data.rewind_hints or [])
+    total = max(len(events), len(source_lines), 1)
+    batches: list[SessionIngest] = []
+    for start in range(0, total, max_items):
+        end = start + max_items
+        batches.append(
+            _copy_session_ingest(
+                data,
+                events=events[start:end],
+                source_lines=source_lines[start:end],
+                # Rewind hints establish branch state; replay them only on the
+                # first sub-batch so later chunks do not repeatedly signal rewind.
+                rewind_hints=rewind_hints if start == 0 else [],
+            )
+        )
+    return batches
+
+
+def _merge_ingest_results(results: list[IngestResult]) -> IngestResult:
+    if not results:
+        raise ValueError("cannot merge empty ingest result set")
+    first = results[0]
+    latest_inserted_event_id = None
+    for result in results:
+        if result.latest_inserted_event_id is not None:
+            latest_inserted_event_id = max(latest_inserted_event_id or 0, result.latest_inserted_event_id)
+    store_stage_ms: dict[str, float] = {}
+    for result in results:
+        for label, value in result.store_stage_ms.items():
+            store_stage_ms[label] = round(store_stage_ms.get(label, 0.0) + float(value), 3)
+    return IngestResult(
+        session_id=first.session_id,
+        events_inserted=sum(result.events_inserted for result in results),
+        events_skipped=sum(result.events_skipped for result in results),
+        latest_inserted_event_id=latest_inserted_event_id,
+        session_created=any(result.session_created for result in results),
+        commit_count=sum(result.commit_count for result in results),
+        commit_ms_total=sum(result.commit_ms_total for result in results),
+        source_lines_inserted=sum(result.source_lines_inserted for result in results),
+        store_stage_ms=store_stage_ms,
+    )
 
 
 def _sync_session_counts_for_label(label: str) -> bool:
@@ -207,16 +271,9 @@ def _raise_archive_ingest_backpressure(
     )
 
 
-async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> bool:
-    """Admit bounded background archive ingest into heavy request work.
-
-    Archive replay/scan batches are reconstructable from local provider files.
-    When a backlog wakes after deploy or repair, cap concurrent body
-    decode/validation work, then let WriteSerializer's priority queue keep
-    live transcript and runtime writes ahead of archive repair.
-    """
+async def _check_archive_ingest_writer_pressure(write_label: str, response: Response) -> None:
     if write_label not in _ARCHIVE_INGEST_LABELS:
-        return False
+        return
 
     from zerg.services.write_serializer import get_write_serializer
 
@@ -253,6 +310,20 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
             response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
             _raise_archive_ingest_backpressure(response, admission_state="writer_pressure")
 
+
+async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> bool:
+    """Admit bounded background archive ingest into heavy request work.
+
+    Archive replay/scan batches are reconstructable from local provider files.
+    When a backlog wakes after deploy or repair, cap concurrent body
+    decode/validation work, then let WriteSerializer's priority queue keep
+    live transcript and runtime writes ahead of archive repair.
+    """
+    if write_label not in _ARCHIVE_INGEST_LABELS:
+        return False
+
+    await _check_archive_ingest_writer_pressure(write_label, response)
+
     if _ARCHIVE_INGEST_SLOTS.locked():
         _raise_archive_ingest_backpressure(response)
 
@@ -276,7 +347,7 @@ def _untraced_ingest_is_too_large(data: SessionIngest, decoded_bytes: int) -> bo
 def _raise_untraced_ingest_backpressure(response: Response) -> None:
     headers = _archive_backpressure_headers(
         admission_state="untraced_ingest_too_large",
-        retry_after_seconds=_ARCHIVE_INGEST_WRITE_TIMEOUT_RETRY_AFTER_SECONDS,
+        retry_after_seconds=_ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
     )
     response.headers.update(headers)
     raise HTTPException(
@@ -928,11 +999,8 @@ async def ingest_session(
 
             ws = get_write_serializer()
             ingest_chunk = _ingest_chunk_for_label(write_label)
-            write_timeout_seconds = None
-            if write_label in _ARCHIVE_INGEST_LABELS:
-                write_timeout_seconds = _ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS
 
-            def _do_ingest(write_db):
+            def _do_ingest(write_db, ingest_data: SessionIngest = data):
                 nonlocal archive_primary_state
                 nonlocal legacy_raw_effective
                 write_started_at_ms = _unix_ms()
@@ -948,7 +1016,7 @@ async def ingest_session(
                             # failed: fail closed with the same 503 semantics as a
                             # prepare failure, not a generic 500.
                             logger.warning(
-                                "Archive-primary manifest insert failed for session %s and legacy raw fallback is disabled",
+                                "Archive-primary manifest insert failed for session %s " "and legacy raw fallback is disabled",
                                 data.id,
                                 exc_info=True,
                             )
@@ -969,7 +1037,7 @@ async def ingest_session(
 
                 store = AgentsStore(write_db)
                 result = store.ingest_session(
-                    data,
+                    ingest_data,
                     chunk_size=ingest_chunk,
                     synchronous_projections=_sync_derived_projections_for_label(write_label),
                     synchronous_session_counts=_sync_session_counts_for_label(write_label),
@@ -980,7 +1048,7 @@ async def ingest_session(
                 store_returned_at_ms = _unix_ms()
                 _persist_ship_trace_event(
                     write_db,
-                    data=data,
+                    data=ingest_data,
                     result=result,
                     ship_trace=ship_trace,
                     server_trace={
@@ -1004,25 +1072,19 @@ async def ingest_session(
 
             with tracer.start_as_current_span("longhouse.ingest.write") as write_span:
                 write_started = time.monotonic()
-                try:
-                    result = await ws.execute_after_closing_request_session(
-                        _do_ingest,
+                ingest_batches = _archive_ingest_batches(data, max_items=ingest_chunk) if write_label in _ARCHIVE_INGEST_LABELS else [data]
+                write_results: list[IngestResult] = []
+                for batch_index, ingest_batch in enumerate(ingest_batches):
+                    if batch_index > 0 and write_label in _ARCHIVE_INGEST_LABELS:
+                        await asyncio.sleep(0)
+                        await _check_archive_ingest_writer_pressure(write_label, response)
+                    batch_result = await ws.execute_after_closing_request_session(
+                        lambda write_db, ingest_batch=ingest_batch: _do_ingest(write_db, ingest_batch),
                         db,
                         label=write_label,
-                        timeout_seconds=write_timeout_seconds,
                     )
-                except asyncio.TimeoutError:
-                    request_status_label = "archive_backpressure"
-                    headers = _archive_backpressure_headers(
-                        admission_state="archive_write_timeout",
-                        retry_after_seconds=_ARCHIVE_INGEST_WRITE_TIMEOUT_RETRY_AFTER_SECONDS,
-                    )
-                    response.headers.update(headers)
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail=_ARCHIVE_INGEST_BACKPRESSURE_DETAIL,
-                        headers=headers,
-                    )
+                    write_results.append(batch_result)
+                result = _merge_ingest_results(write_results)
                 write_ms = round((time.monotonic() - write_started) * 1000, 1)
                 agents_ingest_write_seconds.labels(provider=provider_label).observe(write_ms / 1000.0)
 
@@ -1042,6 +1104,7 @@ async def ingest_session(
                 response.headers["X-Ingest-Commit-Count"] = str(result.commit_count)
                 response.headers["X-Ingest-Commit-Ms"] = f"{result.commit_ms_total:.1f}"
                 response.headers["X-Ingest-Chunk-Size"] = str(ingest_chunk)
+                response.headers["X-Ingest-Sub-Batches"] = str(len(ingest_batches))
                 response.headers["X-Ingest-Archive-Primary"] = archive_primary_state
                 response.headers["X-Ingest-Legacy-Raw"] = "enabled" if legacy_raw_effective else "disabled"
                 response.headers["X-Ingest-Store-Stage-Ms"] = _stage_timing_header_value(result.store_stage_ms)
