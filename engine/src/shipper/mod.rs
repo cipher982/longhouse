@@ -1716,13 +1716,9 @@ async fn attempt_ship(
     } else {
         insert_json_field(&mut flight_record, "request_timeout_ms", Value::Null);
     }
-    let trace_header = ship_trace.and_then(|_| {
-        let mut header_record = flight_record.clone();
-        remove_json_field(&mut header_record, "kind");
-        remove_json_field(&mut header_record, "path");
-        remove_json_field(&mut header_record, "request_timeout_ms");
-        serde_json::to_string(&header_record).ok()
-    });
+    let trace_header = ship_trace
+        .map(|trace| build_ship_trace_header_value(&item, trace, http_send_started_at_ms))
+        .and_then(|header_record| serde_json::to_string(&header_record).ok());
     if matches!(ship_lane, ShipLane::Archive | ShipLane::Repair)
         && !item.source_line_refs.is_empty()
     {
@@ -2273,6 +2269,106 @@ fn build_ship_trace_value(
     value
 }
 
+fn build_ship_trace_header_value(
+    item: &ShipItem,
+    trace: &ShipTraceContext,
+    http_send_started_at_ms: i64,
+) -> Value {
+    let mut value = json!({
+        "schema": "ship_trace.v1",
+        "trace_id": compact_ship_trace_id(item, http_send_started_at_ms),
+        "provider": bounded_json_string(&item.provider),
+        "session_id": bounded_json_string(&item.session_id),
+        "work_context": trace.work_context,
+        "observation_source": trace.observation_source,
+        "event_count": item.event_count,
+        "offset": item.offset,
+        "new_offset": item.new_offset,
+        "range_bytes": item.new_offset.saturating_sub(item.offset),
+        "http_send_started_at_ms": http_send_started_at_ms,
+        "observed_at_ms": trace.observed_at_ms,
+        "latest_observed_at_ms": trace.latest_observed_at_ms,
+        "wake_received_at_ms": trace.wake_received_at_ms,
+        "enqueued_at_ms": trace.enqueued_at_ms,
+        "job_started_at_ms": trace.job_started_at_ms,
+        "prepare_started_at_ms": trace.prepare_started_at_ms,
+        "prepare_finished_at_ms": trace.prepare_finished_at_ms,
+        "prepare_blocking_queue_wait_ms": trace.prepare_blocking_queue_wait_ms,
+        "prepare_open_db_ms": trace.prepare_open_db_ms,
+        "prepare_identity_ms": trace.prepare_identity_ms,
+        "prepare_cursor_ms": trace.prepare_cursor_ms,
+        "prepare_binding_wait_ms": trace.prepare_binding_wait_ms,
+        "prepare_parse_ms": trace.prepare_parse_ms,
+        "prepare_batch_build_ms": trace.prepare_batch_build_ms,
+        "observation_to_enqueue_ms": trace.enqueued_at_ms.saturating_sub(trace.observed_at_ms),
+        "observation_window_ms": trace
+            .latest_observed_at_ms
+            .map(|latest_ms| latest_ms.saturating_sub(trace.observed_at_ms)),
+        "observation_to_wake_ms": trace
+            .wake_received_at_ms
+            .map(|wake_ms| wake_ms.saturating_sub(trace.observed_at_ms)),
+        "wake_to_enqueue_ms": trace
+            .wake_received_at_ms
+            .map(|wake_ms| trace.enqueued_at_ms.saturating_sub(wake_ms)),
+        "enqueue_to_job_ms": trace.job_started_at_ms.saturating_sub(trace.enqueued_at_ms),
+        "observed_to_job_ms": trace.job_started_at_ms.saturating_sub(trace.observed_at_ms),
+        "prepare_ms": trace
+            .prepare_finished_at_ms
+            .saturating_sub(trace.prepare_started_at_ms),
+        "job_to_http_ms": http_send_started_at_ms.saturating_sub(trace.job_started_at_ms),
+    });
+    insert_optional_bounded_string(&mut value, "wake_reason", trace.wake_reason.as_deref());
+    insert_optional_bounded_string(&mut value, "turn_id", trace.turn_id.as_deref());
+    insert_optional_bounded_string(
+        &mut value,
+        "session_id_hint",
+        trace.session_id_hint.as_deref(),
+    );
+    if let Some(file_len_hint) = trace.file_len_hint {
+        insert_json_field(&mut value, "file_len_hint", json!(file_len_hint));
+    }
+    value
+}
+
+fn compact_ship_trace_id(item: &ShipItem, http_send_started_at_ms: i64) -> String {
+    let full = format!(
+        "{}:{}:{}:{}",
+        item.session_id, item.offset, item.new_offset, http_send_started_at_ms
+    );
+    if full.len() <= 240 {
+        return full;
+    }
+    let digest = Sha256::digest(full.as_bytes());
+    let short_hash: String = digest[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!(
+        "{}:sha256-{}:{}:{}:{}",
+        bounded_json_string(&item.session_id),
+        short_hash,
+        item.offset,
+        item.new_offset,
+        http_send_started_at_ms
+    )
+}
+
+fn bounded_json_string(value: &str) -> String {
+    const MAX_CHARS: usize = 160;
+    if value.chars().count() <= MAX_CHARS {
+        return value.to_string();
+    }
+    let mut truncated: String = value.chars().take(MAX_CHARS).collect();
+    truncated.push_str("...");
+    truncated
+}
+
+fn insert_optional_bounded_string(value: &mut Value, key: &str, field_value: Option<&str>) {
+    if let Some(field_value) = field_value {
+        insert_json_field(value, key, json!(bounded_json_string(field_value)));
+    }
+}
+
 fn record_flight_attempt(
     recorder: Option<&FlightRecorder>,
     base_record: &Value,
@@ -2309,12 +2405,6 @@ fn record_flight_attempt(
 fn insert_json_field(value: &mut Value, key: &str, field_value: Value) {
     if let Value::Object(map) = value {
         map.insert(key.to_string(), field_value);
-    }
-}
-
-fn remove_json_field(value: &mut Value, key: &str) {
-    if let Value::Object(map) = value {
-        map.remove(key);
     }
 }
 
@@ -6854,6 +6944,51 @@ mod tests {
     }
 
     #[test]
+    fn test_ship_trace_header_stays_bounded_for_large_context() {
+        let item = ShipItem {
+            path_str: format!("/tmp/{}", "deep-path/".repeat(600)),
+            provider: "opencode".to_string(),
+            offset: 10,
+            new_offset: 20,
+            event_count: 2,
+            session_id: format!("session-{}", "abcdef".repeat(80)),
+            source_line_offsets: Vec::new(),
+            source_line_refs: Vec::new(),
+            media_objects: Vec::new(),
+            compressed: b"secret transcript payload".to_vec(),
+        };
+        let mut trace = make_ship_trace("live_transcript");
+        trace.turn_id = Some(format!("turn-{}", "0123456789".repeat(120)));
+        trace.session_id_hint = Some(format!("hint-{}", "abcdefghij".repeat(120)));
+        trace.wake_reason = Some(format!("wake-{}", "qrstuvwxyz".repeat(120)));
+        trace.prepare_open_db_ms = Some(12);
+        trace.prepare_parse_ms = Some(45);
+
+        let value = build_ship_trace_header_value(&item, &trace, 1234);
+        let encoded = serde_json::to_string(&value).unwrap();
+
+        assert!(encoded.len() < 4096);
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("ship_trace.v1")
+        );
+        assert_eq!(
+            value.get("work_context").and_then(Value::as_str),
+            Some("live_transcript")
+        );
+        assert_eq!(
+            value.get("prepare_open_db_ms").and_then(Value::as_u64),
+            Some(12)
+        );
+        assert_eq!(
+            value.get("prepare_parse_ms").and_then(Value::as_u64),
+            Some(45)
+        );
+        assert!(!encoded.contains("deep-path"));
+        assert!(!encoded.contains("secret transcript payload"));
+    }
+
+    #[test]
     fn test_ship_prepared_file_uploads_media_before_ingest() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (_tmp, conn) = make_db();
@@ -7317,9 +7452,7 @@ mod tests {
         let end_offset = prepared.new_offset;
         let source_line_body = format!(
             r#"{{"present":[],"missing":[{{"source_path":"{}","source_offset":{},"line_hash":"{}"}}],"rejected":[]}}"#,
-            path_str,
-            source_line.source_offset,
-            source_line.line_hash
+            path_str, source_line.source_offset, source_line.line_hash
         );
         let claim_body = format!(
             r#"{{"needed":["{}"],"present":[],"rejected":[]}}"#,
