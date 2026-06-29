@@ -361,6 +361,42 @@ async def test_untraced_ingest_uses_archive_admission(monkeypatch):
     assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
 
 
+def test_large_untraced_ingest_backpressures_before_writer(tmp_path):
+    client, _ = _make_client(tmp_path)
+    try:
+        payload = {
+            "id": "d9f61d55-83e3-4d94-a2c2-f80c69a20411",
+            "provider": "codex",
+            "environment": "test",
+            "project": "zerg",
+            "started_at": "2026-01-01T00:00:00Z",
+            "events": [
+                {
+                    "role": "assistant",
+                    "content_text": f"hello {idx}",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "source_path": "/tmp/untraced-large.jsonl",
+                    "source_offset": idx,
+                    "raw_json": json.dumps({"type": "assistant", "text": f"hello {idx}"}),
+                }
+                for idx in range(201)
+            ],
+        }
+
+        response = client.post(
+            "/agents/ingest",
+            json=payload,
+            headers={"X-Agents-Token": "dev"},
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert response.headers["X-Ingest-Lane"] == "archive"
+        assert response.headers["X-Ingest-Admission-State"] == "untraced_ingest_too_large"
+        assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
     client, factory = _make_client(tmp_path)
     try:

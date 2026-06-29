@@ -112,6 +112,9 @@ _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 1000.0
 _ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS = 60.0
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
 _INGEST_STAGE_HEADER_LIMIT = 8
+_UNTRACED_INGEST_MAX_EVENTS = 200
+_UNTRACED_INGEST_MAX_SOURCE_LINES = 200
+_UNTRACED_INGEST_MAX_DECODED_BYTES = 2 * 1024 * 1024
 _ARCHIVE_SHADOW_SESSION_LOCKS: dict[str, asyncio.Lock] = {}
 _ARCHIVE_SHADOW_SESSION_LOCKS_GUARD = asyncio.Lock()
 
@@ -260,6 +263,27 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
 def _release_archive_ingest_slot(acquired: bool) -> None:
     if acquired:
         _ARCHIVE_INGEST_SLOTS.release()
+
+
+def _untraced_ingest_is_too_large(data: SessionIngest, decoded_bytes: int) -> bool:
+    return (
+        decoded_bytes > _UNTRACED_INGEST_MAX_DECODED_BYTES
+        or len(data.events) > _UNTRACED_INGEST_MAX_EVENTS
+        or len(data.source_lines or []) > _UNTRACED_INGEST_MAX_SOURCE_LINES
+    )
+
+
+def _raise_untraced_ingest_backpressure(response: Response) -> None:
+    headers = _archive_backpressure_headers(
+        admission_state="untraced_ingest_too_large",
+        retry_after_seconds=_ARCHIVE_INGEST_WRITE_TIMEOUT_RETRY_AFTER_SECONDS,
+    )
+    response.headers.update(headers)
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Untraced archive ingest backlog is throttled; retry after traced live writes drain",
+        headers=headers,
+    )
 
 
 def _json_timestamp(value: datetime) -> str:
@@ -793,6 +817,10 @@ async def ingest_session(
                         events_skipped=0,
                         session_created=False,
                     )
+
+                if write_label == "ingest" and _untraced_ingest_is_too_large(data, len(body)):
+                    request_status_label = "archive_backpressure"
+                    _raise_untraced_ingest_backpressure(response)
 
                 settings = get_settings()
                 if settings.archive_primary_write_enabled and data.id is None:
