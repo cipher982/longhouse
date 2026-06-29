@@ -1002,6 +1002,7 @@ async fn execute_command(
                     text,
                     meta: Vec::new(),
                     state_root: None,
+                    wait_timeout: None,
                 })
                 .await
                 .map_err(claude_channel_error_to_command_error)?;
@@ -1059,6 +1060,7 @@ async fn execute_command(
                 claude_channel_interrupt(ClaudeChannelInterruptConfig {
                     session_id,
                     state_root: None,
+                    wait_timeout: None,
                 })
                 .await
                 .map_err(claude_channel_error_to_command_error)?;
@@ -1131,6 +1133,7 @@ async fn execute_command(
                     text,
                     meta: vec![("intent".to_string(), "steer".to_string())],
                     state_root: None,
+                    wait_timeout: None,
                 })
                 .await
                 .map_err(claude_channel_error_to_command_error)?;
@@ -1194,6 +1197,7 @@ async fn execute_command(
                         ("decision".to_string(), decision.clone()),
                     ],
                     state_root: None,
+                    wait_timeout: None,
                 })
                 .await
                 .map_err(claude_channel_error_to_command_error)?;

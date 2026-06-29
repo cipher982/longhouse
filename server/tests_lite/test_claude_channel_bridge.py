@@ -2,19 +2,17 @@ from __future__ import annotations
 
 import json
 import os
-import queue
-import subprocess
-import sys
 import threading
 import time
-from pathlib import Path
 
 from cryptography.fernet import Fernet
+from typer.testing import CliRunner
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+import zerg.cli.claude_channel as claude_channel_cli
 from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.claude_channel_bridge import build_claude_channel_state_file
@@ -159,129 +157,95 @@ def test_build_claude_channel_exec_command_resume_uses_resume_flag():
     assert "--session-id 11111111-1111-1111-1111-111111111111" not in command
 
 
-def test_claude_channel_bridge_emits_channel_notification_after_init(tmp_path):
+def test_claude_channel_send_shim_dispatches_to_engine(monkeypatch, tmp_path):
     session_id = "11111111-1111-1111-1111-111111111111"
-    provider_session_id = "provider-123"
     state_root = tmp_path / "bridge-state"
-    server_cwd = Path(__file__).resolve().parents[1]
-    env = os.environ.copy()
-    env.setdefault("PYTHONUNBUFFERED", "1")
+    calls: list[list[str]] = []
 
-    process = subprocess.Popen(
+    def fake_run_engine(argv: list[str]) -> None:
+        calls.append(argv)
+
+    monkeypatch.setenv("LONGHOUSE_ENGINE_BIN", "/tmp/longhouse-engine")
+    monkeypatch.setattr(claude_channel_cli, "_run_engine", fake_run_engine)
+
+    result = CliRunner().invoke(
+        claude_channel_cli.app,
         [
-            sys.executable,
-            "-m",
-            "zerg.cli.main",
+            "send",
+            "--session-id",
+            session_id,
+            "--state-root",
+            str(state_root),
+            "--text",
+            "hello from pytest",
+            "--meta",
+            "user=pm",
+            "--wait-secs",
+            "1.5",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        [
+            "/tmp/longhouse-engine",
             "claude-channel",
+            "send",
+            "--session-id",
+            session_id,
+            "--text",
+            "hello from pytest",
+            "--wait-secs",
+            "1.5",
+            "--meta",
+            "user=pm",
+            "--state-root",
+            str(state_root),
+        ]
+    ]
+
+
+def test_claude_channel_serve_shim_execs_engine_without_token_argv(monkeypatch, tmp_path):
+    session_id = "11111111-1111-1111-1111-111111111111"
+    state_root = tmp_path / "bridge-state"
+    calls: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_exec_engine(argv: list[str], env: dict[str, str]) -> None:
+        calls.append((argv, env))
+
+    monkeypatch.setenv("LONGHOUSE_ENGINE_BIN", "/tmp/longhouse-engine")
+    monkeypatch.setattr(claude_channel_cli, "_exec_engine", fake_exec_engine)
+
+    result = CliRunner().invoke(
+        claude_channel_cli.app,
+        [
             "serve",
             "--session-id",
             session_id,
-            "--provider-session-id",
-            provider_session_id,
             "--state-root",
             str(state_root),
             "--auth-token",
             "bridge-test-token",
-            "--claude-pid",
-            str(os.getpid()),
-            "--cwd",
-            str(server_cwd),
+            "--port",
+            "4242",
         ],
-        cwd=str(server_cwd),
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=env,
     )
 
-    stdout_lines: "queue.Queue[str]" = queue.Queue()
-
-    def _pump_stdout() -> None:
-        assert process.stdout is not None
-        for line in process.stdout:
-            stdout_lines.put(line)
-
-    reader = threading.Thread(target=_pump_stdout, daemon=True)
-    reader.start()
-
-    try:
-        assert process.stdin is not None
-        process.stdin.write(
-            json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2025-11-25",
-                        "capabilities": {},
-                        "clientInfo": {"name": "pytest", "version": "0.1.0"},
-                    },
-                }
-            )
-            + "\n"
-        )
-        process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
-        process.stdin.flush()
-
-        init_response = json.loads(stdout_lines.get(timeout=5.0))
-        assert init_response["id"] == 1
-        assert init_response["result"]["capabilities"]["experimental"] == {"claude/channel": {}}
-
-        process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}) + "\n")
-        process.stdin.flush()
-        tools_response = json.loads(stdout_lines.get(timeout=5.0))
-        assert tools_response["id"] == 2
-        assert tools_response["result"]["tools"] == []
-
-        state = wait_for_claude_channel_state(session_id=session_id, state_root=state_root, timeout_secs=5.0)
-        assert state["session_id"] == session_id
-        assert state["provider_session_id"] == provider_session_id
-        assert state["auth_token"] == "bridge-test-token"
-        assert state["cwd"] == str(server_cwd)
-        assert state["ready"] is True
-        assert build_claude_channel_state_file(session_id=session_id, state_root=state_root).exists()
-
-        send = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "zerg.cli.main",
-                "claude-channel",
-                "send",
-                "--session-id",
-                session_id,
-                "--state-root",
-                str(state_root),
-                "--text",
-                "hello from pytest",
-                "--meta",
-                "user=pm",
-            ],
-            cwd=str(server_cwd),
-            env=env,
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        assert send.returncode == 0, send.stderr or send.stdout
-
-        notification = json.loads(stdout_lines.get(timeout=5.0))
-        assert notification["method"] == "notifications/claude/channel"
-        assert notification["params"]["content"] == "hello from pytest"
-        assert notification["params"]["meta"] == {
-            "injected_by": "longhouse",
-            "longhouse_session_id": session_id,
-            "user": "pm",
-        }
-    finally:
-        process.terminate()
-        try:
-            process.wait(timeout=5.0)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5.0)
+    assert result.exit_code == 0, result.output
+    argv, env = calls[0]
+    assert argv == [
+        "/tmp/longhouse-engine",
+        "claude-channel",
+        "serve",
+        "--session-id",
+        session_id,
+        "--state-root",
+        str(state_root),
+        "--port",
+        "4242",
+    ]
+    assert "bridge-test-token" not in " ".join(argv)
+    assert env["LONGHOUSE_CHANNEL_AUTH_TOKEN"] == "bridge-test-token"
 
 
 def test_wait_for_claude_channel_state_waits_for_ready_transition(tmp_path):

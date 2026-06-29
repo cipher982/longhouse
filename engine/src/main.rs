@@ -43,6 +43,7 @@ mod unmanaged_bindings;
 mod watcher;
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::fmt::MakeWriter;
@@ -96,6 +97,32 @@ fn parse_json_value_cli_arg(
     serde_json::from_str(trimmed)
         .map(Some)
         .map_err(|e| anyhow::anyhow!("{name} is not valid JSON: {e}"))
+}
+
+fn parse_meta_entries(entries: Vec<String>) -> anyhow::Result<Vec<(String, String)>> {
+    let mut parsed = Vec::new();
+    for entry in entries {
+        let raw = entry.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        let Some((key, value)) = raw.split_once('=') else {
+            anyhow::bail!("--meta entries must use key=value, got {entry:?}");
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            anyhow::bail!("--meta entries must include a non-empty key, got {entry:?}");
+        }
+        parsed.push((key.to_string(), value.to_string()));
+    }
+    Ok(parsed)
+}
+
+fn duration_from_secs(secs: f64) -> anyhow::Result<Duration> {
+    if !secs.is_finite() || secs < 0.0 {
+        anyhow::bail!("--wait-secs must be a finite non-negative number");
+    }
+    Ok(Duration::from_secs_f64(secs))
 }
 
 fn parse_compression_algo(s: &str) -> anyhow::Result<CompressionAlgo> {
@@ -548,6 +575,48 @@ enum ClaudeChannelCommands {
         #[arg(long)]
         cwd: Option<String>,
     },
+
+    /// Send a live message into the active Claude channel bridge
+    Send {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        text: String,
+
+        #[arg(long)]
+        meta: Vec<String>,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+
+        #[arg(long, default_value = "10.0")]
+        wait_secs: f64,
+    },
+
+    /// Send SIGINT to the Claude process associated with the bridge state
+    Interrupt {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+
+        #[arg(long, default_value = "10.0")]
+        wait_secs: f64,
+    },
+
+    /// Print the current local bridge state without exposing secrets
+    Inspect {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+
+        #[arg(long, default_value = "10.0")]
+        wait_secs: f64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -873,6 +942,9 @@ fn command_name(command: &Commands) -> &'static str {
         },
         Commands::ClaudeChannel { command } => match command {
             ClaudeChannelCommands::Serve { .. } => "claude-channel-serve",
+            ClaudeChannelCommands::Send { .. } => "claude-channel-send",
+            ClaudeChannelCommands::Interrupt { .. } => "claude-channel-interrupt",
+            ClaudeChannelCommands::Inspect { .. } => "claude-channel-inspect",
         },
     }
 }
@@ -1272,6 +1344,67 @@ fn main() -> anyhow::Result<()> {
                         cwd: cwd.or_else(|| env_string("LONGHOUSE_CHANNEL_CWD")),
                     },
                 ))?;
+            }
+            ClaudeChannelCommands::Send {
+                session_id,
+                text,
+                meta,
+                state_root,
+                wait_secs,
+            } => {
+                let rt = tokio::runtime::Runtime::new()?;
+                let summary = rt.block_on(claude_channel_control::send_text(
+                    claude_channel_control::ClaudeChannelSendConfig {
+                        session_id,
+                        text,
+                        meta: parse_meta_entries(meta)?,
+                        state_root,
+                        wait_timeout: Some(duration_from_secs(wait_secs)?),
+                    },
+                ))?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "provider_session_id": summary.provider_session_id,
+                    }))?
+                );
+            }
+            ClaudeChannelCommands::Interrupt {
+                session_id,
+                state_root,
+                wait_secs,
+            } => {
+                let rt = tokio::runtime::Runtime::new()?;
+                let summary = rt.block_on(claude_channel_control::interrupt(
+                    claude_channel_control::ClaudeChannelInterruptConfig {
+                        session_id,
+                        state_root,
+                        wait_timeout: Some(duration_from_secs(wait_secs)?),
+                    },
+                ))?;
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "ok": true,
+                        "pid": summary.pid,
+                    }))?
+                );
+            }
+            ClaudeChannelCommands::Inspect {
+                session_id,
+                state_root,
+                wait_secs,
+            } => {
+                let rt = tokio::runtime::Runtime::new()?;
+                let state = rt.block_on(claude_channel_control::inspect_state(
+                    claude_channel_control::ClaudeChannelInspectConfig {
+                        session_id,
+                        state_root,
+                        wait_timeout: Some(duration_from_secs(wait_secs)?),
+                    },
+                ))?;
+                println!("{}", serde_json::to_string_pretty(&state)?);
             }
         },
         Commands::CodexBridge { command } => {

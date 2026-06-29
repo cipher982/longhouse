@@ -26,12 +26,21 @@ pub struct ClaudeChannelSendConfig {
     pub text: String,
     pub meta: Vec<(String, String)>,
     pub state_root: Option<PathBuf>,
+    pub wait_timeout: Option<Duration>,
 }
 
 #[derive(Clone, Debug)]
 pub struct ClaudeChannelInterruptConfig {
     pub session_id: String,
     pub state_root: Option<PathBuf>,
+    pub wait_timeout: Option<Duration>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ClaudeChannelInspectConfig {
+    pub session_id: String,
+    pub state_root: Option<PathBuf>,
+    pub wait_timeout: Option<Duration>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,10 +65,11 @@ struct ClaudeChannelState {
 pub async fn send_text(
     config: ClaudeChannelSendConfig,
 ) -> Result<ClaudeChannelSendSummary, ClaudeChannelControlError> {
+    let wait_timeout = config.wait_timeout.unwrap_or(DEFAULT_READY_WAIT);
     let state = wait_for_ready_state(
         &config.session_id,
         config.state_root.as_deref(),
-        DEFAULT_READY_WAIT,
+        wait_timeout,
         DEFAULT_POLL_INTERVAL,
     )
     .await?;
@@ -123,10 +133,11 @@ pub async fn send_text(
 pub async fn interrupt(
     config: ClaudeChannelInterruptConfig,
 ) -> Result<ClaudeChannelInterruptSummary, ClaudeChannelControlError> {
+    let wait_timeout = config.wait_timeout.unwrap_or(DEFAULT_READY_WAIT);
     let state = wait_for_ready_state(
         &config.session_id,
         config.state_root.as_deref(),
-        DEFAULT_READY_WAIT,
+        wait_timeout,
         DEFAULT_POLL_INTERVAL,
     )
     .await?;
@@ -140,6 +151,37 @@ pub async fn interrupt(
         ))
     })?;
     Ok(ClaudeChannelInterruptSummary { pid })
+}
+
+pub async fn inspect_state(
+    config: ClaudeChannelInspectConfig,
+) -> Result<serde_json::Value, ClaudeChannelControlError> {
+    let wait_timeout = config.wait_timeout.unwrap_or(DEFAULT_READY_WAIT);
+    let path = state_file_path(&config.session_id, config.state_root.as_deref())?;
+    let deadline = Instant::now() + wait_timeout;
+    loop {
+        match read_state_value(&path) {
+            Ok(mut value) => {
+                if let Some(object) = value.as_object_mut() {
+                    if object.contains_key("auth_token") {
+                        object.insert("auth_token".to_string(), json!("<redacted>"));
+                    }
+                }
+                return Ok(value);
+            }
+            Err(StateReadError::Missing) => {}
+            Err(StateReadError::Invalid(message)) => {
+                return Err(not_attached(&config.session_id, &message));
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(not_attached(
+                &config.session_id,
+                &format!("state did not appear at {}", path.display()),
+            ));
+        }
+        sleep(DEFAULT_POLL_INTERVAL).await;
+    }
 }
 
 async fn wait_for_ready_state(
@@ -200,6 +242,18 @@ enum StateReadError {
 }
 
 fn read_state_file(path: &Path) -> Result<ClaudeChannelState, StateReadError> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(StateReadError::Missing)
+        }
+        Err(err) => return Err(StateReadError::Invalid(err.to_string())),
+    };
+    serde_json::from_str(&raw)
+        .map_err(|err| StateReadError::Invalid(format!("state is invalid JSON: {err}")))
+}
+
+fn read_state_value(path: &Path) -> Result<serde_json::Value, StateReadError> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -335,6 +389,7 @@ mod tests {
             text: "hello".to_string(),
             meta: vec![],
             state_root: Some(temp.path().to_path_buf()),
+            wait_timeout: None,
         })
         .await
         .unwrap();
@@ -372,6 +427,7 @@ mod tests {
             text: "course correct".to_string(),
             meta: vec![("intent".to_string(), "steer".to_string())],
             state_root: Some(temp.path().to_path_buf()),
+            wait_timeout: None,
         })
         .await
         .unwrap();
@@ -400,6 +456,7 @@ mod tests {
             text: "hello".to_string(),
             meta: vec![],
             state_root: Some(temp.path().to_path_buf()),
+            wait_timeout: None,
         })
         .await
         .unwrap_err();
@@ -418,6 +475,7 @@ mod tests {
             text: "hello".to_string(),
             meta: vec![],
             state_root: Some(temp.path().to_path_buf()),
+            wait_timeout: Some(Duration::from_millis(10)),
         })
         .await
         .unwrap_err();
@@ -426,6 +484,36 @@ mod tests {
             err,
             ClaudeChannelControlError::SessionNotAttached { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn inspect_state_redacts_auth_token() {
+        let temp = tempfile::tempdir().unwrap();
+        write_state(
+            temp.path(),
+            SESSION_ID,
+            json!({
+                "session_id": SESSION_ID,
+                "provider_session_id": "claude-provider-1",
+                "auth_token": "very-secret-token",
+                "port": 4242,
+                "ready": true,
+            }),
+        );
+
+        let state = inspect_state(ClaudeChannelInspectConfig {
+            session_id: SESSION_ID.to_string(),
+            state_root: Some(temp.path().to_path_buf()),
+            wait_timeout: None,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(state["session_id"], SESSION_ID);
+        assert_eq!(state["auth_token"], "<redacted>");
+        assert!(!serde_json::to_string(&state)
+            .unwrap()
+            .contains("very-secret-token"));
     }
 
     #[cfg(unix)]
