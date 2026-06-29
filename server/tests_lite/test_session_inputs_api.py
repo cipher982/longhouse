@@ -30,6 +30,7 @@ from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionInputDeliveryAttempt
 from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
@@ -1009,6 +1010,10 @@ def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
             )
             assert turn.session_input_id == input_id
             assert turn.user_event_id is not None
+            attempt = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_input_id == input_id).one()
+            assert attempt.status == "accepted"
+            assert attempt.request_id == row.delivery_request_id
+            assert attempt.lease_expires_at is not None
         assert result.dispatched is True
         assert result.input_id == input_id
     finally:
@@ -1210,6 +1215,165 @@ def test_concurrent_queue_wakes_dispatch_at_most_one_input(monkeypatch, tmp_path
         asyncio.run(session_lock_manager.release(str(session_id)))
 
 
+def test_active_attempt_blocks_queue_readiness(tmp_path):
+    from zerg.services.session_input_queue import evaluate_session_input_queue_readiness
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="held by active lease",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-active-lease-1",
+        )
+        db.add(
+            SessionInputDeliveryAttempt(
+                session_input_id=int(row.id),
+                session_id=session_id,
+                thread_id=row.thread_id,
+                owner_id=user_id,
+                request_id="active-attempt-1",
+                attempt_number=1,
+                status="acquired",
+                lease_owner="test",
+                lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            )
+        )
+        db.commit()
+
+        readiness = evaluate_session_input_queue_readiness(db, session=session, owner_id=user_id)
+
+    assert readiness.ready is False
+    assert readiness.reason == "lease_active"
+
+
+def test_concurrent_queue_wakes_different_lock_scopes_create_one_attempt(monkeypatch, tmp_path):
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    dispatch_calls = _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    with session_local() as db:
+        first = create_session_input(
+            db,
+            session_id=session_id,
+            text="first durable lease",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-durable-concurrent-1",
+        )
+        second = create_session_input(
+            db,
+            session_id=session_id,
+            text="second durable lease",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-durable-concurrent-2",
+        )
+        input_ids = [int(first.id), int(second.id)]
+        db_bind = db.get_bind()
+
+    async def run_wakes():
+        return await asyncio.gather(
+            wake_session_input_queue(
+                db_bind=db_bind,
+                session_id=session_id,
+                reason="test_durable_concurrent_1",
+                lock_scope_id=f"scope-a-{uuid4().hex}",
+            ),
+            wake_session_input_queue(
+                db_bind=db_bind,
+                session_id=session_id,
+                reason="test_durable_concurrent_2",
+                lock_scope_id=f"scope-b-{uuid4().hex}",
+            ),
+        )
+
+    results = asyncio.run(run_wakes())
+
+    with session_local() as db:
+        rows = db.query(SessionInput).filter(SessionInput.id.in_(input_ids)).order_by(SessionInput.id.asc()).all()
+        statuses = [row.status for row in rows]
+        attempts = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_id == session_id).all()
+        assert statuses.count(INPUT_STATUS_DELIVERED) == 1
+        assert statuses.count(INPUT_STATUS_QUEUED) == 1
+        assert len(attempts) == 1
+        assert attempts[0].status == "accepted"
+    assert sum(1 for result in results if result.dispatched) == 1
+    assert len(dispatch_calls) == 1
+
+
+def test_expired_attempt_allows_retry(monkeypatch, tmp_path):
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="retry expired lease",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_DELIVERING,
+            client_request_id="ios-expired-attempt-1",
+            delivery_request_id="expired-attempt",
+        )
+        expired = SessionInputDeliveryAttempt(
+            session_input_id=int(row.id),
+            session_id=session_id,
+            thread_id=row.thread_id,
+            owner_id=user_id,
+            request_id="expired-attempt",
+            attempt_number=1,
+            status="acquired",
+            lease_owner="expired",
+            lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        )
+        db.add(expired)
+        db.commit()
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+
+    try:
+        result = asyncio.run(
+            wake_session_input_queue(
+                db_bind=db_bind,
+                session_id=session_id,
+                reason="test_expired_attempt",
+                lock_scope_id=str(session_id),
+            )
+        )
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+            attempts = (
+                db.query(SessionInputDeliveryAttempt)
+                .filter(SessionInputDeliveryAttempt.session_input_id == input_id)
+                .order_by(SessionInputDeliveryAttempt.id.asc())
+                .all()
+            )
+            assert row.status == INPUT_STATUS_DELIVERED
+            assert [attempt.status for attempt in attempts] == ["expired", "accepted"]
+        assert result.dispatched is True
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+
+
 def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch, tmp_path):
     from fastapi.responses import JSONResponse
 
@@ -1261,8 +1425,221 @@ def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch,
         assert row.status == INPUT_STATUS_QUEUED
         assert row.delivery_request_id is None
         assert row.last_error == MANAGED_CONTROL_UNAVAILABLE_ERROR
+        assert row.attempt_count == 1
+        assert row.next_attempt_at is not None
+        attempt = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_input_id == input_id).one()
+        assert attempt.status == "released"
+        assert attempt.error_code == SESSION_TURN_ERROR_SEND_FAILED
     assert result.dispatched is False
     assert result.reason == "transient_dispatch_failure"
+
+
+def test_next_attempt_at_is_respected_after_transient_failure(monkeypatch, tmp_path):
+    from fastapi.responses import JSONResponse
+
+    from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+    from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="respect retry time",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-next-attempt-1",
+        )
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+
+    async def fake_dispatch(*, lock_scope_id, request_id, **_kwargs):
+        await session_lock_manager.release(lock_scope_id, request_id)
+        return JSONResponse(
+            status_code=502,
+            content={
+                "accepted": False,
+                "error": MANAGED_CONTROL_UNAVAILABLE_ERROR,
+                "error_code": SESSION_TURN_ERROR_SEND_FAILED,
+            },
+        )
+
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", fake_dispatch)
+
+    first = asyncio.run(
+        wake_session_input_queue(
+            db_bind=db_bind,
+            session_id=session_id,
+            reason="test_next_attempt_first",
+            lock_scope_id=str(session_id),
+        )
+    )
+    second = asyncio.run(
+        wake_session_input_queue(
+            db_bind=db_bind,
+            session_id=session_id,
+            reason="test_next_attempt_second",
+            lock_scope_id=str(session_id),
+        )
+    )
+
+    with session_local() as db:
+        row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+        attempts = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_input_id == input_id).all()
+        assert row.status == INPUT_STATUS_QUEUED
+        assert row.attempt_count == 1
+        assert row.next_attempt_at is not None
+        assert len(attempts) == 1
+    assert first.reason == "transient_dispatch_failure"
+    assert second.reason == "next_attempt_pending"
+
+
+def test_attempt_count_increments_on_retry(monkeypatch, tmp_path):
+    from fastapi.responses import JSONResponse
+
+    from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+    from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="retry then succeed",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-retry-count-1",
+        )
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+
+    async def fake_transient(*, lock_scope_id, request_id, **_kwargs):
+        await session_lock_manager.release(lock_scope_id, request_id)
+        return JSONResponse(
+            status_code=502,
+            content={
+                "accepted": False,
+                "error": MANAGED_CONTROL_UNAVAILABLE_ERROR,
+                "error_code": SESSION_TURN_ERROR_SEND_FAILED,
+            },
+        )
+
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", fake_transient)
+    asyncio.run(
+        wake_session_input_queue(
+            db_bind=db_bind,
+            session_id=session_id,
+            reason="test_retry_count_first",
+            lock_scope_id=str(session_id),
+        )
+    )
+
+    with session_local() as db:
+        db.query(SessionInput).filter(SessionInput.id == input_id).update(
+            {"next_attempt_at": datetime.now(timezone.utc) - timedelta(seconds=1)},
+            synchronize_session=False,
+        )
+        db.commit()
+
+    async def fake_success(**_kwargs):
+        return JSONResponse(
+            status_code=200,
+            content={
+                "accepted": True,
+                "session_id": str(session_id),
+                "request_id": "retry-success",
+            },
+        )
+
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", fake_success)
+    try:
+        second = asyncio.run(
+            wake_session_input_queue(
+                db_bind=db_bind,
+                session_id=session_id,
+                reason="test_retry_count_second",
+                lock_scope_id=str(session_id),
+            )
+        )
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+            attempts = (
+                db.query(SessionInputDeliveryAttempt)
+                .filter(SessionInputDeliveryAttempt.session_input_id == input_id)
+                .order_by(SessionInputDeliveryAttempt.id.asc())
+                .all()
+            )
+            assert row.status == INPUT_STATUS_DELIVERED
+            assert row.attempt_count == 2
+            assert [attempt.status for attempt in attempts] == ["released", "accepted"]
+        assert second.dispatched is True
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+
+
+def test_permanent_dispatch_failure_marks_input_and_attempt_failed(monkeypatch, tmp_path):
+    from fastapi.responses import JSONResponse
+
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="permanent failure",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-permanent-failure-1",
+        )
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+
+    async def fake_permanent(*, lock_scope_id, request_id, **_kwargs):
+        await session_lock_manager.release(lock_scope_id, request_id)
+        return JSONResponse(
+            status_code=502,
+            content={
+                "accepted": False,
+                "error": "session is closed",
+                "error_code": "session_closed",
+            },
+        )
+
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", fake_permanent)
+    result = asyncio.run(
+        wake_session_input_queue(
+            db_bind=db_bind,
+            session_id=session_id,
+            reason="test_permanent_failure",
+            lock_scope_id=str(session_id),
+        )
+    )
+
+    with session_local() as db:
+        row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+        attempt = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_input_id == input_id).one()
+        assert row.status == INPUT_STATUS_FAILED
+        assert row.last_error == "session is closed"
+        assert attempt.status == "failed"
+        assert attempt.error_code == "session_closed"
+    assert result.dispatched is False
+    assert result.reason == "dispatch_failed"
 
 
 def test_lock_watcher_timeout_recovers_from_fresh_runtime_idle_and_drains_queue(monkeypatch, tmp_path):

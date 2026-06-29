@@ -10,25 +10,40 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from uuid import UUID
 from uuid import uuid4
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionInputDeliveryAttempt
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
 from zerg.models.user import User
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_current_control import current_session_capabilities
+from zerg.services.session_inputs import ACTIVE_DELIVERY_ATTEMPT_STATUSES
+from zerg.services.session_inputs import ATTEMPT_STATUS_ACQUIRED
+from zerg.services.session_inputs import ATTEMPT_STATUS_SUBMITTED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import claim_next_queued
+from zerg.services.session_inputs import expire_delivery_attempts
+from zerg.services.session_inputs import get_delivery_attempt
 from zerg.services.session_inputs import mark_delivered
+from zerg.services.session_inputs import mark_delivery_attempt_accepted
+from zerg.services.session_inputs import mark_delivery_attempt_failed
+from zerg.services.session_inputs import mark_delivery_attempt_released
+from zerg.services.session_inputs import mark_delivery_attempt_submitted
 from zerg.services.session_inputs import mark_failed
 from zerg.services.session_inputs import requeue_delivering
+from zerg.services.session_inputs import requeue_delivering_without_active_attempt
 from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_runtime import session_is_closed_for_input
 from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
@@ -39,6 +54,10 @@ logger = logging.getLogger(__name__)
 
 QUEUE_DRAINABLE_RUNTIME_PHASES = frozenset({"idle", "needs_user", "blocked"})
 ACTIVE_TURN_STATES = frozenset({SESSION_TURN_STATE_SEND_ACCEPTED, SESSION_TURN_STATE_ACTIVE})
+TRANSPORT_LEASE_SECS = 60
+TURN_LEASE_SECS = 300
+MAX_DELIVERY_ATTEMPTS = 5
+RETRY_BACKOFF_SECS = (5, 30, 120, 300)
 
 
 @dataclass(frozen=True)
@@ -102,6 +121,21 @@ def _has_active_non_terminal_turn(db: Session, session_id: UUID) -> bool:
     )
 
 
+def _has_unexpired_active_attempt(db: Session, session_id: UUID, *, now: datetime | None = None) -> bool:
+    effective_now = now or datetime.now(timezone.utc)
+    return (
+        db.query(SessionInputDeliveryAttempt.id)
+        .filter(
+            SessionInputDeliveryAttempt.session_id == session_id,
+            SessionInputDeliveryAttempt.status.in_(ACTIVE_DELIVERY_ATTEMPT_STATUSES),
+            SessionInputDeliveryAttempt.lease_expires_at > effective_now,
+        )
+        .limit(1)
+        .first()
+        is not None
+    )
+
+
 def evaluate_session_input_queue_readiness(
     db: Session,
     *,
@@ -115,6 +149,9 @@ def evaluate_session_input_queue_readiness(
 
     if not current_session_capabilities(db, session, owner_id=owner_id).live_control_available:
         return QueueReadiness(False, "control_unavailable")
+
+    if _has_unexpired_active_attempt(db, session_id):
+        return QueueReadiness(False, "lease_active")
 
     if _has_active_non_terminal_turn(db, session_id):
         return QueueReadiness(False, "active_turn")
@@ -139,16 +176,33 @@ async def wake_session_input_queue(
     SessionLocal = sessionmaker(bind=db_bind, expire_on_commit=False)
     db = SessionLocal()
     try:
+        now = datetime.now(timezone.utc)
+        expire_delivery_attempts(db, session_id=session_id, now=now, statuses=(ATTEMPT_STATUS_ACQUIRED, ATTEMPT_STATUS_SUBMITTED))
+        requeue_delivering_without_active_attempt(db, session_id=session_id, now=now)
+
         queued_exists = (
             db.query(SessionInput)
             .filter(
                 SessionInput.session_id == session_id,
                 SessionInput.status == INPUT_STATUS_QUEUED,
+                or_(SessionInput.next_attempt_at.is_(None), SessionInput.next_attempt_at <= now),
             )
             .order_by(SessionInput.created_at.asc(), SessionInput.id.asc())
             .first()
         )
         if queued_exists is None:
+            pending_retry = (
+                db.query(SessionInput.id)
+                .filter(
+                    SessionInput.session_id == session_id,
+                    SessionInput.status == INPUT_STATUS_QUEUED,
+                    SessionInput.next_attempt_at.isnot(None),
+                    SessionInput.next_attempt_at > now,
+                )
+                .first()
+            )
+            if pending_retry is not None:
+                return QueueWakeResult(reason="next_attempt_pending")
             return QueueWakeResult(reason="no_queued_input")
 
         source_session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -185,6 +239,9 @@ async def wake_session_input_queue(
             session_id,
             delivery_request_id=drain_request_id,
             require_no_active_attempt=True,
+            create_attempt=True,
+            lease_owner=drain_request_id,
+            lease_expires_at=now + timedelta(seconds=TRANSPORT_LEASE_SECS),
         )
         if claimed is None:
             await session_lock_manager.release(lock_scope, drain_request_id)
@@ -214,10 +271,14 @@ async def _dispatch_claimed_input(
 ) -> QueueWakeResult:
     from zerg.services.session_chat_impl import _dispatch_managed_local_text
 
+    attempt = get_delivery_attempt(db, getattr(claimed, "last_attempt_id", None))
+    attempt_id = int(attempt.id) if attempt is not None else None
     recorded_owner = getattr(claimed, "owner_id", None)
     owner_id = int(recorded_owner) if recorded_owner else _resolve_session_owner_id(db)
 
     try:
+        if attempt_id is not None:
+            mark_delivery_attempt_submitted(db, attempt_id, submitted_at=datetime.now(timezone.utc))
         dispatch_response = await _dispatch_managed_local_text(
             source_session=source_session,
             owner_id=owner_id,
@@ -228,6 +289,8 @@ async def _dispatch_claimed_input(
             session_input_id=int(claimed.id),
         )
     except Exception as exc:
+        if attempt_id is not None:
+            mark_delivery_attempt_failed(db, attempt_id, error_code="dispatch_exception", error=str(exc))
         mark_failed(db, int(claimed.id), error=str(exc)[:200])
         await session_lock_manager.release(lock_scope, drain_request_id)
         logger.exception("Queue dispatch failed for SessionInput %s", claimed.id)
@@ -245,7 +308,27 @@ async def _dispatch_claimed_input(
         except Exception:
             pass
         if _is_transient_managed_control_unavailable(response_error_code, response_error_message):
-            requeue_delivering(db, int(claimed.id), error=response_error_message)
+            attempt_count = int(getattr(claimed, "attempt_count", 0) or 0)
+            if attempt_count >= MAX_DELIVERY_ATTEMPTS:
+                if attempt_id is not None:
+                    mark_delivery_attempt_failed(
+                        db,
+                        attempt_id,
+                        error_code=response_error_code,
+                        error=response_error_message,
+                    )
+                mark_failed(db, int(claimed.id), error=response_error_message)
+                return QueueWakeResult(input_id=int(claimed.id), reason="max_attempts_failed")
+            backoff = RETRY_BACKOFF_SECS[min(max(attempt_count, 1) - 1, len(RETRY_BACKOFF_SECS) - 1)]
+            next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=backoff)
+            if attempt_id is not None:
+                mark_delivery_attempt_released(
+                    db,
+                    attempt_id,
+                    error_code=response_error_code,
+                    error=response_error_message,
+                )
+            requeue_delivering(db, int(claimed.id), error=response_error_message, next_attempt_at=next_attempt_at)
             logger.info(
                 "Queue dispatch deferred for SessionInput %s on session %s: %s",
                 claimed.id,
@@ -253,6 +336,13 @@ async def _dispatch_claimed_input(
                 response_error_message,
             )
             return QueueWakeResult(input_id=int(claimed.id), reason="transient_dispatch_failure")
+        if attempt_id is not None:
+            mark_delivery_attempt_failed(
+                db,
+                attempt_id,
+                error_code=response_error_code,
+                error=response_error_message,
+            )
         mark_failed(
             db,
             int(claimed.id),
@@ -265,6 +355,14 @@ async def _dispatch_claimed_input(
         )
         return QueueWakeResult(input_id=int(claimed.id), reason="dispatch_failed")
 
+    if attempt_id is not None:
+        now = datetime.now(timezone.utc)
+        mark_delivery_attempt_accepted(
+            db,
+            attempt_id,
+            accepted_at=now,
+            lease_expires_at=now + timedelta(seconds=TURN_LEASE_SECS),
+        )
     mark_delivered(db, int(claimed.id))
     return QueueWakeResult(dispatched=True, input_id=int(claimed.id), reason="dispatched")
 

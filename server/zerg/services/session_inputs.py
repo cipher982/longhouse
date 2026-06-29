@@ -14,9 +14,11 @@ import logging
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import Iterable
 from typing import Literal
 from uuid import UUID
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import SessionInput
@@ -43,6 +45,14 @@ INPUT_STATUS_FAILED: InputStatus = "failed"
 
 VALID_INTENTS: frozenset[InputIntent] = frozenset({INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER})
 ACTIVE_DELIVERY_ATTEMPT_STATUSES = frozenset({"acquired", "submitted", "accepted"})
+
+ATTEMPT_STATUS_ACQUIRED = "acquired"
+ATTEMPT_STATUS_SUBMITTED = "submitted"
+ATTEMPT_STATUS_ACCEPTED = "accepted"
+ATTEMPT_STATUS_COMPLETED = "completed"
+ATTEMPT_STATUS_RELEASED = "released"
+ATTEMPT_STATUS_FAILED = "failed"
+ATTEMPT_STATUS_EXPIRED = "expired"
 
 # Startup reconciliation: any `delivering` row older than this at boot is
 # considered wedged (the process died mid-dispatch) and rewound to queued.
@@ -171,6 +181,9 @@ def claim_next_queued(
     *,
     delivery_request_id: str,
     require_no_active_attempt: bool = False,
+    create_attempt: bool = False,
+    lease_owner: str | None = None,
+    lease_expires_at: datetime | None = None,
 ) -> SessionInput | None:
     """Atomically move the oldest queued input to delivering.
 
@@ -181,6 +194,7 @@ def claim_next_queued(
         .filter(
             SessionInput.session_id == session_id,
             SessionInput.status == INPUT_STATUS_QUEUED,
+            or_(SessionInput.next_attempt_at.is_(None), SessionInput.next_attempt_at <= datetime.now(timezone.utc)),
         )
         .order_by(SessionInput.created_at.asc(), SessionInput.id.asc())
         .first()
@@ -189,9 +203,11 @@ def claim_next_queued(
         return None
 
     now = datetime.now(timezone.utc)
+    attempt_number = int(getattr(candidate, "attempt_count", 0) or 0) + 1
     claim_query = db.query(SessionInput).filter(
         SessionInput.id == candidate.id,
         SessionInput.status == INPUT_STATUS_QUEUED,
+        or_(SessionInput.next_attempt_at.is_(None), SessionInput.next_attempt_at <= now),
     )
     if require_no_active_attempt:
         active_attempt_exists = (
@@ -205,19 +221,220 @@ def claim_next_queued(
         )
         claim_query = claim_query.filter(~active_attempt_exists)
 
-    claimed = claim_query.update(
+    updates = {
+        "status": INPUT_STATUS_DELIVERING,
+        "delivery_request_id": delivery_request_id,
+        "next_attempt_at": None,
+        "updated_at": now,
+    }
+    if create_attempt:
+        updates["attempt_count"] = attempt_number
+
+    try:
+        claimed = claim_query.update(
+            updates,
+            synchronize_session=False,
+        )
+        if claimed == 1 and create_attempt:
+            attempt = SessionInputDeliveryAttempt(
+                session_input_id=int(candidate.id),
+                session_id=session_id,
+                thread_id=getattr(candidate, "thread_id", None),
+                owner_id=getattr(candidate, "owner_id", None),
+                request_id=delivery_request_id,
+                attempt_number=attempt_number,
+                status=ATTEMPT_STATUS_ACQUIRED,
+                lease_owner=lease_owner or delivery_request_id,
+                lease_expires_at=lease_expires_at or (now + timedelta(seconds=60)),
+            )
+            db.add(attempt)
+            db.flush()
+            db.query(SessionInput).filter(SessionInput.id == candidate.id).update(
+                {
+                    "last_attempt_id": int(attempt.id),
+                    "updated_at": now,
+                },
+                synchronize_session=False,
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    if claimed != 1:
+        return None
+    db.expire_all()
+    return get_session_input(db, int(candidate.id))
+
+
+def get_delivery_attempt(db: Session, attempt_id: int | None) -> SessionInputDeliveryAttempt | None:
+    if attempt_id is None:
+        return None
+    return db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.id == int(attempt_id)).first()
+
+
+def mark_delivery_attempt_submitted(db: Session, attempt_id: int, *, submitted_at: datetime | None = None) -> None:
+    now = submitted_at or datetime.now(timezone.utc)
+    db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.id == attempt_id).update(
         {
-            "status": INPUT_STATUS_DELIVERING,
-            "delivery_request_id": delivery_request_id,
+            "status": ATTEMPT_STATUS_SUBMITTED,
+            "submitted_at": now,
             "updated_at": now,
         },
         synchronize_session=False,
     )
     db.commit()
-    if claimed != 1:
-        return None
-    db.refresh(candidate)
-    return candidate
+
+
+def mark_delivery_attempt_accepted(
+    db: Session,
+    attempt_id: int,
+    *,
+    accepted_at: datetime | None = None,
+    lease_expires_at: datetime | None = None,
+) -> None:
+    now = accepted_at or datetime.now(timezone.utc)
+    updates = {
+        "status": ATTEMPT_STATUS_ACCEPTED,
+        "accepted_at": now,
+        "updated_at": now,
+    }
+    if lease_expires_at is not None:
+        updates["lease_expires_at"] = lease_expires_at
+    db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.id == attempt_id).update(
+        updates,
+        synchronize_session=False,
+    )
+    db.commit()
+
+
+def mark_delivery_attempt_released(
+    db: Session,
+    attempt_id: int,
+    *,
+    released_at: datetime | None = None,
+    error_code: str | None = None,
+    error: str | None = None,
+) -> None:
+    now = released_at or datetime.now(timezone.utc)
+    db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.id == attempt_id).update(
+        {
+            "status": ATTEMPT_STATUS_RELEASED,
+            "released_at": now,
+            "error_code": error_code,
+            "error": str(error)[:500] if error else None,
+            "updated_at": now,
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+
+
+def mark_delivery_attempt_failed(
+    db: Session,
+    attempt_id: int,
+    *,
+    failed_at: datetime | None = None,
+    error_code: str | None = None,
+    error: str | None = None,
+) -> None:
+    now = failed_at or datetime.now(timezone.utc)
+    db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.id == attempt_id).update(
+        {
+            "status": ATTEMPT_STATUS_FAILED,
+            "failed_at": now,
+            "error_code": error_code,
+            "error": str(error)[:500] if error else None,
+            "updated_at": now,
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+
+
+def mark_delivery_attempt_completed(
+    db: Session,
+    *,
+    session_id: UUID,
+    request_id: str,
+    completed_at: datetime | None = None,
+) -> bool:
+    now = completed_at or datetime.now(timezone.utc)
+    updated = (
+        db.query(SessionInputDeliveryAttempt)
+        .filter(
+            SessionInputDeliveryAttempt.session_id == session_id,
+            SessionInputDeliveryAttempt.request_id == request_id,
+            SessionInputDeliveryAttempt.status.in_(ACTIVE_DELIVERY_ATTEMPT_STATUSES),
+        )
+        .update(
+            {
+                "status": ATTEMPT_STATUS_COMPLETED,
+                "completed_at": now,
+                "updated_at": now,
+            },
+            synchronize_session=False,
+        )
+    )
+    return bool(updated)
+
+
+def expire_delivery_attempts(
+    db: Session,
+    *,
+    session_id: UUID,
+    now: datetime | None = None,
+    statuses: Iterable[str] = ACTIVE_DELIVERY_ATTEMPT_STATUSES,
+) -> int:
+    effective_now = now or datetime.now(timezone.utc)
+    expired = (
+        db.query(SessionInputDeliveryAttempt)
+        .filter(
+            SessionInputDeliveryAttempt.session_id == session_id,
+            SessionInputDeliveryAttempt.status.in_(tuple(statuses)),
+            SessionInputDeliveryAttempt.lease_expires_at <= effective_now,
+        )
+        .update(
+            {
+                "status": ATTEMPT_STATUS_EXPIRED,
+                "updated_at": effective_now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    return int(expired)
+
+
+def requeue_delivering_without_active_attempt(db: Session, *, session_id: UUID, now: datetime | None = None) -> int:
+    effective_now = now or datetime.now(timezone.utc)
+    active_attempt_input_ids = (
+        db.query(SessionInputDeliveryAttempt.session_input_id)
+        .filter(
+            SessionInputDeliveryAttempt.session_id == session_id,
+            SessionInputDeliveryAttempt.status.in_(ACTIVE_DELIVERY_ATTEMPT_STATUSES),
+            SessionInputDeliveryAttempt.lease_expires_at > effective_now,
+        )
+        .subquery()
+    )
+    requeued = (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.session_id == session_id,
+            SessionInput.status == INPUT_STATUS_DELIVERING,
+            ~SessionInput.id.in_(active_attempt_input_ids),
+            SessionInput.intent != INPUT_INTENT_STEER,
+        )
+        .update(
+            {
+                "status": INPUT_STATUS_QUEUED,
+                "delivery_request_id": None,
+                "updated_at": effective_now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    return int(requeued)
 
 
 def retry_failed_input(
@@ -281,7 +498,13 @@ def mark_failed(db: Session, input_id: int, *, error: str) -> None:
     db.commit()
 
 
-def requeue_delivering(db: Session, input_id: int, *, error: str | None = None) -> None:
+def requeue_delivering(
+    db: Session,
+    input_id: int,
+    *,
+    error: str | None = None,
+    next_attempt_at: datetime | None = None,
+) -> None:
     """Move a claimed input back to queued after a transient dispatch miss."""
     db.query(SessionInput).filter(
         SessionInput.id == input_id,
@@ -290,6 +513,7 @@ def requeue_delivering(db: Session, input_id: int, *, error: str | None = None) 
         {
             "status": INPUT_STATUS_QUEUED,
             "delivery_request_id": None,
+            "next_attempt_at": next_attempt_at,
             "last_error": str(error)[:500] if error else None,
             "updated_at": datetime.now(timezone.utc),
         },

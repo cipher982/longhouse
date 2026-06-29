@@ -640,6 +640,27 @@ async def _release_managed_local_lock_after_terminal(
                 exc_info=True,
             )
 
+        try:
+            from zerg.services.session_inputs import mark_delivery_attempt_completed
+
+            await execute_session_turn_write(
+                db_bind=db_bind,
+                label="session-input-attempt-completed",
+                fn=lambda attempt_db: mark_delivery_attempt_completed(
+                    attempt_db,
+                    session_id=session_id,
+                    request_id=request_id,
+                    completed_at=terminal_result.occurred_at,
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "[%s] Managed-local terminal watcher failed to mark delivery attempt completed for %s",
+                request_id,
+                session_id,
+                exc_info=True,
+            )
+
         with tracer.start_as_current_span("longhouse.turn.lock_release") as release_span:
             released = await session_lock_manager.release(lock_scope_id, request_id)
             set_span_attributes(
