@@ -1,5 +1,11 @@
 # Managed Input Lifecycle UX
 
+Backend note: this UX spec predates the managed input queue-kernel refactor.
+For the planned durable-attempt/lease design, see
+`docs/specs/managed-session-input-queue-kernel.md`. The UX contract here still
+applies; the older "do not add a new lifecycle table" backend decision is
+superseded by the queue-kernel spec.
+
 ## Problem
 
 Managed session input currently conflates three separate facts:
