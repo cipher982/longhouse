@@ -52,8 +52,45 @@ pub struct ConnectConfig {
     pub algo: CompressionAlgo,
     pub fallback_scan_secs: u64,
     pub spool_replay_secs: u64,
+    pub archive_repair_mode: ArchiveRepairMode,
     pub flight_recorder_dir: Option<PathBuf>,
     pub prevent_sleep: bool,
+}
+
+/// Default archive/backlog repair posture for the daemon.
+///
+/// The operator control file may move a running daemon between these same
+/// values. Keep this vocabulary aligned with server archive-backlog control.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArchiveRepairMode {
+    Paused,
+    Trickle,
+    Drain,
+}
+
+impl ArchiveRepairMode {
+    pub fn parse(value: &str) -> Result<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "paused" | "pause" => Ok(Self::Paused),
+            "trickle" | "resume" => Ok(Self::Trickle),
+            "drain" | "drain-now" => Ok(Self::Drain),
+            other => anyhow::bail!(
+                "unsupported archive repair mode {other}; expected paused, trickle, or drain"
+            ),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Paused => "paused",
+            Self::Trickle => "trickle",
+            Self::Drain => "drain",
+        }
+    }
+
+    fn is_paused(self) -> bool {
+        matches!(self, Self::Paused)
+    }
 }
 
 /// How long to coalesce a burst of filesystem events before scheduling work.
@@ -286,29 +323,32 @@ struct ArchiveRepairControl {
 }
 
 impl ArchiveRepairControl {
-    fn normalized_mode(&self) -> &'static str {
+    fn normalized_mode(&self, default_mode: ArchiveRepairMode) -> ArchiveRepairMode {
         match self
             .mode
             .as_deref()
-            .unwrap_or("drain")
+            .unwrap_or(default_mode.as_str())
             .trim()
             .to_ascii_lowercase()
             .as_str()
         {
-            "paused" | "pause" => "paused",
-            "drain" | "drain-now" => "drain",
-            _ => "trickle",
+            "paused" | "pause" => ArchiveRepairMode::Paused,
+            "trickle" | "resume" => ArchiveRepairMode::Trickle,
+            "drain" | "drain-now" => ArchiveRepairMode::Drain,
+            _ => default_mode,
         }
     }
 
-    fn is_paused(&self) -> bool {
-        self.normalized_mode() == "paused"
+    fn is_paused(&self, default_mode: ArchiveRepairMode) -> bool {
+        self.normalized_mode(default_mode).is_paused()
     }
 
-    fn tick_bytes(&self) -> u64 {
-        match self.normalized_mode() {
-            "drain" => self.max_tick_bytes.unwrap_or(ARCHIVE_DRAIN_TICK_BYTES),
-            _ => self.max_tick_bytes.unwrap_or(ARCHIVE_TRICKLE_TICK_BYTES),
+    fn tick_bytes(&self, default_mode: ArchiveRepairMode) -> u64 {
+        match self.normalized_mode(default_mode) {
+            ArchiveRepairMode::Drain => self.max_tick_bytes.unwrap_or(ARCHIVE_DRAIN_TICK_BYTES),
+            ArchiveRepairMode::Paused | ArchiveRepairMode::Trickle => {
+                self.max_tick_bytes.unwrap_or(ARCHIVE_TRICKLE_TICK_BYTES)
+            }
         }
     }
 
@@ -340,14 +380,19 @@ fn read_archive_repair_control() -> ArchiveRepairControl {
 fn apply_archive_repair_control(
     payload: &mut heartbeat::HeartbeatPayload,
     control: &ArchiveRepairControl,
+    default_mode: ArchiveRepairMode,
 ) {
-    let mode = control.normalized_mode().to_string();
-    payload.archive_backlog.mode = mode.clone();
-    if control.is_paused() && payload.archive_backlog.pending_ranges > 0 {
+    let mode = control.normalized_mode(default_mode);
+    payload.archive_backlog.mode = mode.as_str().to_string();
+    if mode.is_paused() && payload.archive_backlog.pending_ranges > 0 {
         payload.archive_backlog.state = "paused".to_string();
-    } else if mode == "drain" && payload.archive_backlog.pending_ranges > 0 {
+    } else if mode == ArchiveRepairMode::Drain && payload.archive_backlog.pending_ranges > 0 {
         payload.archive_backlog.state = "draining".to_string();
     }
+}
+
+fn archive_repair_is_paused(default_mode: ArchiveRepairMode) -> bool {
+    read_archive_repair_control().is_paused(default_mode)
 }
 
 /// Run the connect daemon. This function blocks until shutdown signal.
@@ -470,6 +515,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         &conn,
         INITIAL_SPOOL_PATH_LIMIT,
         Some(adaptive_limiter.as_ref()),
+        config.archive_repair_mode,
     )?;
     maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "startup");
     tracing::info!(
@@ -518,7 +564,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     local_retry_timer.tick().await; // consume first immediate tick
     let startup_reconciliation_timer = tokio::time::sleep(STARTUP_RECONCILIATION_SCAN_DELAY);
     tokio::pin!(startup_reconciliation_timer);
-    let mut startup_reconciliation_pending = true;
+    let mut startup_reconciliation_pending = !archive_repair_is_paused(config.archive_repair_mode);
 
     let mut offline = OfflineState::new();
     let mut last_ship_at: Option<String> = None;
@@ -571,6 +617,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             offline.is_offline,
             PERIODIC_SPOOL_PATH_LIMIT,
             Some(adaptive_limiter.as_ref()),
+            config.archive_repair_mode,
         ) {
             Ok(queued) if queued > 0 => {
                 tracing::info!(
@@ -1090,6 +1137,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             Some(unmanaged_binding_override),
                             Some(adaptive_limiter.as_ref()),
                             Some(&scheduler),
+                            config.archive_repair_mode,
                             &mut session_snapshot_state,
                         );
                         bridge_reaper.tick(&result.codex_observations);
@@ -1131,6 +1179,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &providers,
                     &scheduler,
                     &deferred_retries,
+                    config.archive_repair_mode,
                     "startup reconciliation",
                 );
             }
@@ -1180,6 +1229,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &providers,
                     &scheduler,
                     &deferred_retries,
+                    config.archive_repair_mode,
                     "reconciliation scan",
                 );
             }
@@ -1192,6 +1242,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &conn,
                     PERIODIC_SPOOL_PATH_LIMIT,
                     Some(adaptive_limiter.as_ref()),
+                    config.archive_repair_mode,
                 ) {
                     Ok(queued) => {
                         if queued > 0 {
@@ -1337,6 +1388,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Some(unmanaged_binding_override),
                     Some(adaptive_limiter.as_ref()),
                     Some(&scheduler),
+                    config.archive_repair_mode,
                     &mut session_snapshot_state,
                 );
                 if !offline.is_offline {
@@ -1386,6 +1438,7 @@ fn write_local_status_snapshot(
     unmanaged_session_binding_override: Option<&[heartbeat::UnmanagedSessionBinding]>,
     limiter: Option<&crate::scheduler::AdaptiveLimiter>,
     scheduler: Option<&PathScheduler>,
+    archive_repair_mode: ArchiveRepairMode,
     session_snapshot_state: &mut SessionSnapshotState,
 ) -> heartbeat::HeartbeatPayload {
     let spool = Spool::new(conn);
@@ -1399,7 +1452,7 @@ fn write_local_status_snapshot(
     };
     let mut payload = heartbeat::HeartbeatPayload::build(&stats);
     let archive_control = read_archive_repair_control();
-    apply_archive_repair_control(&mut payload, &archive_control);
+    apply_archive_repair_control(&mut payload, &archive_control, archive_repair_mode);
     payload.adaptive_backlog_limiter = limiter.map(|l| l.snapshot());
     payload.ship_scheduler = scheduler.map(PathScheduler::snapshot);
     let now = chrono::Utc::now();
@@ -1604,8 +1657,17 @@ fn maybe_start_reconciliation_scan(
     providers: &[ProviderConfig],
     scheduler: &PathScheduler,
     deferred_retries: &HashMap<PathBuf, DeferredRetry>,
+    archive_repair_mode: ArchiveRepairMode,
     reason: &'static str,
 ) {
+    if archive_repair_is_paused(archive_repair_mode) {
+        tracing::debug!(
+            reason,
+            "Skipping reconciliation scan because archive repair is paused"
+        );
+        return;
+    }
+
     if !discovery_tasks.is_empty() {
         tracing::debug!(
             reason,
@@ -2128,6 +2190,7 @@ fn queue_failed_shipment_retry_paths(
     conn: &rusqlite::Connection,
     limit: usize,
     limiter: Option<&AdaptiveLimiter>,
+    archive_repair_mode: ArchiveRepairMode,
 ) -> Result<usize> {
     let spool = Spool::new(conn);
     let cleaned = spool.cleanup()?;
@@ -2136,7 +2199,7 @@ fn queue_failed_shipment_retry_paths(
     }
 
     let control = read_archive_repair_control();
-    if control.is_paused() {
+    if control.is_paused(archive_repair_mode) {
         tracing::debug!("Archive replay paused by local control file");
         return Ok(0);
     }
@@ -2156,7 +2219,11 @@ fn queue_failed_shipment_retry_paths(
     }
 
     let mut queued = 0usize;
-    for pending in spool.pending_paths_budgeted(limit, control.tick_bytes(), include_huge)? {
+    for pending in spool.pending_paths_budgeted(
+        limit,
+        control.tick_bytes(archive_repair_mode),
+        include_huge,
+    )? {
         let Some(provider) = provider_name_to_static(&pending.provider) else {
             tracing::warn!(
                 "Skipping pending spool path with unknown provider {}: {}",
@@ -2184,11 +2251,12 @@ fn queue_failed_shipment_retries_if_idle(
     offline: bool,
     limit: usize,
     limiter: Option<&AdaptiveLimiter>,
+    archive_repair_mode: ArchiveRepairMode,
 ) -> Result<usize> {
     if offline || scheduler.has_pending_work() {
         return Ok(0);
     }
-    queue_failed_shipment_retry_paths(scheduler, conn, limit, limiter)
+    queue_failed_shipment_retry_paths(scheduler, conn, limit, limiter, archive_repair_mode)
 }
 
 fn provider_name_to_static(provider: &str) -> Option<&'static str> {
@@ -3163,6 +3231,7 @@ mod tests {
             Some(&cached),
             None,
             None,
+            ArchiveRepairMode::Drain,
             &mut session_snapshot_state,
         );
 
@@ -3196,6 +3265,7 @@ mod tests {
             Some(&cached),
             None,
             None,
+            ArchiveRepairMode::Drain,
             &mut session_snapshot_state,
         );
         let second = write_local_status_snapshot(
@@ -3214,6 +3284,7 @@ mod tests {
             Some(&cached),
             None,
             None,
+            ArchiveRepairMode::Drain,
             &mut session_snapshot_state,
         );
         let changed = vec![unmanaged_binding("sess-cached", 43)];
@@ -3233,6 +3304,7 @@ mod tests {
             Some(&changed),
             None,
             None,
+            ArchiveRepairMode::Drain,
             &mut session_snapshot_state,
         );
 
@@ -4098,8 +4170,15 @@ mod tests {
             .unwrap();
 
         let mut scheduler = PathScheduler::new(4);
-        let queued =
-            queue_failed_shipment_retries_if_idle(&mut scheduler, &conn, false, 10, None).unwrap();
+        let queued = queue_failed_shipment_retries_if_idle(
+            &mut scheduler,
+            &conn,
+            false,
+            10,
+            None,
+            ArchiveRepairMode::Drain,
+        )
+        .unwrap();
 
         assert_eq!(queued, 1);
         let job = scheduler
@@ -4110,6 +4189,42 @@ mod tests {
         assert_eq!(
             job.observation.source,
             FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE
+        );
+    }
+
+    #[test]
+    fn test_paused_mode_does_not_queue_failed_shipment_retry_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_vars(
+            [
+                (
+                    "LONGHOUSE_HOME",
+                    Some(temp.path().join("lh").display().to_string()),
+                ),
+                ("HOME", Some(temp.path().join("home").display().to_string())),
+            ],
+            || {
+                let db = tempfile::NamedTempFile::new().unwrap();
+                let transcript = tempfile::NamedTempFile::new().unwrap();
+                let conn = open_db(Some(db.path())).unwrap();
+                let path = transcript.path().to_string_lossy().to_string();
+                Spool::new(&conn)
+                    .enqueue("codex", &path, 0, 100, Some("session-id"))
+                    .unwrap();
+
+                let mut scheduler = PathScheduler::new(4);
+                let queued = queue_failed_shipment_retry_paths(
+                    &mut scheduler,
+                    &conn,
+                    10,
+                    None,
+                    ArchiveRepairMode::Paused,
+                )
+                .unwrap();
+
+                assert_eq!(queued, 0);
+                assert!(scheduler.pop_launchable().is_none());
+            },
         );
     }
 
@@ -4149,6 +4264,7 @@ mod tests {
             false,
             10,
             Some(limiter.as_ref()),
+            ArchiveRepairMode::Drain,
         )
         .unwrap();
 
@@ -4212,6 +4328,102 @@ mod tests {
         assert_eq!(
             batch_band_for_priority(WorkPriority::Scan),
             shipper::BatchBand::BackgroundRepair
+        );
+    }
+
+    #[test]
+    fn test_archive_repair_mode_parse_and_control_precedence() {
+        assert_eq!(
+            ArchiveRepairMode::parse("paused").unwrap(),
+            ArchiveRepairMode::Paused
+        );
+        assert_eq!(
+            ArchiveRepairMode::parse("resume").unwrap(),
+            ArchiveRepairMode::Trickle
+        );
+        assert_eq!(
+            ArchiveRepairMode::parse("drain-now").unwrap(),
+            ArchiveRepairMode::Drain
+        );
+        assert!(ArchiveRepairMode::parse("enabled").is_err());
+
+        let unset = ArchiveRepairControl::default();
+        assert_eq!(
+            unset.normalized_mode(ArchiveRepairMode::Paused),
+            ArchiveRepairMode::Paused
+        );
+        assert_eq!(
+            unset.normalized_mode(ArchiveRepairMode::Drain),
+            ArchiveRepairMode::Drain
+        );
+
+        let operator_control = ArchiveRepairControl {
+            mode: Some("trickle".to_string()),
+            max_tick_bytes: None,
+            include_huge: None,
+        };
+        assert_eq!(
+            operator_control.normalized_mode(ArchiveRepairMode::Paused),
+            ArchiveRepairMode::Trickle
+        );
+
+        let invalid_control = ArchiveRepairControl {
+            mode: Some("enabled".to_string()),
+            max_tick_bytes: None,
+            include_huge: None,
+        };
+        assert_eq!(
+            invalid_control.normalized_mode(ArchiveRepairMode::Paused),
+            ArchiveRepairMode::Paused
+        );
+    }
+
+    #[test]
+    fn test_archive_paused_status_is_distinct_from_offline() {
+        let mut payload = empty_heartbeat_payload();
+        payload.archive_backlog.pending_ranges = 2;
+        payload.archive_backlog.state = "ready".to_string();
+        let control = ArchiveRepairControl::default();
+
+        apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
+
+        assert_eq!(payload.archive_backlog.mode, "paused");
+        assert_eq!(payload.archive_backlog.state, "paused");
+        assert!(!payload.is_offline);
+    }
+
+    #[tokio::test]
+    async fn test_paused_mode_skips_reconciliation_scan_task() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_vars(
+            [
+                (
+                    "LONGHOUSE_HOME",
+                    Some(temp.path().join("lh").display().to_string()),
+                ),
+                ("HOME", Some(temp.path().join("home").display().to_string())),
+            ],
+            || {
+                let mut discovery_tasks = JoinSet::new();
+                let providers = vec![ProviderConfig {
+                    name: "codex",
+                    root: PathBuf::from("/tmp/no-scan-when-paused"),
+                    extension: "jsonl",
+                }];
+                let scheduler = PathScheduler::new(4);
+                let deferred_retries = HashMap::new();
+
+                maybe_start_reconciliation_scan(
+                    &mut discovery_tasks,
+                    &providers,
+                    &scheduler,
+                    &deferred_retries,
+                    ArchiveRepairMode::Paused,
+                    "test paused scan",
+                );
+
+                assert!(discovery_tasks.is_empty());
+            },
         );
     }
 

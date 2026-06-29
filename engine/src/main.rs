@@ -266,6 +266,10 @@ enum Commands {
         #[arg(long, default_value = "30")]
         spool_replay_secs: u64,
 
+        /// Archive repair mode: paused, trickle, or drain
+        #[arg(long, default_value = "drain")]
+        archive_repair_mode: String,
+
         /// Maximum compressed batch size in bytes before splitting/dead-lettering
         #[arg(long)]
         max_batch_bytes: Option<u64>,
@@ -905,12 +909,14 @@ fn main() -> anyhow::Result<()> {
             compression,
             fallback_scan_secs,
             spool_replay_secs,
+            archive_repair_mode,
             max_batch_bytes,
             log_dir: _,
             machine_name,
             prevent_sleep,
         } => {
             let algo = parse_compression_algo(&compression)?;
+            let archive_repair_mode = daemon::ArchiveRepairMode::parse(&archive_repair_mode)?;
             let shipper_config = ShipperConfig::from_env()?.with_overrides(
                 url.as_deref(),
                 token.as_deref(),
@@ -926,6 +932,7 @@ fn main() -> anyhow::Result<()> {
                 algo,
                 fallback_scan_secs,
                 spool_replay_secs,
+                archive_repair_mode,
                 flight_recorder_dir: if flight::flight_recorder_enabled() {
                     Some(config::get_agent_flight_dir()?)
                 } else {

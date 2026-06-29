@@ -61,6 +61,13 @@ def test_plist_no_machine_name_arg_when_none():
     assert "--machine-name" not in plist
 
 
+def test_plist_includes_archive_repair_mode():
+    config = _make_config(archive_repair_mode="paused")
+    plist = _generate_launchd_plist(config)
+    assert "--archive-repair-mode" in plist
+    assert "paused" in plist
+
+
 def test_plist_xml_escapes_ampersand():
     """& in a machine name must become &amp; in plist XML."""
     config = _make_config(machine_name="work&laptop")
@@ -143,6 +150,12 @@ def test_systemd_contains_machine_name():
     assert "--machine-name" in unit
     assert "home-server" in unit
     assert "--log-dir" not in unit
+
+
+def test_systemd_includes_archive_repair_mode():
+    config = _make_config(archive_repair_mode="trickle")
+    unit = _generate_systemd_unit(config)
+    assert "--archive-repair-mode trickle" in unit
 
 
 def test_systemd_persists_longhouse_home():

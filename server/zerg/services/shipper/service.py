@@ -36,6 +36,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
@@ -95,6 +96,25 @@ def _common_service_path() -> str:
     return ":".join(parts)
 
 
+def _default_archive_repair_mode_for_url(url: str) -> str:
+    """Hosted Runtime Hosts keep archive repair operator-controlled by default."""
+    try:
+        hostname = urlparse(url).hostname or ""
+    except Exception:
+        hostname = ""
+    hostname = hostname.lower().rstrip(".")
+    if hostname == "longhouse.ai" or hostname.endswith(".longhouse.ai"):
+        return "paused"
+    return "drain"
+
+
+def _validate_archive_repair_mode(mode: str) -> str:
+    normalized = mode.strip().lower()
+    if normalized in {"paused", "trickle", "drain"}:
+        return normalized
+    raise ValueError("archive_repair_mode must be one of: paused, trickle, drain")
+
+
 @dataclass
 class ServiceConfig:
     """Configuration for the installed engine service."""
@@ -104,6 +124,7 @@ class ServiceConfig:
     claude_dir: str | None = None
     fallback_scan_secs: int = 300
     spool_replay_secs: int = 30
+    archive_repair_mode: str = "drain"
     log_dir: str | None = None
     compression: str = "zstd"
     machine_name: str | None = None
@@ -312,6 +333,8 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
         str(config.fallback_scan_secs),
         "--spool-replay-secs",
         str(config.spool_replay_secs),
+        "--archive-repair-mode",
+        _validate_archive_repair_mode(config.archive_repair_mode),
         "--compression",
         config.compression,
     ]
@@ -383,6 +406,7 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
         f"{engine} connect"
         f" --fallback-scan-secs {config.fallback_scan_secs}"
         f" --spool-replay-secs {config.spool_replay_secs}"
+        f" --archive-repair-mode {_validate_archive_repair_mode(config.archive_repair_mode)}"
         f" --compression {config.compression}"
         f"{machine_name_arg}"
     )
@@ -421,6 +445,7 @@ def install_service(
     claude_dir: str | None = None,
     fallback_scan_secs: int = 300,
     spool_replay_secs: int = 30,
+    archive_repair_mode: str | None = None,
     log_dir: str | None = None,
     compression: str = "zstd",
     machine_name: str | None = None,
@@ -439,6 +464,8 @@ def install_service(
         claude_dir: Claude config directory override
         fallback_scan_secs: Seconds between reconciliation directory scans
         spool_replay_secs: Seconds between spool replay attempts
+        archive_repair_mode: Archive repair posture. Defaults to paused for
+            hosted longhouse.ai Runtime Hosts and drain for custom/self-host URLs.
         log_dir: Override for engine log directory
 
     Returns:
@@ -451,6 +478,7 @@ def install_service(
         claude_dir=claude_dir,
         fallback_scan_secs=fallback_scan_secs,
         spool_replay_secs=spool_replay_secs,
+        archive_repair_mode=_validate_archive_repair_mode(archive_repair_mode or _default_archive_repair_mode_for_url(url)),
         log_dir=log_dir,
         compression=compression,
         machine_name=machine_name,

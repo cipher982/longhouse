@@ -46,6 +46,66 @@ def test_install_service_allows_first_install_without_existing_shipper_db(tmp_pa
     assert log_dir.exists()
 
 
+def test_install_service_defaults_hosted_runtime_to_paused_archive_repair(tmp_path, monkeypatch):
+    claude_dir = tmp_path / ".claude"
+    log_dir = tmp_path / ".longhouse" / "agent" / "logs"
+    launchd_path = tmp_path / "LaunchAgents" / "com.longhouse.shipper.plist"
+    modes: list[str] = []
+
+    monkeypatch.setattr(shipper_service, "detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr(shipper_service, "_get_launchd_plist_path", lambda: launchd_path)
+    monkeypatch.setattr(
+        shipper_service,
+        "_get_legacy_engine_plist_path",
+        lambda: tmp_path / "LaunchAgents" / "com.longhouse.engine.plist",
+    )
+    monkeypatch.setattr(shipper_service, "_resolve_log_dir", lambda config: log_dir)
+    monkeypatch.setattr(
+        shipper_service,
+        "_install_launchd",
+        lambda config: modes.append(config.archive_repair_mode)
+        or {"success": True, "platform": "macos", "service": "com.longhouse.shipper", "message": "ok"},
+    )
+
+    shipper_service.install_service(
+        url="https://david010.longhouse.ai",
+        token=None,
+        claude_dir=str(claude_dir),
+    )
+
+    assert modes == ["paused"]
+
+
+def test_install_service_defaults_custom_runtime_to_drain_archive_repair(tmp_path, monkeypatch):
+    claude_dir = tmp_path / ".claude"
+    log_dir = tmp_path / ".longhouse" / "agent" / "logs"
+    launchd_path = tmp_path / "LaunchAgents" / "com.longhouse.shipper.plist"
+    modes: list[str] = []
+
+    monkeypatch.setattr(shipper_service, "detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr(shipper_service, "_get_launchd_plist_path", lambda: launchd_path)
+    monkeypatch.setattr(
+        shipper_service,
+        "_get_legacy_engine_plist_path",
+        lambda: tmp_path / "LaunchAgents" / "com.longhouse.engine.plist",
+    )
+    monkeypatch.setattr(shipper_service, "_resolve_log_dir", lambda config: log_dir)
+    monkeypatch.setattr(
+        shipper_service,
+        "_install_launchd",
+        lambda config: modes.append(config.archive_repair_mode)
+        or {"success": True, "platform": "macos", "service": "com.longhouse.shipper", "message": "ok"},
+    )
+
+    shipper_service.install_service(
+        url="https://example.com",
+        token=None,
+        claude_dir=str(claude_dir),
+    )
+
+    assert modes == ["drain"]
+
+
 def test_install_service_refuses_reinstall_when_existing_service_lost_shipper_db(tmp_path, monkeypatch):
     claude_dir = tmp_path / ".claude"
     launchd_path = tmp_path / "LaunchAgents" / "com.longhouse.shipper.plist"
