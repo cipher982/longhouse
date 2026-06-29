@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionInputAttachment
+from zerg.models.agents import SessionInputDeliveryAttempt
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ INPUT_STATUS_CANCELLED: InputStatus = "cancelled"
 INPUT_STATUS_FAILED: InputStatus = "failed"
 
 VALID_INTENTS: frozenset[InputIntent] = frozenset({INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER})
+ACTIVE_DELIVERY_ATTEMPT_STATUSES = frozenset({"acquired", "submitted", "accepted"})
 
 # Startup reconciliation: any `delivering` row older than this at boot is
 # considered wedged (the process died mid-dispatch) and rewound to queued.
@@ -163,7 +165,13 @@ def cancel_queued_input(db: Session, input_id: int) -> SessionInput | None:
     return get_session_input(db, input_id)
 
 
-def claim_next_queued(db: Session, session_id: UUID, *, delivery_request_id: str) -> SessionInput | None:
+def claim_next_queued(
+    db: Session,
+    session_id: UUID,
+    *,
+    delivery_request_id: str,
+    require_no_active_attempt: bool = False,
+) -> SessionInput | None:
     """Atomically move the oldest queued input to delivering.
 
     Returns the claimed row or None if nothing to drain.
@@ -180,20 +188,30 @@ def claim_next_queued(db: Session, session_id: UUID, *, delivery_request_id: str
     if candidate is None:
         return None
 
-    claimed = (
-        db.query(SessionInput)
-        .filter(
-            SessionInput.id == candidate.id,
-            SessionInput.status == INPUT_STATUS_QUEUED,
+    now = datetime.now(timezone.utc)
+    claim_query = db.query(SessionInput).filter(
+        SessionInput.id == candidate.id,
+        SessionInput.status == INPUT_STATUS_QUEUED,
+    )
+    if require_no_active_attempt:
+        active_attempt_exists = (
+            db.query(SessionInputDeliveryAttempt.id)
+            .filter(
+                SessionInputDeliveryAttempt.session_id == session_id,
+                SessionInputDeliveryAttempt.status.in_(ACTIVE_DELIVERY_ATTEMPT_STATUSES),
+                SessionInputDeliveryAttempt.lease_expires_at > now,
+            )
+            .exists()
         )
-        .update(
-            {
-                "status": INPUT_STATUS_DELIVERING,
-                "delivery_request_id": delivery_request_id,
-                "updated_at": datetime.now(timezone.utc),
-            },
-            synchronize_session=False,
-        )
+        claim_query = claim_query.filter(~active_attempt_exists)
+
+    claimed = claim_query.update(
+        {
+            "status": INPUT_STATUS_DELIVERING,
+            "delivery_request_id": delivery_request_id,
+            "updated_at": now,
+        },
+        synchronize_session=False,
     )
     db.commit()
     if claimed != 1:

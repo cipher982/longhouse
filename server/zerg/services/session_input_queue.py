@@ -20,6 +20,8 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
+from zerg.models.user import User
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
@@ -28,8 +30,8 @@ from zerg.services.session_inputs import mark_delivered
 from zerg.services.session_inputs import mark_failed
 from zerg.services.session_inputs import requeue_delivering
 from zerg.services.session_kernel_projection import session_lock_scope_id
-from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
-from zerg.services.session_runtime import UNVERIFIED_TERMINAL_STATES
+from zerg.services.session_runtime import session_is_closed_for_input
+from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_SEND_ACCEPTED
 
@@ -53,20 +55,26 @@ class QueueWakeResult:
 
 
 def _session_closed_for_input(db: Session, session_id: UUID) -> bool:
-    runtime_state = (
-        db.query(SessionRuntimeState)
-        .filter(SessionRuntimeState.session_id == session_id)
-        .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
-        .first()
+    return session_is_closed_for_input(db, session_id)
+
+
+def _resolve_session_owner_id(db: Session) -> int:
+    owner = db.query(User.id).order_by(User.id.asc()).first()
+    if owner is None:
+        raise RuntimeError("No Longhouse user is configured")
+    return int(owner[0])
+
+
+def _is_transient_managed_control_unavailable(error_code: str | None, error_message: str | None) -> bool:
+    if error_code != SESSION_TURN_ERROR_SEND_FAILED:
+        return False
+    message = str(error_message or "")
+    transient_fragments = (
+        MANAGED_CONTROL_UNAVAILABLE_ERROR,
+        "Machine Agent control channel is offline",
+        "Failed to send command to Machine Agent control channel",
     )
-    terminal_state = str(getattr(runtime_state, "terminal_state", "") or "").strip()
-    if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
-        return True
-    if terminal_state == "finished":
-        return False
-    if terminal_state in UNVERIFIED_TERMINAL_STATES:
-        return False
-    return bool(terminal_state)
+    return any(fragment in message for fragment in transient_fragments)
 
 
 def _latest_runtime_phase(db: Session, session_id: UUID) -> str | None:
@@ -172,7 +180,12 @@ async def wake_session_input_queue(
             )
             return QueueWakeResult(reason="lock_active")
 
-        claimed = claim_next_queued(db, session_id, delivery_request_id=drain_request_id)
+        claimed = claim_next_queued(
+            db,
+            session_id,
+            delivery_request_id=drain_request_id,
+            require_no_active_attempt=True,
+        )
         if claimed is None:
             await session_lock_manager.release(lock_scope, drain_request_id)
             return QueueWakeResult(reason="claim_raced")
@@ -200,8 +213,6 @@ async def _dispatch_claimed_input(
     drain_request_id: str,
 ) -> QueueWakeResult:
     from zerg.services.session_chat_impl import _dispatch_managed_local_text
-    from zerg.services.session_chat_impl import _is_transient_managed_control_unavailable
-    from zerg.services.session_chat_impl import _resolve_session_owner_id
 
     recorded_owner = getattr(claimed, "owner_id", None)
     owner_id = int(recorded_owner) if recorded_owner else _resolve_session_owner_id(db)

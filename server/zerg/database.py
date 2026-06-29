@@ -1258,6 +1258,27 @@ def _migrate_agents_columns(engine: Engine) -> None:
         except Exception:
             logger.debug("failed to emit database_migrations_failed_total metric", exc_info=True)
 
+    try:
+        with engine.connect() as conn:
+            session_inputs_exists = conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_inputs'")
+            ).fetchone()
+            attempts_exists = conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_input_delivery_attempts'")
+            ).fetchone()
+            if session_inputs_exists and not attempts_exists:
+                logger.error("session_input_delivery_attempts table is missing after queue-kernel migration")
+                try:
+                    from zerg.metrics import database_migrations_failed_total
+
+                    database_migrations_failed_total.labels(
+                        migration_name="session_input_attempts_table_missing",
+                    ).inc()
+                except Exception:
+                    logger.debug("failed to emit database_migrations_failed_total metric", exc_info=True)
+    except Exception:
+        logger.debug("session_input_delivery_attempts verification skipped", exc_info=True)
+
     # session_messages table migrations
     try:
         with engine.connect() as conn:

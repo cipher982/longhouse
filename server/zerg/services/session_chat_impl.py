@@ -40,7 +40,6 @@ from zerg.observability import get_tracer
 from zerg.observability import mark_span_error
 from zerg.observability import set_span_attributes
 from zerg.services.agents import AgentsStore
-from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_FAILED
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_COMPLETE
@@ -65,8 +64,7 @@ from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_kernel_projection import project_session_kernel_fields
 from zerg.services.session_kernel_projection import session_lock_scope_id
-from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
-from zerg.services.session_runtime import UNVERIFIED_TERMINAL_STATES
+from zerg.services.session_runtime import session_is_closed_for_input
 from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
 from zerg.services.session_turns import SESSION_TURN_ERROR_TURN_TIMEOUT
 from zerg.services.session_turns import SESSION_TURN_ERROR_VERIFICATION_TIMEOUT
@@ -461,22 +459,7 @@ def _assert_live_session_send_available(
 
 def _session_is_closed_for_input(db: Session, source_session) -> bool:
     session_id = getattr(source_session, "id", None)
-    if session_id is None:
-        return False
-    runtime_state = (
-        db.query(SessionRuntimeState)
-        .filter(SessionRuntimeState.session_id == session_id)
-        .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
-        .first()
-    )
-    terminal_state = str(getattr(runtime_state, "terminal_state", "") or "").strip()
-    if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
-        return True
-    if terminal_state == "finished":
-        return False
-    if terminal_state in UNVERIFIED_TERMINAL_STATES:
-        return False
-    return bool(terminal_state)
+    return session_is_closed_for_input(db, session_id)
 
 
 def _parse_current_session_header(request: Request) -> UUID | None:
@@ -752,17 +735,6 @@ async def _drain_next_queued_input(
     )
 
 
-def _resolve_session_owner_id(db: Session) -> int:
-    """Pick an owner id for background-origin sends (no user request context).
-
-    Mirrors the single-tenant fallback used by the machine-facing endpoints.
-    """
-    owner = db.query(User.id).order_by(User.id.asc()).first()
-    if owner is None:
-        raise RuntimeError("No Longhouse user is configured")
-    return int(owner[0])
-
-
 async def _observe_managed_local_turn_active_phase(
     *,
     request_id: str,
@@ -927,18 +899,6 @@ def _managed_local_send_failure_code(send_result) -> str:
     if bool(getattr(send_result, "ok", False)) or int(getattr(send_result, "exit_code", 1) or 1) == 0:
         return SESSION_TURN_ERROR_VERIFICATION_TIMEOUT
     return SESSION_TURN_ERROR_SEND_FAILED
-
-
-def _is_transient_managed_control_unavailable(error_code: str | None, error_message: str | None) -> bool:
-    if error_code != SESSION_TURN_ERROR_SEND_FAILED:
-        return False
-    message = str(error_message or "")
-    transient_fragments = (
-        MANAGED_CONTROL_UNAVAILABLE_ERROR,
-        "Machine Agent control channel is offline",
-        "Failed to send command to Machine Agent control channel",
-    )
-    return any(fragment in message for fragment in transient_fragments)
 
 
 async def _dispatch_managed_local_text(

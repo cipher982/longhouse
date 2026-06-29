@@ -964,7 +964,7 @@ def test_queue_drain_preserves_client_request_id(tmp_path):
 
 
 def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
-    from zerg.services.session_chat_impl import _drain_next_queued_input
+    from zerg.services.session_input_queue import wake_session_input_queue
     from zerg.services.session_inputs import create_session_input
 
     session_local = _make_db(tmp_path)
@@ -986,10 +986,11 @@ def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
         db_bind = db.get_bind()
 
     try:
-        asyncio.run(
-            _drain_next_queued_input(
+        result = asyncio.run(
+            wake_session_input_queue(
                 db_bind=db_bind,
                 session_id=session_id,
+                reason="test_direct_wake",
                 lock_scope_id=str(session_id),
             )
         )
@@ -1008,6 +1009,8 @@ def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
             )
             assert turn.session_input_id == input_id
             assert turn.user_event_id is not None
+        assert result.dispatched is True
+        assert result.input_id == input_id
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
 
@@ -1105,11 +1108,113 @@ def test_queue_wake_drains_after_prior_turn_terminal(monkeypatch, tmp_path):
         asyncio.run(session_lock_manager.release(str(session_id)))
 
 
+def test_queue_wake_drains_needs_user_phase(monkeypatch, tmp_path):
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    with session_local() as db:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        _seed_live_runtime_state(db, session, phase="needs_user")
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="answer needs user",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-needs-user-gate-1",
+        )
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+        db.commit()
+
+    try:
+        result = asyncio.run(
+            wake_session_input_queue(
+                db_bind=db_bind,
+                session_id=session_id,
+                reason="test_needs_user",
+                lock_scope_id=str(session_id),
+            )
+        )
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+            assert row.status == INPUT_STATUS_DELIVERED
+        assert result.dispatched is True
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+
+
+def test_concurrent_queue_wakes_dispatch_at_most_one_input(monkeypatch, tmp_path):
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    dispatch_calls = _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    with session_local() as db:
+        first = create_session_input(
+            db,
+            session_id=session_id,
+            text="first concurrent",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-concurrent-1",
+        )
+        second = create_session_input(
+            db,
+            session_id=session_id,
+            text="second concurrent",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-concurrent-2",
+        )
+        input_ids = [int(first.id), int(second.id)]
+        db_bind = db.get_bind()
+
+    async def run_wakes():
+        return await asyncio.gather(
+            wake_session_input_queue(
+                db_bind=db_bind,
+                session_id=session_id,
+                reason="test_concurrent_1",
+                lock_scope_id=str(session_id),
+            ),
+            wake_session_input_queue(
+                db_bind=db_bind,
+                session_id=session_id,
+                reason="test_concurrent_2",
+                lock_scope_id=str(session_id),
+            ),
+        )
+
+    try:
+        results = asyncio.run(run_wakes())
+
+        with session_local() as db:
+            rows = db.query(SessionInput).filter(SessionInput.id.in_(input_ids)).order_by(SessionInput.id.asc()).all()
+            statuses = [row.status for row in rows]
+            assert statuses.count(INPUT_STATUS_DELIVERED) == 1
+            assert statuses.count(INPUT_STATUS_QUEUED) == 1
+        assert sum(1 for result in results if result.dispatched) == 1
+        assert len(dispatch_calls) == 1
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+
+
 def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch, tmp_path):
     from fastapi.responses import JSONResponse
 
     from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
-    from zerg.services.session_chat_impl import _drain_next_queued_input
+    from zerg.services.session_input_queue import wake_session_input_queue
     from zerg.services.session_inputs import create_session_input
     from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
 
@@ -1142,10 +1247,11 @@ def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch,
 
     monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", fake_dispatch)
 
-    asyncio.run(
-        _drain_next_queued_input(
+    result = asyncio.run(
+        wake_session_input_queue(
             db_bind=db_bind,
             session_id=session_id,
+            reason="test_transient_failure",
             lock_scope_id=str(session_id),
         )
     )
@@ -1155,6 +1261,8 @@ def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch,
         assert row.status == INPUT_STATUS_QUEUED
         assert row.delivery_request_id is None
         assert row.last_error == MANAGED_CONTROL_UNAVAILABLE_ERROR
+    assert result.dispatched is False
+    assert result.reason == "transient_dispatch_failure"
 
 
 def test_lock_watcher_timeout_recovers_from_fresh_runtime_idle_and_drains_queue(monkeypatch, tmp_path):

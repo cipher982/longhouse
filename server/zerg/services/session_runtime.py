@@ -69,6 +69,26 @@ MANAGED_CODEX_RUNTIME_SOURCES = {MANAGED_SESSION_LEASE_SOURCE, "codex_bridge", "
 MANAGED_CODEX_INVARIANTS = ("ended_without_session_ended", "short_freshness")
 
 
+def session_is_closed_for_input(db: Session, session_id: UUID | None) -> bool:
+    """Return whether runtime terminal truth makes a session reject new input."""
+    if session_id is None:
+        return False
+    runtime_state = (
+        db.query(SessionRuntimeState)
+        .filter(SessionRuntimeState.session_id == session_id)
+        .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
+        .first()
+    )
+    terminal_state = str(getattr(runtime_state, "terminal_state", "") or "").strip()
+    if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
+        return True
+    if terminal_state == "finished":
+        return False
+    if terminal_state in UNVERIFIED_TERMINAL_STATES:
+        return False
+    return bool(terminal_state)
+
+
 def _latest_timestamp(*values: datetime | None) -> datetime | None:
     normalized = [normalize_utc(value) for value in values]
     present = [value for value in normalized if value is not None]
