@@ -4,7 +4,7 @@
 **Owner:** Longhouse core
 **Created:** 2026-06-29
 **Branch:** `epic/hot-cold-ingest-isolation`
-**Reviewed:** Hatch Opus initial architecture review, 2026-06-29
+**Reviewed:** independent architecture review, 2026-06-29
 **Related:** `docs/specs/reliability-data-plane.md`,
 `docs/specs/archive-backlog-repair.md`,
 `docs/specs/transcript-hot-plane-simplification.md`
@@ -14,7 +14,7 @@
 Longhouse hosted must remain launchable, steerable, and writable while
 historical transcript repair is hours or days behind.
 
-The `david010` incident showed that the current single SQLite file is not the
+The hosted dogfood incident showed that the current single SQLite file is not the
 immediate problem by itself. The launch blocker is that hot product writes and
 cold archive repair share one active writer slot, and cold repair is allowed to
 start automatically and then keep that slot after request timeout. Priority
@@ -60,7 +60,7 @@ block hot behavior.
 
 ## Incident Evidence
 
-Observed production symptoms on `david010`:
+Observed production symptoms on a hosted dogfood tenant:
 
 - `/api/health` reported `writer_active=true` for minutes.
 - Active labels included `ingest-live` and `ingest-scan`.
@@ -68,7 +68,7 @@ Observed production symptoms on `david010`:
   `heartbeat`, and `ingest-live`.
 - When the writer queue cleared, normal runtime writes were millisecond-scale.
 - Red/yellow menu bar state tracked hosted write pressure accurately.
-- Stopping local `longhouse-engine connect` and restarting `longhouse-david010`
+- Stopping local `longhouse-engine connect` and restarting the hosted runtime container
   restored the hosted writer, but managed local startup degraded while the
   shipper was offline.
 - Raising local launchd `--fallback-scan-secs` and `--spool-replay-secs` to one
@@ -148,7 +148,7 @@ can tell the difference between "repair paused" and "machine down."
 Deliverables:
 
 - this spec committed
-- Hatch Opus review incorporated
+- independent architecture review incorporated
 - exact success criteria written before implementation
 
 Acceptance:
@@ -288,7 +288,7 @@ Scope:
 Smoke:
 
 - fixture or local tenant-shaped DB with synthetic archive backlog;
-- hosted `david010` smoke only after fixture success;
+- hosted dogfood smoke only after fixture success;
 - verify no `ingest-scan` / `ingest-replay` labels appear during paused-mode
   smoke;
 - verify managed launch reaches provider preparation instead of hanging behind
@@ -316,20 +316,20 @@ repeat a previous mistake: scaffolding without wired runtime behavior.
 
 Before implementation:
 
-- Hatch Opus reviews this spec.
+- Independent architecture review covers this spec.
 - Spec is revised to resolve review findings.
 
 After each committed phase:
 
 - run focused unit/integration tests for the phase;
-- ask Hatch DeepSeek to review the diff for bugs and simplification;
+- ask an independent implementation reviewer to review the diff for bugs and simplification;
 - fix any launch-blocking finding before moving on.
 
 Before ship:
 
 - full focused test set for changed engine/server paths;
-- Hatch Opus final architecture review;
-- Hatch DeepSeek final code review;
+- independent final architecture review;
+- independent final code review;
 - exact-SHA ship and live smoke using the repo ship workflow.
 
 ## Grand Success Criteria
@@ -347,7 +347,7 @@ This epic is complete only when:
 - server archive ingest yields between bounded cold sub-batches and re-checks
   hot pressure;
 - tests cover the failure mode that caused the incident;
-- Hatch Opus and DeepSeek have reviewed the final work;
+- independent architecture and code review have covered the final work;
 - changes are merged to `main`, pushed, shipped, smoke tested, and local main is
   synced to remote main.
 
