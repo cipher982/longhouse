@@ -1184,18 +1184,76 @@ def _migrate_agents_columns(engine: Engine) -> None:
                         """
                     )
                 )
+                conn.execute(
+                    text(
+                        """
+                        CREATE INDEX IF NOT EXISTS ix_session_inputs_session_status_next_attempt
+                        ON session_inputs(session_id, status, next_attempt_at, created_at)
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE IF NOT EXISTS session_input_delivery_attempts (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            session_input_id INTEGER NOT NULL REFERENCES session_inputs(id) ON DELETE CASCADE,
+                            session_id CHAR(36) NOT NULL,
+                            thread_id CHAR(36),
+                            owner_id INTEGER,
+                            request_id VARCHAR(64) NOT NULL,
+                            attempt_number INTEGER NOT NULL DEFAULT 1,
+                            status VARCHAR(24) NOT NULL,
+                            lease_owner VARCHAR(128) NOT NULL,
+                            lease_expires_at DATETIME NOT NULL,
+                            submitted_at DATETIME,
+                            accepted_at DATETIME,
+                            completed_at DATETIME,
+                            released_at DATETIME,
+                            failed_at DATETIME,
+                            error_code VARCHAR(64),
+                            error TEXT,
+                            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        CREATE INDEX IF NOT EXISTS ix_input_attempts_input_created
+                        ON session_input_delivery_attempts(session_input_id, created_at)
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        CREATE INDEX IF NOT EXISTS ix_input_attempts_session_status_lease
+                        ON session_input_delivery_attempts(session_id, status, lease_expires_at)
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS ix_input_attempts_request
+                        ON session_input_delivery_attempts(session_id, request_id)
+                        """
+                    )
+                )
                 conn.commit()
     except Exception:
         logger.error(
-            "session_inputs idempotency index migration FAILED — client_request_id dedupe will not be enforced; "
-            "duplicate iOS retries may create duplicate rows",
+            "session_inputs queue migration FAILED — client_request_id dedupe or queue-attempt recovery may be incomplete",
             exc_info=True,
         )
         try:
             from zerg.metrics import database_migrations_failed_total
 
             database_migrations_failed_total.labels(
-                migration_name="session_inputs_idempotency_index",
+                migration_name="session_inputs_queue_kernel",
             ).inc()
         except Exception:
             logger.debug("failed to emit database_migrations_failed_total metric", exc_info=True)

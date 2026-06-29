@@ -1012,6 +1012,99 @@ def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
         asyncio.run(session_lock_manager.release(str(session_id)))
 
 
+def test_queue_wake_defers_behind_active_turn(monkeypatch, tmp_path):
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+    from zerg.services.session_turns import create_session_turn
+    from zerg.services.session_turns import mark_session_turn_send_accepted
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    dispatch_calls = _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    with session_local() as db:
+        create_session_turn(db, session_id=session_id, request_id="req-active-prior")
+        mark_session_turn_send_accepted(db, session_id=session_id, request_id="req-active-prior")
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="wait behind active turn",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-active-gate-1",
+        )
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+        db.commit()
+
+    result = asyncio.run(
+        wake_session_input_queue(
+            db_bind=db_bind,
+            session_id=session_id,
+            reason="test_active_turn",
+            lock_scope_id=str(session_id),
+        )
+    )
+
+    with session_local() as db:
+        row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+        assert row.status == INPUT_STATUS_QUEUED
+    assert result.dispatched is False
+    assert result.reason == "active_turn"
+    assert dispatch_calls == []
+
+
+def test_queue_wake_drains_after_prior_turn_terminal(monkeypatch, tmp_path):
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+    from zerg.services.session_turns import create_session_turn
+    from zerg.services.session_turns import mark_session_turn_send_accepted
+    from zerg.services.session_turns import mark_session_turn_terminal
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    with session_local() as db:
+        create_session_turn(db, session_id=session_id, request_id="req-terminal-prior")
+        mark_session_turn_send_accepted(db, session_id=session_id, request_id="req-terminal-prior")
+        mark_session_turn_terminal(db, session_id=session_id, request_id="req-terminal-prior", phase="idle")
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="drain after terminal prior turn",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-terminal-gate-1",
+        )
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+        db.commit()
+
+    try:
+        result = asyncio.run(
+            wake_session_input_queue(
+                db_bind=db_bind,
+                session_id=session_id,
+                reason="test_terminal_turn",
+                lock_scope_id=str(session_id),
+            )
+        )
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+            assert row.status == INPUT_STATUS_DELIVERED
+            assert row.delivery_request_id
+            turn = db.query(SessionTurn).filter(SessionTurn.request_id == row.delivery_request_id).one()
+            assert turn.session_input_id == input_id
+        assert result.dispatched is True
+        assert result.input_id == input_id
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+
+
 def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch, tmp_path):
     from fastapi.responses import JSONResponse
 

@@ -164,14 +164,15 @@ async def lifespan(app: FastAPI):
 
                 if queued_session_ids:
                     from zerg.database import default_engine
-                    from zerg.services.session_chat_impl import _drain_next_queued_input
+                    from zerg.services.session_input_queue import wake_session_input_queue
 
                     async def _boot_drain_all() -> None:
                         for sid in queued_session_ids:
                             try:
-                                await _drain_next_queued_input(
+                                await wake_session_input_queue(
                                     db_bind=default_engine,
                                     session_id=sid,
+                                    reason="startup_reconciliation",
                                     lock_scope_id=str(sid),
                                 )
                             except Exception:

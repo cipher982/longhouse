@@ -271,11 +271,12 @@ async def upsert_presence(
                 target_session_id=session_uuid,
                 target_presence_state=canonical_presence_state,
             )
-            from zerg.services.session_chat_impl import _drain_next_queued_input
+            from zerg.services.session_input_queue import wake_session_input_queue
 
-            await _drain_next_queued_input(
+            await wake_session_input_queue(
                 db_bind=delivery_db.get_bind(),
                 session_id=session_uuid,
+                reason="presence_runtime_deliverable",
             )
     if attention_push is not None:
         push_sent = False

@@ -16,7 +16,6 @@ from datetime import datetime
 from datetime import timezone
 from typing import AsyncIterator
 from uuid import UUID
-from uuid import uuid4
 
 from fastapi import HTTPException
 from fastapi import Request
@@ -33,7 +32,6 @@ from zerg.metrics import managed_turn_requests_total
 from zerg.metrics import managed_turn_wait_seconds
 from zerg.metrics import managed_turn_wait_total
 from zerg.models.agents import AgentEvent
-from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
@@ -680,9 +678,12 @@ async def _release_managed_local_lock_after_terminal(
         # session bound to the same engine; reacquires the session lock via
         # the normal send path so a racing user send can't double-dispatch.
         try:
-            await _drain_next_queued_input(
+            from zerg.services.session_input_queue import wake_session_input_queue
+
+            await wake_session_input_queue(
                 db_bind=db_bind,
                 session_id=session_id,
+                reason="turn_terminal",
                 lock_scope_id=lock_scope_id,
             )
         except Exception:
@@ -740,123 +741,15 @@ async def _drain_next_queued_input(
     session_id: UUID,
     lock_scope_id: str | None = None,
 ) -> None:
-    """Pop the oldest queued SessionInput for this session and dispatch it.
+    """Compatibility shim for the managed input queue wake service."""
+    from zerg.services.session_input_queue import wake_session_input_queue
 
-    Acquires the session lock via the normal send path. If a racing user send
-    took the lock first, the queued row stays queued and will be retried on
-    the next terminal-phase release.
-    """
-    from sqlalchemy.orm import sessionmaker
-
-    from zerg.models.agents import AgentSession
-    from zerg.services.session_inputs import INPUT_STATUS_QUEUED
-    from zerg.services.session_inputs import claim_next_queued
-    from zerg.services.session_inputs import mark_delivered
-    from zerg.services.session_inputs import mark_failed
-    from zerg.services.session_inputs import requeue_delivering
-
-    Session = sessionmaker(bind=db_bind, expire_on_commit=False)
-    db = Session()
-    try:
-        queued_exists = (
-            db.query(SessionInput)
-            .filter(
-                SessionInput.session_id == session_id,
-                SessionInput.status == INPUT_STATUS_QUEUED,
-            )
-            .first()
-        )
-        if queued_exists is None:
-            return
-
-        source_session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-        if source_session is None:
-            logger.warning("Drain aborted: session %s not found", session_id)
-            return
-        if not current_session_capabilities(db, source_session, owner_id=queued_exists.owner_id).live_control_available:
-            logger.info("Drain aborted: session %s no longer supports live control", session_id)
-            return
-
-        lock_scope = lock_scope_id or session_lock_scope_id(source_session.id)
-        drain_request_id = f"drain-{uuid4().hex}"
-        lock = await session_lock_manager.acquire(
-            session_id=lock_scope,
-            holder=drain_request_id,
-            ttl_seconds=300,
-        )
-        if not lock:
-            # User beat us to it. The row stays queued and will retry.
-            logger.info(
-                "Drain yield: lock already held for %s; queued input will retry",
-                session_id,
-            )
-            return
-
-        claimed = claim_next_queued(db, session_id, delivery_request_id=drain_request_id)
-        if claimed is None:
-            # Race: the row was cancelled or already claimed. Release and bail.
-            await session_lock_manager.release(lock_scope, drain_request_id)
-            return
-
-        # Use the row's recorded author if present; fall back to single-tenant
-        # first-user resolution for legacy rows that predate owner_id.
-        recorded_owner = getattr(claimed, "owner_id", None)
-        owner_id = int(recorded_owner) if recorded_owner else _resolve_session_owner_id(db)
-
-        try:
-            dispatch_response = await _dispatch_managed_local_text(
-                source_session=source_session,
-                owner_id=owner_id,
-                message=claimed.body,
-                request_id=drain_request_id,
-                lock_scope_id=lock_scope,
-                db=db,
-                session_input_id=int(claimed.id),
-            )
-        except Exception as exc:
-            mark_failed(db, int(claimed.id), error=str(exc)[:200])
-            await session_lock_manager.release(lock_scope, drain_request_id)
-            logger.exception("Drain dispatch failed for SessionInput %s", claimed.id)
-            return
-
-        # Dispatch path returns a 502 JSONResponse on send failure (it releases
-        # the lock itself). Treat that as failed, not delivered.
-        dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
-        if dispatch_status >= 400:
-            response_error_code = "send_failed"
-            response_error_message = f"drain dispatch returned {dispatch_status}"
-            try:
-                response_body = json.loads(getattr(dispatch_response, "body", b"{}") or b"{}")
-                if isinstance(response_body, dict):
-                    response_error_code = str(response_body.get("error_code") or response_error_code)
-                    response_error_message = str(response_body.get("error") or response_error_message)
-            except Exception:
-                pass
-            if _is_transient_managed_control_unavailable(response_error_code, response_error_message):
-                requeue_delivering(db, int(claimed.id), error=response_error_message)
-                logger.info(
-                    "Drain deferred for SessionInput %s on session %s: %s",
-                    claimed.id,
-                    session_id,
-                    response_error_message,
-                )
-                return
-            mark_failed(
-                db,
-                int(claimed.id),
-                error=response_error_message,
-            )
-            logger.warning(
-                "Drain dispatch returned %s for SessionInput %s",
-                dispatch_status,
-                claimed.id,
-            )
-            return
-
-        mark_delivered(db, int(claimed.id))
-        logger.info("Drained SessionInput %s for session %s", claimed.id, session_id)
-    finally:
-        db.close()
+    await wake_session_input_queue(
+        db_bind=db_bind,
+        session_id=session_id,
+        reason="legacy_drain",
+        lock_scope_id=lock_scope_id,
+    )
 
 
 def _resolve_session_owner_id(db: Session) -> int:

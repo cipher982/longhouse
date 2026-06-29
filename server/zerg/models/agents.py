@@ -990,6 +990,9 @@ class SessionInput(AgentsBase):
     # queued | delivering | delivered | cancelled | failed
     client_request_id = Column(String(64), nullable=True)
     delivery_request_id = Column(String(64), nullable=True)
+    attempt_count = Column(Integer, nullable=False, default=0, server_default=text("0"))
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    last_attempt_id = Column(Integer, nullable=True)
     last_error = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     delivered_at = Column(DateTime(timezone=True), nullable=True)
@@ -997,6 +1000,7 @@ class SessionInput(AgentsBase):
 
     __table_args__ = (
         Index("ix_session_inputs_session_status_created", "session_id", "status", "created_at"),
+        Index("ix_session_inputs_session_status_next_attempt", "session_id", "status", "next_attempt_at", "created_at"),
         Index(
             "ix_session_inputs_session_owner_client_request",
             "session_id",
@@ -1005,6 +1009,53 @@ class SessionInput(AgentsBase):
             unique=True,
             postgresql_where=text("client_request_id IS NOT NULL"),
             sqlite_where=text("client_request_id IS NOT NULL"),
+        ),
+    )
+
+
+class SessionInputDeliveryAttempt(AgentsBase):
+    """Durable delivery attempt for a managed session input.
+
+    Phase 1 keeps this as an internal ledger. Later phases will make the
+    unexpired attempt lease the cross-process authority for provider injection.
+    """
+
+    __tablename__ = "session_input_delivery_attempts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    _input_fk = "session_inputs.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_inputs.id"
+    session_input_id = Column(
+        Integer,
+        ForeignKey(_input_fk, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    session_id = Column(GUID(), nullable=False, index=True)
+    thread_id = Column(GUID(), nullable=True, index=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    request_id = Column(String(64), nullable=False)
+    attempt_number = Column(Integer, nullable=False, server_default=text("1"))
+    status = Column(String(24), nullable=False)
+    lease_owner = Column(String(128), nullable=False)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    submitted_at = Column(DateTime(timezone=True), nullable=True)
+    accepted_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+    released_at = Column(DateTime(timezone=True), nullable=True)
+    failed_at = Column(DateTime(timezone=True), nullable=True)
+    error_code = Column(String(64), nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_input_attempts_input_created", "session_input_id", "created_at"),
+        Index("ix_input_attempts_session_status_lease", "session_id", "status", "lease_expires_at"),
+        Index(
+            "ix_input_attempts_request",
+            "session_id",
+            "request_id",
+            unique=True,
         ),
     )
 

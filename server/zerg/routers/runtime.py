@@ -329,11 +329,12 @@ async def ingest_runtime_observation_batch(
                             target_session_id=sid,
                             target_presence_state=canonical_state,
                         )
-                        from zerg.services.session_chat_impl import _drain_next_queued_input
+                        from zerg.services.session_input_queue import wake_session_input_queue
 
-                        await _drain_next_queued_input(
+                        await wake_session_input_queue(
                             db_bind=dispatch_db.get_bind(),
                             session_id=sid,
+                            reason="runtime_state_deliverable",
                         )
             except Exception:
                 import logging

@@ -1,0 +1,266 @@
+"""Managed session input queue wake/readiness service.
+
+Phase 1+2 centralizes the drain decision without changing the public
+SessionInput lifecycle. Delivery attempts are modeled in the DB in this phase,
+but the durable attempt lease becomes authoritative in the next phase.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass
+from uuid import UUID
+from uuid import uuid4
+
+from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker
+
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionRuntimeState
+from zerg.models.agents import SessionTurn
+from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_current_control import current_session_capabilities
+from zerg.services.session_inputs import INPUT_STATUS_QUEUED
+from zerg.services.session_inputs import claim_next_queued
+from zerg.services.session_inputs import mark_delivered
+from zerg.services.session_inputs import mark_failed
+from zerg.services.session_inputs import requeue_delivering
+from zerg.services.session_kernel_projection import session_lock_scope_id
+from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
+from zerg.services.session_runtime import UNVERIFIED_TERMINAL_STATES
+from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
+from zerg.services.session_turns import SESSION_TURN_STATE_SEND_ACCEPTED
+
+logger = logging.getLogger(__name__)
+
+QUEUE_DRAINABLE_RUNTIME_PHASES = frozenset({"idle", "needs_user", "blocked"})
+ACTIVE_TURN_STATES = frozenset({SESSION_TURN_STATE_SEND_ACCEPTED, SESSION_TURN_STATE_ACTIVE})
+
+
+@dataclass(frozen=True)
+class QueueReadiness:
+    ready: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class QueueWakeResult:
+    dispatched: bool = False
+    input_id: int | None = None
+    reason: str = "noop"
+
+
+def _session_closed_for_input(db: Session, session_id: UUID) -> bool:
+    runtime_state = (
+        db.query(SessionRuntimeState)
+        .filter(SessionRuntimeState.session_id == session_id)
+        .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
+        .first()
+    )
+    terminal_state = str(getattr(runtime_state, "terminal_state", "") or "").strip()
+    if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
+        return True
+    if terminal_state == "finished":
+        return False
+    if terminal_state in UNVERIFIED_TERMINAL_STATES:
+        return False
+    return bool(terminal_state)
+
+
+def _latest_runtime_phase(db: Session, session_id: UUID) -> str | None:
+    runtime_state = (
+        db.query(SessionRuntimeState)
+        .filter(SessionRuntimeState.session_id == session_id)
+        .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
+        .first()
+    )
+    if runtime_state is None:
+        return None
+    return str(getattr(runtime_state, "phase", "") or "").strip() or None
+
+
+def _has_active_non_terminal_turn(db: Session, session_id: UUID) -> bool:
+    return (
+        db.query(SessionTurn.id)
+        .filter(
+            SessionTurn.session_id == session_id,
+            SessionTurn.state.in_(ACTIVE_TURN_STATES),
+        )
+        .limit(1)
+        .first()
+        is not None
+    )
+
+
+def evaluate_session_input_queue_readiness(
+    db: Session,
+    *,
+    session: AgentSession,
+    owner_id: int | None,
+) -> QueueReadiness:
+    """Return whether the managed session can accept the next queued input."""
+    session_id = session.id
+    if _session_closed_for_input(db, session_id):
+        return QueueReadiness(False, "closed")
+
+    if not current_session_capabilities(db, session, owner_id=owner_id).live_control_available:
+        return QueueReadiness(False, "control_unavailable")
+
+    if _has_active_non_terminal_turn(db, session_id):
+        return QueueReadiness(False, "active_turn")
+
+    runtime_phase = _latest_runtime_phase(db, session_id)
+    if runtime_phase is None:
+        return QueueReadiness(False, "runtime_unknown")
+    if runtime_phase not in QUEUE_DRAINABLE_RUNTIME_PHASES:
+        return QueueReadiness(False, "runtime_busy")
+
+    return QueueReadiness(True, "ready")
+
+
+async def wake_session_input_queue(
+    *,
+    db_bind,
+    session_id: UUID,
+    reason: str,
+    lock_scope_id: str | None = None,
+) -> QueueWakeResult:
+    """Wake the per-session input queue and dispatch at most one queued row."""
+    SessionLocal = sessionmaker(bind=db_bind, expire_on_commit=False)
+    db = SessionLocal()
+    try:
+        queued_exists = (
+            db.query(SessionInput)
+            .filter(
+                SessionInput.session_id == session_id,
+                SessionInput.status == INPUT_STATUS_QUEUED,
+            )
+            .order_by(SessionInput.created_at.asc(), SessionInput.id.asc())
+            .first()
+        )
+        if queued_exists is None:
+            return QueueWakeResult(reason="no_queued_input")
+
+        source_session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        if source_session is None:
+            logger.warning("Queue wake aborted: session %s not found", session_id)
+            return QueueWakeResult(reason="session_missing")
+
+        readiness = evaluate_session_input_queue_readiness(
+            db,
+            session=source_session,
+            owner_id=queued_exists.owner_id,
+        )
+        if not readiness.ready:
+            logger.info("Queue wake deferred for session %s after %s: %s", session_id, reason, readiness.reason)
+            return QueueWakeResult(reason=readiness.reason)
+
+        lock_scope = lock_scope_id or session_lock_scope_id(source_session.id)
+        drain_request_id = f"drain-{uuid4().hex}"
+        lock = await session_lock_manager.acquire(
+            session_id=lock_scope,
+            holder=drain_request_id,
+            ttl_seconds=300,
+        )
+        if not lock:
+            logger.info(
+                "Queue wake yielded for session %s after %s: lock already held",
+                session_id,
+                reason,
+            )
+            return QueueWakeResult(reason="lock_active")
+
+        claimed = claim_next_queued(db, session_id, delivery_request_id=drain_request_id)
+        if claimed is None:
+            await session_lock_manager.release(lock_scope, drain_request_id)
+            return QueueWakeResult(reason="claim_raced")
+
+        result = await _dispatch_claimed_input(
+            db=db,
+            source_session=source_session,
+            claimed=claimed,
+            lock_scope=lock_scope,
+            drain_request_id=drain_request_id,
+        )
+        if result.dispatched:
+            logger.info("Queue wake drained SessionInput %s for session %s after %s", claimed.id, session_id, reason)
+        return result
+    finally:
+        db.close()
+
+
+async def _dispatch_claimed_input(
+    *,
+    db: Session,
+    source_session: AgentSession,
+    claimed: SessionInput,
+    lock_scope: str,
+    drain_request_id: str,
+) -> QueueWakeResult:
+    from zerg.services.session_chat_impl import _dispatch_managed_local_text
+    from zerg.services.session_chat_impl import _is_transient_managed_control_unavailable
+    from zerg.services.session_chat_impl import _resolve_session_owner_id
+
+    recorded_owner = getattr(claimed, "owner_id", None)
+    owner_id = int(recorded_owner) if recorded_owner else _resolve_session_owner_id(db)
+
+    try:
+        dispatch_response = await _dispatch_managed_local_text(
+            source_session=source_session,
+            owner_id=owner_id,
+            message=claimed.body,
+            request_id=drain_request_id,
+            lock_scope_id=lock_scope,
+            db=db,
+            session_input_id=int(claimed.id),
+        )
+    except Exception as exc:
+        mark_failed(db, int(claimed.id), error=str(exc)[:200])
+        await session_lock_manager.release(lock_scope, drain_request_id)
+        logger.exception("Queue dispatch failed for SessionInput %s", claimed.id)
+        return QueueWakeResult(input_id=int(claimed.id), reason="dispatch_exception")
+
+    dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
+    if dispatch_status >= 400:
+        response_error_code = "send_failed"
+        response_error_message = f"drain dispatch returned {dispatch_status}"
+        try:
+            response_body = json.loads(getattr(dispatch_response, "body", b"{}") or b"{}")
+            if isinstance(response_body, dict):
+                response_error_code = str(response_body.get("error_code") or response_error_code)
+                response_error_message = str(response_body.get("error") or response_error_message)
+        except Exception:
+            pass
+        if _is_transient_managed_control_unavailable(response_error_code, response_error_message):
+            requeue_delivering(db, int(claimed.id), error=response_error_message)
+            logger.info(
+                "Queue dispatch deferred for SessionInput %s on session %s: %s",
+                claimed.id,
+                source_session.id,
+                response_error_message,
+            )
+            return QueueWakeResult(input_id=int(claimed.id), reason="transient_dispatch_failure")
+        mark_failed(
+            db,
+            int(claimed.id),
+            error=response_error_message,
+        )
+        logger.warning(
+            "Queue dispatch returned %s for SessionInput %s",
+            dispatch_status,
+            claimed.id,
+        )
+        return QueueWakeResult(input_id=int(claimed.id), reason="dispatch_failed")
+
+    mark_delivered(db, int(claimed.id))
+    return QueueWakeResult(dispatched=True, input_id=int(claimed.id), reason="dispatched")
+
+
+__all__ = [
+    "QueueReadiness",
+    "QueueWakeResult",
+    "evaluate_session_input_queue_readiness",
+    "wake_session_input_queue",
+]
