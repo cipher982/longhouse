@@ -25,6 +25,10 @@ use crate::claude_channel_control::{
     interrupt as claude_channel_interrupt, send_text as claude_channel_send_text,
     ClaudeChannelControlError, ClaudeChannelInterruptConfig, ClaudeChannelSendConfig,
 };
+use crate::claude_channel_launch::{
+    launch_detached as launch_detached_claude_channel, ClaudeChannelLaunchConfig,
+    ClaudePermissionMode,
+};
 use crate::codex_bridge::{
     cmd_codex_bridge_interrupt, cmd_codex_bridge_pause_response, cmd_codex_bridge_send,
     cmd_codex_bridge_start, cmd_codex_bridge_steer, validate_codex_bridge_attached,
@@ -913,12 +917,21 @@ async fn execute_command(
                 let resume_provider_session_id = resume_target
                     .as_ref()
                     .map(|target| target.thread_id.clone());
+                let permission_mode = match payload_optional_string(&payload, "permission_mode")
+                    .as_deref()
+                    .map(str::trim)
+                {
+                    Some("remote_approve") => ClaudePermissionMode::RemoteApprove,
+                    _ => ClaudePermissionMode::Bypass,
+                };
                 return launch_claude_channel_session(
                     session_id.clone(),
                     cwd,
                     api_url,
                     api_token,
                     resume_provider_session_id,
+                    payload_optional_string(&payload, "hook_token"),
+                    permission_mode,
                 )
                 .await;
             }
@@ -1675,87 +1688,50 @@ fn normalize_provider_version(raw: &str) -> Option<String> {
     Some(value.trim_start_matches('v').to_ascii_lowercase())
 }
 
-/// Build the `longhouse claude-channel launch` argv for a fresh or resumed
-/// session. Pure + side-effect free so the resume wiring is unit-testable.
-///
-/// On resume the provider session id is the id claude should re-open
-/// (`claude --resume <id>`); on a fresh launch it is a distinct id that Claude
-/// will own via `claude --session-id <id>`.
-fn claude_channel_launch_args(
-    session_id: &str,
-    cwd: &Path,
-    api_url: &str,
-    provider_session_id: &str,
-    resume: bool,
-) -> Vec<String> {
-    let mut args = vec![
-        "claude-channel".to_string(),
-        "launch".to_string(),
-        "--session-id".to_string(),
-        session_id.to_string(),
-        "--provider-session-id".to_string(),
-        provider_session_id.to_string(),
-        "--cwd".to_string(),
-        cwd.display().to_string(),
-        "--api-url".to_string(),
-        api_url.to_string(),
-        "--wait-ready-secs".to_string(),
-        LAUNCH_START_TIMEOUT_SECS.to_string(),
-    ];
-    if resume {
-        args.push("--resume".to_string());
-    }
-    args
-}
-
 async fn launch_claude_channel_session(
     session_id: String,
     cwd: PathBuf,
     api_url: String,
     api_token: String,
     resume_provider_session_id: Option<String>,
+    hook_token: Option<String>,
+    permission_mode: ClaudePermissionMode,
 ) -> std::result::Result<Value, CommandError> {
     let resume = resume_provider_session_id.is_some();
     let provider_session_id =
         resume_provider_session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
-    let args =
-        claude_channel_launch_args(&session_id, &cwd, &api_url, &provider_session_id, resume);
-    let output = run_longhouse_command(
-        args,
-        LAUNCH_START_TIMEOUT_SECS * 2,
-        vec![("LONGHOUSE_CLAUDE_REMOTE_LAUNCH_TOKEN", api_token)],
-    )
-    .await?;
-    if output.exit_code != 0 {
-        return Err(CommandError {
-            code: "provider_launch_failed".to_string(),
-            message: nonempty_cli_error(&output),
-        });
-    }
-    let payload: Value =
-        serde_json::from_str(output.stdout.trim()).map_err(|err| CommandError {
-            code: "provider_launch_failed".to_string(),
-            message: format!(
-                "Claude launch returned invalid JSON: {err}; stderr={}",
-                output.stderr.trim()
-            ),
-        })?;
-    let resolved_provider_session_id = payload
-        .get("provider_session_id")
-        .and_then(Value::as_str)
-        .unwrap_or(&provider_session_id)
-        .to_string();
+    let summary = launch_detached_claude_channel(ClaudeChannelLaunchConfig {
+        session_id: session_id.clone(),
+        provider_session_id: provider_session_id.clone(),
+        cwd,
+        api_url,
+        api_token,
+        hook_token,
+        resume,
+        wait_ready: Duration::from_secs(LAUNCH_START_TIMEOUT_SECS),
+        claude_bin: "claude".to_string(),
+        permission_mode,
+        state_root: None,
+        claude_dir: None,
+        log_dir: None,
+        script_bin: "script".to_string(),
+    })
+    .await
+    .map_err(|err| CommandError {
+        code: "provider_launch_failed".to_string(),
+        message: err.to_string(),
+    })?;
     Ok(json!({
-        "session_id": payload.get("session_id").and_then(Value::as_str).unwrap_or(&session_id),
+        "session_id": summary.session_id,
         "provider": "claude",
         "transport": "claude_channel_bridge",
-        "provider_session_id": resolved_provider_session_id,
+        "provider_session_id": summary.provider_session_id,
         // Echo thread_id so server-side late reconciliation can attach the new
         // run even when the synchronous response is lost. For claude the thread
         // id is the provider session id.
-        "thread_id": resolved_provider_session_id,
-        "pid": payload.get("pid").cloned().unwrap_or(Value::Null),
-        "log_path": payload.get("log_path").cloned().unwrap_or(Value::Null),
+        "thread_id": summary.provider_session_id,
+        "pid": summary.pid,
+        "log_path": summary.log_path.display().to_string(),
     }))
 }
 
@@ -2490,48 +2466,6 @@ mod tests {
         assert!(supports
             .iter()
             .any(|item| item.as_str() == Some("codex.resume_run_once")));
-    }
-
-    #[test]
-    fn claude_channel_launch_args_fresh_has_no_resume() {
-        let args = claude_channel_launch_args(
-            "sess-123",
-            Path::new("/Users/me/git/zeta"),
-            "https://example.test",
-            "provider-456",
-            false,
-        );
-        // Fresh launch uses a provider id distinct from the Longhouse id and
-        // does NOT pass --resume.
-        assert!(!args.iter().any(|a| a == "--resume"));
-        let provider_idx = args
-            .iter()
-            .position(|a| a == "--provider-session-id")
-            .unwrap();
-        assert_eq!(args[provider_idx + 1], "provider-456");
-    }
-
-    #[test]
-    fn claude_channel_launch_args_resume_threads_id_and_flag() {
-        // Claude resumes by id; for managed sessions that id == the longhouse
-        // session id, but the resolver is the source of truth so we pass it
-        // through explicitly rather than assuming equality here.
-        let args = claude_channel_launch_args(
-            "sess-123",
-            Path::new("/Users/me/git/zeta"),
-            "https://example.test",
-            "provider-456",
-            true,
-        );
-        assert!(args.iter().any(|a| a == "--resume"));
-        let provider_idx = args
-            .iter()
-            .position(|a| a == "--provider-session-id")
-            .unwrap();
-        assert_eq!(args[provider_idx + 1], "provider-456");
-        // --session-id is always the longhouse id.
-        let session_idx = args.iter().position(|a| a == "--session-id").unwrap();
-        assert_eq!(args[session_idx + 1], "sess-123");
     }
 
     #[test]
