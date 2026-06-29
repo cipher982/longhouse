@@ -620,6 +620,20 @@ def latest_runtime_affecting_sha(root: Path, target_sha: str) -> str | None:
     return value or None
 
 
+def runtime_reuse_accepted_shas(root: Path, latest_runtime_sha: str | None, target_sha: str) -> set[str]:
+    if not latest_runtime_sha:
+        return {target_sha[:10]}
+    accepted = {latest_runtime_sha[:10], target_sha[:10]}
+    proc = run(
+        ["git", "rev-list", "--ancestry-path", f"{latest_runtime_sha}..{target_sha}"],
+        cwd=root,
+        check=False,
+    )
+    if proc.returncode == 0:
+        accepted.update(line[:10] for line in proc.stdout.splitlines() if line.strip())
+    return accepted
+
+
 def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> tuple[dict[str, SurfaceInfo], list[str], str]:
     proc = run(
         [str(root / "scripts" / "ops" / "deploy-status.sh")],
@@ -682,7 +696,7 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
     )
     expected_runtime_shas = {expected_runtime_short} if expected_runtime_short else set()
     if deploy_job_succeeded and not runtime_image_published:
-        expected_runtime_shas.add(sha[:10])
+        expected_runtime_shas = runtime_reuse_accepted_shas(root, expected_runtime_sha, sha)
 
     if deploy_run_completed or deploy_job_succeeded:
         require_surface("Demo runtime", RUNTIME_HEALTH, expected_shas=expected_runtime_shas)

@@ -56,6 +56,15 @@ def with_fakes(
     deploy_status_output: str | None = None,
 ) -> None:
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        cmd = args[0] if args else []
+        if isinstance(cmd, list) and cmd and cmd[0] == "git":
+            return subprocess.run(
+                cmd,
+                cwd=kwargs.get("cwd"),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
         output = deploy_status_output if deploy_status_output is not None else deploy_status("latest", "latest")
         return subprocess.CompletedProcess(args=args, returncode=0, stdout=output, stderr="")
 
@@ -104,6 +113,30 @@ def test_runtime_reuse_accepts_deploy_stamped_target_sha() -> None:
     ]
 
     _surfaces, errors, _raw = ship_monitor.verify_live_state(ROOT, "cipher982/longhouse", "ac77b06d72", runs)
+
+    assert errors == []
+
+
+def test_runtime_reuse_accepts_intermediate_deploy_sha() -> None:
+    with_fakes(
+        {
+            1: {ship_monitor.DEPLOY_AND_VERIFY_JOB: "success"},
+            2: {ship_monitor.RUNTIME_IMAGE_JOB: "skipped"},
+        },
+        latest_runtime_sha="7447df0799c06120fa254f0732a7d13646562390",
+        deploy_status_output=deploy_status("f45edcb318", "f45edcb318"),
+    )
+    runs = [
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1),
+        run_info(ship_monitor.RUNTIME_IMAGE_WORKFLOW, 2),
+    ]
+
+    _surfaces, errors, _raw = ship_monitor.verify_live_state(
+        ROOT,
+        "cipher982/longhouse",
+        "9f90ad4549c002486e07d7a6911e9401de6c65b9",
+        runs,
+    )
 
     assert errors == []
 
@@ -232,6 +265,7 @@ def test_runtime_image_paths_include_docker_context_rules() -> None:
 if __name__ == "__main__":
     test_runtime_reuse_does_not_require_exact_live_sha()
     test_runtime_reuse_accepts_deploy_stamped_target_sha()
+    test_runtime_reuse_accepts_intermediate_deploy_sha()
     test_runtime_publish_requires_exact_live_sha()
     test_skipped_tip_still_requires_latest_runtime_affecting_sha()
     test_gate_heartbeat_names_blocking_ci_job_and_step()
