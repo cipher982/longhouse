@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -13,7 +14,19 @@ const CLAUDE_CHANNEL_SERVER_NAME: &str = "longhouse-channel";
 const CLAUDE_CHANNEL_DEVELOPMENT_FLAG: &str = "--dangerously-load-development-channels";
 const MANAGED_SESSION_ENV: &str = "LONGHOUSE_MANAGED_SESSION_ID";
 const CLAUDE_REMOTE_LAUNCH_LOG_DIR: &str = "claude-channel-launch";
+const CLAUDE_LIFECYCLE_HOOK_SCRIPT: &str = "longhouse-hook.sh";
+const CLAUDE_PERMISSION_GATE_SCRIPT: &str = "longhouse-permission-gate.py";
 const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+const CLAUDE_LIFECYCLE_HOOK_EVENTS: &[&str] = &[
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolUseFailure",
+    "PermissionRequest",
+    "Notification",
+];
 
 const STANDARD_PATH_PREFIXES: &[&str] = &[
     "$HOME/.local/bin",
@@ -96,7 +109,7 @@ pub async fn launch_detached(
     config: ClaudeChannelLaunchConfig,
 ) -> Result<ClaudeChannelLaunchResult, ClaudeChannelLaunchError> {
     validate_launch_config(&config)?;
-    ensure_claude_channel_mcp_server(config.claude_dir.as_deref())?;
+    ensure_claude_launch_prereqs(&config)?;
     let plan = build_launch_command_plan(&config)?;
     let log_path = launch_log_path(&config)?;
     if let Some(parent) = log_path.parent() {
@@ -108,26 +121,7 @@ pub async fn launch_detached(
         })?;
     }
 
-    let mut command = Command::new(&plan.program);
-    command
-        .args(&plan.args)
-        .current_dir(&config.cwd)
-        .env("LONGHOUSE_HOOK_TOKEN", &plan.hook_token_env)
-        .env_remove("CLAUDE_CONFIG_DIR")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(unix)]
-    unsafe {
-        use std::os::unix::process::CommandExt;
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-
+    let mut command = build_launch_command(&config, &plan);
     let mut child = command
         .spawn()
         .map_err(|err| ClaudeChannelLaunchError::SpawnFailed(err.to_string()))?;
@@ -138,13 +132,17 @@ pub async fn launch_detached(
     )
     .await
     {
-        Ok(channel_state) => Ok(ClaudeChannelLaunchResult {
-            session_id: config.session_id,
-            provider_session_id: config.provider_session_id,
-            pid: child.id(),
-            log_path,
-            channel_state,
-        }),
+        Ok(channel_state) => {
+            let pid = child.id();
+            reap_child_on_exit(child);
+            Ok(ClaudeChannelLaunchResult {
+                session_id: config.session_id,
+                provider_session_id: config.provider_session_id,
+                pid,
+                log_path,
+                channel_state,
+            })
+        }
         Err(err) => {
             terminate_child_group(&mut child);
             Err(err)
@@ -170,6 +168,32 @@ pub fn build_launch_command_plan(
         shell_script,
         hook_token_env,
     })
+}
+
+fn build_launch_command(
+    config: &ClaudeChannelLaunchConfig,
+    plan: &ClaudeLaunchCommandPlan,
+) -> Command {
+    let mut command = Command::new(&plan.program);
+    command
+        .args(&plan.args)
+        .current_dir(&config.cwd)
+        .env("LONGHOUSE_HOOK_TOKEN", &plan.hook_token_env)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
 }
 
 fn validate_launch_config(
@@ -313,6 +337,162 @@ fn launch_log_path(
         .join("logs")
         .join(CLAUDE_REMOTE_LAUNCH_LOG_DIR)
         .join(format!("{}.log", config.session_id)))
+}
+
+fn ensure_claude_launch_prereqs(
+    config: &ClaudeChannelLaunchConfig,
+) -> Result<(), ClaudeChannelLaunchError> {
+    ensure_claude_hook_settings(config.claude_dir.as_deref(), config.permission_mode)?;
+    ensure_claude_channel_mcp_server(config.claude_dir.as_deref())
+}
+
+fn ensure_claude_hook_settings(
+    claude_dir: Option<&Path>,
+    permission_mode: ClaudePermissionMode,
+) -> Result<(), ClaudeChannelLaunchError> {
+    let resolved_claude_dir = claude_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(default_claude_dir);
+    let hooks_dir = resolved_claude_dir.join("hooks");
+    let lifecycle_hook = hooks_dir.join(CLAUDE_LIFECYCLE_HOOK_SCRIPT);
+    let permission_gate_hook = hooks_dir.join(CLAUDE_PERMISSION_GATE_SCRIPT);
+
+    require_existing_hook(&lifecycle_hook, "Claude Longhouse lifecycle hook")?;
+    chmod_executable_if_possible(&lifecycle_hook);
+    let permission_gate_exists = permission_gate_hook.is_file();
+    if permission_mode == ClaudePermissionMode::RemoteApprove {
+        require_existing_hook(
+            &permission_gate_hook,
+            "Claude Longhouse permission gate hook",
+        )?;
+    }
+    if permission_gate_exists {
+        chmod_executable_if_possible(&permission_gate_hook);
+    }
+
+    let settings_path = resolved_claude_dir.join("settings.json");
+    let mut settings = read_json_object_or_empty(&settings_path)?;
+    let root = settings.as_object_mut().ok_or_else(|| {
+        ClaudeChannelLaunchError::ConfigFailed("Claude settings root is not an object".to_string())
+    })?;
+    let hooks = root
+        .entry("hooks")
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !hooks.is_object() {
+        *hooks = Value::Object(Map::new());
+    }
+    let hooks = hooks.as_object_mut().expect("hooks normalized to object");
+
+    let lifecycle_entry = command_hook_entry(&lifecycle_hook, 5);
+    upsert_hook_entry(
+        hooks,
+        "Stop",
+        lifecycle_entry.clone(),
+        is_longhouse_lifecycle_entry,
+    );
+    for event in CLAUDE_LIFECYCLE_HOOK_EVENTS {
+        upsert_hook_entry(
+            hooks,
+            event,
+            lifecycle_entry.clone(),
+            is_longhouse_lifecycle_entry,
+        );
+    }
+
+    if permission_gate_exists {
+        let permission_gate_entry = command_hook_entry(&permission_gate_hook, 30);
+        upsert_hook_entry(hooks, "PreToolUse", permission_gate_entry, |entry| {
+            entry_has_command_substr(entry, CLAUDE_PERMISSION_GATE_SCRIPT)
+        });
+    }
+
+    write_json_object(&settings_path, &settings)
+}
+
+fn require_existing_hook(path: &Path, label: &str) -> Result<(), ClaudeChannelLaunchError> {
+    if path.is_file() {
+        return Ok(());
+    }
+    Err(ClaudeChannelLaunchError::ConfigFailed(format!(
+        "{label} is missing at {}; run `longhouse machine repair` or `longhouse connect --install` before remote launch",
+        path.display()
+    )))
+}
+
+fn command_hook_entry(command: &Path, timeout: u64) -> Value {
+    json!({
+        "hooks": [{
+            "type": "command",
+            "command": command.display().to_string(),
+            "async": false,
+            "timeout": timeout,
+        }]
+    })
+}
+
+fn upsert_hook_entry<F>(hooks: &mut Map<String, Value>, event: &str, new_entry: Value, matches: F)
+where
+    F: Fn(&Value) -> bool,
+{
+    let existing = hooks
+        .remove(event)
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+    let mut updated = false;
+    let mut merged = Vec::with_capacity(existing.len() + 1);
+    for entry in existing {
+        if matches(&entry) {
+            if !updated {
+                merged.push(new_entry.clone());
+                updated = true;
+            }
+        } else {
+            merged.push(entry);
+        }
+    }
+    if !updated {
+        merged.push(new_entry);
+    }
+    hooks.insert(event.to_string(), Value::Array(merged));
+}
+
+fn is_longhouse_lifecycle_entry(entry: &Value) -> bool {
+    hook_commands(entry).any(|command| {
+        command.contains("longhouse-") && !command.contains(CLAUDE_PERMISSION_GATE_SCRIPT)
+    })
+}
+
+fn entry_has_command_substr(entry: &Value, needle: &str) -> bool {
+    hook_commands(entry).any(|command| command.contains(needle))
+}
+
+fn hook_commands(entry: &Value) -> impl Iterator<Item = &str> {
+    entry
+        .get("hooks")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|hook| hook.get("command").and_then(Value::as_str))
+}
+
+fn chmod_executable_if_possible(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let mut permissions = metadata.permissions();
+            let mode = permissions.mode();
+            let executable_mode = mode | 0o755;
+            if executable_mode != mode {
+                permissions.set_mode(executable_mode);
+                let _ = std::fs::set_permissions(path, permissions);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 fn ensure_claude_channel_mcp_server(
@@ -491,6 +671,12 @@ fn terminate_child_group(child: &mut Child) {
     let _ = child.wait();
 }
 
+fn reap_child_on_exit(mut child: Child) {
+    thread::spawn(move || {
+        let _ = child.wait();
+    });
+}
+
 fn shell_quote_path(path: &Path) -> String {
     shell_quote(&path.display().to_string())
 }
@@ -510,6 +696,8 @@ fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
+
     use serde_json::json;
 
     const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
@@ -532,6 +720,99 @@ mod tests {
             log_dir: Some(temp.join("logs")),
             script_bin: "script".to_string(),
         }
+    }
+
+    fn write_existing_claude_hooks(claude_dir: &Path) {
+        let hooks_dir = claude_dir.join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        std::fs::write(hooks_dir.join(CLAUDE_LIFECYCLE_HOOK_SCRIPT), "#!/bin/sh\n").unwrap();
+        std::fs::write(
+            hooks_dir.join(CLAUDE_PERMISSION_GATE_SCRIPT),
+            "#!/usr/bin/env python3\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn ensures_claude_hook_settings_from_existing_hook_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        write_existing_claude_hooks(&claude_dir);
+        let settings_path = claude_dir.join("settings.json");
+        std::fs::write(
+            &settings_path,
+            serde_json::to_vec_pretty(&json!({
+                "hooks": {
+                    "PreToolUse": [
+                        {"hooks": [{"type": "command", "command": "/usr/local/bin/custom-hook.sh"}]},
+                        {"hooks": [{"type": "command", "command": "/old/longhouse-old-hook.sh"}]},
+                        {"hooks": [{"type": "command", "command": "/old/longhouse-permission-gate.py"}]}
+                    ],
+                    "Stop": [
+                        {"hooks": [{"type": "command", "command": "/old/longhouse-stop.sh"}]}
+                    ]
+                }
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        ensure_claude_hook_settings(Some(&claude_dir), ClaudePermissionMode::RemoteApprove)
+            .unwrap();
+
+        let updated: Value =
+            serde_json::from_slice(&std::fs::read(&settings_path).unwrap()).unwrap();
+        let pre_tool_use = updated["hooks"]["PreToolUse"].as_array().unwrap();
+        let pre_commands = pre_tool_use
+            .iter()
+            .flat_map(|entry| hook_commands(entry))
+            .collect::<Vec<_>>();
+        assert!(pre_commands.contains(&"/usr/local/bin/custom-hook.sh"));
+        assert!(pre_commands
+            .iter()
+            .any(|command| command.ends_with(CLAUDE_LIFECYCLE_HOOK_SCRIPT)));
+        assert!(pre_commands
+            .iter()
+            .any(|command| command.ends_with(CLAUDE_PERMISSION_GATE_SCRIPT)));
+        assert!(!pre_commands.iter().any(|command| command.contains("/old/")));
+
+        for event in CLAUDE_LIFECYCLE_HOOK_EVENTS {
+            let commands = updated["hooks"][*event]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|entry| hook_commands(entry))
+                .collect::<Vec<_>>();
+            assert!(commands
+                .iter()
+                .any(|command| command.ends_with(CLAUDE_LIFECYCLE_HOOK_SCRIPT)));
+        }
+        let stop_commands = updated["hooks"]["Stop"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|entry| hook_commands(entry))
+            .collect::<Vec<_>>();
+        assert!(stop_commands
+            .iter()
+            .any(|command| command.ends_with(CLAUDE_LIFECYCLE_HOOK_SCRIPT)));
+    }
+
+    #[test]
+    fn remote_approve_requires_existing_permission_gate_hook() {
+        let temp = tempfile::tempdir().unwrap();
+        let claude_dir = temp.path().join(".claude");
+        let hooks_dir = claude_dir.join("hooks");
+        std::fs::create_dir_all(&hooks_dir).unwrap();
+        std::fs::write(hooks_dir.join(CLAUDE_LIFECYCLE_HOOK_SCRIPT), "#!/bin/sh\n").unwrap();
+
+        let err =
+            ensure_claude_hook_settings(Some(&claude_dir), ClaudePermissionMode::RemoteApprove)
+                .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("Claude Longhouse permission gate hook is missing"));
     }
 
     #[test]
@@ -589,6 +870,58 @@ mod tests {
         assert!(!plan.shell_script.contains("device-token-secret"));
         assert!(!plan.args.join(" ").contains("hook-token-secret"));
         assert_eq!(plan.hook_token_env, "hook-token-secret");
+    }
+
+    #[test]
+    fn launch_command_passes_hook_token_only_through_env() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("workspace")).unwrap();
+        let config = test_config(temp.path());
+        let plan = build_launch_command_plan(&config).unwrap();
+
+        let command = build_launch_command(&config, &plan);
+
+        assert_eq!(command.get_current_dir(), Some(config.cwd.as_path()));
+        let envs = command.get_envs().collect::<Vec<_>>();
+        assert!(envs.iter().any(|(key, value)| {
+            *key == OsStr::new("LONGHOUSE_HOOK_TOKEN")
+                && value.as_deref() == Some(OsStr::new("hook-token-secret"))
+        }));
+        assert!(envs
+            .iter()
+            .any(|(key, value)| *key == OsStr::new("CLAUDE_CONFIG_DIR") && value.is_none()));
+        assert!(!command
+            .get_args()
+            .any(|arg| arg.to_string_lossy().contains("hook-token-secret")));
+    }
+
+    #[test]
+    fn script_args_match_platform_contract() {
+        let script = "exec claude";
+        let log_path = Path::new("/tmp/claude-channel.log");
+        let args = build_script_args(script, log_path);
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            args,
+            vec![
+                "-q".to_string(),
+                "/tmp/claude-channel.log".to_string(),
+                "zsh".to_string(),
+                "-lc".to_string(),
+                script.to_string()
+            ]
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            args,
+            vec![
+                "-q".to_string(),
+                "-c".to_string(),
+                "zsh -lc 'exec claude'".to_string(),
+                "/tmp/claude-channel.log".to_string()
+            ]
+        );
     }
 
     #[test]
