@@ -218,6 +218,29 @@ pub(crate) async fn ship_opencode_database(
     tracker: Option<&ConsecutiveErrorTracker>,
     parse_tracker: Option<&RecentIssueTracker>,
 ) -> Result<(usize, usize)> {
+    ship_opencode_database_with_trace(
+        path,
+        conn,
+        client,
+        algo,
+        max_batch_bytes,
+        tracker,
+        parse_tracker,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn ship_opencode_database_with_trace(
+    path: &Path,
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+    tracker: Option<&ConsecutiveErrorTracker>,
+    parse_tracker: Option<&RecentIssueTracker>,
+    ship_trace: Option<&ShipTraceContext>,
+) -> Result<(usize, usize)> {
     let file_state = FileState::new(conn);
     ensure_opencode_sqlite_state_table(conn)?;
     let sessions = opencode_db::list_opencode_sessions(path)?;
@@ -312,7 +335,31 @@ pub(crate) async fn ship_opencode_database(
                 );
                 continue;
             }
-            client.ship(compressed).await
+            let http_send_started_at_ms = chrono::Utc::now().timestamp_millis();
+            let trace_header = ship_trace
+                .map(|trace| {
+                    let trace_item = ShipItem {
+                        path_str: candidate.source_key.clone(),
+                        provider: "opencode".to_string(),
+                        offset: current_offset,
+                        new_offset,
+                        event_count: parse_result.events.len(),
+                        session_id: longhouse_session_id.clone(),
+                        source_line_offsets: Vec::new(),
+                        source_line_refs: Vec::new(),
+                        media_objects: Vec::new(),
+                        compressed: Vec::new(),
+                    };
+                    build_ship_trace_header_value(&trace_item, trace, http_send_started_at_ms)
+                })
+                .and_then(|header_record| serde_json::to_string(&header_record).ok());
+            client
+                .ship_with_trace_and_timeout(
+                    compressed,
+                    trace_header.as_deref(),
+                    request_timeout_for_trace(ship_trace),
+                )
+                .await
         } else {
             ShipResult::PayloadTooLarge(format!(
                 "compressed OpenCode SQLite payload is {compressed_len} bytes which exceeds max_batch_bytes {max_batch_bytes}"
@@ -3584,14 +3631,14 @@ mod tests {
             .any(|line| line.eq_ignore_ascii_case("expect: 100-continue"))
     }
 
-    fn read_request_body(stream: &mut std::net::TcpStream) -> Vec<u8> {
+    fn read_request(stream: &mut std::net::TcpStream) -> (String, Vec<u8>) {
         let mut buf = Vec::new();
         let mut chunk = [0_u8; 4096];
 
         loop {
             let n = stream.read(&mut chunk).unwrap();
             if n == 0 {
-                return Vec::new();
+                return (String::new(), Vec::new());
             }
             buf.extend_from_slice(&chunk[..n]);
             if let Some(header_end) = find_header_end(&buf) {
@@ -3607,9 +3654,16 @@ mod tests {
                     }
                     buf.extend_from_slice(&chunk[..n]);
                 }
-                return buf[body_start..body_start + content_length].to_vec();
+                return (
+                    String::from_utf8_lossy(&buf[..body_start]).to_string(),
+                    buf[body_start..body_start + content_length].to_vec(),
+                );
             }
         }
+    }
+
+    fn read_request_body(stream: &mut std::net::TcpStream) -> Vec<u8> {
+        read_request(stream).1
     }
 
     fn spawn_http_sequence_server(
@@ -3644,6 +3698,50 @@ mod tests {
         });
 
         (format!("http://{}", addr), captured, handle)
+    }
+
+    fn spawn_http_sequence_server_with_headers(
+        responses: &[(&str, &str)],
+    ) -> (
+        String,
+        Arc<Mutex<Vec<(String, Vec<u8>)>>>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let responses: Vec<(String, String)> = responses
+            .iter()
+            .map(|(status, body)| ((*status).to_string(), (*body).to_string()))
+            .collect();
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let captured_clone = Arc::clone(&captured);
+
+        let handle = std::thread::spawn(move || {
+            for (status_line, body) in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_request(&mut stream);
+                captured_clone.lock().unwrap().push(request);
+                let response = format!(
+                    "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+                    status_line,
+                    body.len(),
+                    body,
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+
+        (format!("http://{}", addr), captured, handle)
+    }
+
+    fn request_header_value(headers: &str, name: &str) -> Option<String> {
+        headers.lines().find_map(|line| {
+            let (header_name, value) = line.split_once(':')?;
+            header_name
+                .trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_string())
+        })
     }
 
     fn decode_payload_source_offsets(compressed: &[u8]) -> Vec<u64> {
@@ -3886,6 +3984,51 @@ mod tests {
         .await
         .unwrap();
         assert_eq!((skipped_sessions, skipped_events), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn test_ship_opencode_database_with_trace_sends_live_header() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_opencode_fixture_db(&db_path);
+        let (_state_file, conn) = make_db();
+        let (url, captured, handle) = spawn_http_sequence_server_with_headers(&[("200 OK", "{}")]);
+        let client = make_test_client(&url);
+        let trace = make_ship_trace("live_transcript");
+
+        let (sessions, events) = ship_opencode_database_with_trace(
+            &db_path,
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+            Some(&trace),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!((sessions, events), (1, 2));
+        handle.join().unwrap();
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let header = request_header_value(&captured[0].0, "X-Longhouse-Ship-Trace")
+            .expect("OpenCode SQLite ship should include trace header");
+        assert!(header.len() < 4096);
+        let value: serde_json::Value = serde_json::from_str(&header).unwrap();
+        assert_eq!(
+            value.get("schema").and_then(Value::as_str),
+            Some("ship_trace.v1")
+        );
+        assert_eq!(
+            value.get("work_context").and_then(Value::as_str),
+            Some("live_transcript")
+        );
+        assert_eq!(
+            value.get("provider").and_then(Value::as_str),
+            Some("opencode")
+        );
     }
 
     #[tokio::test]

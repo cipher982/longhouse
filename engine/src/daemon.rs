@@ -31,8 +31,8 @@ use crate::flight::FlightRecorder;
 use crate::heartbeat;
 use crate::managed_bridge_scan;
 use crate::managed_claude_scan;
-use crate::managed_opencode_scan;
 use crate::managed_opencode_reaper::ManagedOpenCodeReaper;
+use crate::managed_opencode_scan;
 use crate::managed_reaper::ManagedBridgeReaper;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
@@ -2758,7 +2758,29 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
 
     if is_opencode_database_job(&result.job) {
         let file_start = Instant::now();
-        match shipper::ship_opencode_database(
+        let opencode_trace = shipper::ShipTraceContext {
+            work_context: work_context(result.job.priority),
+            observation_source: result.job.observation.source,
+            observed_at_ms: result.job.observation.observed_at_ms,
+            latest_observed_at_ms: result.job.observation.latest_observed_at_ms,
+            wake_received_at_ms: result.job.observation.wake_received_at_ms,
+            enqueued_at_ms: result.job.observation.enqueued_at_ms,
+            job_started_at_ms,
+            prepare_started_at_ms: job_started_at_ms,
+            prepare_finished_at_ms: chrono::Utc::now().timestamp_millis(),
+            prepare_blocking_queue_wait_ms: None,
+            prepare_open_db_ms: None,
+            prepare_identity_ms: None,
+            prepare_cursor_ms: None,
+            prepare_binding_wait_ms: None,
+            prepare_parse_ms: None,
+            prepare_batch_build_ms: None,
+            session_id_hint: result.job.observation.session_id.clone(),
+            turn_id: result.job.observation.turn_id.clone(),
+            wake_reason: result.job.observation.wake_reason.clone(),
+            file_len_hint: result.job.observation.file_len_hint,
+        };
+        match shipper::ship_opencode_database_with_trace(
             &result.job.path,
             &conn,
             &task_context.client,
@@ -2766,6 +2788,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             task_context.shipper_config.max_batch_bytes,
             Some(&task_context.tracker),
             Some(&task_context.parse_tracker),
+            Some(&opencode_trace),
         )
         .await
         {
