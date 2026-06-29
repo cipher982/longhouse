@@ -88,6 +88,13 @@ async function ingestSession(
   const timestamp = overrides.started_at || new Date().toISOString();
 
   const ingest = await request.post("/api/agents/ingest", {
+    headers: {
+      "X-Longhouse-Ship-Trace": JSON.stringify({
+        schema: "ship_trace.v1",
+        work_context: "live_transcript",
+        trace_id: `e2e:${sessionId}`,
+      }),
+    },
     data: {
       id: sessionId,
       provider: overrides.provider || "claude",
