@@ -68,6 +68,13 @@ def test_plist_includes_archive_repair_mode():
     assert "paused" in plist
 
 
+def test_plist_normalizes_archive_repair_mode_synonym():
+    config = _make_config(archive_repair_mode="resume")
+    plist = _generate_launchd_plist(config)
+    assert "trickle" in plist
+    assert "resume" not in plist
+
+
 def test_plist_xml_escapes_ampersand():
     """& in a machine name must become &amp; in plist XML."""
     config = _make_config(machine_name="work&laptop")

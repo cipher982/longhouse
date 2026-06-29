@@ -110,8 +110,12 @@ def _default_archive_repair_mode_for_url(url: str) -> str:
 
 def _validate_archive_repair_mode(mode: str) -> str:
     normalized = mode.strip().lower()
-    if normalized in {"paused", "trickle", "drain"}:
-        return normalized
+    if normalized in {"paused", "pause"}:
+        return "paused"
+    if normalized in {"trickle", "resume"}:
+        return "trickle"
+    if normalized in {"drain", "drain-now"}:
+        return "drain"
     raise ValueError("archive_repair_mode must be one of: paused, trickle, drain")
 
 

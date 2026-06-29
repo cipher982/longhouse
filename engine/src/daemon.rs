@@ -384,10 +384,13 @@ fn apply_archive_repair_control(
 ) {
     let mode = control.normalized_mode(default_mode);
     payload.archive_backlog.mode = mode.as_str().to_string();
-    if mode.is_paused() && payload.archive_backlog.pending_ranges > 0 {
-        payload.archive_backlog.state = "paused".to_string();
-    } else if mode == ArchiveRepairMode::Drain && payload.archive_backlog.pending_ranges > 0 {
-        payload.archive_backlog.state = "draining".to_string();
+    if payload.archive_backlog.pending_ranges > 0 {
+        payload.archive_backlog.state = match mode {
+            ArchiveRepairMode::Paused => "paused",
+            ArchiveRepairMode::Trickle => "pending",
+            ArchiveRepairMode::Drain => "draining",
+        }
+        .to_string();
     }
 }
 
@@ -4390,6 +4393,23 @@ mod tests {
         assert_eq!(payload.archive_backlog.mode, "paused");
         assert_eq!(payload.archive_backlog.state, "paused");
         assert!(!payload.is_offline);
+    }
+
+    #[test]
+    fn test_archive_trickle_status_does_not_keep_stale_paused_state() {
+        let mut payload = empty_heartbeat_payload();
+        payload.archive_backlog.pending_ranges = 2;
+        payload.archive_backlog.state = "paused".to_string();
+        let control = ArchiveRepairControl {
+            mode: Some("trickle".to_string()),
+            max_tick_bytes: None,
+            include_huge: None,
+        };
+
+        apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
+
+        assert_eq!(payload.archive_backlog.mode, "trickle");
+        assert_eq!(payload.archive_backlog.state, "pending");
     }
 
     #[tokio::test]
