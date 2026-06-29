@@ -1743,6 +1743,34 @@ class AgentsStore:
             max_len=_SESSION_LAST_VISIBLE_PREVIEW_CHARS,
         )
 
+    def _apply_incremental_session_count_deltas(
+        self,
+        session_id: UUID,
+        *,
+        user_delta: int,
+        assistant_delta: int,
+        tool_delta: int,
+        first_user_preview: str | None,
+        last_visible_preview: str | None,
+    ) -> None:
+        """Apply cheap count deltas for archive-admitted compatibility ingest."""
+        session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        if session_obj is None:
+            return
+        session_obj.user_messages = int(session_obj.user_messages or 0) + user_delta
+        session_obj.assistant_messages = int(session_obj.assistant_messages or 0) + assistant_delta
+        session_obj.tool_calls = int(session_obj.tool_calls or 0) + tool_delta
+        if first_user_preview and not session_obj.first_user_message_preview:
+            session_obj.first_user_message_preview = _bounded_session_preview(
+                first_user_preview,
+                max_len=_SESSION_FIRST_USER_PREVIEW_CHARS,
+            )
+        if last_visible_preview:
+            session_obj.last_visible_text_preview = _bounded_session_preview(
+                last_visible_preview,
+                max_len=_SESSION_LAST_VISIBLE_PREVIEW_CHARS,
+            )
+
     def _align_head_branch_from_leaf_uuid(
         self,
         session_id: UUID,
@@ -1788,6 +1816,7 @@ class AgentsStore:
         chunk_size: int | None = None,
         synchronous_projections: bool = True,
         synchronous_session_counts: bool | None = None,
+        incremental_session_counts: bool = False,
         write_legacy_raw: bool = True,
         raw_source_archived: bool = False,
     ) -> IngestResult:
@@ -1804,6 +1833,8 @@ class AgentsStore:
                 projections that can be reconstructed after archive repair.
             synchronous_session_counts: Override whether cheap session message
                 counters update inline. Defaults to ``synchronous_projections``.
+            incremental_session_counts: When true and full counter recompute is
+                disabled, apply cheap deltas for this request's inserted events.
             write_legacy_raw: When false, skip legacy raw payload persistence
                 after archive-primary has stored source fidelity.
             raw_source_archived: True when this ingest's source payload was
@@ -2145,6 +2176,11 @@ class AgentsStore:
         leaf_uuid_hint: str | None = None
         latest_inserted_timestamp: datetime | None = None
         latest_inserted_event_id: int | None = None
+        user_count_delta = 0
+        assistant_count_delta = 0
+        tool_count_delta = 0
+        first_user_preview_delta: tuple[datetime, int, str] | None = None
+        last_visible_preview_delta: tuple[datetime, int, str] | None = None
 
         # Chunk commits every N events to release the SQLite write lock
         # periodically. A single 1000+ event transaction can hold the lock for
@@ -2246,6 +2282,26 @@ class AgentsStore:
                     reduction = None
                 if reduction is not None and reduction.inserted:
                     events_inserted += 1
+                    role = str(event_data.role or "").strip().lower()
+                    content_text = event_data.content_text
+                    content_clean = str(content_text).strip() if content_text is not None else None
+                    is_warmup = bool(role == "user" and content_clean and content_clean.lower() == "warmup")
+                    event_ts = _normalize_utc_naive(event_data.timestamp) or datetime.min
+                    event_order = int(event_data.source_offset or 0)
+                    if role == "user" and not is_warmup:
+                        user_count_delta += 1
+                        if content_clean:
+                            candidate = (event_ts, event_order, content_clean)
+                            if first_user_preview_delta is None or candidate[:2] < first_user_preview_delta[:2]:
+                                first_user_preview_delta = candidate
+                    elif role == "assistant" and event_data.tool_name is not None:
+                        tool_count_delta += 1
+                    elif role == "assistant":
+                        assistant_count_delta += 1
+                    if role in {"user", "assistant"} and (role != "assistant" or event_data.tool_name is None) and content_clean:
+                        candidate = (event_ts, event_order, content_clean)
+                        if last_visible_preview_delta is None or candidate[:2] > last_visible_preview_delta[:2]:
+                            last_visible_preview_delta = candidate
                     if reduction.event is not None and isinstance(reduction.event.id, int):
                         latest_inserted_event_id = reduction.event.id
                     if fts_triggers_dropped:
@@ -2395,6 +2451,15 @@ class AgentsStore:
         sync_session_counts = synchronous_projections if synchronous_session_counts is None else synchronous_session_counts
         if sync_session_counts:
             self._sync_session_counts_to_head(session_id, head_branch_for_counts)
+        elif incremental_session_counts:
+            self._apply_incremental_session_count_deltas(
+                session_id,
+                user_delta=user_count_delta,
+                assistant_delta=assistant_count_delta,
+                tool_delta=tool_count_delta,
+                first_user_preview=first_user_preview_delta[2] if first_user_preview_delta else None,
+                last_visible_preview=last_visible_preview_delta[2] if last_visible_preview_delta else None,
+            )
 
         transcript_changed = bool(source_lines_inserted) or raw_source_archived or not source_lines or rewind_signal is not None
         if events_inserted > 0 and not transcript_changed:

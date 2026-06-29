@@ -98,7 +98,8 @@ _INGEST_CHUNK_BY_LABEL: dict[str, int] = {
 
 _ARCHIVE_INGEST_LABELS = {"ingest", "ingest-replay", "ingest-scan"}
 _DEFER_DERIVED_PROJECTION_LABELS = {"ingest", "ingest-replay", "ingest-scan"}
-_SYNC_SESSION_COUNT_LABELS = {"ingest-live", "ingest"}
+_SYNC_SESSION_COUNT_LABELS = {"ingest-live"}
+_INCREMENTAL_SESSION_COUNT_LABELS = {"ingest"}
 _ARCHIVE_INGEST_BACKPRESSURE_DETAIL = "Archive ingest backlog is throttled; retry shortly"
 _ARCHIVE_INGEST_BACKPRESSURE_KIND = "archive_ingest_backpressure"
 _ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS = 5
@@ -133,6 +134,10 @@ def _sync_session_counts_for_label(label: str) -> bool:
 
 def _sync_derived_projections_for_label(label: str) -> bool:
     return label not in _DEFER_DERIVED_PROJECTION_LABELS
+
+
+def _incremental_session_counts_for_label(label: str) -> bool:
+    return label in _INCREMENTAL_SESSION_COUNT_LABELS
 
 
 def _stage_timing_header_value(stage_ms: dict[str, float]) -> str:
@@ -940,6 +945,7 @@ async def ingest_session(
                     chunk_size=ingest_chunk,
                     synchronous_projections=_sync_derived_projections_for_label(write_label),
                     synchronous_session_counts=_sync_session_counts_for_label(write_label),
+                    incremental_session_counts=_incremental_session_counts_for_label(write_label),
                     write_legacy_raw=legacy_raw_effective,
                     raw_source_archived=archive_primary_state == "written" and archive_primary_records_written > 0,
                 )

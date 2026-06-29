@@ -30,6 +30,7 @@ from zerg.models.agents import SessionObservation
 from zerg.routers.agents_ingest import _ARCHIVE_INGEST_MAX_IN_FLIGHT
 from zerg.routers.agents_ingest import _acquire_archive_ingest_slot
 from zerg.routers.agents_ingest import _archive_retry_after_for_queue_depth
+from zerg.routers.agents_ingest import _incremental_session_counts_for_label
 from zerg.routers.agents_ingest import _ingest_lane_for_label
 from zerg.routers.agents_ingest import _release_archive_ingest_slot
 from zerg.routers.agents_ingest import _stage_timing_header_value
@@ -69,9 +70,11 @@ def test_ship_trace_live_transcript_uses_live_ingest_label():
     assert _ingest_lane_for_label("ingest-replay") == "archive"
     assert _ingest_lane_for_label("ingest-scan") == "archive"
     assert _ingest_lane_for_label("ingest") == "archive"
-    assert _sync_session_counts_for_label("ingest")
+    assert not _sync_session_counts_for_label("ingest")
+    assert _incremental_session_counts_for_label("ingest")
     assert not _sync_derived_projections_for_label("ingest")
     assert not _sync_session_counts_for_label("ingest-replay")
+    assert not _incremental_session_counts_for_label("ingest-replay")
     assert not _sync_derived_projections_for_label("ingest-replay")
 
 
