@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import re
 import sys
-import tomllib
 from pathlib import Path
 from typing import Any
+
+import tomllib
 
 DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     {
@@ -104,7 +107,10 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "path": "server/zerg/cli/claude_channel.py",
         "owner_area": "claude-native",
         "replacement_phase": "phase3",
-        "reason": "Python compatibility claude-channel CLI remains, but live serve/send/interrupt/inspect dispatch to longhouse-engine.",
+        "reason": (
+            "Python compatibility claude-channel CLI remains, but live serve/send/interrupt/inspect dispatch "
+            "to longhouse-engine."
+        ),
         "device_command": True,
         "python_dependency_kind": "adapter",
     },
@@ -121,7 +127,10 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         ],
         "owner_area": "claude-native",
         "replacement_phase": "phase3",
-        "reason": "Human/local claude-channel send, interrupt, and inspect compatibility commands now resolve to native longhouse-engine subcommands.",
+        "reason": (
+            "Human/local claude-channel send, interrupt, and inspect compatibility commands now resolve to native "
+            "longhouse-engine subcommands."
+        ),
         "device_command": True,
     },
     {
@@ -131,7 +140,10 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "path": "server/zerg/services/claude_channel_bridge.py",
         "owner_area": "claude-native",
         "replacement_phase": "phase3",
-        "reason": "Python still backs human-launch command construction, channel config helpers, and compatibility state path helpers.",
+        "reason": (
+            "Python still backs human-launch command construction, channel config helpers, and compatibility "
+            "state path helpers."
+        ),
         "device_command": True,
         "python_dependency_kind": "adapter",
     },
@@ -144,6 +156,63 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "replacement_phase": "server-track",
         "reason": "Runtime Host text projection helper, not a device provider-control entrypoint.",
         "device_command": False,
+    },
+    {
+        "id": "device-hook-installer-python",
+        "category": "transitional_device",
+        "provider": "all",
+        "path": "server/zerg/services/shipper/hooks.py",
+        "owner_area": "native-health-repair",
+        "replacement_phase": "phase7",
+        "reason": "Python connect/repair code still installs provider hooks onto the user's device.",
+        "device_command": True,
+        "python_dependency_kind": "hook_installer",
+    },
+    {
+        "id": "claude-lifecycle-hook-shell",
+        "category": "native_exempt",
+        "provider": "claude",
+        "path": "server/zerg/services/shipper/hooks.py",
+        "symbol": "HOOK_SCRIPT",
+        "installed_path": "~/.claude/hooks/longhouse-hook.sh",
+        "owner_area": "native-health-repair",
+        "replacement_phase": "exempt",
+        "reason": (
+            "Installed Claude lifecycle hook is shell text that writes local outbox files and calls "
+            "longhouse-engine; it does not require Python."
+        ),
+        "device_command": True,
+    },
+    {
+        "id": "claude-permission-gate-hook-python",
+        "category": "transitional_device",
+        "provider": "claude",
+        "path": "server/zerg/services/shipper/hooks.py",
+        "symbol": "PERMISSION_GATE_SCRIPT",
+        "installed_path": "~/.claude/hooks/longhouse-permission-gate.py",
+        "owner_area": "claude-native",
+        "replacement_phase": "phase3",
+        "reason": (
+            "Claude hook repair always installs the Python PreToolUse permission gate on the device; it executes "
+            "only when remote-approve mode enables it."
+        ),
+        "device_command": True,
+        "python_dependency_kind": "hook_script",
+    },
+    {
+        "id": "codex-lifecycle-hook-shell",
+        "category": "native_exempt",
+        "provider": "codex",
+        "path": "server/zerg/services/shipper/hooks.py",
+        "symbol": "CODEX_HOOK_SCRIPT",
+        "installed_path": "~/.codex/hooks/longhouse-codex-hook.sh",
+        "owner_area": "native-health-repair",
+        "replacement_phase": "exempt",
+        "reason": (
+            "Installed Codex lifecycle hook is shell text that writes local outbox files and calls "
+            "longhouse-engine; it does not require Python."
+        ),
+        "device_command": True,
     },
     {
         "id": "codex-launch-wrapper",
@@ -174,7 +243,9 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "path": "server/zerg/cli/opencode_channel.py",
         "owner_area": "native-device-entrypoint",
         "replacement_phase": "phase5",
-        "reason": "Compatibility CLI remains for attach and local bridge operations while native entrypoint is designed.",
+        "reason": (
+            "Compatibility CLI remains for attach and local bridge operations while native entrypoint is designed."
+        ),
         "device_command": True,
         "python_dependency_kind": "entrypoint",
     },
@@ -231,6 +302,22 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "reason": "Python installs and manages the hook-inbox adapter used by agy.",
         "device_command": True,
         "python_dependency_kind": "control_shellout",
+    },
+    {
+        "id": "antigravity-hook-script-python",
+        "category": "transitional_device",
+        "provider": "antigravity",
+        "path": "server/zerg/services/antigravity_hook_inbox.py",
+        "symbol": "_ANTIGRAVITY_HOOK_SCRIPT",
+        "installed_path": "~/.gemini/antigravity-cli/plugins/longhouse-runtime/longhouse-antigravity-hook.sh",
+        "owner_area": "antigravity-decision",
+        "replacement_phase": "phase6",
+        "reason": (
+            "Installed Antigravity hook is a shell wrapper, but it invokes python3 on the device to process "
+            "hook payloads."
+        ),
+        "device_command": True,
+        "python_dependency_kind": "hook_script",
     },
     {
         "id": "local-health-cli-python",
@@ -318,11 +405,14 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
         "native_dispatch_symbols": [
             "claude_channel_send_text",
             "claude_channel_interrupt",
-            "claude_channel_control_result"
+            "claude_channel_control_result",
         ],
         "owner_area": "claude-native",
         "replacement_phase": "phase3",
-        "reason": "Rust Machine Agent routes Claude live control through native channel-control code instead of the Python-packaged longhouse CLI.",
+        "reason": (
+            "Rust Machine Agent routes Claude live control through native channel-control code instead of the "
+            "Python-packaged longhouse CLI."
+        ),
         "device_command": True,
     },
     {
@@ -353,18 +443,63 @@ PROVIDER_CONTROL_PYTHON_GLOBS = (
     "server/zerg/cli/*antigravity*.py",
     "server/zerg/services/local_health.py",
     "server/zerg/services/desktop_app.py",
+    "server/zerg/services/shipper/hooks.py",
     "server/zerg/services/*claude_channel*.py",
     "server/zerg/services/*opencode*.py",
     "server/zerg/services/*antigravity*.py",
 )
-VALID_CATEGORIES = {"native_device", "transitional_device", "legacy_compat", "server_only", "test_only"}
-DEVICE_CATEGORIES = {"native_device", "transitional_device", "legacy_compat"}
+DEVICE_HOOK_SOURCE_GLOBS = (
+    "server/zerg/services/shipper/hooks.py",
+    "server/zerg/services/*hook*.py",
+)
+INSTALLED_DEVICE_ARTIFACTS: tuple[dict[str, Any], ...] = (
+    {
+        "installed_path": "~/.claude/hooks/longhouse-hook.sh",
+        "path": "server/zerg/services/shipper/hooks.py",
+        "symbol": "HOOK_SCRIPT",
+        "provider": "claude",
+        "requires_python_runtime": False,
+    },
+    {
+        "installed_path": "~/.claude/hooks/longhouse-permission-gate.py",
+        "path": "server/zerg/services/shipper/hooks.py",
+        "symbol": "PERMISSION_GATE_SCRIPT",
+        "provider": "claude",
+        "requires_python_runtime": True,
+    },
+    {
+        "installed_path": "~/.codex/hooks/longhouse-codex-hook.sh",
+        "path": "server/zerg/services/shipper/hooks.py",
+        "symbol": "CODEX_HOOK_SCRIPT",
+        "provider": "codex",
+        "requires_python_runtime": False,
+    },
+    {
+        "installed_path": "~/.gemini/antigravity-cli/plugins/longhouse-runtime/longhouse-antigravity-hook.sh",
+        "path": "server/zerg/services/antigravity_hook_inbox.py",
+        "symbol": "_ANTIGRAVITY_HOOK_SCRIPT",
+        "provider": "antigravity",
+        "requires_python_runtime": True,
+    },
+)
+VALID_CATEGORIES = {
+    "blocker",
+    "legacy_compat",
+    "native_device",
+    "native_exempt",
+    "server_only",
+    "test_only",
+    "transitional_device",
+}
+DEVICE_CATEGORIES = {"blocker", "native_device", "native_exempt", "transitional_device", "legacy_compat"}
 TRANSITIONAL_CATEGORIES = {"transitional_device", "legacy_compat"}
 PYTHON_DEPENDENCY_KINDS = {
     "adapter",
     "control_shellout",
     "entrypoint",
     "health_repair",
+    "hook_installer",
+    "hook_script",
     "proof",
     "shared_scaffold",
 }
@@ -372,9 +507,11 @@ REMOTE_NATIVE_ONLY_KINDS = {
     "adapter",
     "entrypoint",
     "health_repair",
+    "hook_installer",
     "proof",
     "shared_scaffold",
 }
+PYTHON_RUNTIME_PATTERN = re.compile(r"(?<![A-Za-z0-9_])python(?:3(?:\.\d+)?)?(?![A-Za-z0-9_])", re.IGNORECASE)
 
 
 def _load_inventory(path: Path | None) -> list[dict[str, Any]]:
@@ -402,6 +539,44 @@ def _as_string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [item for item in value if isinstance(item, str)]
     return []
+
+
+def _string_assignments(path: Path) -> dict[str, str]:
+    try:
+        module = ast.parse(path.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return {}
+    assignments: dict[str, str] = {}
+    for node in module.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    assignments[target.id] = node.value.value
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+        ):
+            assignments[node.target.id] = node.value.value
+    return assignments
+
+
+def _installed_hook_templates(root: Path) -> dict[tuple[str, str], str]:
+    templates: dict[tuple[str, str], str] = {}
+    for pattern in DEVICE_HOOK_SOURCE_GLOBS:
+        for path in root.glob(pattern):
+            if not path.is_file():
+                continue
+            rel_path = _rel(path, root)
+            for symbol, value in _string_assignments(path).items():
+                if "HOOK" in symbol and "SCRIPT" in symbol and value.lstrip().startswith("#!"):
+                    templates[(rel_path, symbol)] = value
+    return templates
+
+
+def _requires_python_runtime(script_text: str) -> bool:
+    return bool(PYTHON_RUNTIME_PATTERN.search(script_text))
 
 
 def _rel(path: Path, root: Path) -> str:
@@ -456,6 +631,21 @@ def _validate_inventory(root: Path, inventory: list[dict[str, Any]]) -> list[str
     contracts = _contract_items(root)
     providers = {str(item.get("provider") or "").strip() for item in contracts}
     inventory_paths = {str(item.get("path") or "").strip() for item in inventory}
+    inventory_source_symbols = {
+        (str(item.get("path") or "").strip(), str(item.get("symbol") or "").strip())
+        for item in inventory
+        if item.get("symbol")
+    }
+    inventory_installed_paths = {
+        str(item.get("installed_path") or "").strip()
+        for item in inventory
+        if item.get("installed_path")
+    }
+    installed_hook_templates = _installed_hook_templates(root)
+    installed_artifact_keys = {
+        (str(artifact["path"]), str(artifact["symbol"]))
+        for artifact in INSTALLED_DEVICE_ARTIFACTS
+    }
 
     seen_ids: set[str] = set()
     for item in inventory:
@@ -472,6 +662,8 @@ def _validate_inventory(root: Path, inventory: list[dict[str, Any]]) -> list[str
         seen_ids.add(item_id)
         if category not in VALID_CATEGORIES:
             errors.append(f"{item_id}: category {category!r} must be one of {sorted(VALID_CATEGORIES)}")
+        if category == "blocker":
+            errors.append(f"{item_id}: blocker entries must be resolved before the no-Python device path can pass")
         if not path_value:
             errors.append(f"{item_id}: path is required")
         elif not (root / path_value).exists():
@@ -497,9 +689,13 @@ def _validate_inventory(root: Path, inventory: list[dict[str, Any]]) -> list[str
                 )
         if item.get("device_command") is True and category not in DEVICE_CATEGORIES:
             errors.append(f"{item_id}: device_command=true cannot be classified as {category}")
+        installed_path = str(item.get("installed_path") or "").strip()
+        if installed_path and category not in DEVICE_CATEGORIES:
+            errors.append(f"{item_id}: installed_path entries must be device-path categories, not {category}")
         symbol = str(item.get("symbol") or "").strip()
         if symbol and path_value:
-            text = (root / path_value).read_text(encoding="utf-8", errors="ignore") if (root / path_value).exists() else ""
+            source_path = root / path_value
+            text = source_path.read_text(encoding="utf-8", errors="ignore") if source_path.exists() else ""
             if symbol not in text:
                 errors.append(f"{item_id}: symbol {symbol!r} was not found in {path_value}")
             for native_symbol in _as_string_list(item.get("native_dispatch_symbols")):
@@ -510,6 +706,60 @@ def _validate_inventory(root: Path, inventory: list[dict[str, Any]]) -> list[str
         if path not in inventory_paths:
             errors.append(f"{path} is provider-control Python but is missing from no-Python device inventory")
 
+    for path, symbol in sorted(installed_hook_templates):
+        if (path, symbol) not in installed_artifact_keys:
+            errors.append(
+                f"{path}::{symbol} looks like an installed device hook script but is missing from "
+                "INSTALLED_DEVICE_ARTIFACTS"
+            )
+        if (path, symbol) not in inventory_source_symbols:
+            errors.append(f"{path}::{symbol} looks like an installed device hook script but is missing from inventory")
+
+    for artifact in INSTALLED_DEVICE_ARTIFACTS:
+        installed_path = str(artifact["installed_path"])
+        if installed_path not in inventory_installed_paths:
+            errors.append(
+                f"{installed_path} is installed device artifact but is missing from no-Python device inventory"
+            )
+            continue
+        entries = [item for item in inventory if str(item.get("installed_path") or "").strip() == installed_path]
+        for item in entries:
+            item_id = str(item.get("id") or installed_path)
+            expected_path = str(artifact["path"])
+            expected_symbol = str(artifact["symbol"])
+            artifact_template = installed_hook_templates.get((expected_path, expected_symbol))
+            if str(item.get("path") or "").strip() != expected_path:
+                errors.append(f"{item_id}: installed artifact {installed_path} must point at {expected_path}")
+            if str(item.get("symbol") or "").strip() != expected_symbol:
+                errors.append(f"{item_id}: installed artifact {installed_path} must track symbol {expected_symbol}")
+            requires_python = bool(artifact.get("requires_python_runtime"))
+            if artifact_template is not None:
+                detected_requires_python = _requires_python_runtime(artifact_template)
+                if detected_requires_python != requires_python:
+                    errors.append(
+                        f"{expected_path}::{expected_symbol} requires_python_runtime={requires_python} "
+                        f"but source template invokes Python={detected_requires_python}"
+                    )
+            if requires_python:
+                if item.get("category") in {"native_device", "native_exempt", "server_only", "test_only"}:
+                    errors.append(
+                        f"{item_id}: Python installed artifact {installed_path} cannot be classified as "
+                        f"{item.get('category')}"
+                    )
+                if str(item.get("python_dependency_kind") or "").strip() != "hook_script":
+                    errors.append(
+                        f"{item_id}: Python installed artifact {installed_path} must use "
+                        "python_dependency_kind=hook_script"
+                    )
+            elif (
+                item.get("category") == "transitional_device"
+                and str(item.get("python_dependency_kind") or "").strip()
+            ):
+                errors.append(
+                    f"{item_id}: non-Python installed artifact {installed_path} must not carry "
+                    "python_dependency_kind"
+                )
+
     for contract in contracts:
         provider = str(contract.get("provider") or "").strip()
         entries = [item for item in inventory if _provider_matches(item.get("provider"), provider)]
@@ -517,9 +767,16 @@ def _validate_inventory(root: Path, inventory: list[dict[str, Any]]) -> list[str
         if not stance_entries:
             errors.append(f"provider {provider} has no no-Python device inventory stance")
         if contract.get("requires_longhouse_cli") is True:
-            transitional = [item for item in entries if item.get("category") in TRANSITIONAL_CATEGORIES]
+            transitional = [
+                item
+                for item in entries
+                if item.get("category") in TRANSITIONAL_CATEGORIES
+                and item.get("provider") != "all"
+            ]
             if not transitional:
-                errors.append(f"provider {provider} requires_longhouse_cli=true but has no transitional_device inventory entry")
+                errors.append(
+                    f"provider {provider} requires_longhouse_cli=true but has no transitional_device inventory entry"
+                )
         else:
             native_remote_blockers = [
                 item

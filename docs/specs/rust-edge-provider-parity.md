@@ -50,6 +50,12 @@ offers a better surface.
   Server Python is out of scope for this provider-control spec, but it must not
   be required for the normal on-device Machine Agent/Desktop/provider-control
   path.
+- **Installed hook artifact**: Script text Longhouse writes into a provider
+  home directory, such as `~/.claude/hooks/longhouse-hook.sh` or
+  `~/.claude/hooks/longhouse-permission-gate.py`. Classification follows
+  whether the installed script invokes a Python interpreter at runtime, not the
+  file extension. A shell hook that invokes `python3` is still device Python
+  debt; a shell hook that does not require Python may be `native_exempt`.
 
 ## Decision Log
 
@@ -152,6 +158,8 @@ control API.
    explicit product decision.
 8. The user-facing device product must not require `uv`, `pip`, a virtualenv, or
    an ambient Python interpreter for managed provider control.
+9. Generated/installed hook scripts count in the no-Python proof surface. A
+   green inventory must not hide Python inside hook templates or installer code.
 
 ## Phase Plan
 

@@ -83,7 +83,8 @@
       "native_target_command": "longhouse-engine device repair",
       "phase1_inventory_ids": [
         "doctor-cli-python",
-        "machine-cli-python"
+        "machine-cli-python",
+        "device-hook-installer-python"
       ],
       "providers": "all",
       "provider_binary_ownership": "not_applicable",
@@ -124,6 +125,7 @@
         "claude-launch-wrapper",
         "claude-channel-bridge",
         "claude-channel-helpers",
+        "claude-permission-gate-hook-python",
         "control-channel-claude-shellout"
       ],
       "providers": [
@@ -190,6 +192,7 @@
         "antigravity-launch-wrapper",
         "antigravity-channel",
         "antigravity-hook-inbox",
+        "antigravity-hook-script-python",
         "control-channel-antigravity-shellout"
       ],
       "providers": [

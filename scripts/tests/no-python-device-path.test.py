@@ -34,15 +34,21 @@ def _write_root(root: Path) -> None:
                 "providers": [
                     _minimal_contract("claude", requires_longhouse_cli=True),
                     _minimal_contract("codex", requires_longhouse_cli=False),
+                    _minimal_contract("antigravity", requires_longhouse_cli=True),
                 ],
             }
         ),
     )
     _write(root / "server/zerg/cli/claude.py", "def main(): pass\n")
     _write(root / "server/zerg/cli/codex.py", "def main(): pass\n")
+    _write(root / "server/zerg/cli/antigravity.py", "def main(): pass\n")
+    _write(root / "server/zerg/cli/antigravity_channel.py", "def main(): pass\n")
     _write(
         root / "engine/src/control_channel.rs",
-        "fn claude_channel_send_text() {}\nfn claude_channel_interrupt() {}\nfn claude_channel_control_result() {}\n",
+        "fn claude_channel_send_text() {}\n"
+        "fn claude_channel_interrupt() {}\n"
+        "fn claude_channel_control_result() {}\n"
+        "fn run_antigravity_channel_command() {}\n",
     )
     _write(
         root / "engine/src/claude_channel_launch.rs",
@@ -51,6 +57,16 @@ def _write_root(root: Path) -> None:
     _write(
         root / "engine/src/claude_channel_server.rs",
         "struct ClaudeChannelServeConfig {}\nfn run() {}\n",
+    )
+    _write(
+        root / "server/zerg/services/shipper/hooks.py",
+        "HOOK_SCRIPT = 'longhouse-hook.sh shell text'\n"
+        "PERMISSION_GATE_SCRIPT = '#!/usr/bin/env python3\\nprint(\"gate\")'\n"
+        "CODEX_HOOK_SCRIPT = 'longhouse-codex-hook.sh shell text'\n",
+    )
+    _write(
+        root / "server/zerg/services/antigravity_hook_inbox.py",
+        "_ANTIGRAVITY_HOOK_SCRIPT = '#!/bin/bash\\npython3 - <<\\'PY\\'\\nPY\\n'\n",
     )
 
 
@@ -83,6 +99,28 @@ def _inventory(*entries: dict) -> list[dict]:
             "reason": "test",
             "device_command": True,
             "python_dependency_kind": "entrypoint",
+        },
+        {
+            "id": "antigravity-wrapper",
+            "category": "transitional_device",
+            "provider": "antigravity",
+            "path": "server/zerg/cli/antigravity.py",
+            "owner_area": "antigravity-decision",
+            "replacement_phase": "phase6",
+            "reason": "test",
+            "device_command": True,
+            "python_dependency_kind": "entrypoint",
+        },
+        {
+            "id": "antigravity-channel",
+            "category": "transitional_device",
+            "provider": "antigravity",
+            "path": "server/zerg/cli/antigravity_channel.py",
+            "owner_area": "antigravity-decision",
+            "replacement_phase": "phase6",
+            "reason": "test",
+            "device_command": True,
+            "python_dependency_kind": "control_shellout",
         },
         {
             "id": "claude-rust-shellout",
@@ -130,6 +168,67 @@ def _inventory(*entries: dict) -> list[dict]:
             "replacement_phase": "phase3",
             "reason": "test",
             "device_command": True,
+        },
+        {
+            "id": "device-hook-installer-python",
+            "category": "transitional_device",
+            "provider": "all",
+            "path": "server/zerg/services/shipper/hooks.py",
+            "owner_area": "native-health-repair",
+            "replacement_phase": "phase7",
+            "reason": "test",
+            "device_command": True,
+            "python_dependency_kind": "hook_installer",
+        },
+        {
+            "id": "claude-lifecycle-hook-shell",
+            "category": "native_exempt",
+            "provider": "claude",
+            "path": "server/zerg/services/shipper/hooks.py",
+            "symbol": "HOOK_SCRIPT",
+            "installed_path": "~/.claude/hooks/longhouse-hook.sh",
+            "owner_area": "native-health-repair",
+            "replacement_phase": "exempt",
+            "reason": "test",
+            "device_command": True,
+        },
+        {
+            "id": "claude-permission-gate-hook-python",
+            "category": "transitional_device",
+            "provider": "claude",
+            "path": "server/zerg/services/shipper/hooks.py",
+            "symbol": "PERMISSION_GATE_SCRIPT",
+            "installed_path": "~/.claude/hooks/longhouse-permission-gate.py",
+            "owner_area": "claude-native",
+            "replacement_phase": "phase3",
+            "reason": "test",
+            "device_command": True,
+            "python_dependency_kind": "hook_script",
+        },
+        {
+            "id": "codex-lifecycle-hook-shell",
+            "category": "native_exempt",
+            "provider": "codex",
+            "path": "server/zerg/services/shipper/hooks.py",
+            "symbol": "CODEX_HOOK_SCRIPT",
+            "installed_path": "~/.codex/hooks/longhouse-codex-hook.sh",
+            "owner_area": "native-health-repair",
+            "replacement_phase": "exempt",
+            "reason": "test",
+            "device_command": True,
+        },
+        {
+            "id": "antigravity-hook-script-python",
+            "category": "transitional_device",
+            "provider": "antigravity",
+            "path": "server/zerg/services/antigravity_hook_inbox.py",
+            "symbol": "_ANTIGRAVITY_HOOK_SCRIPT",
+            "installed_path": "~/.gemini/antigravity-cli/plugins/longhouse-runtime/longhouse-antigravity-hook.sh",
+            "owner_area": "antigravity-decision",
+            "replacement_phase": "phase6",
+            "reason": "test",
+            "device_command": True,
+            "python_dependency_kind": "hook_script",
         },
         *entries,
     ]
@@ -229,6 +328,92 @@ def test_transitional_python_entries_require_dependency_kind() -> None:
         )
 
 
+def test_device_installed_python_hook_requires_inventory_stance() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        inventory = [
+            entry
+            for entry in _inventory()
+            if entry["id"] != "claude-permission-gate-hook-python"
+        ]
+
+        _assert_fails(
+            _run(root, inventory),
+            "~/.claude/hooks/longhouse-permission-gate.py is installed device artifact but is missing",
+        )
+
+
+def test_python_installed_hook_cannot_be_marked_native_exempt() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        inventory = _inventory()
+        gate = next(entry for entry in inventory if entry["id"] == "claude-permission-gate-hook-python")
+        gate["category"] = "native_exempt"
+        gate.pop("python_dependency_kind")
+
+        _assert_fails(
+            _run(root, inventory),
+            "claude-permission-gate-hook-python: Python installed artifact "
+            "~/.claude/hooks/longhouse-permission-gate.py cannot be classified as native_exempt",
+        )
+
+
+def test_installed_hook_template_requires_artifact_registration() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        with (root / "server/zerg/services/shipper/hooks.py").open("a", encoding="utf-8") as handle:
+            handle.write("FUTURE_HOOK_SCRIPT = '#!/bin/bash\\npython3 -c \"pass\"\\n'\n")
+
+        _assert_fails(
+            _run(root, _inventory()),
+            "server/zerg/services/shipper/hooks.py::FUTURE_HOOK_SCRIPT looks like an installed device hook script",
+        )
+
+
+def test_installed_hook_runtime_flag_must_match_template() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        _write(
+            root / "server/zerg/services/shipper/hooks.py",
+            "HOOK_SCRIPT = 'longhouse-hook.sh shell text'\n"
+            "PERMISSION_GATE_SCRIPT = '#!/usr/bin/env python3\\nprint(\"gate\")'\n"
+            "CODEX_HOOK_SCRIPT = '#!/bin/bash\\npython3 -c \"pass\"\\n'\n",
+        )
+
+        _assert_fails(
+            _run(root, _inventory()),
+            "server/zerg/services/shipper/hooks.py::CODEX_HOOK_SCRIPT "
+            "requires_python_runtime=False but source template invokes Python=True",
+        )
+
+
+def test_blocker_entries_fail_until_resolved() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        inventory = _inventory(
+            {
+                "id": "future-python-hook-blocker",
+                "category": "blocker",
+                "provider": "claude",
+                "path": "server/zerg/services/shipper/hooks.py",
+                "owner_area": "claude-native",
+                "replacement_phase": "phase3",
+                "reason": "test",
+                "device_command": True,
+            }
+        )
+
+        _assert_fails(
+            _run(root, inventory),
+            "future-python-hook-blocker: blocker entries must be resolved",
+        )
+
+
 def test_requires_longhouse_cli_false_rejects_remote_control_shellout_debt() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -286,6 +471,11 @@ def main() -> int:
         test_unclassified_generic_device_python_fails,
         test_packaged_console_script_python_requires_inventory_stance,
         test_transitional_python_entries_require_dependency_kind,
+        test_device_installed_python_hook_requires_inventory_stance,
+        test_python_installed_hook_cannot_be_marked_native_exempt,
+        test_installed_hook_template_requires_artifact_registration,
+        test_installed_hook_runtime_flag_must_match_template,
+        test_blocker_entries_fail_until_resolved,
         test_requires_longhouse_cli_false_rejects_remote_control_shellout_debt,
         test_native_dispatch_symbols_must_exist,
         test_device_command_cannot_be_test_only,

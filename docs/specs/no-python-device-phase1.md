@@ -70,8 +70,15 @@ The target should distinguish:
 - `server_only`: Runtime Host or hosted/server install lane; not part of this
   provider-control phase.
 - `test_only`: QA/test/proof harnesses; allowed.
+- `native_exempt`: installed device artifact that does not require a Python
+  interpreter at runtime and therefore is not part of the Python-removal
+  burden. This does not mean dependency-free; for example, a shell hook may
+  still rely on normal system tools.
 - `legacy_compat`: old command compatibility retained temporarily; must have a
   removal or replacement phase.
+- `blocker`: known Python device dependency with no accepted transitional
+  plan. A blocker entry is allowed only as a loud failing state; the validation
+  target must not pass while blockers remain.
 
 The inventory should fail when:
 
@@ -88,6 +95,11 @@ The inventory should fail when:
 - A scanned provider-control Python file is not in the inventory.
 - A packaged Python console script under `server/pyproject.toml`
   `[project.scripts]` maps to a device module without an inventory stance.
+- A device-installed hook/script artifact maps to Python or installs Python
+  code without an inventory stance. The inventory must see generated/installed
+  artifacts embedded as string templates, not only `.py` files on disk.
+- A Python installed artifact is marked `native_device`, `native_exempt`,
+  `server_only`, or `test_only`.
 - A normal device command maps to Python but is marked `server_only` or
   `test_only`.
 - A new provider manifest support bit implies a Python-backed device path
@@ -132,6 +144,15 @@ Expected transitional device items:
   `server/zerg/cli/machine.py`
 - Provider proof entrypoint: `server/zerg/cli/provider_live.py`
 - Rust-to-Python transit call sites in `engine/src/control_channel.rs`.
+- Hook installation and generated hook artifacts:
+  `server/zerg/services/shipper/hooks.py` remains transitional because the
+  device install/repair path still uses Python to write provider hooks.
+  `~/.claude/hooks/longhouse-permission-gate.py` remains transitional because
+  remote-approve Claude sessions still execute Python on the device.
+  Antigravity's `longhouse-antigravity-hook.sh` also remains transitional even
+  though it is a shell file, because that shell file invokes `python3`. Hooks
+  may be listed as `native_exempt` only when their installed script text does
+  not require a Python interpreter.
 
 Expected allowed non-device items:
 

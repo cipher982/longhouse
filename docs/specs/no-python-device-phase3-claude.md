@@ -203,3 +203,15 @@ This slice leaves the following Phase 3 work for later commits:
 4. Native MCP stdio channel server, or an explicit product decision that this
    one Python helper remains packaged separately until a larger server-runtime
    split.
+
+## Proof-Surface Correction
+
+After the native channel-control/server slices, the no-Python inventory must
+still treat Claude remote-approve as incomplete while
+`~/.claude/hooks/longhouse-permission-gate.py` is a Python hook installed on
+the device. That file is always installed by the hook repair path; it executes
+Python only when remote-approve mode enables the permission hook. The lifecycle
+hook (`longhouse-hook.sh`) is `native_exempt` because its installed script text
+does not require Python, but the permission gate is `transitional_device`
+`hook_script` debt until it is replaced natively or explicitly excluded from
+the no-Python device promise.
