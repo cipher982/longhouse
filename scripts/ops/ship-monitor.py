@@ -658,13 +658,15 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
     expected_runtime_sha = latest_runtime_affecting_sha(root, sha)
     expected_runtime_short = expected_runtime_sha[:10] if expected_runtime_sha else None
 
-    def require_surface(surface_name: str, allowed_health: set[str], *, expected_sha: str | None) -> None:
+    def require_surface(surface_name: str, allowed_health: set[str], *, expected_shas: set[str]) -> None:
         surface = surfaces.get(surface_name)
         if surface is None:
             errors.append(f"Missing {surface_name!r} in deploy-status output")
             return
-        if expected_sha is not None and surface.sha != expected_sha:
-            errors.append(f"{surface_name} is on {surface.sha}, expected {expected_sha}")
+        if expected_shas and surface.sha not in expected_shas:
+            expected = sorted(expected_shas)
+            expected_label = expected[0] if len(expected) == 1 else f"one of {expected}"
+            errors.append(f"{surface_name} is on {surface.sha}, expected {expected_label}")
         if surface.health not in allowed_health:
             errors.append(f"{surface_name} health is {surface.health}, expected one of {sorted(allowed_health)}")
 
@@ -678,9 +680,13 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
         run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, DEPLOY_AND_VERIFY_JOB)
         for run in runs
     )
+    expected_runtime_shas = {expected_runtime_short} if expected_runtime_short else set()
+    if deploy_job_succeeded and not runtime_image_published:
+        expected_runtime_shas.add(sha[:10])
+
     if deploy_run_completed or deploy_job_succeeded:
-        require_surface("Demo runtime", RUNTIME_HEALTH, expected_sha=expected_runtime_short)
-        require_surface(CANARY_SURFACE, RUNTIME_HEALTH, expected_sha=expected_runtime_short)
+        require_surface("Demo runtime", RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
+        require_surface(CANARY_SURFACE, RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
 
     return surfaces, errors, raw
 
