@@ -64,6 +64,20 @@ struct BridgeStatePayload {
     updated_at: String,
 }
 
+#[derive(Debug, Serialize)]
+struct BridgeHealthPayload {
+    session_id: Option<String>,
+    provider_session_id: Option<String>,
+    state_root: String,
+    port: u16,
+    claude_pid: Option<i32>,
+    bridge_pid: u32,
+    cwd: Option<String>,
+    ready: bool,
+    started_at: String,
+    updated_at: String,
+}
+
 pub async fn run(config: ClaudeChannelServeConfig) -> Result<()> {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
@@ -88,28 +102,45 @@ where
 
     let mut lines = BufReader::new(reader).lines();
     let mut writer = writer;
+    let mut loop_result: Result<()> = Ok(());
     loop {
         tokio::select! {
             line = lines.next_line() => {
-                match line? {
-                    Some(line) => {
+                match line {
+                    Err(err) => {
+                        loop_result = Err(err.into());
+                        break;
+                    }
+                    Ok(None) => break,
+                    Ok(Some(line)) => {
                         let trimmed = line.trim();
                         if trimmed.is_empty() {
                             continue;
                         }
-                        let response = handle_rpc_line(trimmed, &state)?;
+                        let response = match handle_rpc_line(trimmed, &state) {
+                            Ok(response) => response,
+                            Err(err) => {
+                                loop_result = Err(err);
+                                break;
+                            }
+                        };
                         if let Some(response) = response {
-                            outbound_tx
-                                .send(response)
-                                .map_err(|_| anyhow!("Claude channel stdio writer is closed"))?;
+                            if outbound_tx.send(response).is_err() {
+                                loop_result = Err(anyhow!("Claude channel stdio writer is closed"));
+                                break;
+                            }
                         }
                     }
-                    None => break,
                 }
             }
             message = outbound_rx.recv() => {
                 match message {
-                    Some(message) => write_json_line(&mut writer, &message).await?,
+                    Some(message) => {
+                        if let Err(err) = write_json_line(&mut writer, &message).await {
+                            loop_result = Err(err);
+                            break;
+                        }
+                    }
                     None => break,
                 }
             }
@@ -120,16 +151,34 @@ where
         http.shutdown();
     }
     drop(outbound_tx);
-    while let Some(message) = outbound_rx.recv().await {
-        write_json_line(&mut writer, &message).await?;
+    if loop_result.is_ok() {
+        while let Some(message) = outbound_rx.recv().await {
+            if let Err(err) = write_json_line(&mut writer, &message).await {
+                loop_result = Err(err);
+                break;
+            }
+        }
     }
-    state.remove_state()?;
+    let cleanup_result = state.remove_state();
+    loop_result?;
+    cleanup_result?;
     Ok(())
 }
 
 fn handle_rpc_line(raw: &str, state: &BridgeState) -> Result<Option<Value>> {
-    let message: Value =
-        serde_json::from_str(raw).with_context(|| "Claude channel received invalid JSON-RPC")?;
+    let message: Value = match serde_json::from_str(raw) {
+        Ok(message) => message,
+        Err(_) => {
+            return Ok(Some(json!({
+                "jsonrpc": "2.0",
+                "id": Value::Null,
+                "error": {
+                    "code": -32700,
+                    "message": "parse error"
+                }
+            })));
+        }
+    };
     let method = message.get("method").and_then(Value::as_str).unwrap_or("");
     let id = message.get("id").cloned();
     if method == "notifications/initialized" || method == "initialized" {
@@ -261,6 +310,22 @@ impl BridgeState {
         }
     }
 
+    fn health_payload(&self) -> BridgeHealthPayload {
+        let inner = self.inner.lock().expect("bridge state mutex poisoned");
+        BridgeHealthPayload {
+            session_id: inner.session_id.clone(),
+            provider_session_id: inner.provider_session_id.clone(),
+            state_root: inner.state_root.display().to_string(),
+            port: inner.port,
+            claude_pid: inner.claude_pid,
+            bridge_pid: inner.bridge_pid,
+            cwd: inner.cwd.clone(),
+            ready: inner.ready,
+            started_at: inner.started_at.to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        }
+    }
+
     fn state_file(&self) -> Result<Option<PathBuf>> {
         let inner = self.inner.lock().expect("bridge state mutex poisoned");
         let Some(session_id) = inner.session_id.as_deref() else {
@@ -285,9 +350,8 @@ impl BridgeState {
         }
         let raw = serde_json::to_vec_pretty(&self.payload())?;
         let tmp = path.with_extension(format!("json.tmp.{}", std::process::id()));
-        std::fs::write(&tmp, [&raw[..], b"\n"].concat())
+        write_private_file(&tmp, [&raw[..], b"\n"].concat().as_slice())
             .with_context(|| format!("writing {}", tmp.display()))?;
-        set_private_file_mode(&tmp);
         std::fs::rename(&tmp, &path)
             .with_context(|| format!("renaming {} to {}", tmp.display(), path.display()))?;
         set_private_file_mode(&path);
@@ -476,7 +540,7 @@ fn handle_http_request(
 ) -> HttpResponse {
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/health") => {
-            HttpResponse::json(200, serde_json::to_value(state.payload()).unwrap())
+            HttpResponse::json(200, serde_json::to_value(state.health_payload()).unwrap())
         }
         ("POST", "/inject") => handle_inject_request(request, state, outbound),
         _ => HttpResponse::empty(404),
@@ -623,6 +687,21 @@ fn set_private_file_mode(path: &Path) {
     }
 }
 
+fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    set_private_file_mode(path);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -691,6 +770,7 @@ mod tests {
             .await
             .unwrap();
         stdin_client.write_all(b"\n").await.unwrap();
+        stdin_client.write_all(b"{not-json}\n").await.unwrap();
         stdin_client
             .write_all(br#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#)
             .await
@@ -704,6 +784,9 @@ mod tests {
             init["result"]["capabilities"]["experimental"],
             json!({"claude/channel": {}})
         );
+        let parse_error = read_json_line(&mut stdout).await;
+        assert_eq!(parse_error["id"], Value::Null);
+        assert_eq!(parse_error["error"]["code"], -32700);
         let tools = read_json_line(&mut stdout).await;
         assert_eq!(
             tools,
@@ -721,6 +804,18 @@ mod tests {
         assert!(port > 0);
 
         let client = reqwest::Client::new();
+        let health = client
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(health.status(), reqwest::StatusCode::OK);
+        let health_text = health.text().await.unwrap();
+        assert!(!health_text.contains("bridge-test-token"));
+        let health_json: Value = serde_json::from_str(&health_text).unwrap();
+        assert!(health_json.get("auth_token").is_none());
+        assert_eq!(health_json["ready"], true);
+
         let rejected = client
             .post(format!("http://127.0.0.1:{port}/inject"))
             .header("X-Longhouse-Channel-Token", "wrong-token")

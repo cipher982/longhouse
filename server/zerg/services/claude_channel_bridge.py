@@ -55,7 +55,7 @@ def install_claude_channel_mcp_server(
     *,
     workspace_path: str | Path | None = None,
     claude_dir: str | Path | None = None,
-    command: str = "longhouse",
+    command: str = "longhouse-engine",
     args: list[str] | None = None,
 ) -> list[str]:
     """Ensure the Longhouse Claude channel MCP server is registered in Claude's user config.

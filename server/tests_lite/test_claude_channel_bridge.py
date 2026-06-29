@@ -71,7 +71,7 @@ def test_install_claude_channel_mcp_server_writes_user_scope_entry(tmp_path):
     assert data["mcpServers"]["existing"] == {"type": "stdio", "command": "demo", "args": ["serve"]}
     assert data["mcpServers"][CLAUDE_CHANNEL_SERVER_NAME] == {
         "type": "stdio",
-        "command": "longhouse",
+        "command": "longhouse-engine",
         "args": ["claude-channel", "serve"],
         "env": {},
     }
