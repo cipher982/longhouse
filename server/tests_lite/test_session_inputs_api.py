@@ -1064,6 +1064,68 @@ def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch,
         assert row.last_error == MANAGED_CONTROL_UNAVAILABLE_ERROR
 
 
+def test_lock_watcher_timeout_recovers_from_fresh_runtime_idle_and_drains_queue(monkeypatch, tmp_path):
+    from zerg.services.managed_local_control import ManagedLocalTerminalResult
+    from zerg.services.session_chat_impl import _release_managed_local_lock_after_terminal
+    from zerg.services.session_turns import create_session_turn
+    from zerg.services.session_turns import mark_session_turn_send_accepted
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    with session_local() as db:
+        create_session_turn(db, session_id=session_id, request_id="req-timeout-recover")
+        mark_session_turn_send_accepted(db, session_id=session_id, request_id="req-timeout-recover")
+        queued = create_session_input(
+            db,
+            session_id=session_id,
+            text="send after recovered idle",
+            owner_id=user_id,
+            intent="auto",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-timeout-recover-1",
+        )
+        queued_id = int(queued.id)
+        db_bind = db.get_bind()
+
+    async def fake_wait_terminal(**_kwargs):
+        return None
+
+    monkeypatch.setattr("zerg.services.session_chat_impl.await_managed_local_turn_terminal", fake_wait_terminal)
+    monkeypatch.setattr(
+        "zerg.services.session_chat_impl._runtime_terminal_result_after",
+        lambda **_kwargs: ManagedLocalTerminalResult(
+            phase="idle",
+            control_status="completed",
+            observation_id=0,
+            occurred_at=datetime.now(timezone.utc),
+        ),
+    )
+
+    asyncio.run(session_lock_manager.acquire(str(session_id), holder="req-timeout-recover", ttl_seconds=300))
+    try:
+        asyncio.run(
+            _release_managed_local_lock_after_terminal(
+                lock_scope_id=str(session_id),
+                request_id="req-timeout-recover",
+                session_id=session_id,
+                provider="claude",
+                db_bind=db_bind,
+                after_observation_id=0,
+            )
+        )
+
+        with session_local() as db:
+            queued = db.query(SessionInput).filter(SessionInput.id == queued_id).one()
+            assert queued.status == INPUT_STATUS_DELIVERED
+            turn = db.query(SessionTurn).filter(SessionTurn.request_id == "req-timeout-recover").one()
+            assert turn.terminal_phase == "idle"
+            assert turn.terminal_at is not None
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+
+
 def test_client_request_id_different_text_conflicts(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)

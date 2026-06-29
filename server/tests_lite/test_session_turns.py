@@ -16,6 +16,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
@@ -26,6 +27,8 @@ from zerg.services import session_turns as session_turns_service
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_TERMINAL
@@ -39,11 +42,8 @@ from zerg.services.session_turns import mark_session_turn_terminal
 from zerg.services.session_turns import materialize_managed_transcript_turns
 from zerg.services.session_turns import materialize_recent_managed_transcript_turns
 from zerg.services.session_turns import maybe_mark_session_turn_durable
-from zerg.services.session_runtime import RuntimeEventIngest
-from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.write_serializer import WriteSerializer
 from zerg.utils.time import normalize_utc
-from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
 
 def _make_db(tmp_path):
@@ -740,6 +740,53 @@ def test_mark_session_turn_failed_does_not_overwrite_durable_state(tmp_path):
         row = db.query(SessionTurn).filter(SessionTurn.request_id == "req-durable").one()
         assert row.state == SESSION_TURN_STATE_DURABLE
         assert row.error_code is None
+
+
+def test_mark_session_turn_terminal_fills_terminal_fields_after_durable_state(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        create_session_turn(
+            db,
+            session_id=session.id,
+            request_id="req-durable-then-terminal",
+        )
+        mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-durable-then-terminal")
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="continue",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="done",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        durable_turn = maybe_mark_session_turn_durable(db, session_id=session.id)
+        assert durable_turn is not None
+        assert durable_turn.state == SESSION_TURN_STATE_DURABLE
+        terminal_at = datetime.now(timezone.utc)
+        assert mark_session_turn_terminal(
+            db,
+            session_id=session.id,
+            request_id="req-durable-then-terminal",
+            phase="idle",
+            terminal_at=terminal_at,
+        )
+
+        row = db.query(SessionTurn).filter(SessionTurn.request_id == "req-durable-then-terminal").one()
+        assert row.state == SESSION_TURN_STATE_DURABLE
+        assert row.terminal_phase == "idle"
+        assert row.terminal_at is not None
 
 
 def test_mark_session_turn_failed_does_not_overwrite_terminal_state(tmp_path):

@@ -922,11 +922,9 @@ def mark_session_turn_terminal(
         return False
     if turn.terminal_at is not None:
         return True
-    if turn.state == SESSION_TURN_STATE_DURABLE:
-        return True
     turn.terminal_phase = (phase or "").strip() or None
     turn.terminal_at = normalize_utc(terminal_at) or datetime.now(timezone.utc)
-    if turn.state != SESSION_TURN_STATE_FAILED:
+    if turn.state not in {SESSION_TURN_STATE_FAILED, SESSION_TURN_STATE_DURABLE}:
         turn.state = SESSION_TURN_STATE_TERMINAL
     return True
 

@@ -48,6 +48,7 @@ from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_FAI
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_COMPLETE
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_FAILED
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_PENDING
+from zerg.services.managed_local_control import ManagedLocalTerminalResult
 from zerg.services.managed_local_control import await_managed_local_hook_phase_update
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
 from zerg.services.managed_local_control import get_managed_local_control_status_for_phase
@@ -83,6 +84,7 @@ from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
+from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +93,7 @@ MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS = 300.0
 MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 10.0
 MANAGED_LOCAL_POST_DURABLE_TERMINAL_GRACE_SECS = 0.5
 _MANAGED_LOCAL_ACTIVE_PHASES = frozenset({"thinking", "running"})
+_MANAGED_LOCAL_TERMINAL_PHASES = frozenset({"idle", "needs_user", "blocked"})
 _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
     [
         "Message was sent to the managed local session, but Longhouse ",
@@ -549,6 +552,7 @@ async def _release_managed_local_lock_after_terminal(
     tracer = get_tracer(__name__)
     wait_started = time.monotonic()
     with tracer.start_as_current_span("longhouse.turn.wait_terminal") as span:
+        wait_started_at = datetime.now(timezone.utc)
         set_span_attributes(
             span,
             {
@@ -579,6 +583,20 @@ async def _release_managed_local_lock_after_terminal(
                 exc_info=True,
             )
             return
+
+        if terminal_result is None:
+            terminal_result = _runtime_terminal_result_after(
+                db_bind=db_bind,
+                session_id=session_id,
+                after=wait_started_at,
+            )
+            if terminal_result is not None:
+                logger.info(
+                    "[%s] Managed-local lock watcher recovered terminal phase %s for %s from runtime state",
+                    request_id,
+                    terminal_result.phase,
+                    session_id,
+                )
 
         if terminal_result is None:
             wait_seconds = max(0.0, time.monotonic() - wait_started)
@@ -673,6 +691,47 @@ async def _release_managed_local_lock_after_terminal(
                 request_id,
                 session_id,
             )
+
+
+def _runtime_terminal_result_after(*, db_bind, session_id: UUID, after: datetime) -> ManagedLocalTerminalResult | None:
+    """Recover lock release from fresh runtime state when observation polling misses idle.
+
+    The bridge/runtime reducer is an independent live truth lane. If it has
+    observed a terminal-ish phase after the send watcher started, do not leave
+    queued inputs waiting for an unrelated future runtime event.
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    Session = sessionmaker(bind=db_bind, expire_on_commit=False)
+    db = Session()
+    try:
+        state = (
+            db.query(SessionRuntimeState)
+            .filter(SessionRuntimeState.session_id == session_id)
+            .order_by(SessionRuntimeState.updated_at.desc())
+            .first()
+        )
+        if state is None:
+            return None
+        phase = str(getattr(state, "phase", "") or "").strip()
+        if not phase or phase not in _MANAGED_LOCAL_TERMINAL_PHASES:
+            return None
+        observed_at = (
+            normalize_utc(getattr(state, "phase_started_at", None))
+            or normalize_utc(getattr(state, "last_runtime_signal_at", None))
+            or normalize_utc(getattr(state, "updated_at", None))
+        )
+        after_utc = normalize_utc(after) or after
+        if observed_at is None or observed_at < after_utc:
+            return None
+        return ManagedLocalTerminalResult(
+            phase=phase,
+            control_status=get_managed_local_control_status_for_phase(phase),
+            observation_id=0,
+            occurred_at=observed_at,
+        )
+    finally:
+        db.close()
 
 
 async def _drain_next_queued_input(
