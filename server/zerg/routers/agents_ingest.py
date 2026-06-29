@@ -73,7 +73,9 @@ def _write_serializer_label_for_ship_trace(ship_trace: dict | None) -> str:
         return "ingest-replay"
     if work_context == "reconciliation_scan":
         return "ingest-scan"
-    return "ingest"
+    # Missing or unknown trace context is reconstructable archive/catch-up work
+    # from the server's point of view. Keep it out of the hot live writer lane.
+    return "ingest-replay"
 
 
 def _ship_trace_id(ship_trace: dict | None) -> str | None:
@@ -86,7 +88,7 @@ def _ship_trace_id(ship_trace: dict | None) -> str | None:
 # can amortise the WAL fsync cost over much larger transactions.
 _INGEST_CHUNK_BY_LABEL: dict[str, int] = {
     "ingest-live": 200,
-    "ingest": 500,
+    "ingest": 100,
     # Archive repair can arrive as a large historical backlog after reboot or
     # deploy repair. Keep these chunks modest so replay cannot monopolize the
     # single SQLite writer long enough to starve health and launch requests.
@@ -94,7 +96,7 @@ _INGEST_CHUNK_BY_LABEL: dict[str, int] = {
     "ingest-scan": 100,
 }
 
-_ARCHIVE_INGEST_LABELS = {"ingest-replay", "ingest-scan"}
+_ARCHIVE_INGEST_LABELS = {"ingest", "ingest-replay", "ingest-scan"}
 _ARCHIVE_INGEST_BACKPRESSURE_DETAIL = "Archive ingest backlog is throttled; retry shortly"
 _ARCHIVE_INGEST_BACKPRESSURE_KIND = "archive_ingest_backpressure"
 _ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS = 5

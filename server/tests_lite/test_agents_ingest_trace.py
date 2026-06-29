@@ -61,11 +61,12 @@ def test_ship_trace_live_transcript_uses_live_ingest_label():
     assert _write_serializer_label_for_ship_trace({"work_context": "live_transcript"}) == "ingest-live"
     assert _write_serializer_label_for_ship_trace({"work_context": "reconciliation_scan"}) == "ingest-scan"
     assert _write_serializer_label_for_ship_trace({"work_context": "spool_replay"}) == "ingest-replay"
-    assert _write_serializer_label_for_ship_trace(None) == "ingest"
+    assert _write_serializer_label_for_ship_trace({"work_context": "hook_catchup"}) == "ingest-replay"
+    assert _write_serializer_label_for_ship_trace(None) == "ingest-replay"
     assert _ingest_lane_for_label("ingest-live") == "live"
     assert _ingest_lane_for_label("ingest-replay") == "archive"
     assert _ingest_lane_for_label("ingest-scan") == "archive"
-    assert _ingest_lane_for_label("ingest") == "default"
+    assert _ingest_lane_for_label("ingest") == "archive"
 
 
 def test_stage_timing_header_value_is_bounded_and_sorted():
@@ -325,6 +326,30 @@ async def test_live_ingest_admission_ignores_archive_writer_pressure(monkeypatch
     acquired = await _acquire_archive_ingest_slot("ingest-live", response)
     assert acquired is False
     assert "Retry-After" not in response.headers
+
+
+@pytest.mark.asyncio
+async def test_untraced_ingest_uses_archive_admission(monkeypatch):
+    class BusySerializer:
+        is_configured = True
+        writer_active = True
+        active_label = "ingest-replay"
+        active_age_ms = 5000.0
+        queue_depth = 0
+
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: BusySerializer(),
+    )
+    response = Response()
+
+    with pytest.raises(HTTPException) as exc:
+        await _acquire_archive_ingest_slot(_write_serializer_label_for_ship_trace(None), response)
+
+    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.headers["X-Ingest-Lane"] == "archive"
+    assert response.headers["X-Ingest-Admission-State"] == "archive_writer_busy"
+    assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
 
 
 def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):

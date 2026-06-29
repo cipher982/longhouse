@@ -76,7 +76,7 @@ _LABEL_PRIORITIES: dict[str, int] = {
     # APNs/widget/queued-message side effects derived from runtime state should
     # not hold the hot runtime/transcript writer lane.
     "runtime-push": 25,
-    "ingest": 10,
+    "ingest": 45,
     # Daemon archive repair is intentionally behind health/control signals. It
     # can be regenerated from local files and should not make the machine look
     # offline while an old backlog drains.

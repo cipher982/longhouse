@@ -2,8 +2,9 @@
 
 Replaces the cross-request `IngestCoalescer` proposal. Codex review
 showed cross-request coalescing buys near-zero locally because
-`ingest_session` already commits internally, so the throughput win comes
-from larger archive/replay chunks rather than a shared transaction.
+`ingest_session` already commits internally, so replay throughput and
+writer fairness come from explicit per-lane chunk sizes rather than a
+shared transaction.
 
 These tests pin:
 
@@ -96,7 +97,7 @@ def test_router_chunk_table_is_stable():
     # If you change these defaults, update the docket epic notes too —
     # they are load-bearing for the phase-1 bench numbers.
     assert _ingest_chunk_for_label("ingest-live") == 200
-    assert _ingest_chunk_for_label("ingest") == 500
+    assert _ingest_chunk_for_label("ingest") == 100
     assert _ingest_chunk_for_label("ingest-replay") == 100
     assert _ingest_chunk_for_label("ingest-scan") == 100
     # Unknown labels stay conservative.

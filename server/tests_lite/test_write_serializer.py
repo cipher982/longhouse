@@ -65,7 +65,7 @@ async def test_high_priority_write_jumps_ahead_of_queued_background_work(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_runtime_and_archive_writes_jump_ahead_of_presence_chatter(tmp_path):
+async def test_runtime_writes_jump_ahead_of_presence_and_archive_chatter(tmp_path):
     db_path = tmp_path / "write-serializer-priority.db"
     engine = make_engine(f"sqlite:///{db_path}")
     session_factory = make_sessionmaker(engine)
@@ -99,7 +99,7 @@ async def test_runtime_and_archive_writes_jump_ahead_of_presence_chatter(tmp_pat
 
     await asyncio.gather(first, presence, ingest, runtime)
 
-    assert run_order == ["first", "runtime", "ingest", "presence"]
+    assert run_order == ["first", "runtime", "presence", "ingest"]
 
 
 @pytest.mark.asyncio
@@ -177,7 +177,7 @@ async def test_live_ingest_jumps_ahead_of_archive_ingest(tmp_path):
 
     await asyncio.gather(first, archive, live, presence)
 
-    assert run_order == ["first", "live", "archive", "presence"]
+    assert run_order == ["first", "live", "presence", "archive"]
 
 
 @pytest.mark.asyncio
