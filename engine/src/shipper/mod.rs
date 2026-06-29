@@ -36,16 +36,17 @@ use crate::state::file_state::FileState;
 use crate::state::live_file_state::LiveFileState;
 use crate::state::spool::Spool;
 
-/// Live-transcript batch target. Each ship is one HTTP round trip; for live
-/// work this is a tail-latency knob, so we keep it small.
-const LIVE_TARGET_BATCH_BYTES: u64 = 512 * 1024;
+/// Live-transcript batch target. Each ship is one HTTP round trip and one
+/// hosted SQLite write; for live work this is a writer-hold-time knob, so keep
+/// it small enough that runtime/control writes can interleave on large tenants.
+const LIVE_TARGET_BATCH_BYTES: u64 = 64 * 1024;
 const BACKGROUND_REPAIR_TARGET_BATCH_BYTES: u64 = 32 * 1024;
 
 /// Archive / replay batch target. This lane is reconstructable background
 /// repair, so bound each server write first and accept extra HTTP overhead.
 /// Large replay batches can spend seconds in SQLite/source-line dedupe on a
 /// huge tenant DB, which defeats the runtime's interactive control SLO.
-const ARCHIVE_TARGET_BATCH_BYTES: u64 = 256 * 1024;
+const ARCHIVE_TARGET_BATCH_BYTES: u64 = 64 * 1024;
 
 // The Runtime Host allows archive ingest writes to run up to 60s. Archive,
 // replay, and media sends should not give up first; otherwise the server may
@@ -57,7 +58,7 @@ const ARCHIVE_BACKPRESSURE_RETRY_DELAY: Duration = Duration::from_secs(60);
 /// Batch sizing band, independent of `SourceLineMode`. `SourceLineMode` is a
 /// Codex-specific axis (whether to ship full source lines or event-only); the
 /// batch band is keyed off `WorkPriority` so non-Codex live work also gets the
-/// 512 KiB live target instead of accidentally inheriting the 4 MiB archive
+/// low-latency live target instead of accidentally inheriting an archive-sized
 /// target via `SourceLineMode::Full`. Phase-6 fix; see worktree commit log.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum BatchBand {
@@ -128,11 +129,11 @@ mod target_batch_bytes_tests {
     }
 
     #[test]
-    fn archive_target_is_below_live_target() {
+    fn archive_target_does_not_exceed_live_target() {
         // Archive/replay is reconstructable background repair. Keep accepted
-        // requests shorter than live ships so one old backlog cannot starve
+        // requests no larger than live ships so one old backlog cannot starve
         // provider control and liveness after deploy.
-        assert!(ARCHIVE_TARGET_BATCH_BYTES < LIVE_TARGET_BATCH_BYTES);
+        assert!(ARCHIVE_TARGET_BATCH_BYTES <= LIVE_TARGET_BATCH_BYTES);
     }
 
     #[test]
