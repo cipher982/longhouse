@@ -690,12 +690,18 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
         and run.conclusion in ACCEPTED_CONCLUSIONS
         for run in runs
     )
+    deploy_run_succeeded = any(
+        run.workflowName == DEPLOY_AND_VERIFY
+        and run.status == "completed"
+        and run.conclusion in {"success", "neutral"}
+        for run in runs
+    )
     deploy_job_succeeded = any(
         run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, DEPLOY_AND_VERIFY_JOB)
         for run in runs
     )
     expected_runtime_shas = {expected_runtime_short} if expected_runtime_short else set()
-    if deploy_job_succeeded and not runtime_image_published:
+    if (deploy_job_succeeded or deploy_run_succeeded) and not runtime_image_published:
         expected_runtime_shas = runtime_reuse_accepted_shas(root, expected_runtime_sha, sha)
 
     if deploy_run_completed or deploy_job_succeeded:

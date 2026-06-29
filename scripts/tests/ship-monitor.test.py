@@ -141,6 +141,30 @@ def test_runtime_reuse_accepts_intermediate_deploy_sha() -> None:
     assert errors == []
 
 
+def test_runtime_reuse_accepts_intermediate_sha_when_deploy_job_is_absent() -> None:
+    with_fakes(
+        {
+            1: {},
+            2: {ship_monitor.RUNTIME_IMAGE_JOB: "skipped"},
+        },
+        latest_runtime_sha="7447df0799c06120fa254f0732a7d13646562390",
+        deploy_status_output=deploy_status("f45edcb318", "f45edcb318"),
+    )
+    runs = [
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1),
+        run_info(ship_monitor.RUNTIME_IMAGE_WORKFLOW, 2),
+    ]
+
+    _surfaces, errors, _raw = ship_monitor.verify_live_state(
+        ROOT,
+        "cipher982/longhouse",
+        "d2f450d2c1973bbdaaec569b5c7b6d00b8ed1efd",
+        runs,
+    )
+
+    assert errors == []
+
+
 def test_runtime_publish_requires_exact_live_sha() -> None:
     with_fakes(
         {
@@ -266,6 +290,7 @@ if __name__ == "__main__":
     test_runtime_reuse_does_not_require_exact_live_sha()
     test_runtime_reuse_accepts_deploy_stamped_target_sha()
     test_runtime_reuse_accepts_intermediate_deploy_sha()
+    test_runtime_reuse_accepts_intermediate_sha_when_deploy_job_is_absent()
     test_runtime_publish_requires_exact_live_sha()
     test_skipped_tip_still_requires_latest_runtime_affecting_sha()
     test_gate_heartbeat_names_blocking_ci_job_and_step()
