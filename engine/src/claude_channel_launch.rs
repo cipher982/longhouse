@@ -1,0 +1,513 @@
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::time::{Duration, Instant};
+
+use serde_json::Value;
+use thiserror::Error;
+use tokio::time::sleep;
+use uuid::Uuid;
+
+const CLAUDE_CHANNEL_SERVER_NAME: &str = "longhouse-channel";
+const CLAUDE_CHANNEL_DEVELOPMENT_FLAG: &str = "--dangerously-load-development-channels";
+const MANAGED_SESSION_ENV: &str = "LONGHOUSE_MANAGED_SESSION_ID";
+const CLAUDE_REMOTE_LAUNCH_LOG_DIR: &str = "claude-channel-launch";
+const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+const STANDARD_PATH_PREFIXES: &[&str] = &[
+    "$HOME/.local/bin",
+    "$HOME/bin",
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/home/linuxbrew/.linuxbrew/bin",
+    "/home/linuxbrew/.linuxbrew/sbin",
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaudePermissionMode {
+    Bypass,
+    RemoteApprove,
+}
+
+impl ClaudePermissionMode {
+    fn permission_hook_enabled(self) -> &'static str {
+        match self {
+            Self::Bypass => "0",
+            Self::RemoteApprove => "1",
+        }
+    }
+
+    fn uses_skip_permissions(self) -> bool {
+        matches!(self, Self::Bypass)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ClaudeChannelLaunchConfig {
+    pub session_id: String,
+    pub provider_session_id: String,
+    pub cwd: PathBuf,
+    pub api_url: String,
+    pub api_token: String,
+    pub hook_token: Option<String>,
+    pub resume: bool,
+    pub wait_ready: Duration,
+    pub claude_bin: String,
+    pub permission_mode: ClaudePermissionMode,
+    pub state_root: Option<PathBuf>,
+    pub claude_dir: Option<PathBuf>,
+    pub log_dir: Option<PathBuf>,
+    pub script_bin: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaudeChannelLaunchResult {
+    pub session_id: String,
+    pub provider_session_id: String,
+    pub pid: u32,
+    pub log_path: PathBuf,
+    pub channel_state: Value,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaudeLaunchCommandPlan {
+    pub program: String,
+    pub args: Vec<String>,
+    pub shell_script: String,
+    pub hook_token_env: String,
+}
+
+#[derive(Debug, Error)]
+pub enum ClaudeChannelLaunchError {
+    #[error("Claude launch config is invalid: {0}")]
+    InvalidConfig(String),
+    #[error("failed to start Claude launch process: {0}")]
+    SpawnFailed(String),
+    #[error("Claude channel state did not become ready: {0}")]
+    StateNotReady(String),
+}
+
+pub async fn launch_detached(
+    config: ClaudeChannelLaunchConfig,
+) -> Result<ClaudeChannelLaunchResult, ClaudeChannelLaunchError> {
+    validate_launch_config(&config)?;
+    let plan = build_launch_command_plan(&config)?;
+    let log_path = launch_log_path(&config)?;
+    if let Some(parent) = log_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| {
+            ClaudeChannelLaunchError::SpawnFailed(format!(
+                "creating Claude launch log directory {}: {err}",
+                parent.display()
+            ))
+        })?;
+    }
+
+    let mut command = Command::new(&plan.program);
+    command
+        .args(&plan.args)
+        .current_dir(&config.cwd)
+        .env("LONGHOUSE_HOOK_TOKEN", &plan.hook_token_env)
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|err| ClaudeChannelLaunchError::SpawnFailed(err.to_string()))?;
+    match wait_for_channel_state(
+        &config.session_id,
+        config.state_root.as_deref(),
+        config.wait_ready,
+    )
+    .await
+    {
+        Ok(channel_state) => Ok(ClaudeChannelLaunchResult {
+            session_id: config.session_id,
+            provider_session_id: config.provider_session_id,
+            pid: child.id(),
+            log_path,
+            channel_state,
+        }),
+        Err(err) => {
+            terminate_child_group(&mut child);
+            Err(err)
+        }
+    }
+}
+
+pub fn build_launch_command_plan(
+    config: &ClaudeChannelLaunchConfig,
+) -> Result<ClaudeLaunchCommandPlan, ClaudeChannelLaunchError> {
+    validate_launch_config(config)?;
+    let log_path = launch_log_path(config)?;
+    let shell_script = build_claude_shell_script(config);
+    let args = build_script_args(&shell_script, &log_path);
+    let hook_token_env = config
+        .hook_token
+        .as_deref()
+        .unwrap_or(&config.api_token)
+        .to_string();
+    Ok(ClaudeLaunchCommandPlan {
+        program: config.script_bin.clone(),
+        args,
+        shell_script,
+        hook_token_env,
+    })
+}
+
+fn validate_launch_config(
+    config: &ClaudeChannelLaunchConfig,
+) -> Result<(), ClaudeChannelLaunchError> {
+    if config.session_id.trim().is_empty() {
+        return Err(ClaudeChannelLaunchError::InvalidConfig(
+            "session_id must not be empty".to_string(),
+        ));
+    }
+    if Uuid::parse_str(config.session_id.trim()).is_err() {
+        return Err(ClaudeChannelLaunchError::InvalidConfig(
+            "session_id must be a UUID".to_string(),
+        ));
+    }
+    if config.provider_session_id.trim().is_empty() {
+        return Err(ClaudeChannelLaunchError::InvalidConfig(
+            "provider_session_id must not be empty".to_string(),
+        ));
+    }
+    if !config.cwd.is_absolute() {
+        return Err(ClaudeChannelLaunchError::InvalidConfig(
+            "cwd must be absolute".to_string(),
+        ));
+    }
+    if config.api_url.trim().is_empty() {
+        return Err(ClaudeChannelLaunchError::InvalidConfig(
+            "api_url must not be empty".to_string(),
+        ));
+    }
+    if config.api_token.trim().is_empty() {
+        return Err(ClaudeChannelLaunchError::InvalidConfig(
+            "api_token must not be empty".to_string(),
+        ));
+    }
+    if config.claude_bin.trim().is_empty() {
+        return Err(ClaudeChannelLaunchError::InvalidConfig(
+            "claude_bin must not be empty".to_string(),
+        ));
+    }
+    if config.script_bin.trim().is_empty() {
+        return Err(ClaudeChannelLaunchError::InvalidConfig(
+            "script_bin must not be empty".to_string(),
+        ));
+    }
+    if config.resume && config.provider_session_id.trim().is_empty() {
+        return Err(ClaudeChannelLaunchError::InvalidConfig(
+            "provider_session_id is required for resume".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn build_claude_shell_script(config: &ClaudeChannelLaunchConfig) -> String {
+    let mut commands = vec![
+        format!("export PATH=\"{}:$PATH\"", STANDARD_PATH_PREFIXES.join(":")),
+        format!(
+            "if ! command -v {} >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi",
+            shell_quote(&config.claude_bin)
+        ),
+        format!("cd {}", shell_quote_path(&config.cwd)),
+        format!(
+            "export {MANAGED_SESSION_ENV}={}",
+            shell_quote(&config.session_id)
+        ),
+        format!(
+            "export LONGHOUSE_CHANNEL_SESSION_ID={}",
+            shell_quote(&config.session_id)
+        ),
+        format!(
+            "export LONGHOUSE_PROVIDER_SESSION_ID={}",
+            shell_quote(&config.provider_session_id)
+        ),
+        format!(
+            "export LONGHOUSE_CHANNEL_CWD={}",
+            shell_quote_path(&config.cwd)
+        ),
+        format!("export LONGHOUSE_HOOK_URL={}", shell_quote(&config.api_url)),
+        format!(
+            "export LONGHOUSE_PERMISSION_HOOK_ENABLED={}",
+            config.permission_mode.permission_hook_enabled()
+        ),
+    ];
+
+    let target_flag = if config.resume {
+        "--resume"
+    } else {
+        "--session-id"
+    };
+    let mut claude_bits = vec![config.claude_bin.clone()];
+    if config.permission_mode.uses_skip_permissions() {
+        claude_bits.push("--dangerously-skip-permissions".to_string());
+    }
+    claude_bits.extend([
+        target_flag.to_string(),
+        config.provider_session_id.clone(),
+        CLAUDE_CHANNEL_DEVELOPMENT_FLAG.to_string(),
+        format!("server:{CLAUDE_CHANNEL_SERVER_NAME}"),
+    ]);
+    commands.push(format!(
+        "exec {}",
+        claude_bits
+            .iter()
+            .map(|part| shell_quote(part))
+            .collect::<Vec<_>>()
+            .join(" ")
+    ));
+    commands.join("; ")
+}
+
+fn build_script_args(shell_script: &str, log_path: &Path) -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    {
+        vec![
+            "-q".to_string(),
+            log_path.display().to_string(),
+            "zsh".to_string(),
+            "-lc".to_string(),
+            shell_script.to_string(),
+        ]
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        vec![
+            "-q".to_string(),
+            "-c".to_string(),
+            format!("zsh -lc {}", shell_quote(shell_script)),
+            log_path.display().to_string(),
+        ]
+    }
+}
+
+fn launch_log_path(
+    config: &ClaudeChannelLaunchConfig,
+) -> Result<PathBuf, ClaudeChannelLaunchError> {
+    if let Some(log_dir) = config.log_dir.as_ref() {
+        return Ok(log_dir.join(format!("{}.log", config.session_id)));
+    }
+    let claude_dir = config.claude_dir.clone().unwrap_or_else(default_claude_dir);
+    Ok(claude_dir
+        .join("logs")
+        .join(CLAUDE_REMOTE_LAUNCH_LOG_DIR)
+        .join(format!("{}.log", config.session_id)))
+}
+
+async fn wait_for_channel_state(
+    session_id: &str,
+    state_root: Option<&Path>,
+    timeout: Duration,
+) -> Result<Value, ClaudeChannelLaunchError> {
+    let path = state_file_path(session_id, state_root)?;
+    let deadline = Instant::now() + timeout;
+    let mut last_not_ready = false;
+    loop {
+        match read_state_value(&path) {
+            Ok(value) => {
+                if value.get("ready").and_then(Value::as_bool).unwrap_or(false) {
+                    return Ok(value);
+                }
+                last_not_ready = true;
+            }
+            Err(StateReadError::Missing) => {}
+            Err(StateReadError::Invalid(message)) => {
+                return Err(ClaudeChannelLaunchError::StateNotReady(message));
+            }
+        }
+        if Instant::now() >= deadline {
+            let message = if last_not_ready {
+                format!("state at {} did not become ready", path.display())
+            } else {
+                format!("state did not appear at {}", path.display())
+            };
+            return Err(ClaudeChannelLaunchError::StateNotReady(message));
+        }
+        sleep(DEFAULT_POLL_INTERVAL).await;
+    }
+}
+
+fn state_file_path(
+    session_id: &str,
+    state_root: Option<&Path>,
+) -> Result<PathBuf, ClaudeChannelLaunchError> {
+    let normalized = Uuid::parse_str(session_id).map_err(|_| {
+        ClaudeChannelLaunchError::StateNotReady("session id is not a UUID".to_string())
+    })?;
+    let root = state_root
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_claude_dir().join("channels/longhouse"));
+    Ok(root.join("sessions").join(format!("{normalized}.json")))
+}
+
+enum StateReadError {
+    Missing,
+    Invalid(String),
+}
+
+fn read_state_value(path: &Path) -> Result<Value, StateReadError> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(StateReadError::Missing)
+        }
+        Err(err) => return Err(StateReadError::Invalid(err.to_string())),
+    };
+    serde_json::from_str(&raw)
+        .map_err(|err| StateReadError::Invalid(format!("state is invalid JSON: {err}")))
+}
+
+fn default_claude_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".claude")
+}
+
+fn terminate_child_group(child: &mut Child) {
+    #[cfg(unix)]
+    unsafe {
+        let pid = child.id() as i32;
+        let pgid = libc::getpgid(pid);
+        if pgid > 0 {
+            let _ = libc::killpg(pgid, libc::SIGTERM);
+        } else {
+            let _ = child.kill();
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    shell_quote(&path.display().to_string())
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    if value.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | ':' | '=' | ',')
+    }) {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    const SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
+    const PROVIDER_SESSION_ID: &str = "22222222-2222-4222-8222-222222222222";
+
+    fn test_config(temp: &Path) -> ClaudeChannelLaunchConfig {
+        ClaudeChannelLaunchConfig {
+            session_id: SESSION_ID.to_string(),
+            provider_session_id: PROVIDER_SESSION_ID.to_string(),
+            cwd: temp.join("workspace"),
+            api_url: "https://example.test".to_string(),
+            api_token: "device-token-secret".to_string(),
+            hook_token: Some("hook-token-secret".to_string()),
+            resume: false,
+            wait_ready: Duration::from_millis(100),
+            claude_bin: "/opt/homebrew/bin/claude".to_string(),
+            permission_mode: ClaudePermissionMode::Bypass,
+            state_root: Some(temp.join("channels")),
+            claude_dir: Some(temp.join(".claude")),
+            log_dir: Some(temp.join("logs")),
+            script_bin: "script".to_string(),
+        }
+    }
+
+    #[test]
+    fn launch_plan_uses_provider_id_without_leaking_tokens() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("workspace")).unwrap();
+        let config = test_config(temp.path());
+        let plan = build_launch_command_plan(&config).unwrap();
+
+        assert_eq!(plan.program, "script");
+        assert!(plan.shell_script.contains("--session-id"));
+        assert!(plan.shell_script.contains(PROVIDER_SESSION_ID));
+        assert!(plan.shell_script.contains("LONGHOUSE_CHANNEL_SESSION_ID"));
+        assert!(plan.shell_script.contains("LONGHOUSE_PROVIDER_SESSION_ID"));
+        assert!(plan.shell_script.contains("--dangerously-skip-permissions"));
+        assert!(!plan.shell_script.contains("device-token-secret"));
+        assert!(!plan.args.join(" ").contains("hook-token-secret"));
+        assert_eq!(plan.hook_token_env, "hook-token-secret");
+    }
+
+    #[test]
+    fn remote_approve_removes_skip_permissions_and_enables_gate() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("workspace")).unwrap();
+        let mut config = test_config(temp.path());
+        config.permission_mode = ClaudePermissionMode::RemoteApprove;
+        config.hook_token = None;
+        let plan = build_launch_command_plan(&config).unwrap();
+
+        assert!(!plan.shell_script.contains("--dangerously-skip-permissions"));
+        assert!(plan
+            .shell_script
+            .contains("LONGHOUSE_PERMISSION_HOOK_ENABLED=1"));
+        assert_eq!(plan.hook_token_env, "device-token-secret");
+    }
+
+    #[test]
+    fn resume_plan_uses_resume_flag() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("workspace")).unwrap();
+        let mut config = test_config(temp.path());
+        config.resume = true;
+        let plan = build_launch_command_plan(&config).unwrap();
+
+        assert!(plan.shell_script.contains("--resume"));
+        assert!(!plan.shell_script.contains("--session-id"));
+    }
+
+    #[tokio::test]
+    async fn waits_for_ready_state_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let state_root = temp.path().join("channels");
+        let state_path = state_file_path(SESSION_ID, Some(&state_root)).unwrap();
+        std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &state_path,
+            serde_json::to_vec(&json!({
+                "ready": true,
+                "port": 8123,
+                "auth_token": "secret",
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let state =
+            wait_for_channel_state(SESSION_ID, Some(&state_root), Duration::from_millis(100))
+                .await
+                .unwrap();
+        assert_eq!(state["port"], 8123);
+    }
+}
