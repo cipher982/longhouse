@@ -20,6 +20,7 @@ VALID_TOKEN_POLICIES = {"env_or_state_file", "no_token", "not_applicable"}
 VALID_CWD_POLICIES = {"strict_absolute_or_existing", "inherits_existing", "not_applicable"}
 VALID_PHASES = {"phase2", "phase3", "phase4", "phase5", "phase6", "phase7"}
 TRANSITIONAL_CATEGORIES = {"transitional_device", "legacy_compat"}
+DEVICE_INVENTORY_CATEGORIES = {"native_device", *TRANSITIONAL_CATEGORIES}
 FORBIDDEN_NATIVE_COMMAND_BINS = {"longhouse", "python", "python3", "uv", "pip"}
 
 
@@ -192,8 +193,8 @@ def _validate_contract(root: Path, contract: dict[str, Any]) -> list[str]:
             if item is None:
                 errors.append(f"{command_id}: references unknown Phase 1 inventory id {item_id}")
                 continue
-            if item.get("category") not in TRANSITIONAL_CATEGORIES:
-                errors.append(f"{command_id}: Phase 1 inventory id {item_id} is not transitional/legacy device debt")
+            if item.get("category") not in DEVICE_INVENTORY_CATEGORIES:
+                errors.append(f"{command_id}: Phase 1 inventory id {item_id} is not device entrypoint debt")
             covered_inventory_ids.add(item_id)
             if status == "native" and item.get("category") in TRANSITIONAL_CATEGORIES:
                 errors.append(f"{command_id}: cannot be native while Phase 1 inventory id {item_id} is still {item.get('category')}")

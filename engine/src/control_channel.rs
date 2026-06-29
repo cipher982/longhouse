@@ -21,6 +21,10 @@ use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
 use crate::build_identity;
+use crate::claude_channel_control::{
+    interrupt as claude_channel_interrupt, send_text as claude_channel_send_text,
+    ClaudeChannelControlError, ClaudeChannelInterruptConfig, ClaudeChannelSendConfig,
+};
 use crate::codex_bridge::{
     cmd_codex_bridge_interrupt, cmd_codex_bridge_pause_response, cmd_codex_bridge_send,
     cmd_codex_bridge_start, cmd_codex_bridge_steer, validate_codex_bridge_attached,
@@ -980,12 +984,15 @@ async fn execute_command(
             let provider = payload_optional_string(&payload, "provider")
                 .unwrap_or_else(|| "codex".to_string());
             if provider == "claude" {
-                return run_claude_channel_command(
-                    claude_channel_args(COMMAND_SEND_TEXT, &session_id, Some(text))?,
-                    LAUNCH_START_TIMEOUT_SECS,
-                )
+                let summary = claude_channel_send_text(ClaudeChannelSendConfig {
+                    session_id: session_id.clone(),
+                    text,
+                    meta: Vec::new(),
+                    state_root: None,
+                })
                 .await
-                .map(|output| cli_output_result(output, "claude", "claude_channel_bridge"));
+                .map_err(claude_channel_error_to_command_error)?;
+                return Ok(claude_channel_control_result(summary.provider_session_id));
             }
             if provider == "opencode" {
                 let summary = crate::opencode_control::send_text(&session_id, &text)
@@ -1036,12 +1043,13 @@ async fn execute_command(
             let provider = payload_optional_string(&payload, "provider")
                 .unwrap_or_else(|| "codex".to_string());
             if provider == "claude" {
-                return run_claude_channel_command(
-                    claude_channel_args(COMMAND_INTERRUPT, &session_id, None)?,
-                    LAUNCH_START_TIMEOUT_SECS,
-                )
+                claude_channel_interrupt(ClaudeChannelInterruptConfig {
+                    session_id,
+                    state_root: None,
+                })
                 .await
-                .map(|output| cli_output_result(output, "claude", "claude_channel_bridge"));
+                .map_err(claude_channel_error_to_command_error)?;
+                return Ok(claude_channel_control_result(None));
             }
             if provider == "opencode" {
                 let summary = crate::opencode_control::interrupt(&session_id)
@@ -1105,12 +1113,15 @@ async fn execute_command(
             let provider = payload_optional_string(&payload, "provider")
                 .unwrap_or_else(|| "codex".to_string());
             if provider == "claude" {
-                return run_claude_channel_command(
-                    claude_channel_args(COMMAND_STEER_TEXT, &session_id, Some(text))?,
-                    LAUNCH_START_TIMEOUT_SECS,
-                )
+                let summary = claude_channel_send_text(ClaudeChannelSendConfig {
+                    session_id: session_id.clone(),
+                    text,
+                    meta: vec![("intent".to_string(), "steer".to_string())],
+                    state_root: None,
+                })
                 .await
-                .map(|output| cli_output_result(output, "claude", "claude_channel_bridge"));
+                .map_err(claude_channel_error_to_command_error)?;
+                return Ok(claude_channel_control_result(summary.provider_session_id));
             }
             if provider == "opencode" {
                 return Err(CommandError {
@@ -1161,13 +1172,20 @@ async fn execute_command(
                     .unwrap_or_else(|| "answer".to_string());
                 let text = claude_pause_response_text(&payload)?;
                 let response_text = text.clone();
-                return run_claude_channel_command(
-                    claude_channel_pause_response_args(&session_id, text, &request_key, &decision),
-                    LAUNCH_START_TIMEOUT_SECS,
-                )
+                let summary = claude_channel_send_text(ClaudeChannelSendConfig {
+                    session_id: session_id.clone(),
+                    text,
+                    meta: vec![
+                        ("intent".to_string(), "pause_response".to_string()),
+                        ("request_key".to_string(), request_key.clone()),
+                        ("decision".to_string(), decision.clone()),
+                    ],
+                    state_root: None,
+                })
                 .await
-                .map(|output| {
-                    let mut result = cli_output_result(output, "claude", "claude_channel_bridge");
+                .map_err(claude_channel_error_to_command_error)?;
+                return Ok({
+                    let mut result = claude_channel_control_result(summary.provider_session_id);
                     if let Some(obj) = result.as_object_mut() {
                         obj.insert(
                             "pause_response".to_string(),
@@ -1273,71 +1291,6 @@ async fn run_archive_backlog_control_command(
     }))
 }
 
-fn claude_channel_args(
-    command_type: &str,
-    session_id: &str,
-    text: Option<String>,
-) -> std::result::Result<Vec<String>, CommandError> {
-    match command_type {
-        COMMAND_SEND_TEXT => Ok(vec![
-            "claude-channel".to_string(),
-            "send".to_string(),
-            "--session-id".to_string(),
-            session_id.to_string(),
-            "--text".to_string(),
-            text.ok_or_else(|| CommandError {
-                code: "invalid_command".to_string(),
-                message: "text is required".to_string(),
-            })?,
-        ]),
-        COMMAND_INTERRUPT => Ok(vec![
-            "claude-channel".to_string(),
-            "interrupt".to_string(),
-            "--session-id".to_string(),
-            session_id.to_string(),
-        ]),
-        COMMAND_STEER_TEXT => Ok(vec![
-            "claude-channel".to_string(),
-            "send".to_string(),
-            "--session-id".to_string(),
-            session_id.to_string(),
-            "--text".to_string(),
-            text.ok_or_else(|| CommandError {
-                code: "invalid_command".to_string(),
-                message: "text is required".to_string(),
-            })?,
-            "--meta".to_string(),
-            "intent=steer".to_string(),
-        ]),
-        _ => Err(CommandError {
-            code: "unsupported_command".to_string(),
-            message: format!("unsupported Claude channel command {command_type}"),
-        }),
-    }
-}
-
-fn claude_channel_pause_response_args(
-    session_id: &str,
-    text: String,
-    request_key: &str,
-    decision: &str,
-) -> Vec<String> {
-    vec![
-        "claude-channel".to_string(),
-        "send".to_string(),
-        "--session-id".to_string(),
-        session_id.to_string(),
-        "--text".to_string(),
-        text,
-        "--meta".to_string(),
-        "intent=pause_response".to_string(),
-        "--meta".to_string(),
-        format!("request_key={}", request_key.trim()),
-        "--meta".to_string(),
-        format!("decision={}", decision.trim()),
-    ]
-}
-
 fn claude_pause_response_text(payload: &Value) -> std::result::Result<String, CommandError> {
     let decision = payload_optional_string(payload, "decision")
         .unwrap_or_else(|| "answer".to_string())
@@ -1387,6 +1340,38 @@ fn claude_pause_response_text(payload: &Value) -> std::result::Result<String, Co
         code: "invalid_command".to_string(),
         message: "Claude pause responses require a non-empty answer message".to_string(),
     })
+}
+
+fn claude_channel_control_result(provider_session_id: Option<String>) -> Value {
+    let mut result = json!({
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "",
+        "provider": "claude",
+        "transport": "claude_channel_bridge",
+    });
+    if let Some(provider_session_id) = provider_session_id {
+        if !provider_session_id.trim().is_empty() {
+            if let Some(obj) = result.as_object_mut() {
+                obj.insert(
+                    "provider_session_id".to_string(),
+                    json!(provider_session_id),
+                );
+            }
+        }
+    }
+    result
+}
+
+fn claude_channel_error_to_command_error(err: ClaudeChannelControlError) -> CommandError {
+    match err {
+        ClaudeChannelControlError::SessionNotAttached { message, .. } => {
+            CommandError::session_not_attached(anyhow!(message))
+        }
+        ClaudeChannelControlError::CommandFailed(message) => {
+            CommandError::command_failed(anyhow!(message))
+        }
+    }
 }
 
 fn claude_pause_answer_values(value: &Value) -> Vec<String> {
@@ -1485,20 +1470,6 @@ async fn run_longhouse_command(
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
     })
-}
-
-async fn run_claude_channel_command(
-    args: Vec<String>,
-    timeout_secs: u64,
-) -> std::result::Result<CliCommandOutput, CommandError> {
-    let output = run_longhouse_command(args, timeout_secs, Vec::new()).await?;
-    if output.exit_code != 0 {
-        return Err(CommandError {
-            code: "command_failed".to_string(),
-            message: nonempty_cli_error(&output),
-        });
-    }
-    Ok(output)
 }
 
 async fn run_antigravity_channel_command(
@@ -2209,6 +2180,75 @@ mod tests {
         (format!("http://{addr}"), rx)
     }
 
+    async fn spawn_claude_inject_server() -> (u16, tokio::sync::mpsc::Receiver<RecordedHttpRequest>)
+    {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let mut bytes = Vec::new();
+                    let mut header_end = None;
+                    let mut content_length = 0usize;
+                    loop {
+                        let mut chunk = [0u8; 1024];
+                        let read = stream.read(&mut chunk).await.unwrap();
+                        if read == 0 {
+                            break;
+                        }
+                        bytes.extend_from_slice(&chunk[..read]);
+                        if header_end.is_none() {
+                            header_end = http_header_end(&bytes);
+                            if let Some(end) = header_end {
+                                let head = String::from_utf8_lossy(&bytes[..end]);
+                                content_length = http_content_length(&head);
+                            }
+                        }
+                        if let Some(end) = header_end {
+                            if bytes.len() >= end + 4 + content_length {
+                                break;
+                            }
+                        }
+                    }
+                    let request = parse_http_request(&bytes);
+                    let _ = tx.send(request).await;
+                    stream
+                        .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                        .await
+                        .unwrap();
+                });
+            }
+        });
+        (port, rx)
+    }
+
+    fn write_claude_channel_state(home: &Path, session_id: &str, port: u16) {
+        let state_path = home
+            .join(".claude/channels/longhouse/sessions")
+            .join(format!("{session_id}.json"));
+        std::fs::create_dir_all(state_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            state_path,
+            serde_json::to_vec(&json!({
+                "session_id": session_id,
+                "provider_session_id": "claude-provider-1",
+                "auth_token": "test-channel-token",
+                "port": port,
+                "claude_pid": 12345,
+                "ready": true,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
     async fn spawn_opencode_launch_http_server(provider_session_id: &'static str) -> String {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -2917,34 +2957,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_command_frame_routes_claude_control_through_longhouse_cli() {
+    async fn handle_command_frame_routes_claude_control_natively() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let unique = format!(
-            "lh-claude-send-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        );
-        let dir = std::env::temp_dir().join(unique);
-        std::fs::create_dir_all(&dir).unwrap();
-        let args_path = dir.join("args.txt");
-        write_test_executable(
-            &dir.join("longhouse"),
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$LONGHOUSE_ARGS_OUT\"\nexit 0\n",
-        );
+        let temp = tempfile::tempdir().unwrap();
+        let (port, mut rx) = spawn_claude_inject_server().await;
+        let session_id = "11111111-1111-4111-8111-111111111111";
+        write_claude_channel_state(temp.path(), session_id, port);
 
-        let old_path = std::env::var_os("PATH");
-        let old_args_out = std::env::var_os("LONGHOUSE_ARGS_OUT");
-        std::env::set_var("PATH", dir.as_os_str());
-        std::env::set_var("LONGHOUSE_ARGS_OUT", args_path.as_os_str());
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", temp.path().as_os_str());
         let mut cache = command_cache();
         let result = handle_command_frame(
             json!({
                 "type": "command",
                 "command_id": "cmd-claude-send",
-                "session_id": "session-1",
+                "session_id": session_id,
                 "command_type": COMMAND_SEND_TEXT,
                 "payload": {"provider": "claude", "text": "hello"},
             }),
@@ -2955,43 +2982,18 @@ mod tests {
         assert_eq!(result["ok"], true);
         assert_eq!(result["result"]["provider"], "claude");
         assert_eq!(result["result"]["transport"], "claude_channel_bridge");
-        let args = std::fs::read_to_string(&args_path).unwrap();
-        assert_eq!(
-            args.lines().collect::<Vec<_>>(),
-            vec![
-                "claude-channel",
-                "send",
-                "--session-id",
-                "session-1",
-                "--text",
-                "hello",
-            ]
-        );
-
-        let result = handle_command_frame(
-            json!({
-                "type": "command",
-                "command_id": "cmd-claude-interrupt",
-                "session_id": "session-1",
-                "command_type": COMMAND_INTERRUPT,
-                "payload": {"provider": "claude"},
-            }),
-            &mut cache,
-            &test_config(),
-        )
-        .await;
-        assert_eq!(result["ok"], true);
-        let args = std::fs::read_to_string(&args_path).unwrap();
-        assert_eq!(
-            args.lines().collect::<Vec<_>>(),
-            vec!["claude-channel", "interrupt", "--session-id", "session-1"]
-        );
+        let request = rx.recv().await.unwrap();
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+        assert_eq!(request.target, "/inject");
+        assert_eq!(body["content"], "hello");
+        assert_eq!(body["meta"]["injected_by"], "longhouse");
+        assert_eq!(body["meta"]["longhouse_session_id"], session_id);
 
         let result = handle_command_frame(
             json!({
                 "type": "command",
                 "command_id": "cmd-claude-steer",
-                "session_id": "session-1",
+                "session_id": session_id,
                 "command_type": COMMAND_STEER_TEXT,
                 "payload": {"provider": "claude", "text": "course correct"},
             }),
@@ -3000,26 +3002,16 @@ mod tests {
         )
         .await;
         assert_eq!(result["ok"], true);
-        let args = std::fs::read_to_string(&args_path).unwrap();
-        assert_eq!(
-            args.lines().collect::<Vec<_>>(),
-            vec![
-                "claude-channel",
-                "send",
-                "--session-id",
-                "session-1",
-                "--text",
-                "course correct",
-                "--meta",
-                "intent=steer",
-            ]
-        );
+        let request = rx.recv().await.unwrap();
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+        assert_eq!(body["content"], "course correct");
+        assert_eq!(body["meta"]["intent"], "steer");
 
         let result = handle_command_frame(
             json!({
                 "type": "command",
                 "command_id": "cmd-claude-answer-pause",
-                "session_id": "session-1",
+                "session_id": session_id,
                 "command_type": COMMAND_ANSWER_PAUSE,
                 "payload": {
                     "provider": "claude",
@@ -3033,35 +3025,18 @@ mod tests {
         .await;
         assert_eq!(result["ok"], true);
         assert_eq!(result["result"]["pause_response"]["status"], "resolved");
-        let args = std::fs::read_to_string(&args_path).unwrap();
-        assert_eq!(
-            args.lines().collect::<Vec<_>>(),
-            vec![
-                "claude-channel",
-                "send",
-                "--session-id",
-                "session-1",
-                "--text",
-                "Use the smaller plan",
-                "--meta",
-                "intent=pause_response",
-                "--meta",
-                "request_key=pause-key",
-                "--meta",
-                "decision=answer",
-            ]
-        );
-        if let Some(value) = old_path {
-            std::env::set_var("PATH", value);
+        let request = rx.recv().await.unwrap();
+        let body: Value = serde_json::from_str(&request.body).unwrap();
+        assert_eq!(body["content"], "Use the smaller plan");
+        assert_eq!(body["meta"]["intent"], "pause_response");
+        assert_eq!(body["meta"]["request_key"], "pause-key");
+        assert_eq!(body["meta"]["decision"], "answer");
+
+        if let Some(value) = old_home {
+            std::env::set_var("HOME", value);
         } else {
-            std::env::remove_var("PATH");
+            std::env::remove_var("HOME");
         }
-        if let Some(value) = old_args_out {
-            std::env::set_var("LONGHOUSE_ARGS_OUT", value);
-        } else {
-            std::env::remove_var("LONGHOUSE_ARGS_OUT");
-        }
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
@@ -3834,84 +3809,6 @@ exit 1
         if let Some(pid) = payload["pid"].as_u64() {
             terminate_test_pid(pid as u32);
         }
-    }
-
-    #[test]
-    fn claude_channel_args_route_send_interrupt_and_steer() {
-        assert_eq!(
-            claude_channel_args(
-                COMMAND_SEND_TEXT,
-                "11111111-1111-4111-8111-111111111111",
-                Some("hello".to_string())
-            )
-            .unwrap(),
-            vec![
-                "claude-channel",
-                "send",
-                "--session-id",
-                "11111111-1111-4111-8111-111111111111",
-                "--text",
-                "hello",
-            ]
-        );
-        assert_eq!(
-            claude_channel_args(
-                COMMAND_INTERRUPT,
-                "11111111-1111-4111-8111-111111111111",
-                None
-            )
-            .unwrap(),
-            vec![
-                "claude-channel",
-                "interrupt",
-                "--session-id",
-                "11111111-1111-4111-8111-111111111111",
-            ]
-        );
-        assert_eq!(
-            claude_channel_args(
-                COMMAND_STEER_TEXT,
-                "11111111-1111-4111-8111-111111111111",
-                Some("course correct".to_string())
-            )
-            .unwrap(),
-            vec![
-                "claude-channel",
-                "send",
-                "--session-id",
-                "11111111-1111-4111-8111-111111111111",
-                "--text",
-                "course correct",
-                "--meta",
-                "intent=steer",
-            ]
-        );
-    }
-
-    #[test]
-    fn claude_pause_response_args_include_request_metadata() {
-        assert_eq!(
-            claude_channel_pause_response_args(
-                "11111111-1111-4111-8111-111111111111",
-                "Success metric: Real users".to_string(),
-                "claude-transcript:session:key",
-                "answer",
-            ),
-            vec![
-                "claude-channel",
-                "send",
-                "--session-id",
-                "11111111-1111-4111-8111-111111111111",
-                "--text",
-                "Success metric: Real users",
-                "--meta",
-                "intent=pause_response",
-                "--meta",
-                "request_key=claude-transcript:session:key",
-                "--meta",
-                "decision=answer",
-            ]
-        );
     }
 
     #[test]

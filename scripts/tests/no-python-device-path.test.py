@@ -40,7 +40,10 @@ def _write_root(root: Path) -> None:
     )
     _write(root / "server/zerg/cli/claude.py", "def main(): pass\n")
     _write(root / "server/zerg/cli/codex.py", "def main(): pass\n")
-    _write(root / "engine/src/control_channel.rs", "fn run_claude_channel_command() {}\n")
+    _write(
+        root / "engine/src/control_channel.rs",
+        "fn claude_channel_send_text() {}\nfn claude_channel_interrupt() {}\nfn claude_channel_control_result() {}\n",
+    )
 
 
 def _write_pyproject_scripts(root: Path, scripts: dict[str, str]) -> None:
@@ -75,15 +78,19 @@ def _inventory(*entries: dict) -> list[dict]:
         },
         {
             "id": "claude-rust-shellout",
-            "category": "transitional_device",
+            "category": "native_device",
             "provider": "claude",
             "path": "engine/src/control_channel.rs",
-            "symbol": "run_claude_channel_command",
+            "symbol": "claude_channel_control_result",
+            "native_dispatch_symbols": [
+                "claude_channel_send_text",
+                "claude_channel_interrupt",
+                "claude_channel_control_result",
+            ],
             "owner_area": "claude-native",
             "replacement_phase": "phase3",
             "reason": "test",
             "device_command": True,
-            "python_dependency_kind": "control_shellout",
         },
         *entries,
     ]
@@ -207,7 +214,7 @@ def test_requires_longhouse_cli_false_rejects_remote_control_shellout_debt() -> 
         )
 
 
-def test_rust_shellout_symbol_must_exist() -> None:
+def test_native_dispatch_symbols_must_exist() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write_root(root)
@@ -215,7 +222,7 @@ def test_rust_shellout_symbol_must_exist() -> None:
 
         _assert_fails(
             _run(root, _inventory()),
-            "symbol 'run_claude_channel_command' was not found",
+            "native dispatch symbol 'claude_channel_send_text' was not found",
         )
 
 
@@ -241,7 +248,7 @@ def main() -> int:
         test_packaged_console_script_python_requires_inventory_stance,
         test_transitional_python_entries_require_dependency_kind,
         test_requires_longhouse_cli_false_rejects_remote_control_shellout_debt,
-        test_rust_shellout_symbol_must_exist,
+        test_native_dispatch_symbols_must_exist,
         test_device_command_cannot_be_test_only,
     ]
     for test in tests:

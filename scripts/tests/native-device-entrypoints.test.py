@@ -34,6 +34,12 @@ DEFAULT_INVENTORY = (
         "provider": "codex",
         "path": "server/zerg/cli/codex.py",
     },
+    {
+        "id": "codex-native-control",
+        "category": "native_device",
+        "provider": "codex",
+        "path": "engine/src/control_channel.rs",
+    },
 )
 """,
     )
@@ -206,6 +212,16 @@ def test_unknown_phase1_inventory_id_fails() -> None:
         )
 
 
+def test_native_inventory_id_can_remain_in_planned_group() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        contract = _contract()
+        contract["commands"][1]["phase1_inventory_ids"].append("codex-native-control")
+
+        _assert_passes(_run(root, contract))
+
+
 def test_native_target_must_not_route_through_python_or_longhouse() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -280,6 +296,7 @@ def main() -> int:
         test_implementation_phase_is_validated,
         test_every_transitional_inventory_id_needs_command_plan,
         test_unknown_phase1_inventory_id_fails,
+        test_native_inventory_id_can_remain_in_planned_group,
         test_native_target_must_not_route_through_python_or_longhouse,
         test_invalid_cwd_policy_fails,
         test_provider_command_requires_concrete_cwd_policy,

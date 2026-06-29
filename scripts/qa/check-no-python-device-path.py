@@ -264,15 +264,19 @@ DEFAULT_INVENTORY: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "control-channel-claude-shellout",
-        "category": "transitional_device",
+        "category": "native_device",
         "provider": "claude",
         "path": "engine/src/control_channel.rs",
-        "symbol": "run_claude_channel_command",
+        "symbol": "claude_channel_control_result",
+        "native_dispatch_symbols": [
+            "claude_channel_send_text",
+            "claude_channel_interrupt",
+            "claude_channel_control_result"
+        ],
         "owner_area": "claude-native",
         "replacement_phase": "phase3",
-        "reason": "Rust Machine Agent shells out to the Python-packaged longhouse CLI for Claude control.",
+        "reason": "Rust Machine Agent routes Claude live control through native channel-control code instead of the Python-packaged longhouse CLI.",
         "device_command": True,
-        "python_dependency_kind": "control_shellout",
     },
     {
         "id": "control-channel-antigravity-shellout",
@@ -343,6 +347,14 @@ def _provider_matches(entry_provider: Any, provider: str) -> bool:
     if isinstance(entry_provider, list):
         return provider in entry_provider or "all" in entry_provider
     return False
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str)]
+    return []
 
 
 def _rel(path: Path, root: Path) -> str:
@@ -443,6 +455,9 @@ def _validate_inventory(root: Path, inventory: list[dict[str, Any]]) -> list[str
             text = (root / path_value).read_text(encoding="utf-8", errors="ignore") if (root / path_value).exists() else ""
             if symbol not in text:
                 errors.append(f"{item_id}: symbol {symbol!r} was not found in {path_value}")
+            for native_symbol in _as_string_list(item.get("native_dispatch_symbols")):
+                if native_symbol not in text:
+                    errors.append(f"{item_id}: native dispatch symbol {native_symbol!r} was not found in {path_value}")
 
     for path in sorted(_scanned_provider_control_files(root)):
         if path not in inventory_paths:
