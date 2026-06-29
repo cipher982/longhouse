@@ -1787,6 +1787,7 @@ class AgentsStore:
         *,
         chunk_size: int | None = None,
         synchronous_projections: bool = True,
+        synchronous_session_counts: bool | None = None,
         write_legacy_raw: bool = True,
         raw_source_archived: bool = False,
     ) -> IngestResult:
@@ -1801,6 +1802,8 @@ class AgentsStore:
                 replay/scan paths; smaller values keep live ingest responsive.
             synchronous_projections: When false, skip expensive derived
                 projections that can be reconstructed after archive repair.
+            synchronous_session_counts: Override whether cheap session message
+                counters update inline. Defaults to ``synchronous_projections``.
             write_legacy_raw: When false, skip legacy raw payload persistence
                 after archive-primary has stored source fidelity.
             raw_source_archived: True when this ingest's source payload was
@@ -2389,7 +2392,8 @@ class AgentsStore:
 
         stage_started = time.monotonic()
         head_branch_for_counts = self._align_head_branch_from_leaf_uuid(session_id, ingest_branch.id, leaf_uuid_hint)
-        if synchronous_projections:
+        sync_session_counts = synchronous_projections if synchronous_session_counts is None else synchronous_session_counts
+        if sync_session_counts:
             self._sync_session_counts_to_head(session_id, head_branch_for_counts)
 
         transcript_changed = bool(source_lines_inserted) or raw_source_archived or not source_lines or rewind_signal is not None

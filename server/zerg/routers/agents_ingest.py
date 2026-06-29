@@ -73,9 +73,9 @@ def _write_serializer_label_for_ship_trace(ship_trace: dict | None) -> str:
         return "ingest-replay"
     if work_context == "reconciliation_scan":
         return "ingest-scan"
-    # Missing or unknown trace context is reconstructable archive/catch-up work
-    # from the server's point of view. Keep it out of the hot live writer lane.
-    return "ingest-replay"
+    # Missing or unknown trace context needs compatibility-grade session
+    # counters, but it should still queue/admit like background archive work.
+    return "ingest"
 
 
 def _ship_trace_id(ship_trace: dict | None) -> str | None:
@@ -97,6 +97,8 @@ _INGEST_CHUNK_BY_LABEL: dict[str, int] = {
 }
 
 _ARCHIVE_INGEST_LABELS = {"ingest", "ingest-replay", "ingest-scan"}
+_DEFER_DERIVED_PROJECTION_LABELS = {"ingest", "ingest-replay", "ingest-scan"}
+_SYNC_SESSION_COUNT_LABELS = {"ingest-live", "ingest"}
 _ARCHIVE_INGEST_BACKPRESSURE_DETAIL = "Archive ingest backlog is throttled; retry shortly"
 _ARCHIVE_INGEST_BACKPRESSURE_KIND = "archive_ingest_backpressure"
 _ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS = 5
@@ -123,6 +125,14 @@ def _ingest_lane_for_label(label: str) -> str:
     if label in _ARCHIVE_INGEST_LABELS:
         return "archive"
     return "default"
+
+
+def _sync_session_counts_for_label(label: str) -> bool:
+    return label in _SYNC_SESSION_COUNT_LABELS
+
+
+def _sync_derived_projections_for_label(label: str) -> bool:
+    return label not in _DEFER_DERIVED_PROJECTION_LABELS
 
 
 def _stage_timing_header_value(stage_ms: dict[str, float]) -> str:
@@ -928,7 +938,8 @@ async def ingest_session(
                 result = store.ingest_session(
                     data,
                     chunk_size=ingest_chunk,
-                    synchronous_projections=write_label not in _ARCHIVE_INGEST_LABELS,
+                    synchronous_projections=_sync_derived_projections_for_label(write_label),
+                    synchronous_session_counts=_sync_session_counts_for_label(write_label),
                     write_legacy_raw=legacy_raw_effective,
                     raw_source_archived=archive_primary_state == "written" and archive_primary_records_written > 0,
                 )

@@ -33,6 +33,8 @@ from zerg.routers.agents_ingest import _archive_retry_after_for_queue_depth
 from zerg.routers.agents_ingest import _ingest_lane_for_label
 from zerg.routers.agents_ingest import _release_archive_ingest_slot
 from zerg.routers.agents_ingest import _stage_timing_header_value
+from zerg.routers.agents_ingest import _sync_derived_projections_for_label
+from zerg.routers.agents_ingest import _sync_session_counts_for_label
 from zerg.routers.agents_ingest import _write_serializer_label_for_ship_trace
 
 
@@ -61,12 +63,16 @@ def test_ship_trace_live_transcript_uses_live_ingest_label():
     assert _write_serializer_label_for_ship_trace({"work_context": "live_transcript"}) == "ingest-live"
     assert _write_serializer_label_for_ship_trace({"work_context": "reconciliation_scan"}) == "ingest-scan"
     assert _write_serializer_label_for_ship_trace({"work_context": "spool_replay"}) == "ingest-replay"
-    assert _write_serializer_label_for_ship_trace({"work_context": "hook_catchup"}) == "ingest-replay"
-    assert _write_serializer_label_for_ship_trace(None) == "ingest-replay"
+    assert _write_serializer_label_for_ship_trace({"work_context": "hook_catchup"}) == "ingest"
+    assert _write_serializer_label_for_ship_trace(None) == "ingest"
     assert _ingest_lane_for_label("ingest-live") == "live"
     assert _ingest_lane_for_label("ingest-replay") == "archive"
     assert _ingest_lane_for_label("ingest-scan") == "archive"
     assert _ingest_lane_for_label("ingest") == "archive"
+    assert _sync_session_counts_for_label("ingest")
+    assert not _sync_derived_projections_for_label("ingest")
+    assert not _sync_session_counts_for_label("ingest-replay")
+    assert not _sync_derived_projections_for_label("ingest-replay")
 
 
 def test_stage_timing_header_value_is_bounded_and_sorted():
