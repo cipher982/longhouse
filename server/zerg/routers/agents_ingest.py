@@ -1072,7 +1072,11 @@ async def ingest_session(
 
             with tracer.start_as_current_span("longhouse.ingest.write") as write_span:
                 write_started = time.monotonic()
-                ingest_batches = _archive_ingest_batches(data, max_items=ingest_chunk) if write_label in _ARCHIVE_INGEST_LABELS else [data]
+                ingest_batches = (
+                    _archive_ingest_batches(data, max_items=min(ingest_chunk, _ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS))
+                    if write_label in _ARCHIVE_INGEST_LABELS
+                    else [data]
+                )
                 write_results: list[IngestResult] = []
                 for batch_index, ingest_batch in enumerate(ingest_batches):
                     if batch_index > 0 and write_label in _ARCHIVE_INGEST_LABELS:
