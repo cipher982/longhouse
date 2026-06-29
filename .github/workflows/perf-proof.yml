@@ -49,6 +49,9 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y make build-essential pkg-config
+
       - name: Ensure make available
         run: ./scripts/ci/ensure-make.sh
 
