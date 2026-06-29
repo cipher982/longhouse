@@ -206,7 +206,9 @@ def _queue_process_stdout(process: subprocess.Popen[str]) -> "queue.Queue[str]":
 
 
 def _fake_interruptible_process(marker: Path) -> subprocess.Popen[str]:
+    fake_claude = marker.parent / "bin" / "claude"
     script = (
+        "#!/usr/bin/env python3\n"
         "import pathlib,signal,sys,time\n"
         f"marker=pathlib.Path({str(marker)!r})\n"
         "def handle(sig, frame):\n"
@@ -216,8 +218,9 @@ def _fake_interruptible_process(marker: Path) -> subprocess.Popen[str]:
         "print('ready', flush=True)\n"
         "while True: time.sleep(0.2)\n"
     )
+    _write_executable(fake_claude, script)
     return subprocess.Popen(
-        [sys.executable, "-c", script],
+        [str(fake_claude)],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

@@ -1,6 +1,12 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::process_identity::{
+    ProcessFact, collect_process_facts_by_pid, command_contains_basename, parse_rfc3339,
+    started_before_or_near_recorded,
+};
+use chrono::DateTime;
+use chrono::Utc;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::json;
@@ -60,6 +66,7 @@ struct ClaudeChannelState {
     port: Option<u16>,
     claude_pid: Option<i32>,
     ready: Option<bool>,
+    started_at: Option<String>,
 }
 
 pub async fn send_text(
@@ -145,6 +152,11 @@ pub async fn interrupt(
         .claude_pid
         .filter(|pid| *pid > 0)
         .ok_or_else(|| not_attached(&config.session_id, "state is missing claude_pid"))?;
+    verify_claude_interrupt_target(
+        &config.session_id,
+        pid,
+        state.started_at.as_deref().and_then(parse_rfc3339),
+    )?;
     signal_interrupt(pid).map_err(|err| {
         ClaudeChannelControlError::CommandFailed(format!(
             "failed to interrupt Claude process {pid}: {err}"
@@ -245,7 +257,7 @@ fn read_state_file(path: &Path) -> Result<ClaudeChannelState, StateReadError> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err(StateReadError::Missing)
+            return Err(StateReadError::Missing);
         }
         Err(err) => return Err(StateReadError::Invalid(err.to_string())),
     };
@@ -257,12 +269,47 @@ fn read_state_value(path: &Path) -> Result<serde_json::Value, StateReadError> {
     let raw = match std::fs::read_to_string(path) {
         Ok(raw) => raw,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return Err(StateReadError::Missing)
+            return Err(StateReadError::Missing);
         }
         Err(err) => return Err(StateReadError::Invalid(err.to_string())),
     };
     serde_json::from_str(&raw)
         .map_err(|err| StateReadError::Invalid(format!("state is invalid JSON: {err}")))
+}
+
+fn verify_claude_interrupt_target(
+    session_id: &str,
+    pid: i32,
+    recorded_start: Option<DateTime<Utc>>,
+) -> Result<(), ClaudeChannelControlError> {
+    let pid_u32 = u32::try_from(pid).map_err(|_| {
+        not_attached(
+            session_id,
+            &format!("state has invalid claude_pid {pid} for interrupt"),
+        )
+    })?;
+    let process_facts = collect_process_facts_by_pid();
+    let Some(fact) = process_facts.get(&pid_u32) else {
+        return Err(not_attached(
+            session_id,
+            &format!("recorded Claude process {pid} is not running"),
+        ));
+    };
+    if !claude_interrupt_target_matches(fact, recorded_start) {
+        return Err(not_attached(
+            session_id,
+            &format!("recorded Claude process {pid} no longer matches the channel state"),
+        ));
+    }
+    Ok(())
+}
+
+fn claude_interrupt_target_matches(
+    fact: &ProcessFact,
+    recorded_start: Option<DateTime<Utc>>,
+) -> bool {
+    command_contains_basename(&fact.command, "claude")
+        && started_before_or_near_recorded(fact, recorded_start)
 }
 
 fn signal_interrupt(pid: i32) -> std::io::Result<()> {
@@ -362,6 +409,17 @@ mod tests {
         std::fs::write(path, serde_json::to_vec(&payload).unwrap()).unwrap();
     }
 
+    fn process_fact(command: &str, started_at: Option<&str>) -> ProcessFact {
+        ProcessFact {
+            pid: 101,
+            tty: "??".to_string(),
+            stat: "Ss".to_string(),
+            lstart: "".to_string(),
+            command: command.to_string(),
+            start_time: started_at.and_then(parse_rfc3339),
+        }
+    }
+
     #[tokio::test]
     async fn send_text_injects_payload_and_default_meta() {
         let temp = tempfile::tempdir().unwrap();
@@ -393,10 +451,12 @@ mod tests {
             Some("claude-provider-1")
         );
         let request = rx.await.unwrap();
-        assert!(request
-            .headers
-            .to_ascii_lowercase()
-            .contains("x-longhouse-channel-token: secret-token"));
+        assert!(
+            request
+                .headers
+                .to_ascii_lowercase()
+                .contains("x-longhouse-channel-token: secret-token")
+        );
         assert_eq!(request.body["content"], "hello");
         assert_eq!(request.body["meta"]["injected_by"], "longhouse");
         assert_eq!(request.body["meta"]["longhouse_session_id"], SESSION_ID);
@@ -505,9 +565,43 @@ mod tests {
 
         assert_eq!(state["session_id"], SESSION_ID);
         assert_eq!(state["auth_token"], "<redacted>");
-        assert!(!serde_json::to_string(&state)
-            .unwrap()
-            .contains("very-secret-token"));
+        assert!(
+            !serde_json::to_string(&state)
+                .unwrap()
+                .contains("very-secret-token")
+        );
+    }
+
+    #[test]
+    fn claude_interrupt_target_requires_claude_command() {
+        let fact = process_fact(
+            "/System/Library/PrivateFrameworks/CascadeSets.framework/SetStoreUpdateService",
+            None,
+        );
+
+        assert!(!claude_interrupt_target_matches(&fact, None));
+    }
+
+    #[test]
+    fn claude_interrupt_target_rejects_reused_claude_pid_by_start_time() {
+        let fact = process_fact(
+            "/Users/test/.local/bin/claude --resume 11111111-1111-4111-8111-111111111111",
+            Some("2026-05-28T20:40:28Z"),
+        );
+        let recorded_start = parse_rfc3339("2026-04-07T19:38:09Z");
+
+        assert!(!claude_interrupt_target_matches(&fact, recorded_start));
+    }
+
+    #[test]
+    fn claude_interrupt_target_accepts_matching_recorded_claude_process() {
+        let fact = process_fact(
+            "/Users/test/.local/bin/claude --resume 11111111-1111-4111-8111-111111111111",
+            Some("2026-04-07T19:38:08Z"),
+        );
+        let recorded_start = parse_rfc3339("2026-04-07T19:38:09Z");
+
+        assert!(claude_interrupt_target_matches(&fact, recorded_start));
     }
 
     #[cfg(unix)]
