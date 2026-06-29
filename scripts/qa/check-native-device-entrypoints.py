@@ -13,10 +13,12 @@ from pathlib import Path
 from typing import Any
 
 VALID_COMMAND_STATUSES = {"planned", "native", "transitional_shim", "excluded"}
+VALID_NATIVE_OWNER_STATUSES = {"planned", "native"}
 VALID_SHIM_STATUSES = {"transitional_shim", "legacy_compat"}
 VALID_PROVIDER_OWNERSHIP = {"user_owned", "not_applicable", "excluded_until_provider_surface"}
 VALID_TOKEN_POLICIES = {"env_or_state_file", "no_token", "not_applicable"}
 VALID_CWD_POLICIES = {"strict_absolute_or_existing", "inherits_existing", "not_applicable"}
+VALID_PHASES = {"phase2", "phase3", "phase4", "phase5", "phase6", "phase7"}
 TRANSITIONAL_CATEGORIES = {"transitional_device", "legacy_compat"}
 FORBIDDEN_NATIVE_COMMAND_BINS = {"longhouse", "python", "python3", "uv", "pip"}
 
@@ -97,6 +99,9 @@ def _validate_contract(root: Path, contract: dict[str, Any]) -> list[str]:
         errors.append("native_owner.binary must be longhouse-engine")
     if owner_namespace != "device":
         errors.append("native_owner.namespace must be device")
+    owner_status = str(owner.get("status") or "").strip()
+    if owner_status not in VALID_NATIVE_OWNER_STATUSES:
+        errors.append(f"native_owner.status must be one of {sorted(VALID_NATIVE_OWNER_STATUSES)}")
     native_prefix = f"{owner_binary} {owner_namespace}".strip()
 
     shim_entries = contract.get("compatibility_shims")
@@ -118,6 +123,9 @@ def _validate_contract(root: Path, contract: dict[str, Any]) -> list[str]:
         status = str(shim.get("status") or "").strip()
         if status not in VALID_SHIM_STATUSES:
             errors.append(f"compatibility shim {script} status must be one of {sorted(VALID_SHIM_STATUSES)}")
+        removal_phase = str(shim.get("removal_phase") or "").strip()
+        if removal_phase and removal_phase not in VALID_PHASES:
+            errors.append(f"compatibility shim {script} removal_phase must be one of {sorted(VALID_PHASES)}")
         target = str(shim.get("target") or "").strip()
         packaged_target = _packaged_console_scripts(root).get(script)
         if packaged_target and target != packaged_target:
@@ -159,6 +167,10 @@ def _validate_contract(root: Path, contract: dict[str, Any]) -> list[str]:
         for required in ("implementation_phase", "native_target_command", "provider_binary_ownership", "token_policy", "cwd_policy", "notes"):
             if not str(command.get(required) or "").strip():
                 errors.append(f"{command_id}: {required} is required")
+
+        implementation_phase = str(command.get("implementation_phase") or "").strip()
+        if implementation_phase and implementation_phase not in VALID_PHASES:
+            errors.append(f"{command_id}: implementation_phase must be one of {sorted(VALID_PHASES)}")
 
         legacy_commands = _as_string_list(command.get("legacy_commands"))
         if not legacy_commands:
@@ -204,6 +216,8 @@ def _validate_contract(root: Path, contract: dict[str, Any]) -> list[str]:
         cwd_policy = str(command.get("cwd_policy") or "").strip()
         if cwd_policy not in VALID_CWD_POLICIES:
             errors.append(f"{command_id}: cwd_policy must be one of {sorted(VALID_CWD_POLICIES)}")
+        if provider_values != ["all"] and cwd_policy == "not_applicable":
+            errors.append(f"{command_id}: provider command plans must declare a concrete cwd_policy")
 
     missing = sorted(transitional_inventory_ids - covered_inventory_ids)
     for item_id in missing:

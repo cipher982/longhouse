@@ -154,6 +154,32 @@ def test_schema_version_is_pinned() -> None:
         )
 
 
+def test_native_owner_status_is_validated() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        contract = _contract()
+        contract["native_owner"]["status"] = "aspirational"
+
+        _assert_fails(
+            _run(root, contract),
+            "native_owner.status must be one of",
+        )
+
+
+def test_implementation_phase_is_validated() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        contract = _contract()
+        contract["commands"][1]["implementation_phase"] = "phaze4"
+
+        _assert_fails(
+            _run(root, contract),
+            "codex-managed: implementation_phase must be one of",
+        )
+
+
 def test_every_transitional_inventory_id_needs_command_plan() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -193,6 +219,32 @@ def test_native_target_must_not_route_through_python_or_longhouse() -> None:
         )
 
 
+def test_invalid_cwd_policy_fails() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        contract = _contract()
+        contract["commands"][1]["cwd_policy"] = "wherever"
+
+        _assert_fails(
+            _run(root, contract),
+            "codex-managed: cwd_policy must be one of",
+        )
+
+
+def test_provider_command_requires_concrete_cwd_policy() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_root(root)
+        contract = _contract()
+        contract["commands"][1]["cwd_policy"] = "not_applicable"
+
+        _assert_fails(
+            _run(root, contract),
+            "codex-managed: provider command plans must declare a concrete cwd_policy",
+        )
+
+
 def test_provider_command_must_keep_provider_binary_user_owned() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -224,9 +276,13 @@ def main() -> int:
         test_minimal_contract_passes,
         test_packaged_console_script_requires_compatibility_plan,
         test_schema_version_is_pinned,
+        test_native_owner_status_is_validated,
+        test_implementation_phase_is_validated,
         test_every_transitional_inventory_id_needs_command_plan,
         test_unknown_phase1_inventory_id_fails,
         test_native_target_must_not_route_through_python_or_longhouse,
+        test_invalid_cwd_policy_fails,
+        test_provider_command_requires_concrete_cwd_policy,
         test_provider_command_must_keep_provider_binary_user_owned,
         test_native_status_rejects_transitional_phase1_debt,
     ]

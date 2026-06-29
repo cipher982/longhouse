@@ -74,7 +74,7 @@ Initial target groups:
 | Device root | `longhouse`, `longhouse --help`, shared CLI scaffolding | `longhouse-engine device` | Phase 2 |
 | Desktop App | `Longhouse.app` setup/status/menu-bar flows invoking Python CLI helpers | Consumer of `longhouse-engine device ...`, not an owner | Phase 7 implementation |
 | Local health | `longhouse local-health`, `longhouse-local-health` | `longhouse-engine device local-health` | Phase 7 implementation |
-| Doctor/repair | `longhouse doctor`, `longhouse machine repair`, `longhouse connect --install` | `longhouse-engine device doctor`, `device machine repair`, `device connect` | Phase 7 implementation |
+| Doctor/repair | `longhouse doctor`, `longhouse machine repair`, `longhouse connect --install` | `longhouse-engine device repair` as the consolidated native repair surface | Phase 7 implementation |
 | Provider proof | `longhouse provider-live ...` | `longhouse-engine device provider-live ...` | Phase 7 implementation |
 | Claude | `longhouse claude`, `longhouse claude-channel ...` | `longhouse-engine device claude ...` plus native channel bridge | Phase 3 |
 | Codex | `longhouse codex` | `longhouse-engine device codex ...` over existing Rust bridge | Phase 4 |
