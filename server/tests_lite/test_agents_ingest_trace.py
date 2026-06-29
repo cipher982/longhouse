@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 from types import SimpleNamespace
@@ -10,6 +9,9 @@ from cryptography.fernet import Fernet
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-long-enough")
+os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-long-enough")
+os.environ.setdefault("AUTH_DISABLED", "1")
 
 import pytest
 from fastapi import HTTPException
@@ -481,23 +483,26 @@ def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_archive_ingest_write_timeout_returns_typed_backpressure(tmp_path, monkeypatch):
-    class TimeoutSerializer:
+def test_archive_ingest_does_not_pass_serializer_timeout(tmp_path, monkeypatch):
+    calls: list[dict] = []
+
+    class RecordingSerializer:
         is_configured = True
         writer_active = False
         active_label = None
         active_age_ms = 0.0
         queue_depth = 0
 
-        async def execute_after_closing_request_session(self, *args, **kwargs):
+        async def execute_after_closing_request_session(self, fn, fallback_db, **kwargs):
+            calls.append(kwargs)
             assert kwargs["label"] == "ingest-replay"
-            assert kwargs["timeout_seconds"] is not None
-            raise asyncio.TimeoutError
+            assert "timeout_seconds" not in kwargs
+            return fn(fallback_db)
 
     client, _ = _make_client(tmp_path)
     monkeypatch.setattr(
         "zerg.services.write_serializer.get_write_serializer",
-        lambda: TimeoutSerializer(),
+        lambda: RecordingSerializer(),
     )
     try:
         session_id = "21111111-2222-3333-4444-555555555555"
@@ -536,13 +541,11 @@ def test_archive_ingest_write_timeout_returns_typed_backpressure(tmp_path, monke
             },
         )
 
-        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-        assert response.json()["detail"] == "Archive ingest backlog is throttled; retry shortly"
-        assert response.headers["Retry-After"] == "30"
+        assert response.status_code == status.HTTP_200_OK, response.text
+        assert calls
         assert response.headers["X-Ingest-Lane"] == "archive"
-        assert response.headers["X-Ingest-Admission-State"] == "archive_write_timeout"
-        assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
-        assert response.headers["X-Ingest-Error-Kind"] == "archive_ingest_backpressure"
+        assert response.headers["X-Ingest-Admission-State"] == "archive_slot_acquired"
+        assert response.headers["X-Ingest-Sub-Batches"] == "1"
     finally:
         api_app.dependency_overrides.clear()
 
