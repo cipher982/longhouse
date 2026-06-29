@@ -2,6 +2,7 @@ mod bench;
 mod build_identity;
 mod claude_channel_control;
 mod claude_channel_launch;
+mod claude_channel_server;
 mod codex_app_server_canary;
 mod codex_attachments;
 mod codex_bridge;
@@ -119,6 +120,17 @@ fn require_codex_bridge_token_env() -> anyhow::Result<String> {
         );
     }
     Ok(token)
+}
+
+fn env_string(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn env_i32(name: &str) -> Option<i32> {
+    env_string(name).and_then(|value| value.parse::<i32>().ok())
 }
 
 fn resolve_codex_bridge_start_roots(
@@ -503,6 +515,39 @@ enum Commands {
         #[command(subcommand)]
         command: CodexBridgeCommands,
     },
+
+    /// Native managed Claude channel utilities
+    ClaudeChannel {
+        #[command(subcommand)]
+        command: ClaudeChannelCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum ClaudeChannelCommands {
+    /// Run the local MCP channel bridge that Claude connects to over stdio
+    Serve {
+        #[arg(long)]
+        session_id: Option<String>,
+
+        #[arg(long)]
+        provider_session_id: Option<String>,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+
+        #[arg(long, default_value = "0")]
+        port: u16,
+
+        #[arg(long)]
+        auth_token: Option<String>,
+
+        #[arg(long)]
+        claude_pid: Option<i32>,
+
+        #[arg(long)]
+        cwd: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -825,6 +870,9 @@ fn command_name(command: &Commands) -> &'static str {
             CodexBridgeCommands::Steer { .. } => "codex-bridge-steer",
             CodexBridgeCommands::PauseResponse { .. } => "codex-bridge-pause-response",
             CodexBridgeCommands::Stop { .. } => "codex-bridge-stop",
+        },
+        Commands::ClaudeChannel { command } => match command {
+            ClaudeChannelCommands::Serve { .. } => "claude-channel-serve",
         },
     }
 }
@@ -1199,6 +1247,33 @@ fn main() -> anyhow::Result<()> {
             sb.bind(&canonical, &session_id, &provider)?;
             eprintln!("Bound {} → {}", canonical, session_id);
         }
+        Commands::ClaudeChannel { command } => match command {
+            ClaudeChannelCommands::Serve {
+                session_id,
+                provider_session_id,
+                state_root,
+                port,
+                auth_token,
+                claude_pid,
+                cwd,
+            } => {
+                let rt = tokio::runtime::Runtime::new()?;
+                rt.block_on(claude_channel_server::run(
+                    claude_channel_server::ClaudeChannelServeConfig {
+                        session_id: session_id
+                            .or_else(|| env_string("LONGHOUSE_CHANNEL_SESSION_ID")),
+                        provider_session_id: provider_session_id
+                            .or_else(|| env_string("LONGHOUSE_PROVIDER_SESSION_ID")),
+                        state_root,
+                        port,
+                        auth_token: auth_token
+                            .or_else(|| env_string("LONGHOUSE_CHANNEL_AUTH_TOKEN")),
+                        claude_pid: claude_pid.or_else(|| env_i32("LONGHOUSE_CHANNEL_PARENT_PID")),
+                        cwd: cwd.or_else(|| env_string("LONGHOUSE_CHANNEL_CWD")),
+                    },
+                ))?;
+            }
+        },
         Commands::CodexBridge { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {

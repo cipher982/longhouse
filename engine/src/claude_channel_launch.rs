@@ -11,6 +11,7 @@ use tokio::time::sleep;
 use uuid::Uuid;
 
 const CLAUDE_CHANNEL_SERVER_NAME: &str = "longhouse-channel";
+const CLAUDE_CHANNEL_SERVER_COMMAND: &str = "longhouse-engine";
 const CLAUDE_CHANNEL_DEVELOPMENT_FLAG: &str = "--dangerously-load-development-channels";
 const MANAGED_SESSION_ENV: &str = "LONGHOUSE_MANAGED_SESSION_ID";
 const CLAUDE_REMOTE_LAUNCH_LOG_DIR: &str = "claude-channel-launch";
@@ -502,7 +503,7 @@ fn ensure_claude_channel_mcp_server(
     let mut settings = read_json_object_or_empty(&config_path)?;
     let desired = json!({
         "type": "stdio",
-        "command": "longhouse",
+        "command": CLAUDE_CHANNEL_SERVER_COMMAND,
         "args": ["claude-channel", "serve"],
         "env": {},
     });
@@ -843,7 +844,7 @@ mod tests {
         let updated: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
         assert_eq!(
             updated["mcpServers"]["longhouse-channel"]["command"],
-            "longhouse"
+            CLAUDE_CHANNEL_SERVER_COMMAND
         );
         assert_eq!(
             updated["mcpServers"]["longhouse-channel"]["args"],

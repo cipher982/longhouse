@@ -48,6 +48,10 @@ def _write_root(root: Path) -> None:
         root / "engine/src/claude_channel_launch.rs",
         "struct ClaudeChannelLaunchConfig {}\nfn build_launch_command_plan() {}\nfn launch_detached() {}\n",
     )
+    _write(
+        root / "engine/src/claude_channel_server.rs",
+        "struct ClaudeChannelServeConfig {}\nfn run() {}\n",
+    )
 
 
 def _write_pyproject_scripts(root: Path, scripts: dict[str, str]) -> None:
@@ -106,6 +110,21 @@ def _inventory(*entries: dict) -> list[dict]:
                 "ClaudeChannelLaunchConfig",
                 "build_launch_command_plan",
                 "launch_detached",
+            ],
+            "owner_area": "claude-native",
+            "replacement_phase": "phase3",
+            "reason": "test",
+            "device_command": True,
+        },
+        {
+            "id": "claude-channel-server-native",
+            "category": "native_device",
+            "provider": "claude",
+            "path": "engine/src/claude_channel_server.rs",
+            "symbol": "run",
+            "native_dispatch_symbols": [
+                "ClaudeChannelServeConfig",
+                "run",
             ],
             "owner_area": "claude-native",
             "replacement_phase": "phase3",
