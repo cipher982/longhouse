@@ -34,11 +34,32 @@ entrypoints:
 longhouse-engine device <command> [args...]
 ```
 
-Phase 2 does **not** add the runtime subcommand yet. Later phases implement it
-command group by command group. The macOS `Longhouse.app` remains the
+Phase 2A adds the native namespace scaffold and read-only plan/status commands.
+Later phases implement it command group by command group. The macOS `Longhouse.app` remains the
 recommended human surface and may invoke native device commands internally. The
 Python `longhouse` console script remains only as a compatibility shim until
 package transport is replaced.
+
+## Phase 2A Namespace Scaffold
+
+Phase 2A establishes the compiled owner without claiming provider behavior has
+been ported:
+
+```text
+longhouse-engine device plan [--json]
+longhouse-engine device status [--json]
+```
+
+The Rust binary embeds `config/native_device_entrypoints.json` at compile time,
+so installed `longhouse-engine` can report the device-entrypoint contract
+without needing a repo checkout or Python interpreter. The owner may be marked
+`native` once this namespace exists. Individual command groups must remain
+`planned` until their corresponding Phase 1 Python inventory entries stop being
+`transitional_device` or `legacy_compat`.
+
+Repo authoring and CI validation for this contract may remain Python tooling in
+this stage. The no-Python promise here applies to the installed runtime command
+path on the user's device.
 
 ## Non-Goals
 
@@ -142,8 +163,9 @@ Each command plan has these fields:
   `not_applicable`
 - `notes`
 
-Phase 2 entries start as `planned`. A later phase may mark an entry `native`
-only after the corresponding Phase 1 Python inventory item is no longer
+Phase 2A marks only `native_owner.status` as `native`. Command entries start as
+`planned`. A later phase may mark an entry `native` only after the
+corresponding Phase 1 Python inventory item is no longer
 `transitional_device`/`legacy_compat`.
 
 Add a validation target:
@@ -172,6 +194,8 @@ surface that later phases will implement.
 
 - The repo has a reviewed Phase 2 spec that chooses the native owner and shim
   strategy.
+- `longhouse-engine device plan` and `longhouse-engine device status` report
+  the embedded native device-entrypoint contract without invoking Python.
 - `config/native_device_entrypoints.json` names the native target for every
   normal device command category from the Phase 1 inventory.
 - `make validate-native-device-entrypoints` passes and is included in

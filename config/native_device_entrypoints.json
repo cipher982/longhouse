@@ -3,7 +3,7 @@
   "native_owner": {
     "binary": "longhouse-engine",
     "namespace": "device",
-    "status": "planned"
+    "status": "native"
   },
   "compatibility_shims": [
     {
@@ -47,7 +47,7 @@
       "provider_binary_ownership": "not_applicable",
       "token_policy": "not_applicable",
       "cwd_policy": "not_applicable",
-      "notes": "Native root namespace and shared device CLI support library. Phase 2 is contract-only; implementation comes later."
+      "notes": "Native root namespace scaffold and shared device CLI support library. Provider/local-health/repair behavior remains planned for later phases."
     },
     {
       "id": "local-health",

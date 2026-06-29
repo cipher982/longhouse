@@ -13,6 +13,7 @@ mod commands;
 mod config;
 mod control_channel;
 mod daemon;
+mod device;
 mod discovery;
 mod error_tracker;
 mod flight;
@@ -548,6 +549,29 @@ enum Commands {
         #[command(subcommand)]
         command: ClaudeChannelCommands,
     },
+
+    /// Native device command surface scaffold
+    Device {
+        #[command(subcommand)]
+        command: DeviceCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum DeviceCommands {
+    /// Print the native device-entrypoint contract
+    Plan {
+        /// Emit the full native device-entrypoint contract as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Print the current native device command status summary
+    Status {
+        /// Emit the status summary as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -922,6 +946,10 @@ fn command_name(command: &Commands) -> &'static str {
     match command {
         Commands::Parse { .. } => "parse",
         Commands::BuildIdentity { .. } => "build-identity",
+        Commands::Device { command } => match command {
+            DeviceCommands::Plan { .. } => "device-plan",
+            DeviceCommands::Status { .. } => "device-status",
+        },
         Commands::Bench { .. } => "bench",
         Commands::Ship { .. } => "ship",
         Commands::Connect { .. } => "connect",
@@ -1316,6 +1344,14 @@ fn main() -> anyhow::Result<()> {
             sb.bind(&canonical, &session_id, &provider)?;
             eprintln!("Bound {} → {}", canonical, session_id);
         }
+        Commands::Device { command } => match command {
+            DeviceCommands::Plan { json } => {
+                device::cmd_device_plan(json)?;
+            }
+            DeviceCommands::Status { json } => {
+                device::cmd_device_status(json)?;
+            }
+        },
         Commands::ClaudeChannel { command } => match command {
             ClaudeChannelCommands::Serve {
                 session_id,
@@ -1725,6 +1761,30 @@ mod tests {
                 );
             }
             _ => panic!("expected codex-bridge start command"),
+        }
+    }
+
+    #[test]
+    fn device_plan_cli_parses() {
+        let cli = Cli::try_parse_from(["longhouse-engine", "device", "plan", "--json"]).unwrap();
+
+        match cli.command {
+            Commands::Device {
+                command: DeviceCommands::Plan { json },
+            } => assert!(json),
+            _ => panic!("expected device plan command"),
+        }
+    }
+
+    #[test]
+    fn device_status_cli_parses() {
+        let cli = Cli::try_parse_from(["longhouse-engine", "device", "status", "--json"]).unwrap();
+
+        match cli.command {
+            Commands::Device {
+                command: DeviceCommands::Status { json },
+            } => assert!(json),
+            _ => panic!("expected device status command"),
         }
     }
 
