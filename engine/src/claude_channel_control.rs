@@ -214,6 +214,9 @@ fn read_state_file(path: &Path) -> Result<ClaudeChannelState, StateReadError> {
 fn signal_interrupt(pid: i32) -> std::io::Result<()> {
     #[cfg(unix)]
     unsafe {
+        // Claude detached launches currently run in their own process group
+        // (Python launch uses start_new_session=True). Future native launch
+        // code must preserve that isolation before depending on group signals.
         let pgid = libc::getpgid(pid);
         if pgid > 0 {
             if libc::killpg(pgid, libc::SIGINT) == 0 {
@@ -343,7 +346,8 @@ mod tests {
         let request = rx.await.unwrap();
         assert!(request
             .headers
-            .contains("X-Longhouse-Channel-Token: secret-token"));
+            .to_ascii_lowercase()
+            .contains("x-longhouse-channel-token: secret-token"));
         assert_eq!(request.body["content"], "hello");
         assert_eq!(request.body["meta"]["injected_by"], "longhouse");
         assert_eq!(request.body["meta"]["longhouse_session_id"], SESSION_ID);

@@ -119,7 +119,8 @@ contract:
 
 The Rust path should preserve the Python send timing shape: wait up to roughly
 10 seconds for a ready state file, polling at short intervals, then use a short
-HTTP timeout for the local injection request.
+HTTP timeout for the local injection request. The bridge injection itself is a
+single request with no retry, matching the Python compatibility command.
 
 ### State Root
 
@@ -154,6 +155,10 @@ Claude process PID. The native implementation should prefer interrupting the
 Claude process group on Unix when available, falling back to the recorded PID
 only when process-group signaling fails or is unavailable. This better matches
 terminal behavior while keeping the existing state schema.
+
+This is safe because the current Python detached launcher starts Claude in a
+new session/process group. The later native launch slice must preserve that
+process-group isolation before relying on process-group interrupts.
 
 ## Success Criteria
 
