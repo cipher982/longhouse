@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 
 from cryptography.fernet import Fernet
 from typer.testing import CliRunner
@@ -205,7 +208,7 @@ def test_claude_channel_send_shim_dispatches_to_engine(monkeypatch, tmp_path):
     ]
 
 
-def test_claude_channel_serve_shim_execs_engine_without_token_argv(monkeypatch, tmp_path):
+def test_claude_channel_serve_shim_execs_engine_with_env_token_only(monkeypatch, tmp_path):
     session_id = "11111111-1111-1111-1111-111111111111"
     state_root = tmp_path / "bridge-state"
     calls: list[tuple[list[str], dict[str, str]]] = []
@@ -214,6 +217,7 @@ def test_claude_channel_serve_shim_execs_engine_without_token_argv(monkeypatch, 
         calls.append((argv, env))
 
     monkeypatch.setenv("LONGHOUSE_ENGINE_BIN", "/tmp/longhouse-engine")
+    monkeypatch.setenv("LONGHOUSE_CHANNEL_AUTH_TOKEN", "bridge-test-token")
     monkeypatch.setattr(claude_channel_cli, "_exec_engine", fake_exec_engine)
 
     result = CliRunner().invoke(
@@ -224,8 +228,6 @@ def test_claude_channel_serve_shim_execs_engine_without_token_argv(monkeypatch, 
             session_id,
             "--state-root",
             str(state_root),
-            "--auth-token",
-            "bridge-test-token",
             "--port",
             "4242",
         ],
@@ -246,6 +248,77 @@ def test_claude_channel_serve_shim_execs_engine_without_token_argv(monkeypatch, 
     ]
     assert "bridge-test-token" not in " ".join(argv)
     assert env["LONGHOUSE_CHANNEL_AUTH_TOKEN"] == "bridge-test-token"
+
+
+def test_claude_channel_serve_shim_preserves_stdio_through_exec(tmp_path):
+    fake_engine = tmp_path / "longhouse-engine"
+    argv_path = tmp_path / "argv.json"
+    env_path = tmp_path / "env.json"
+    fake_engine.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import json, os, sys",
+                f"open({str(argv_path)!r}, 'w', encoding='utf-8').write(json.dumps(sys.argv))",
+                f"open({str(env_path)!r}, 'w', encoding='utf-8').write(json.dumps({{'token': os.environ.get('LONGHOUSE_CHANNEL_AUTH_TOKEN')}}))",
+                "line = sys.stdin.readline()",
+                "sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': {'stdin': line.strip()}}) + '\\n')",
+                "sys.stdout.flush()",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fake_engine.chmod(0o755)
+
+    env = os.environ.copy()
+    env["LONGHOUSE_ENGINE_BIN"] = str(fake_engine)
+    env["LONGHOUSE_CHANNEL_AUTH_TOKEN"] = "bridge-test-token"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-m",
+            "zerg.cli.main",
+            "claude-channel",
+            "serve",
+            "--session-id",
+            "11111111-1111-1111-1111-111111111111",
+            "--state-root",
+            str(tmp_path / "state"),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        env=env,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    try:
+        assert process.stdin is not None
+        assert process.stdout is not None
+        process.stdin.write('{"jsonrpc":"2.0","id":1,"method":"initialize"}\n')
+        process.stdin.flush()
+        response = json.loads(process.stdout.readline())
+        assert response["result"]["stdin"] == '{"jsonrpc":"2.0","id":1,"method":"initialize"}'
+        process.stdin.close()
+        stderr = process.stderr.read() if process.stderr else ""
+        assert process.wait(timeout=5.0) == 0, stderr
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5.0)
+
+    argv = json.loads(argv_path.read_text(encoding="utf-8"))
+    assert argv[:5] == [
+        str(fake_engine),
+        "claude-channel",
+        "serve",
+        "--session-id",
+        "11111111-1111-1111-1111-111111111111",
+    ]
+    assert "bridge-test-token" not in " ".join(argv)
+    assert json.loads(env_path.read_text(encoding="utf-8")) == {"token": "bridge-test-token"}
 
 
 def test_wait_for_claude_channel_state_waits_for_ready_transition(tmp_path):

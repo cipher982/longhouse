@@ -567,9 +567,6 @@ enum ClaudeChannelCommands {
         port: u16,
 
         #[arg(long)]
-        auth_token: Option<String>,
-
-        #[arg(long)]
         claude_pid: Option<i32>,
 
         #[arg(long)]
@@ -1325,7 +1322,6 @@ fn main() -> anyhow::Result<()> {
                 provider_session_id,
                 state_root,
                 port,
-                auth_token,
                 claude_pid,
                 cwd,
             } => {
@@ -1338,8 +1334,7 @@ fn main() -> anyhow::Result<()> {
                             .or_else(|| env_string("LONGHOUSE_PROVIDER_SESSION_ID")),
                         state_root,
                         port,
-                        auth_token: auth_token
-                            .or_else(|| env_string("LONGHOUSE_CHANNEL_AUTH_TOKEN")),
+                        auth_token: env_string("LONGHOUSE_CHANNEL_AUTH_TOKEN"),
                         claude_pid: claude_pid.or_else(|| env_i32("LONGHOUSE_CHANNEL_PARENT_PID")),
                         cwd: cwd.or_else(|| env_string("LONGHOUSE_CHANNEL_CWD")),
                     },

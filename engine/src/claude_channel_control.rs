@@ -268,15 +268,9 @@ fn read_state_value(path: &Path) -> Result<serde_json::Value, StateReadError> {
 fn signal_interrupt(pid: i32) -> std::io::Result<()> {
     #[cfg(unix)]
     unsafe {
-        // Claude detached launches currently run in their own process group
-        // (Python launch uses start_new_session=True). Future native launch
-        // code must preserve that isolation before depending on group signals.
-        let pgid = libc::getpgid(pid);
-        if pgid > 0 {
-            if libc::killpg(pgid, libc::SIGINT) == 0 {
-                return Ok(());
-            }
-        }
+        // The Claude MCP bridge can share a process group with Claude when the
+        // provider launches the server, so interrupt only the recorded Claude
+        // process. Group signaling can destroy the bridge/control channel.
         if libc::kill(pid, libc::SIGINT) == 0 {
             return Ok(());
         }
@@ -518,29 +512,30 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn interrupt_signals_child_process_group() {
-        use std::os::unix::process::CommandExt;
+    fn interrupt_signals_only_target_child() {
         use std::os::unix::process::ExitStatusExt;
         use std::process::Command;
 
-        let mut child = unsafe {
-            let mut command = Command::new("/bin/sh");
-            command
-                .arg("-c")
-                .arg("trap 'exit 42' INT; while :; do sleep 1; done");
-            command.pre_exec(|| {
-                if libc::setsid() == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-            command.spawn().unwrap()
-        };
+        let mut child = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("trap 'exit 42' INT; while :; do sleep 1; done")
+            .spawn()
+            .unwrap();
+        let mut sibling = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("trap 'exit 43' INT; while :; do sleep 1; done")
+            .spawn()
+            .unwrap();
         let pid = i32::try_from(child.id()).unwrap();
 
         signal_interrupt(pid).unwrap();
         let status = child.wait().unwrap();
 
         assert!(status.signal() == Some(libc::SIGINT) || status.code() == Some(42));
+        assert!(sibling.try_wait().unwrap().is_none());
+        unsafe {
+            libc::kill(i32::try_from(sibling.id()).unwrap(), libc::SIGTERM);
+        }
+        let _ = sibling.wait();
     }
 }

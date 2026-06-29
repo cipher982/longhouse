@@ -62,7 +62,6 @@ def serve(
     ),
     state_root: Path | None = typer.Option(None, "--state-root", file_okay=False, dir_okay=True, resolve_path=True),
     port: int = typer.Option(0, "--port", min=0, max=65535),
-    auth_token: str | None = typer.Option(None, "--auth-token", envvar="LONGHOUSE_CHANNEL_AUTH_TOKEN"),
     claude_pid: int | None = typer.Option(None, "--claude-pid", envvar="LONGHOUSE_CHANNEL_PARENT_PID"),
     cwd: str | None = typer.Option(None, "--cwd", envvar="LONGHOUSE_CHANNEL_CWD"),
 ) -> None:
@@ -75,11 +74,7 @@ def serve(
     _append_option(argv, "--port", port)
     _append_option(argv, "--claude-pid", claude_pid)
     _append_option(argv, "--cwd", cwd)
-    env = os.environ.copy()
-    # Preserve the legacy compatibility flag without leaking the token in argv.
-    if auth_token:
-        env["LONGHOUSE_CHANNEL_AUTH_TOKEN"] = auth_token
-    _exec_engine(argv, env)
+    _exec_engine(argv, os.environ.copy())
 
 
 @app.command("launch", hidden=True)
