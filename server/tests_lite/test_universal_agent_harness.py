@@ -51,6 +51,183 @@ def _fake_bins(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+def _fake_longhouse_engine_claude_channel(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        r"""#!/usr/bin/env python3
+import http.server
+import json
+import os
+import signal
+import socketserver
+import sys
+import threading
+import urllib.request
+import uuid
+from pathlib import Path
+
+
+def arg_value(args, name, default=None):
+    if name not in args:
+        return default
+    index = args.index(name)
+    return args[index + 1]
+
+
+def meta_entries(args):
+    values = {}
+    index = 0
+    while index < len(args):
+        if args[index] == "--meta" and index + 1 < len(args):
+            raw = args[index + 1]
+            if "=" in raw:
+                key, value = raw.split("=", 1)
+                values[key] = value
+            index += 2
+            continue
+        index += 1
+    return values
+
+
+def state_path(args):
+    session_id = arg_value(args, "--session-id")
+    state_root = Path(arg_value(args, "--state-root"))
+    return state_root / "sessions" / f"{uuid.UUID(session_id)}.json"
+
+
+def read_state(args):
+    return json.loads(state_path(args).read_text(encoding="utf-8"))
+
+
+def serve(args):
+    session_id = arg_value(args, "--session-id")
+    provider_session_id = arg_value(args, "--provider-session-id", "provider-session")
+    claude_pid = int(arg_value(args, "--claude-pid", "0"))
+    token = os.environ.get("LONGHOUSE_CHANNEL_AUTH_TOKEN") or "fake-token"
+    stdout_lock = threading.Lock()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            expected = f"Bearer {token}"
+            got = self.headers.get("Authorization")
+            if got != expected and self.headers.get("X-Longhouse-Channel-Token") != token:
+                self.send_response(401)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length") or "0")
+            payload = json.loads(self.rfile.read(length).decode("utf-8") or "{}")
+            notification = {
+                "jsonrpc": "2.0",
+                "method": "notifications/message",
+                "params": {
+                    "content": payload.get("text") or payload.get("content"),
+                    "meta": payload.get("meta") or {},
+                },
+            }
+            with stdout_lock:
+                sys.stdout.write(json.dumps(notification) + "\n")
+                sys.stdout.flush()
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, format, *values):
+            return
+
+    server = socketserver.TCPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    path = state_path(args)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "ready": True,
+                "session_id": session_id,
+                "provider_session_id": provider_session_id,
+                "port": server.server_address[1],
+                "auth_token": token,
+                "claude_pid": claude_pid,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    try:
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            request = json.loads(line)
+            if request.get("method") == "initialize":
+                with stdout_lock:
+                    sys.stdout.write(
+                        json.dumps(
+                            {
+                                "jsonrpc": "2.0",
+                                "id": request.get("id"),
+                                "result": {
+                                    "protocolVersion": "2025-11-25",
+                                    "capabilities": {},
+                                    "serverInfo": {"name": "fake-longhouse-channel", "version": "0"},
+                                },
+                            }
+                        )
+                        + "\n"
+                    )
+                    sys.stdout.flush()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def send(args):
+    state = read_state(args)
+    meta = {"injected_by": "longhouse", "longhouse_session_id": arg_value(args, "--session-id")}
+    meta.update(meta_entries(args))
+    payload = json.dumps({"text": arg_value(args, "--text"), "meta": meta}).encode("utf-8")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{state['port']}/message",
+        data=payload,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-Longhouse-Channel-Token": state["auth_token"],
+        },
+    )
+    with urllib.request.urlopen(request, timeout=5):
+        pass
+
+
+def interrupt(args):
+    state = read_state(args)
+    os.kill(int(state["claude_pid"]), signal.SIGINT)
+
+
+def main():
+    args = sys.argv[1:]
+    if len(args) < 2 or args[0] != "claude-channel":
+        print("unexpected fake engine args: " + json.dumps(args), file=sys.stderr)
+        raise SystemExit(2)
+    command = args[1]
+    rest = args[2:]
+    if command == "serve":
+        serve(rest)
+    elif command == "send":
+        send(rest)
+    elif command == "interrupt":
+        interrupt(rest)
+    else:
+        print("unsupported fake engine command: " + command, file=sys.stderr)
+        raise SystemExit(2)
+
+
+if __name__ == "__main__":
+    main()
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def _fake_codex_permission_canary(args: dict[str, object]) -> dict[str, object]:
     artifact_path = Path(str(args["artifact"]))
     evidence_root = Path(str(args["evidence_root"]))
@@ -907,6 +1084,10 @@ def test_full_action_suite_uses_provider_scoped_old_new_artifacts(tmp_path: Path
         "run_codex_provider_release_canary",
         _fake_codex_permission_canary_only(codex_provider_release_canary.run_codex_provider_release_canary),
     )
+    monkeypatch.setenv(
+        "LONGHOUSE_ENGINE_BIN",
+        str(_fake_longhouse_engine_claude_channel(tmp_path / "bin" / "longhouse-engine")),
+    )
     providers = ("claude", "codex")
     old_paths = {
         provider: _write_release_proof(
@@ -1070,6 +1251,10 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         codex_provider_release_canary,
         "run_codex_provider_release_canary",
         _fake_codex_permission_canary_only(codex_provider_release_canary.run_codex_provider_release_canary),
+    )
+    monkeypatch.setenv(
+        "LONGHOUSE_ENGINE_BIN",
+        str(_fake_longhouse_engine_claude_channel(tmp_path / "bin" / "longhouse-engine")),
     )
     bins = _fake_bins(tmp_path)
     bins["opencode"] = _fake_opencode_server(tmp_path / "bin" / "opencode")
