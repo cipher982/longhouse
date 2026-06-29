@@ -1,0 +1,79 @@
+name: Perf Proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      startup_iterations:
+        description: "Startup probe iterations"
+        required: false
+        default: "20"
+        type: string
+  schedule:
+    - cron: "43 10 * * *"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/perf-proof.yml"
+      - "Makefile"
+      - "scripts/ci/perf-proof.py"
+      - "scripts/tests/perf-proof.test.py"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-proof-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+jobs:
+  perf-proof:
+    name: "Perf proof artifact"
+    runs-on: cube
+    timeout-minutes: 30
+    if: ${{ github.repository == 'cipher982/longhouse' }}
+    env:
+      PERF_PROOF_OUTPUT: artifacts/perf-proof/perf-proof-${{ github.sha }}.json
+      PERF_PROOF_STARTUP_ITERATIONS: ${{ inputs.startup_iterations || '20' }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Ensure make available
+        run: ./scripts/ci/ensure-make.sh
+
+      - name: Validate perf proof collector
+        run: make validate-perf-proof
+
+      - name: Run perf proof
+        run: make perf-proof
+
+      - name: Write job summary
+        if: always()
+        run: |
+          summary="${PERF_PROOF_OUTPUT%.json}.md"
+          if [[ -f "$summary" ]]; then
+            cat "$summary" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Perf proof summary missing: $summary" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload perf proof artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: perf-proof-${{ github.sha }}
+          path: |
+            artifacts/perf-proof/*.json
+            artifacts/perf-proof/*.md
+          if-no-files-found: warn

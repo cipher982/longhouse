@@ -15,10 +15,12 @@ CODEX_AGENTS_TOKEN ?=
 CLAUDE_API_URL ?=
 CLAUDE_AGENTS_TOKEN ?=
 CLAUDE_DEVICE_ID ?=
+PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 
 .PHONY: help check-push-readiness dev dev-demo stop test test-ios test-ios-session-open ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-playwright-install validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-universal-live-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-synthetic-live-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check observability-up observability-down
 .PHONY: validate-dogfood-runtime
 .PHONY: validate-native-device-entrypoints
+.PHONY: perf-proof validate-perf-proof
 
 # ---------------------------------------------------------------------------
 # Help
@@ -211,6 +213,15 @@ test-shipper-synthetic-live-bench: ## Synthetic mixed live/archive shipper bench
 	test -s "$$port_file"; \
 	port="$$(cat "$$port_file")"; \
 	cd engine && cargo run --profile $(or $(CARGO_PROFILE),release) -- bench --synthetic-files 6 --synthetic-events-per-file 50 --synthetic-bytes-per-event 1024 --level L3 --ship-url "http://127.0.0.1:$$port" --ship-token synthetic --ship-concurrency 4 --mixed-live-count 8 --mixed-live-max-p95-ms 10000
+
+perf-proof: ## Collect trendable startup/shipper/live perf proof JSON
+	@python3 scripts/build/generate_build_identity.py
+	cd engine && cargo build --profile $(or $(CARGO_PROFILE),release)
+	cd server && uv sync --extra dev
+	@python3 scripts/ci/perf-proof.py --output "$(PERF_PROOF_OUTPUT)"
+
+validate-perf-proof: ## Validate perf proof collector parsing and summary logic
+	@python3 scripts/tests/perf-proof.test.py
 
 test-shipper-premerge: ## Engine + shipper E2E (run before merging engine changes)
 	$(MAKE) test-engine
