@@ -89,3 +89,38 @@ def test_health_reports_saturated_writer_without_entering_writer_lane(tmp_path, 
     assert payload["checks"]["db_pool"]["checked_out"] == 0
     assert payload["checks"]["db_pool"]["saturated"] is False
     assert payload["checks"]["db_pool"]["total_checkouts"] >= 2
+
+
+def test_health_fails_stale_active_writer_with_queued_work(tmp_path, monkeypatch):
+    engine = make_engine(f"sqlite:///{tmp_path}/health_stale_writer.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
+
+    class StaleWriter:
+        is_configured = True
+
+        def get_metrics(self):
+            return {
+                "queue_depth": 38,
+                "writer_active": True,
+                "active_label": "ingest-scan",
+                "active_age_ms": health_router._write_serializer_stale_active_ms() + 1,
+            }
+
+    import zerg.database as database_module
+
+    monkeypatch.setattr(database_module, "default_engine", engine)
+    monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: StaleWriter())
+    monkeypatch.setattr(health_router, "_session_projection_lag_check", lambda: {"status": "pass", "pending_sessions": 0})
+    monkeypatch.setattr(health_router, "_session_enrichment_lag_check", lambda: {"status": "pass", "pending_sessions": 0})
+
+    response = health_router.health_check(
+        SimpleNamespace(
+            client=SimpleNamespace(host="testclient"),
+            headers={},
+        )
+    )
+
+    assert response.status_code == 503
+    assert response.body

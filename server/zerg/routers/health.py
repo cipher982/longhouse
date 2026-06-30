@@ -4,6 +4,7 @@ Extracted from main.py — these probe endpoints are logically separate
 from the app factory and router registration.
 """
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -17,6 +18,14 @@ from zerg.config import get_settings
 router = APIRouter(tags=["health"])
 
 EVENTS_FTS_EXISTS_SQL = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1"
+
+
+def _write_serializer_stale_active_ms() -> float:
+    return float(os.getenv("LONGHOUSE_WRITE_SERIALIZER_STALE_ACTIVE_MS", "300000"))
+
+
+def _write_serializer_stale_queue_depth() -> int:
+    return int(os.getenv("LONGHOUSE_WRITE_SERIALIZER_STALE_QUEUE_DEPTH", "5"))
 
 
 def _session_projection_lag_check(session_factory=None) -> dict:
@@ -431,7 +440,17 @@ def health_check(request: Request):
 
         ws = get_write_serializer()
         if ws.is_configured:
-            checks["write_serializer"] = {"status": "pass", **ws.get_metrics()}
+            metrics = ws.get_metrics()
+            writer_stale = (
+                bool(metrics.get("writer_active"))
+                and int(metrics.get("queue_depth") or 0) >= _write_serializer_stale_queue_depth()
+                and float(metrics.get("active_age_ms") or 0.0) >= _write_serializer_stale_active_ms()
+            )
+            checks["write_serializer"] = {"status": "fail" if writer_stale else "pass", **metrics}
+            if writer_stale:
+                health_status["status"] = "unhealthy"
+                health_status["message"] = "Write serializer is stalled"
+                critical_failure = True
         else:
             checks["write_serializer"] = {"status": "skip", "reason": "not configured"}
     except Exception as e:

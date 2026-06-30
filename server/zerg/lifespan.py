@@ -28,6 +28,10 @@ def _live_preview_cleanup_enabled() -> bool:
     return os.getenv("LONGHOUSE_ENABLE_LIVE_PREVIEW_CLEANUP", "").strip().lower() in _TRUTHY_ENV
 
 
+def _session_input_queue_recovery_enabled() -> bool:
+    return os.getenv("LONGHOUSE_ENABLE_SESSION_INPUT_QUEUE_RECOVERY", "").strip().lower() in _TRUTHY_ENV
+
+
 @contextmanager
 def _timed_startup_step(name: str):
     started = time.monotonic()
@@ -151,7 +155,7 @@ async def lifespan(app: FastAPI):
         # SessionInput reconciliation: run one bounded queue recovery tick at
         # boot so startup, periodic recovery, and missed-signal recovery share
         # the same policy.
-        if not _settings.testing:
+        if not _settings.testing and _session_input_queue_recovery_enabled():
             try:
                 with _timed_startup_step("session_input_reconciliation"):
                     from zerg.database import default_engine
@@ -286,16 +290,20 @@ async def lifespan(app: FastAPI):
                 logger.exception("Failed to start watch_renewal_service")
 
             # Managed session input queue recovery: safety net for process
-            # restarts and missed local terminal/idle wakes.
-            try:
-                from zerg.database import default_engine as _default_engine_input_queue
-                from zerg.services.session_input_queue import run_session_input_queue_recovery_loop
+            # restarts and missed local terminal/idle wakes. This is opt-in
+            # until its DB writes use the hosted SQLite write serializer.
+            if _session_input_queue_recovery_enabled():
+                try:
+                    from zerg.database import default_engine as _default_engine_input_queue
+                    from zerg.services.session_input_queue import run_session_input_queue_recovery_loop
 
-                asyncio.create_task(run_session_input_queue_recovery_loop(db_bind=_default_engine_input_queue))
-                started.append("session_input_queue_recovery")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"session_input_queue_recovery ({e})")
-                logger.exception("Failed to start session_input_queue_recovery")
+                    asyncio.create_task(run_session_input_queue_recovery_loop(db_bind=_default_engine_input_queue))
+                    started.append("session_input_queue_recovery")
+                except Exception as e:  # noqa: BLE001
+                    failed.append(f"session_input_queue_recovery ({e})")
+                    logger.exception("Failed to start session_input_queue_recovery")
+            else:
+                logger.info("Session input queue periodic recovery disabled; set LONGHOUSE_ENABLE_SESSION_INPUT_QUEUE_RECOVERY=1 to enable")
 
             # Remote launch reaper: orphan expired launch rows.
             try:
