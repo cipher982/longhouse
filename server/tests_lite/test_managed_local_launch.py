@@ -26,9 +26,9 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.managed_local_launcher import _derive_project
 from zerg.services.managed_local_launcher import _initial_provider_session_id_for_spawn
-from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_pubsub import TOPIC_TIMELINE
@@ -300,14 +300,25 @@ def test_this_device_launch_does_not_require_runner_record(monkeypatch, tmp_path
     assert control.source_runner_id is None
 
 
-def test_this_device_launch_does_not_use_write_serializer(monkeypatch, tmp_path):
+def test_this_device_launch_uses_managed_launch_write_serializer(monkeypatch, tmp_path):
+    from zerg.routers import session_chat
     from zerg.services import managed_local_launcher
-    from zerg.services import write_serializer
 
     SessionLocal = _make_db(tmp_path)
+    calls: list[dict] = []
 
-    def fail_serializer():
-        raise AssertionError("managed-local this-device launch must not queue behind WriteSerializer")
+    class RecordingSerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+
+        async def repair_idle_queue(self):
+            return False
+
+        async def execute_or_direct(self, fn, fallback_db, **kwargs):
+            calls.append(kwargs)
+            return fn(fallback_db)
 
     with SessionLocal() as db:
         user = User(email="managed-local@test.local", role=UserRole.USER.value)
@@ -316,7 +327,7 @@ def test_this_device_launch_does_not_use_write_serializer(monkeypatch, tmp_path)
         db.refresh(user)
         device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
         client, api_app = _make_device_client(db, device_token)
-        monkeypatch.setattr(write_serializer, "get_write_serializer", fail_serializer)
+        monkeypatch.setattr(session_chat, "get_write_serializer", lambda: RecordingSerializer())
         monkeypatch.setattr(
             managed_local_launcher,
             "get_runner_connection_manager",
@@ -339,117 +350,172 @@ def test_this_device_launch_does_not_use_write_serializer(monkeypatch, tmp_path)
         session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
 
     assert response.status_code == 200, response.text
+    assert calls == [{"label": "managed-launch", "auto_commit": False}]
     assert payload["managed_transport"] == "codex_app_server"
     capabilities, control = _project_control(db, session)
     assert capabilities.managed_transport.value == "codex_app_server"
     assert control.source_runner_id is None
 
 
-def test_this_device_launch_retries_sqlite_writer_lock(monkeypatch):
-    from sqlalchemy.exc import OperationalError
-
+def test_this_device_launch_reports_503_when_serializer_writer_is_stale(monkeypatch):
     from zerg.routers import session_chat
 
-    class DummyDB:
-        def __init__(self):
-            self.rollbacks = 0
+    class StaleSerializer:
+        is_configured = True
+        writer_active = True
+        active_label = "ingest-live"
+        active_age_ms = 20_000.0
 
-        def rollback(self):
-            self.rollbacks += 1
+        async def repair_idle_queue(self):
+            return False
 
-    db = DummyDB()
-    expected = object()
-    sleeps: list[float] = []
-    calls = 0
+        async def execute_or_direct(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+            raise AssertionError("stale writer should reject before queueing managed launch")
 
-    def fake_launch(_db, _params):
-        nonlocal calls
-        calls += 1
-        if calls == 1:
-            raise OperationalError("INSERT", {}, Exception("database is locked"))
-        return expected
+    monkeypatch.setattr(session_chat, "get_write_serializer", lambda: StaleSerializer())
 
-    async def fake_sleep(delay):
-        sleeps.append(delay)
+    with pytest.raises(session_chat.ManagedLocalLaunchError) as exc_info:
+        asyncio.run(
+            session_chat._launch_managed_local_session_serialized(
+                SimpleNamespace(),
+                SimpleNamespace(provider="codex", runner_target="cinder"),
+            )
+        )
 
-    monkeypatch.setattr(session_chat, "launch_managed_local_session_sync", fake_launch)
-    monkeypatch.setattr(session_chat.asyncio, "sleep", fake_sleep)
+    assert exc_info.value.status_code == 503
+    assert "database writer is stalled" in exc_info.value.detail
+
+
+def test_this_device_launch_builds_response_inside_serialized_write(monkeypatch):
+    from zerg.routers import session_chat
+
+    request_db = object()
+    write_db = object()
+    expected_result = object()
+    expected_response = object()
+    seen: dict[str, object | int | None] = {}
+
+    class FreshSessionSerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+
+        async def repair_idle_queue(self):
+            return False
+
+        async def execute_or_direct(self, fn, fallback_db, **kwargs):
+            seen["fallback_db"] = fallback_db
+            seen["kwargs"] = kwargs
+            return fn(write_db)
+
+    def fake_response(db, result, *, owner_id=None):
+        seen["response_db"] = db
+        seen["response_result"] = result
+        seen["owner_id"] = owner_id
+        return expected_response
+
+    monkeypatch.setattr(session_chat, "get_write_serializer", lambda: FreshSessionSerializer())
+    monkeypatch.setattr(session_chat, "launch_managed_local_session_sync", lambda db, _params: expected_result)
+    monkeypatch.setattr(session_chat, "_managed_local_launch_response", fake_response)
 
     result = asyncio.run(
-        session_chat._launch_managed_local_session_with_lock_retry(
-            db,
-            SimpleNamespace(provider="codex", runner_target="cinder"),
+        session_chat._launch_managed_local_session_serialized(
+            request_db,
+            SimpleNamespace(owner_id=42, provider="codex", runner_target="cinder"),
         )
     )
 
-    assert result is expected
-    assert calls == 2
-    assert db.rollbacks == 1
-    assert sleeps == [session_chat._MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS[0]]
+    assert result == (expected_result, expected_response)
+    assert seen["fallback_db"] is request_db
+    assert seen["response_db"] is write_db
+    assert seen["response_result"] is expected_result
+    assert seen["owner_id"] == 42
+    assert seen["kwargs"] == {"label": "managed-launch", "auto_commit": False}
 
 
 def test_this_device_launch_does_not_block_event_loop(monkeypatch):
     from zerg.routers import session_chat
 
-    expected = object()
+    expected_result = object()
+    expected_response = object()
+
+    class ThreadedSerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+
+        async def repair_idle_queue(self):
+            return False
+
+        async def execute_or_direct(self, fn, fallback_db, **_kwargs):
+            return await asyncio.to_thread(fn, fallback_db)
 
     def fake_launch(_db, _params):
         time.sleep(0.2)
-        return expected
+        return expected_result
 
     async def run_probe():
+        monkeypatch.setattr(session_chat, "get_write_serializer", lambda: ThreadedSerializer())
         monkeypatch.setattr(session_chat, "launch_managed_local_session_sync", fake_launch)
+        monkeypatch.setattr(
+            session_chat,
+            "_managed_local_launch_response",
+            lambda _db, result, *, owner_id=None: expected_response,
+        )
         task = asyncio.create_task(
-            session_chat._launch_managed_local_session_with_lock_retry(
+            session_chat._launch_managed_local_session_serialized(
                 SimpleNamespace(rollback=lambda: None),
-                SimpleNamespace(provider="codex", runner_target="cinder"),
+                SimpleNamespace(owner_id=42, provider="codex", runner_target="cinder"),
             )
         )
         started_at = time.monotonic()
         await asyncio.sleep(0.02)
         assert time.monotonic() - started_at < 0.1
         result = await task
-        assert result is expected
+        assert result == (expected_result, expected_response)
 
     asyncio.run(run_probe())
 
 
-def test_this_device_launch_reports_503_after_sqlite_writer_lock_retries(monkeypatch):
-    from sqlalchemy.exc import OperationalError
-
+def test_this_device_launch_uses_serializer_label(monkeypatch):
     from zerg.routers import session_chat
 
-    class DummyDB:
-        def __init__(self):
-            self.rollbacks = 0
+    expected_result = object()
+    expected_response = object()
+    calls: list[dict] = []
 
-        def rollback(self):
-            self.rollbacks += 1
+    class RecordingSerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
 
-    db = DummyDB()
-    sleeps: list[float] = []
+        async def repair_idle_queue(self):
+            return False
 
-    def fake_launch(_db, _params):
-        raise OperationalError("INSERT", {}, Exception("database is locked"))
+        async def execute_or_direct(self, fn, fallback_db, **kwargs):
+            calls.append(kwargs)
+            return fn(fallback_db)
 
-    async def fake_sleep(delay):
-        sleeps.append(delay)
+    monkeypatch.setattr(session_chat, "get_write_serializer", lambda: RecordingSerializer())
+    monkeypatch.setattr(session_chat, "launch_managed_local_session_sync", lambda _db, _params: expected_result)
+    monkeypatch.setattr(
+        session_chat,
+        "_managed_local_launch_response",
+        lambda _db, result, *, owner_id=None: expected_response,
+    )
 
-    monkeypatch.setattr(session_chat, "launch_managed_local_session_sync", fake_launch)
-    monkeypatch.setattr(session_chat.asyncio, "sleep", fake_sleep)
-
-    with pytest.raises(session_chat.ManagedLocalLaunchError) as exc_info:
-        asyncio.run(
-            session_chat._launch_managed_local_session_with_lock_retry(
-                db,
-                SimpleNamespace(provider="codex", runner_target="cinder"),
-            )
+    result = asyncio.run(
+        session_chat._launch_managed_local_session_serialized(
+            SimpleNamespace(),
+            SimpleNamespace(owner_id=42, provider="codex", runner_target="cinder"),
         )
+    )
 
-    assert exc_info.value.status_code == 503
-    assert "database writer" in exc_info.value.detail
-    assert db.rollbacks == len(session_chat._MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS) + 1
-    assert sleeps == list(session_chat._MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS)
+    assert result == (expected_result, expected_response)
+    assert calls == [{"label": "managed-launch", "auto_commit": False}]
 
 
 def test_this_device_launch_rejects_claude_without_native_channels(monkeypatch, tmp_path):

@@ -18,6 +18,8 @@ const SHIP_TRACE_HEADER: &str = "X-Longhouse-Ship-Trace";
 const INGEST_BACKPRESSURE_HEADER: &str = "X-Ingest-Backpressure";
 const INGEST_ERROR_KIND_HEADER: &str = "X-Ingest-Error-Kind";
 const INGEST_LANE_HEADER: &str = "X-Ingest-Lane";
+const ARCHIVE_INGEST_BACKPRESSURE_KIND: &str = "archive_ingest_backpressure";
+const LIVE_INGEST_BACKPRESSURE_KIND: &str = "live_ingest_backpressure";
 
 /// Structured details for a network-layer ingest failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -438,12 +440,15 @@ fn parse_server_backpressure(
     let header_kind = parse_header_string(headers, INGEST_BACKPRESSURE_HEADER)
         .or_else(|| parse_header_string(headers, INGEST_ERROR_KIND_HEADER));
     let legacy_body_match = body.contains("Archive ingest backlog is throttled");
-    if header_kind.as_deref() != Some("archive_ingest_backpressure") && !legacy_body_match {
-        return None;
-    }
+    let kind = match header_kind.as_deref() {
+        Some(ARCHIVE_INGEST_BACKPRESSURE_KIND) => ARCHIVE_INGEST_BACKPRESSURE_KIND,
+        Some(LIVE_INGEST_BACKPRESSURE_KIND) => LIVE_INGEST_BACKPRESSURE_KIND,
+        _ if legacy_body_match => ARCHIVE_INGEST_BACKPRESSURE_KIND,
+        _ => return None,
+    };
     Some(ServerBackpressureDetail {
         status_code,
-        kind: "archive_ingest_backpressure",
+        kind,
         body,
         lane: parse_header_string(headers, INGEST_LANE_HEADER),
         retry_after_seconds: parse_retry_after_seconds(headers),
@@ -710,6 +715,26 @@ mod tests {
         assert_eq!(detail.kind, "archive_ingest_backpressure");
         assert_eq!(detail.lane.as_deref(), Some("archive"));
         assert_eq!(detail.retry_after_seconds, Some(5.0));
+    }
+
+    #[test]
+    fn test_parse_server_backpressure_from_live_typed_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Ingest-Backpressure",
+            HeaderValue::from_static("live_ingest_backpressure"),
+        );
+        headers.insert("X-Ingest-Lane", HeaderValue::from_static("live"));
+        headers.insert("Retry-After", HeaderValue::from_static("7"));
+
+        let detail =
+            parse_server_backpressure(503, &headers, "{\"detail\":\"live throttled\"}".to_string())
+                .expect("typed live backpressure should parse");
+
+        assert_eq!(detail.status_code, 503);
+        assert_eq!(detail.kind, "live_ingest_backpressure");
+        assert_eq!(detail.lane.as_deref(), Some("live"));
+        assert_eq!(detail.retry_after_seconds, Some(7.0));
     }
 
     #[test]

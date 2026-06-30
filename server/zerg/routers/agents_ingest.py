@@ -102,12 +102,16 @@ _SYNC_SESSION_COUNT_LABELS = {"ingest-live"}
 _INCREMENTAL_SESSION_COUNT_LABELS = {"ingest"}
 _ARCHIVE_INGEST_BACKPRESSURE_DETAIL = "Archive ingest backlog is throttled; retry shortly"
 _ARCHIVE_INGEST_BACKPRESSURE_KIND = "archive_ingest_backpressure"
+_LIVE_INGEST_BACKPRESSURE_DETAIL = "Live ingest is throttled because the database writer is busy; retry shortly"
+_LIVE_INGEST_BACKPRESSURE_KIND = "live_ingest_backpressure"
 _ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS = 5
 _ARCHIVE_INGEST_MAX_RETRY_AFTER_SECONDS = 60
 _ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS = 15
 _ARCHIVE_INGEST_MAX_IN_FLIGHT = 4
 _ARCHIVE_INGEST_WRITER_QUEUE_HARD_LIMIT = 50
 _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 1000.0
+_LIVE_INGEST_WRITER_QUEUE_HARD_LIMIT = 10
+_LIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 5_000.0
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
 _ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS = 64
 _INGEST_STAGE_HEADER_LIMIT = 8
@@ -250,6 +254,22 @@ def _archive_backpressure_headers(
     }
 
 
+def _live_backpressure_headers(
+    *,
+    admission_state: str,
+    retry_after_seconds: int = _ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
+) -> dict[str, str]:
+    return {
+        "Retry-After": str(retry_after_seconds),
+        "X-Ingest-Lane": "live",
+        "X-Ingest-Admission-State": admission_state,
+        "X-Ingest-Backpressure": _LIVE_INGEST_BACKPRESSURE_KIND,
+        "X-Ingest-Error-Kind": _LIVE_INGEST_BACKPRESSURE_KIND,
+        "X-Ingest-Queue-Wait-Ms": "0.0",
+        "X-Ingest-Exec-Ms": "0.0",
+    }
+
+
 def _raise_archive_ingest_backpressure(
     response: Response,
     *,
@@ -267,6 +287,27 @@ def _raise_archive_ingest_backpressure(
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail=_ARCHIVE_INGEST_BACKPRESSURE_DETAIL,
+        headers=headers,
+    )
+
+
+def _raise_live_ingest_backpressure(
+    response: Response,
+    *,
+    admission_state: str,
+    retry_after_seconds: int = _ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
+) -> None:
+    headers = {
+        **_live_backpressure_headers(
+            admission_state=admission_state,
+            retry_after_seconds=retry_after_seconds,
+        ),
+        **dict(response.headers),
+    }
+    response.headers.update(headers)
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=_LIVE_INGEST_BACKPRESSURE_DETAIL,
         headers=headers,
     )
 
@@ -309,6 +350,37 @@ async def _check_archive_ingest_writer_pressure(write_label: str, response: Resp
             response.headers["X-Ingest-Writer-Active-Label"] = active_label
             response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
             _raise_archive_ingest_backpressure(response, admission_state="writer_pressure")
+
+
+async def _check_live_ingest_writer_pressure(write_label: str, response: Response) -> None:
+    if write_label != "ingest-live":
+        return
+
+    from zerg.services.write_serializer import get_write_serializer
+
+    ws = get_write_serializer()
+    if not ws.is_configured:
+        return
+    repair_idle_queue = getattr(ws, "repair_idle_queue", None)
+    if callable(repair_idle_queue):
+        await repair_idle_queue()
+    queue_depth = int(getattr(ws, "queue_depth", 0) or 0)
+    writer_active = bool(getattr(ws, "writer_active", False))
+    active_label = str(getattr(ws, "active_label", "") or "")
+    active_age_ms = float(getattr(ws, "active_age_ms", 0.0) or 0.0)
+    if queue_depth > 0:
+        response.headers["X-Ingest-Writer-Queue-Depth"] = str(queue_depth)
+    if queue_depth >= _LIVE_INGEST_WRITER_QUEUE_HARD_LIMIT:
+        _raise_live_ingest_backpressure(
+            response,
+            admission_state="writer_queue_pressure",
+            retry_after_seconds=_archive_retry_after_for_queue_depth(queue_depth),
+        )
+    if writer_active and active_age_ms >= _LIVE_INGEST_ACTIVE_WRITER_GRACE_MS:
+        response.headers["X-Ingest-Writer-Active-Label"] = active_label
+        response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
+        admission_state = "live_writer_busy" if active_label == "ingest-live" else "writer_pressure"
+        _raise_live_ingest_backpressure(response, admission_state=admission_state)
 
 
 async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> bool:
@@ -810,6 +882,7 @@ async def ingest_session(
 
         try:
             archive_slot_acquired = await _acquire_archive_ingest_slot(write_label, response)
+            await _check_live_ingest_writer_pressure(write_label, response)
 
             with tracer.start_as_current_span("longhouse.ingest.decode") as decode_span:
                 decode_started = time.monotonic()

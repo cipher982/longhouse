@@ -32,6 +32,7 @@ from zerg.models.agents import SessionObservation
 from zerg.routers.agents_ingest import _ARCHIVE_INGEST_MAX_IN_FLIGHT
 from zerg.routers.agents_ingest import _acquire_archive_ingest_slot
 from zerg.routers.agents_ingest import _archive_retry_after_for_queue_depth
+from zerg.routers.agents_ingest import _check_live_ingest_writer_pressure
 from zerg.routers.agents_ingest import _incremental_session_counts_for_label
 from zerg.routers.agents_ingest import _ingest_lane_for_label
 from zerg.routers.agents_ingest import _release_archive_ingest_slot
@@ -320,13 +321,13 @@ async def test_archive_ingest_admission_rejects_when_non_archive_writer_is_long(
 
 
 @pytest.mark.asyncio
-async def test_live_ingest_admission_ignores_archive_writer_pressure(monkeypatch):
+async def test_live_ingest_admission_rejects_stale_archive_writer(monkeypatch):
     class BusySerializer:
         is_configured = True
         writer_active = True
         active_label = "ingest-replay"
         active_age_ms = 10_000.0
-        queue_depth = 10
+        queue_depth = 9
 
     monkeypatch.setattr(
         "zerg.services.write_serializer.get_write_serializer",
@@ -336,7 +337,69 @@ async def test_live_ingest_admission_ignores_archive_writer_pressure(monkeypatch
 
     acquired = await _acquire_archive_ingest_slot("ingest-live", response)
     assert acquired is False
-    assert "Retry-After" not in response.headers
+    with pytest.raises(HTTPException) as exc:
+        await _check_live_ingest_writer_pressure("ingest-live", response)
+
+    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.headers["Retry-After"] == "5"
+    assert response.headers["X-Ingest-Lane"] == "live"
+    assert response.headers["X-Ingest-Admission-State"] == "writer_pressure"
+    assert response.headers["X-Ingest-Backpressure"] == "live_ingest_backpressure"
+    assert response.headers["X-Ingest-Writer-Active-Label"] == "ingest-replay"
+    assert response.headers["X-Ingest-Writer-Active-Age-Ms"] == "10000.0"
+
+
+@pytest.mark.asyncio
+async def test_live_ingest_admission_rejects_stale_live_writer(monkeypatch):
+    class BusySerializer:
+        is_configured = True
+        writer_active = True
+        active_label = "ingest-live"
+        active_age_ms = 10_000.0
+        queue_depth = 2
+
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: BusySerializer(),
+    )
+    response = Response()
+
+    with pytest.raises(HTTPException) as exc:
+        await _check_live_ingest_writer_pressure("ingest-live", response)
+
+    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.headers["Retry-After"] == "5"
+    assert response.headers["X-Ingest-Lane"] == "live"
+    assert response.headers["X-Ingest-Admission-State"] == "live_writer_busy"
+    assert response.headers["X-Ingest-Backpressure"] == "live_ingest_backpressure"
+    assert response.headers["X-Ingest-Writer-Queue-Depth"] == "2"
+    assert response.headers["X-Ingest-Writer-Active-Label"] == "ingest-live"
+
+
+@pytest.mark.asyncio
+async def test_live_ingest_admission_rejects_large_writer_queue(monkeypatch):
+    class BusySerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+        queue_depth = 10
+
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: BusySerializer(),
+    )
+    response = Response()
+
+    with pytest.raises(HTTPException) as exc:
+        await _check_live_ingest_writer_pressure("ingest-live", response)
+
+    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.headers["Retry-After"] == "20"
+    assert response.headers["X-Ingest-Lane"] == "live"
+    assert response.headers["X-Ingest-Admission-State"] == "writer_queue_pressure"
+    assert response.headers["X-Ingest-Backpressure"] == "live_ingest_backpressure"
+    assert response.headers["X-Ingest-Writer-Queue-Depth"] == "10"
 
 
 @pytest.mark.asyncio

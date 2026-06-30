@@ -24,7 +24,6 @@ from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
@@ -94,6 +93,7 @@ from zerg.services.session_pause_requests import resolve_pause_request
 from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_views import SessionPauseRequestProjectionResponse
+from zerg.services.write_serializer import get_write_serializer
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 
@@ -102,7 +102,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sessions", tags=["session-chat"])
 agents_router = APIRouter(prefix="/agents/sessions", tags=["agents"])
 _STEER_ACTIVE_PRESENCE_STATES = frozenset({"thinking", "running"})
-_MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS = (0.15, 0.5, 1.0)
+_MANAGED_LOCAL_STALE_WRITER_MS = 15_000.0
 
 
 # ---------------------------------------------------------------------------
@@ -155,37 +155,57 @@ class RemoteSessionLaunchResponse(BaseModel):
     launch_error_message: str | None = None
 
 
-def _is_sqlite_database_locked(exc: OperationalError) -> bool:
-    text = str(getattr(exc, "orig", exc)).lower()
-    return "database is locked" in text or "database table is locked" in text
-
-
-async def _launch_managed_local_session_with_lock_retry(db: Session, params: ManagedLocalLaunchParams):
-    for attempt in range(len(_MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS) + 1):
-        try:
-            return await asyncio.to_thread(launch_managed_local_session_sync, db, params)
-        except OperationalError as exc:
-            if not _is_sqlite_database_locked(exc):
-                raise
-            await asyncio.to_thread(db.rollback)
-            if attempt >= len(_MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS):
+async def _launch_managed_local_session_serialized(
+    db: Session,
+    params: ManagedLocalLaunchParams,
+) -> tuple[Any, ManagedLocalSessionLaunchResponse]:
+    ws = get_write_serializer()
+    if ws.is_configured:
+        repair_idle_queue = getattr(ws, "repair_idle_queue", None)
+        if callable(repair_idle_queue):
+            await repair_idle_queue()
+        if bool(getattr(ws, "writer_active", False)):
+            active_age_ms = float(getattr(ws, "active_age_ms", 0.0) or 0.0)
+            if active_age_ms >= _MANAGED_LOCAL_STALE_WRITER_MS:
+                active_label = str(getattr(ws, "active_label", "") or "")
+                logger.warning(
+                    "Managed local launch blocked by stale database writer",
+                    extra={
+                        "active_label": active_label,
+                        "active_age_ms": round(active_age_ms, 1),
+                        "provider": params.provider,
+                        "runner_target": params.runner_target,
+                    },
+                )
                 raise ManagedLocalLaunchError(
-                    "Managed local launch is waiting for the local database writer; retry shortly.",
+                    "Managed local launch is blocked because the Longhouse database writer is stalled; retry shortly.",
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                ) from exc
-            delay = _MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS[attempt]
-            logger.warning(
-                "Managed local launch hit SQLite writer lock; retrying",
-                extra={
-                    "attempt": attempt + 1,
-                    "retry_delay_seconds": delay,
-                    "provider": params.provider,
-                    "runner_target": params.runner_target,
-                },
-            )
-            await asyncio.sleep(delay)
+                )
 
-    raise AssertionError("unreachable managed-local launch retry state")
+    def _write_launch(write_db: Session) -> tuple[Any, ManagedLocalSessionLaunchResponse]:
+        result = launch_managed_local_session_sync(write_db, params)
+        try:
+            launch_response = _managed_local_launch_response(write_db, result, owner_id=params.owner_id)
+        except Exception:
+            logger.exception("Managed local launch response contract failed; discarding session")
+            try:
+                write_db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == result.session.id).delete(
+                    synchronize_session=False
+                )
+                write_db.delete(result.session)
+                write_db.commit()
+            except Exception:
+                write_db.rollback()
+                logger.exception("Failed to discard invalid managed local launch session %s", getattr(result.session, "id", None))
+            raise
+        return result, launch_response
+
+    return await ws.execute_or_direct(
+        _write_launch,
+        db,
+        label="managed-launch",
+        auto_commit=False,
+    )
 
 
 class RemoteSessionContinueRequest(BaseModel):
@@ -1093,11 +1113,10 @@ async def launch_managed_local_this_device(
             claude_launch_env=body.claude_launch_env,
             permission_mode=body.permission_mode,
         )
-        # Managed-local launch is a tiny user-facing write that must not wait
-        # behind archive ingest/replay jobs already occupying the single writer.
-        # Retry short SQLite writer-lock contention directly; the launcher owns
-        # the successful commit boundary.
-        result = await _launch_managed_local_session_with_lock_retry(db, params)
+        # Managed-local launch is a tiny user-facing write. Route it through the
+        # process writer at the highest priority instead of racing SQLite with a
+        # request-scoped session; the launcher owns the successful commit.
+        result, launch_response = await _launch_managed_local_session_serialized(db, params)
     except ManagedLocalLaunchError as exc:
         db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
@@ -1109,22 +1128,6 @@ async def launch_managed_local_this_device(
             detail="Managed local launch failed",
         )
 
-    try:
-        response = _managed_local_launch_response(db, result, owner_id=owner_id)
-    except Exception as exc:
-        logger.exception("Managed local launch response contract failed; discarding session")
-        try:
-            db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == result.session.id).delete(synchronize_session=False)
-            db.delete(result.session)
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception("Failed to discard invalid managed local launch session %s", getattr(result.session, "id", None))
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Managed local launch failed",
-        ) from exc
-
     from zerg.services.session_pubsub import publish_session_runtime_update
 
     publish_session_runtime_update(
@@ -1133,7 +1136,7 @@ async def launch_managed_local_this_device(
         source="managed_local_launch",
     )
 
-    return response
+    return launch_response
 
 
 @router.post("/launch", response_model=RemoteSessionLaunchResponse)

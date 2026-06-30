@@ -5932,6 +5932,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_live_server_backpressure_uses_retry_after() {
+        let result =
+            ShipResult::ServerBackpressure(crate::shipping::client::ServerBackpressureDetail {
+                status_code: 503,
+                kind: "live_ingest_backpressure",
+                body: "{\"detail\":\"Live ingest is throttled\"}".to_string(),
+                lane: Some("live".to_string()),
+                retry_after_seconds: Some(7.0),
+            });
+
+        assert!(ship_result_is_backpressure(&result));
+        assert_eq!(
+            transient_error_kind(&result),
+            Some("live_ingest_backpressure")
+        );
+        assert_eq!(
+            ship_result_retry_after(&result),
+            Some(Duration::from_secs(7))
+        );
+    }
+
     #[tokio::test]
     async fn test_replay_spool_connect_error_records_backoff() {
         let (_tmp, conn) = make_db();
