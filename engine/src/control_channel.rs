@@ -36,7 +36,7 @@ use crate::codex_bridge::{
     BridgeStartConfig, BridgeSteerConfig, BridgeSteerError,
 };
 use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig};
-use crate::cursor_exec::{start_cursor_exec_once, CursorExecRunConfig};
+use crate::cursor_acp::{start_cursor_acp_once, CursorAcpRunConfig};
 use crate::config::ShipperConfig;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -840,7 +840,7 @@ async fn execute_command(
                 .or_else(|| crate::config::get_agent_db_path().ok());
 
             if provider == "cursor" {
-                let summary = start_cursor_exec_once(CursorExecRunConfig {
+                let summary = start_cursor_acp_once(CursorAcpRunConfig {
                     session_id: session_id.clone(),
                     run_id: run_id.clone(),
                     cwd,
@@ -848,7 +848,7 @@ async fn execute_command(
                     api_token,
                     cursor_bin: DEFAULT_CURSOR_BIN.to_string(),
                     prompt: initial_prompt,
-                    resume_chat_id: resume_target
+                    resume_acp_session_id: resume_target
                         .as_ref()
                         .map(|target| target.thread_id.clone()),
                     machine_name: config.machine_name.clone(),
@@ -864,7 +864,7 @@ async fn execute_command(
                     "session_id": summary.session_id,
                     "run_id": summary.run_id,
                     "provider": "cursor",
-                    "transport": "cursor_exec",
+                    "transport": "cursor_acp",
                     "pid": summary.pid,
                     "argv": summary.argv,
                 }));
