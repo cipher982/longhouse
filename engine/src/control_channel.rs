@@ -1063,6 +1063,21 @@ async fn execute_command(
                 .await
                 .map(|output| cli_output_result(output, "antigravity", "antigravity_hook_inbox"));
             }
+            if provider == "cursor" {
+                let summary = crate::cursor_helm_control::send_text(&session_id, &text, None)
+                    .await
+                    .map_err(|err| CommandError {
+                        code: err.code().to_string(),
+                        message: err.message().to_string(),
+                    })?;
+                return Ok(json!({
+                    "exit_code": summary.exit_code,
+                    "stdout": summary.stdout,
+                    "stderr": summary.stderr,
+                    "provider": "cursor",
+                    "transport": crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
+                }));
+            }
             let attachments = crate::codex_attachments::parse_attachments(&payload)
                 .map_err(CommandError::command_failed)?;
             validate_codex_bridge_attached(&session_id, None)
@@ -1120,6 +1135,21 @@ async fn execute_command(
                         .to_string(),
                 });
             }
+            if provider == "cursor" {
+                let summary = crate::cursor_helm_control::interrupt(&session_id, None)
+                    .await
+                    .map_err(|err| CommandError {
+                        code: err.code().to_string(),
+                        message: err.message().to_string(),
+                    })?;
+                return Ok(json!({
+                    "exit_code": summary.exit_code,
+                    "stdout": summary.stdout,
+                    "stderr": summary.stderr,
+                    "provider": "cursor",
+                    "transport": crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
+                }));
+            }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             cmd_codex_bridge_interrupt(BridgeInterruptConfig {
@@ -1150,6 +1180,21 @@ async fn execute_command(
                     "transport": crate::opencode_control::OPENCODE_SERVER_BRIDGE_TRANSPORT,
                     "pid": summary.pid,
                     "stopped": summary.stopped,
+                }));
+            }
+            if provider == "cursor" {
+                let summary = crate::cursor_helm_control::terminate(&session_id, None)
+                    .await
+                    .map_err(|err| CommandError {
+                        code: err.code().to_string(),
+                        message: err.message().to_string(),
+                    })?;
+                return Ok(json!({
+                    "exit_code": summary.exit_code,
+                    "stdout": summary.stdout,
+                    "stderr": summary.stderr,
+                    "provider": "cursor",
+                    "transport": crate::cursor_helm_control::CURSOR_HELM_TRANSPORT,
                 }));
             }
             Err(CommandError {
@@ -2123,6 +2168,9 @@ mod tests {
         ("codex", "resume_run_once", COMMAND_RUN_ONCE),
         ("cursor", "run_once", COMMAND_RUN_ONCE),
         ("cursor", "resume_run_once", COMMAND_RUN_ONCE),
+        ("cursor", "send", COMMAND_SEND_TEXT),
+        ("cursor", "interrupt", COMMAND_INTERRUPT),
+        ("cursor", "terminate", COMMAND_TERMINATE),
         ("claude", "send", COMMAND_SEND_TEXT),
         ("claude", "interrupt", COMMAND_INTERRUPT),
         ("claude", "steer", COMMAND_STEER_TEXT),

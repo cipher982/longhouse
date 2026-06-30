@@ -8,6 +8,7 @@ mod codex_attachments;
 mod codex_bridge;
 mod codex_exec;
 mod cursor_acp;
+mod cursor_helm_control;
 mod codex_source;
 mod codex_ws_relay;
 mod commands;
