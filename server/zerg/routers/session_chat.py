@@ -398,6 +398,77 @@ async def _interrupt_live_session_response(
     )
 
 
+class SessionTerminateResponse(BaseModel):
+    terminate_dispatched: bool
+    session_id: str
+    exit_code: int | None = None
+    error: str | None = None
+    released_lock: bool = False
+
+
+async def _terminate_live_session_response(
+    *,
+    db: Session,
+    owner_id: int,
+    source_session,
+    request_id: str,
+) -> SessionTerminateResponse:
+    """Dispatch managed-local terminate through the single control service."""
+    from zerg.services.managed_local_control import terminate_managed_local_session
+
+    lock_scope_id = session_lock_scope_id(source_session.id)
+
+    try:
+        result = await terminate_managed_local_session(
+            db=db,
+            owner_id=owner_id,
+            session=source_session,
+            commis_id=request_id,
+        )
+    except Exception as exc:
+        released_lock = await session_lock_manager.release(lock_scope_id)
+        if released_lock:
+            logger.warning(
+                "[%s] Released managed-local session lock after terminate dispatch error for %s",
+                request_id,
+                source_session.id,
+            )
+        logger.exception("[%s] Error dispatching managed-local terminate for %s", request_id, source_session.id)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "error_code": "terminate_dispatch_error",
+                "message": f"Internal error: {str(exc)[:200]}",
+                "released_lock": released_lock,
+            },
+        ) from exc
+
+    released_lock = await session_lock_manager.release(lock_scope_id)
+    if released_lock:
+        logger.warning(
+            "[%s] Released managed-local session lock during terminate for %s",
+            request_id,
+            source_session.id,
+        )
+    if not result.ok:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error_code": "terminate_failed",
+                "message": str(result.error or "Managed local terminate failed"),
+                "exit_code": result.exit_code,
+                "released_lock": released_lock,
+            },
+        )
+
+    return SessionTerminateResponse(
+        terminate_dispatched=True,
+        session_id=str(source_session.id),
+        exit_code=result.exit_code,
+        released_lock=released_lock,
+    )
+
+
 def _pause_request_projection_or_empty(row) -> dict[str, Any]:
     return serialize_pause_request_projection(row) or {}
 
@@ -951,7 +1022,59 @@ async def interrupt_live_session_agents(
     )
 
 
-@router.get("/{session_id}/pause-requests", response_model=PauseRequestListResponse)
+@router.post("/{session_id}/terminate-live", response_model=SessionTerminateResponse)
+async def terminate_live_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_browser_route_user),
+) -> SessionTerminateResponse:
+    """Browser-authenticated explicit terminate for managed-local sessions."""
+    request_id = str(uuid.uuid4())[:8]
+    source_session = _load_session_for_continuation(db, session_id)
+    _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
+    return await _terminate_live_session_response(
+        db=db,
+        owner_id=current_user.id,
+        source_session=source_session,
+        request_id=request_id,
+    )
+
+
+@agents_router.post("/{session_id}/terminate-live", response_model=SessionTerminateResponse)
+async def terminate_live_session_agents(
+    session_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionTerminateResponse:
+    """Machine-facing explicit terminate for managed-local sessions.
+
+    A successful response means the terminate command was dispatched on the
+    source runner (the engine signalled the provider child). It is not a
+    confirmation that the OS has reaped the process, though most managed
+    transports kill the child synchronously.
+    """
+    settings = get_settings()
+    resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
+
+    request_id = str(uuid.uuid4())[:8]
+    source_session = _load_session_for_continuation(db, session_id)
+    _authorize_live_send(
+        request=request,
+        device_token=resolved_device_token,
+        auth_disabled=settings.auth_disabled,
+    )
+    owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
+    return await _terminate_live_session_response(
+        db=db,
+        owner_id=owner_id,
+        source_session=source_session,
+        request_id=request_id,
+    )
+
+
 async def list_pause_requests_endpoint(
     session_id: str,
     status_filter: str | None = PAUSE_PENDING_STATUS,

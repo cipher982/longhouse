@@ -1109,3 +1109,155 @@ def test_agents_interrupt_live_route_releases_lock_on_dispatch_failure(monkeypat
     finally:
         asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
         api_app_ref.dependency_overrides = {}
+
+
+def test_browser_terminate_live_route_dispatches_and_releases_lock(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"browser-managed-terminate-{uuid4().hex[:8]}"
+    calls: list[dict[str, object]] = []
+
+    with session_local() as db:
+        user = User(email="browser-terminate-live@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="claude",
+                environment="Cinder",
+                project="browser-terminate-live",
+                device_id="agent-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started on agent-device before browser terminate",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        source_session = store.get_session(source_session_id)
+        assert source_session is not None
+        source_session.execution_home = "managed_local"
+        source_session.managed_transport = "claude_channel_bridge"
+        source_session.source_runner_id = 1
+        source_session.source_runner_name = "agent-device"
+        source_session.managed_session_name = "lh-browser-terminate-live"
+        db.commit()
+        _mark_session_live(db, source_session, owner_id=user.id)
+        user_id = user.id
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="browser-terminate-live@test.local", role=UserRole.USER.value),
+    )
+
+    async def fake_terminate(*, db, owner_id, session, commis_id=None, timeout_secs=15):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "commis_id": commis_id,
+                "timeout_secs": timeout_secs,
+            }
+        )
+        return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+    monkeypatch.setattr("zerg.services.managed_local_control.terminate_managed_local_session", fake_terminate)
+    asyncio.run(session_chat.session_lock_manager.acquire(str(source_session_id), holder="stalled-turn"))
+
+    try:
+        response = client.post(f"/api/sessions/{source_session_id}/terminate-live")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["terminate_dispatched"] is True
+        assert payload["session_id"] == str(source_session_id)
+        assert payload["released_lock"] is True
+        assert len(calls) == 1
+        assert calls[0]["owner_id"] == user_id
+        assert calls[0]["session_id"] == str(source_session_id)
+    finally:
+        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
+        api_app_ref.dependency_overrides = {}
+
+
+def test_agents_terminate_live_route_releases_lock_on_dispatch_failure(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"managed-terminate-fail-{uuid4().hex[:8]}"
+
+    with session_local() as db:
+        user = User(email="agents-terminate-fail@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="claude",
+                environment="Cinder",
+                project="agents-terminate-fail",
+                device_id="agent-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started on agent-device before failed terminate",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        source_session = store.get_session(source_session_id)
+        assert source_session is not None
+        source_session.execution_home = "managed_local"
+        source_session.managed_transport = "claude_channel_bridge"
+        source_session.source_runner_id = 1
+        source_session.source_runner_name = "agent-device"
+        source_session.managed_session_name = "lh-agent-terminate-fail"
+        db.commit()
+        _mark_session_live(db, source_session, owner_id=user.id)
+        token = DeviceToken(owner_id=user.id, device_id="different-machine-label", token_hash="test")
+
+    client, api_app_ref = _make_machine_client(session_local, token)
+
+    async def fake_terminate(*, db, owner_id, session, commis_id=None, timeout_secs=15):
+        return SimpleNamespace(ok=False, exit_code=7, error="terminate failed")
+
+    monkeypatch.setattr("zerg.services.managed_local_control.terminate_managed_local_session", fake_terminate)
+    asyncio.run(session_chat.session_lock_manager.acquire(str(source_session_id), holder="stalled-turn"))
+
+    try:
+        response = client.post(f"/api/agents/sessions/{source_session_id}/terminate-live")
+        assert response.status_code == 502, response.text
+        detail = response.json()["detail"]
+        assert detail["error_code"] == "terminate_failed"
+        assert detail["exit_code"] == 7
+        assert detail["released_lock"] is True
+        assert asyncio.run(session_chat.session_lock_manager.get_lock_info(str(source_session_id))) is None
+    finally:
+        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
+        api_app_ref.dependency_overrides = {}

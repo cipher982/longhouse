@@ -27,6 +27,7 @@ from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANS
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_STEER_TEXT
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_TERMINATE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
 from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
@@ -599,6 +600,63 @@ async def interrupt_managed_local_session(
             stdout=stdout,
             stderr=stderr,
             error=detail or "Managed local interrupt command failed",
+        )
+    return ManagedLocalInterruptResult(ok=True, exit_code=0, stdout=stdout, stderr=stderr)
+
+
+async def terminate_managed_local_session(
+    *,
+    db: Session,
+    owner_id: int,
+    session: AgentSession,
+    commis_id: str | None = None,
+    timeout_secs: int = 15,
+) -> ManagedLocalInterruptResult:
+    """Dispatch a terminate request for a managed-local session.
+
+    A successful result means the terminate command ran (the engine signalled
+    the provider child); it is not a confirmation that the process is reaped,
+    though most transports (cursor_helm, codex) kill the child synchronously.
+    """
+
+    if not _is_managed_local_session(db, session):
+        return ManagedLocalInterruptResult(ok=False, error="Session is not managed_local")
+    transport_error = _managed_control_transport_error(
+        session,
+        owner_id=owner_id,
+        command_type=MANAGED_CONTROL_COMMAND_TERMINATE,
+    )
+    if transport_error is not None:
+        return ManagedLocalInterruptResult(ok=False, error=transport_error)
+
+    result = await dispatch_managed_control_command(
+        db=db,
+        owner_id=owner_id,
+        session=session,
+        timeout_secs=timeout_secs,
+        command_type=MANAGED_CONTROL_COMMAND_TERMINATE,
+        payload={},
+        commis_id=commis_id,
+        run_id=None,
+    )
+    if not result.ok:
+        return ManagedLocalInterruptResult(
+            ok=False,
+            error=result.error or "Failed to dispatch terminate command",
+        )
+
+    data = result.data or {}
+    exit_code = int(data.get("exit_code", 1))
+    stdout = data.get("stdout") or ""
+    stderr = data.get("stderr") or ""
+    if exit_code != 0:
+        detail = stderr.strip() or stdout.strip()
+        return ManagedLocalInterruptResult(
+            ok=False,
+            exit_code=exit_code,
+            stdout=stdout,
+            stderr=stderr,
+            error=detail or "Managed local terminate command failed",
         )
     return ManagedLocalInterruptResult(ok=True, exit_code=0, stdout=stdout, stderr=stderr)
 
