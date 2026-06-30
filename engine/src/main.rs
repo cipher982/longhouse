@@ -7,6 +7,7 @@ mod codex_app_server_canary;
 mod codex_attachments;
 mod codex_bridge;
 mod codex_exec;
+mod cursor_exec;
 mod codex_source;
 mod codex_ws_relay;
 mod commands;

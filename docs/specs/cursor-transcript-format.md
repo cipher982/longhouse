@@ -357,31 +357,87 @@ Three layers, landed explicitly:
   shipped half-tested. Pick it up in a focused engine session; until then,
   `longhouse cursor import` is the path to timeline presence.
 
-## Phase 4 — Managed interactive control (not implemented)
+## Phase 4 — Managed Cursor: Console mode (implemented), Helm mode (blocked)
 
-The product contract for every `longhouse <provider>` is: run the provider's
-normal interactive experience invisibly to the user (their TUI, untouched)
-while Longhouse owns a background remote control channel for send / interrupt
-/ steer from browser/iOS — the pattern Claude (native channels), Codex
-(`app-server` + `--remote` TUI attach), and OpenCode (`serve` + `attach`)
-follow. Cursor must match that contract or not be a managed provider at all.
+Per the Shadow / Helm / Console vocabulary (see `AGENTS.md`), Cursor ships in
+two of the three session modes:
 
-A headless `--print stream-json` one-shot wrapper was built and then
-**removed** (commit history) because it is the wrong model: it gives no
-interactive TUI, so it is not invisible-to-the-user and not the daily-driver
-path. It is not a substitute for the managed interactive wrapper and must
-not be shipped as `longhouse cursor`.
+- **Shadow** (unmanaged, live, observe-only): engine tails `~/.cursor/chats`
+  `store.db` and ships events via `cursor_transcript.py`. Built. See Phase 1-3.
+- **Console** (managed, headless, UI-driven): user launches a Cursor task from
+  Longhouse web/iOS; the Runtime Host dispatches `session.run_once` to the
+  Machine Agent, which spawns `cursor-agent --print --output-format stream-json`
+  headless and ships the transcript to the timeline. **Built.** See below.
+- **Helm** (managed, interactive, remote-steerable `longhouse cursor`): the
+  user runs `longhouse cursor` and gets their normal interactive TUI
+  invisibly while Longhouse owns a background control channel for send /
+  interrupt / steer from browser/iOS — the pattern Claude (native channels),
+  Codex (`app-server` + `--remote` TUI attach), and OpenCode (`serve` +
+  `attach`) follow. **Not built — blocked**, see "Helm gating question" below.
 
-**Gating question (unconfirmed):** does `cursor-agent` expose a steerable
-interactive control surface — an app-server / `serve` / socket / MCP control
-channel / `--remote`-style attach — that a TUI can attach to while
-Longhouse fronts the control path, the way Codex and OpenCode do? If yes,
-build the managed interactive wrapper on that surface (user gets the normal
-TUI; Longhouse owns the control channel; ingest ships live with whatever
-timing that surface provides). If no, Cursor cannot match the managed
-control story and should ship as unmanaged ingest only until Cursor exposes
-such a surface — do not fake a one-shot wrapper as managed control.
+### Console mode — how it works
 
-Mid-turn steer is likely an `unsupported_gap` regardless (Cursor exposes no
-mid-turn injection surface today); record it honestly if/when the managed
-wrapper is built.
+Contract: `schemas/managed_providers.yml` `provider: cursor`,
+`managed_transport: cursor_exec`, `control_plane: cursor_exec`,
+`launch_local: false`, `launch_remote: true`, `run_once: true`,
+`can_resume: true` (via `--resume <chatId>`), `terminate: false` (relies on
+`kill_on_drop`; a pid-registry terminate is a follow-up). Advertises
+`cursor.run_once` and `cursor.resume_run_once` only. Mid-turn
+`send_input` / `interrupt` / `steer_active_turn` are explicit unsupported
+gaps — Console is turn-batched, not mid-turn steerable.
+
+Flow mirrors codex `run_once`:
+
+1. Web/iOS → `POST /api/sessions/launch` `{provider:"cursor",
+   execution_lifetime:"one_shot", initial_prompt, cwd, device_id}`.
+2. `remote_session_launch.launch_remote_session` pre-allocates the session +
+   run, dispatches `session.run_once` over the control WebSocket. The one-shot
+   `SessionConnection.control_plane` is `cursor_exec` (derived via
+   `ONE_SHOT_CONTROL_PLANE_BY_PROVIDER`, no longer hardcoded to `codex_exec`).
+3. Engine `control_channel::handle_command_frame` `COMMAND_RUN_ONCE` dispatches
+   by provider → `cursor_exec::start_cursor_exec_once`.
+4. `cursor_exec.rs` spawns `cursor-agent --print --output-format stream-json
+   --yolo --trust --workspace <cwd> [--resume <chatId>] <prompt>` in its own
+   process group, `kill_on_drop`, env `LONGHOUSE_MANAGED_SESSION_ID`, returns
+   pid/argv upstream immediately (server flips connection → `attached`).
+5. Background: parses stream-json NDJSON → `EventIngest` rows → posts
+   `SessionIngest` to `/api/agents/ingest` with the managed session id (real
+   `timestamp_ms` on tool calls, monotonic receipt clock for assistant/user),
+   plus runtime phase/progress/terminal signals to
+   `/api/agents/runtime/events/batch` for the live overlay.
+
+### stream-json event mapping (authoritative — captured from cursor-agent)
+
+- `system` (subtype init): `session_id` → `provider_session_id`. No event.
+- `user`: `message.content[].text` → `EventIngest(role=user, content_text)`.
+- `assistant`: `message.content[].text` → `EventIngest(role=assistant,
+  content_text)`.
+- `tool_call` subtype=started: `tool_call.<toolName>.args`,
+  `toolCallId`, `timestamp_ms` → `EventIngest(role=assistant, tool_name,
+  tool_input_json, tool_call_id)`.
+- `tool_call` subtype=completed: `tool_call.<toolName>.result`,
+  `toolCallId`, `timestamp_ms` → `EventIngest(role=tool, tool_name,
+  tool_output_text, tool_call_id)`. Paired with the started event on
+  `tool_call_id` (mirrors web/iOS pairing).
+- `result`: terminal marker; `duration_ms` anchors `ended_at`. No event (the
+  final text is already in the `assistant` event).
+
+**Timestamp fidelity note:** only `tool_call` events carry a real
+`timestamp_ms` / `startedAtMs` / `completedAtMs`. `assistant` / `user` /
+`system` / `result` do **not** — an earlier draft of this spec claimed they
+did; a live capture disproved it. Those events use a monotonic receipt clock
+anchored to the last real tool timestamp. Do not fabricate per-event
+timestamps beyond this.
+
+### Helm gating question (unconfirmed — do not fake)
+
+Does `cursor-agent` expose a steerable interactive control surface — an
+app-server / `serve` / socket / MCP control channel / `--remote`-style
+attach — that a TUI can attach to while Longhouse fronts the control path,
+the way Codex and OpenCode do? If yes, build the Helm wrapper on that
+surface (user gets the normal TUI; Longhouse owns the control channel). If
+no, Cursor stays Shadow + Console only until Cursor exposes such a surface.
+A headless `--print` one-shot must not be shipped as `longhouse cursor`
+(Helm) — it gives no interactive TUI, so it is not invisible-to-the-user and
+not the daily-driver path. Mid-turn steer is likely an `unsupported_gap`
+regardless; record it honestly if/when the Helm wrapper is built.

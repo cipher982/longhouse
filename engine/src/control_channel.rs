@@ -36,6 +36,7 @@ use crate::codex_bridge::{
     BridgeStartConfig, BridgeSteerConfig, BridgeSteerError,
 };
 use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig};
+use crate::cursor_exec::{start_cursor_exec_once, CursorExecRunConfig};
 use crate::config::ShipperConfig;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -51,6 +52,7 @@ const COMMAND_RUN_ONCE: &str = "session.run_once";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
 const DEFAULT_CODEX_BIN: &str = "codex";
+const DEFAULT_CURSOR_BIN: &str = "cursor-agent";
 const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
 // Remote detached-UI Codex launches run without the user's shell wrapper, so
 // the engine owns the managed zero-prompt contract explicitly.
@@ -805,7 +807,7 @@ async fn execute_command(
     match command_type.as_str() {
         COMMAND_RUN_ONCE => {
             let provider = payload_required_string(&payload, "provider")?;
-            if provider != "codex" {
+            if provider != "codex" && provider != "cursor" {
                 return Err(CommandError {
                     code: "provider_unsupported".to_string(),
                     message: format!("provider={provider} is not supported for session.run_once"),
@@ -836,6 +838,38 @@ async fn execute_command(
                 .db_path
                 .clone()
                 .or_else(|| crate::config::get_agent_db_path().ok());
+
+            if provider == "cursor" {
+                let summary = start_cursor_exec_once(CursorExecRunConfig {
+                    session_id: session_id.clone(),
+                    run_id: run_id.clone(),
+                    cwd,
+                    api_url: config.api_url.clone(),
+                    api_token,
+                    cursor_bin: DEFAULT_CURSOR_BIN.to_string(),
+                    prompt: initial_prompt,
+                    resume_chat_id: resume_target
+                        .as_ref()
+                        .map(|target| target.thread_id.clone()),
+                    machine_name: config.machine_name.clone(),
+                    local_db_path,
+                })
+                .await
+                .map_err(|err| CommandError {
+                    code: "provider_launch_failed".to_string(),
+                    message: err.to_string(),
+                })?;
+
+                return Ok(json!({
+                    "session_id": summary.session_id,
+                    "run_id": summary.run_id,
+                    "provider": "cursor",
+                    "transport": "cursor_exec",
+                    "pid": summary.pid,
+                    "argv": summary.argv,
+                }));
+            }
+
             let summary = start_codex_exec_once(CodexExecRunConfig {
                 session_id: session_id.clone(),
                 run_id: run_id.clone(),
@@ -2087,6 +2121,8 @@ mod tests {
         ("codex", "continue", COMMAND_LAUNCH),
         ("codex", "run_once", COMMAND_RUN_ONCE),
         ("codex", "resume_run_once", COMMAND_RUN_ONCE),
+        ("cursor", "run_once", COMMAND_RUN_ONCE),
+        ("cursor", "resume_run_once", COMMAND_RUN_ONCE),
         ("claude", "send", COMMAND_SEND_TEXT),
         ("claude", "interrupt", COMMAND_INTERRUPT),
         ("claude", "steer", COMMAND_STEER_TEXT),
@@ -2731,6 +2767,7 @@ mod tests {
         write_executable(&dir, "codex");
         write_executable(&dir, "claude");
         write_executable(&dir, "agy");
+        write_executable(&dir, "cursor-agent");
         let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
         let mut expected = vec!["archive.backlog_control".to_string()];
         for contract in managed_provider_contract_items() {

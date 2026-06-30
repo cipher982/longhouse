@@ -28,6 +28,7 @@ class ManagedSessionTransport(str, Enum):
     OPENCODE_PROCESS = "opencode_process"
     ANTIGRAVITY_HOOK_INBOX = "antigravity_hook_inbox"
     ANTIGRAVITY_PROCESS = "antigravity_process"
+    CURSOR_EXEC = "cursor_exec"
 
     @staticmethod
     def for_provider(
