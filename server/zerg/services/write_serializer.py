@@ -83,6 +83,7 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "ingest-scan": 45,
     "ingest-replay": 45,
     "runner-online": 10,
+    "machine-control-reaper": 15,
     "session-turn-active": 15,
     "session-turn-terminal": 15,
     "presence": 20,

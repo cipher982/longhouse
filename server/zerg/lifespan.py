@@ -32,6 +32,16 @@ def _session_input_queue_recovery_enabled() -> bool:
     return os.getenv("LONGHOUSE_ENABLE_SESSION_INPUT_QUEUE_RECOVERY", "").strip().lower() in _TRUTHY_ENV
 
 
+async def _reap_stale_machine_control_operations_once() -> int:
+    from zerg.services.machine_control_operations import reap_stale_machine_control_operations
+    from zerg.services.write_serializer import get_write_serializer
+
+    return await get_write_serializer().execute(
+        reap_stale_machine_control_operations,
+        label="machine-control-reaper",
+    )
+
+
 @contextmanager
 def _timed_startup_step(name: str):
     started = time.monotonic()
@@ -333,18 +343,12 @@ async def lifespan(app: FastAPI):
             # Machine-control operation reaper: expire commands whose result
             # did not return before their operation lease.
             try:
-                from zerg.database import get_session_factory as _get_sf_machine_ops
-                from zerg.services.machine_control_operations import reap_stale_machine_control_operations
 
                 async def _machine_control_operation_reaper_loop() -> None:
                     while True:
                         try:
                             await asyncio.sleep(60)
-                            db = _get_sf_machine_ops()()
-                            try:
-                                reap_stale_machine_control_operations(db)
-                            finally:
-                                db.close()
+                            await _reap_stale_machine_control_operations_once()
                         except asyncio.CancelledError:
                             raise
                         except Exception:  # noqa: BLE001
