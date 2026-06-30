@@ -19,6 +19,7 @@ from zerg.routers.device_tokens import validate_device_token
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.machine_control_operations import reconcile_machine_control_operation_from_command_result
 from zerg.services.remote_session_launch import reconcile_launch_from_command_result
+from zerg.services.write_serializer import get_write_serializer
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,35 @@ def _validate_websocket_device_token(websocket: WebSocket, db: Session) -> Devic
     if not token.startswith("zdt_"):
         return None
     return validate_device_token(token, db)
+
+
+async def _reconcile_machine_control_operation_result(
+    db: Session,
+    message: dict[str, Any],
+    *,
+    owner_id: int,
+    device_id: str,
+) -> bool:
+    return await get_write_serializer().execute_or_direct(
+        lambda write_db: reconcile_machine_control_operation_from_command_result(
+            write_db,
+            message,
+            owner_id=owner_id,
+            device_id=device_id,
+        ),
+        db,
+        auto_commit=False,
+        label="machine-control-result",
+    )
+
+
+async def _reconcile_late_launch_result(db: Session, message: dict[str, Any]) -> bool:
+    return await get_write_serializer().execute_or_direct(
+        lambda write_db: reconcile_launch_from_command_result(write_db, message),
+        db,
+        auto_commit=False,
+        label="remote-launch-result",
+    )
 
 
 async def _close_control_ws(websocket: WebSocket, *, code: int = 1008, reason: str) -> None:
@@ -127,7 +157,7 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
                 matched = await registry.complete_command(message, owner_id=owner_id, device_id=device_id)
                 if not matched:
                     try:
-                        matched = reconcile_machine_control_operation_from_command_result(
+                        matched = await _reconcile_machine_control_operation_result(
                             db,
                             message,
                             owner_id=owner_id,
@@ -143,7 +173,7 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
                     # The original launcher call may have timed out; persist the
                     # late outcome on the sessions row so the client can see it.
                     try:
-                        reconcile_launch_from_command_result(db, message)
+                        await _reconcile_late_launch_result(db, message)
                     except Exception:  # noqa: BLE001
                         db.rollback()
                         logger.exception(

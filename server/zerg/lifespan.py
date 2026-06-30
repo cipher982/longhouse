@@ -38,6 +38,7 @@ async def _reap_stale_machine_control_operations_once() -> int:
 
     return await get_write_serializer().execute(
         reap_stale_machine_control_operations,
+        auto_commit=False,
         label="machine-control-reaper",
     )
 

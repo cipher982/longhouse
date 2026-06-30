@@ -94,6 +94,8 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "runner-job-complete": 20,
     "runner-job-error": 20,
     "runner-offline": 20,
+    "machine-control-result": 10,
+    "remote-launch-result": 10,
     "loop-thread": 25,
     "loop-thread-message": 25,
     "turn-review-create": 30,

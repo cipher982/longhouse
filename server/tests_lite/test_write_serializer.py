@@ -136,11 +136,12 @@ async def test_background_ingest_repair_stays_behind_machine_health_signals(tmp_
     presence = asyncio.create_task(serializer.execute(_make_write("presence"), label="presence"))
     heartbeat = asyncio.create_task(serializer.execute(_make_write("heartbeat"), label="heartbeat"))
     runtime = asyncio.create_task(serializer.execute(_make_write("runtime"), label="runtime-observations"))
+    result = asyncio.create_task(serializer.execute(_make_write("result"), label="machine-control-result"))
     reaper = asyncio.create_task(serializer.execute(_make_write("reaper"), label="machine-control-reaper"))
 
-    await asyncio.gather(first, replay, scan, presence, heartbeat, runtime, reaper)
+    await asyncio.gather(first, replay, scan, presence, heartbeat, runtime, result, reaper)
 
-    assert run_order == ["first", "runtime", "reaper", "presence", "heartbeat", "replay", "scan"]
+    assert run_order == ["first", "runtime", "result", "reaper", "presence", "heartbeat", "replay", "scan"]
 
 
 @pytest.mark.asyncio

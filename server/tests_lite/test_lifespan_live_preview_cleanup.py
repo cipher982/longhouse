@@ -38,8 +38,8 @@ async def test_machine_control_reaper_uses_write_serializer(monkeypatch):
         return 3
 
     class FakeSerializer:
-        async def execute(self, fn, *, label):
-            calls.append(("execute", label))
+        async def execute(self, fn, *, auto_commit, label):
+            calls.append(("execute", label, auto_commit))
             return fn("serializer-db")
 
     monkeypatch.setattr(
@@ -53,6 +53,6 @@ async def test_machine_control_reaper_uses_write_serializer(monkeypatch):
 
     assert await _reap_stale_machine_control_operations_once() == 3
     assert calls == [
-        ("execute", "machine-control-reaper"),
+        ("execute", "machine-control-reaper", False),
         ("reap", "serializer-db"),
     ]
