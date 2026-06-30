@@ -33,6 +33,7 @@ use crate::managed_bridge_scan;
 use crate::managed_claude_scan;
 use crate::managed_opencode_reaper::ManagedOpenCodeReaper;
 use crate::managed_opencode_scan;
+use crate::managed_cursor_helm_scan;
 use crate::managed_reaper::ManagedBridgeReaper;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
@@ -312,6 +313,7 @@ struct ManagedObservationScanResult {
     codex_observations: Vec<managed_bridge_scan::CodexBridgeObservation>,
     claude_observations: Vec<managed_claude_scan::ClaudeChannelObservation>,
     opencode_observations: Vec<managed_opencode_scan::OpenCodeServerObservation>,
+    cursor_observations: Vec<managed_cursor_helm_scan::CursorHelmObservation>,
     elapsed_ms: u64,
 }
 
@@ -1076,6 +1078,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 codex_count = result.codex_observations.len(),
                                 claude_count = result.claude_observations.len(),
                                 opencode_count = result.opencode_observations.len(),
+                                cursor_count = result.cursor_observations.len(),
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan was slow"
                             );
@@ -1085,6 +1088,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 codex_count = result.codex_observations.len(),
                                 claude_count = result.claude_observations.len(),
                                 opencode_count = result.opencode_observations.len(),
+                                cursor_count = result.cursor_observations.len(),
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan completed"
                             );
@@ -1136,6 +1140,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &result.codex_observations,
                             &result.claude_observations,
                             &result.opencode_observations,
+                            &result.cursor_observations,
                             serde_json::to_value(control_channel_status.snapshot()).ok(),
                             Some(unmanaged_binding_override),
                             Some(adaptive_limiter.as_ref()),
@@ -1344,6 +1349,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 );
                 let claude_observations = managed_claude_scan::collect_observations();
                 let opencode_observations = managed_opencode_scan::collect_observations();
+                let cursor_observations = managed_cursor_helm_scan::collect_observations();
                 reconcile_claude_terminal_signals(
                     &mut live_claude_channels,
                     &mut pending_claude_terminal_signals,
@@ -1387,6 +1393,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &observations,
                     &claude_observations,
                     &opencode_observations,
+                    &cursor_observations,
                     serde_json::to_value(control_channel_status.snapshot()).ok(),
                     Some(unmanaged_binding_override),
                     Some(adaptive_limiter.as_ref()),
@@ -1437,6 +1444,7 @@ fn write_local_status_snapshot(
     observations: &[managed_bridge_scan::CodexBridgeObservation],
     claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
+    cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
     control_channel: Option<Value>,
     unmanaged_session_binding_override: Option<&[heartbeat::UnmanagedSessionBinding]>,
     limiter: Option<&crate::scheduler::AdaptiveLimiter>,
@@ -1475,6 +1483,14 @@ fn write_local_status_snapshot(
             conn,
             machine_id,
             opencode_observations,
+            now,
+        ));
+    payload
+        .managed_sessions
+        .extend(heartbeat::leases_from_cursor_helm_observations(
+            conn,
+            machine_id,
+            cursor_observations,
             now,
         ));
     payload.managed_sessions.sort_by(|a, b| {
@@ -1853,11 +1869,13 @@ fn maybe_start_managed_observation_scan(
         let codex_observations = managed_bridge_scan::collect_observations();
         let claude_observations = managed_claude_scan::collect_observations();
         let opencode_observations = managed_opencode_scan::collect_observations();
+        let cursor_observations = managed_cursor_helm_scan::collect_observations();
         ManagedObservationScanResult {
             reason,
             codex_observations,
             claude_observations,
             opencode_observations,
+            cursor_observations,
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });
@@ -3230,6 +3248,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             None,
             Some(&cached),
             None,
@@ -3264,6 +3283,7 @@ mod tests {
             &[],
             &[],
             &[],
+            &[],
             None,
             Some(&cached),
             None,
@@ -3280,6 +3300,7 @@ mod tests {
             &None,
             "cinder",
             status.path(),
+            &[],
             &[],
             &[],
             &[],
@@ -3300,6 +3321,7 @@ mod tests {
             &None,
             "cinder",
             status.path(),
+            &[],
             &[],
             &[],
             &[],

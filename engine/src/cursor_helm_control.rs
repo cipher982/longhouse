@@ -19,7 +19,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::Context;
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::json;
@@ -29,7 +28,6 @@ use crate::config::get_longhouse_home;
 use crate::managed_bridge_scan::pid_alive;
 
 pub const CURSOR_HELM_TRANSPORT: &str = "cursor_helm";
-pub const CURSOR_HELM_CONTROL_PLANE: &str = "cursor_helm";
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(8);
 const SOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);

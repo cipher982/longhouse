@@ -21,6 +21,7 @@ use crate::build_identity::BuildIdentity;
 use crate::managed_bridge_scan::CodexBridgeObservation;
 use crate::managed_claude_scan::ClaudeChannelObservation;
 use crate::managed_opencode_scan::OpenCodeServerObservation;
+use crate::managed_cursor_helm_scan::CursorHelmObservation;
 
 /// Captured once per daemon process at the first write_status_file call.
 /// Compared against the on-disk binary mtime to detect "restart pending".
@@ -581,6 +582,52 @@ pub fn leases_from_opencode_server_observations(
         leases.push(ManagedSessionLease {
             session_id: obs.session_id.clone(),
             provider: "opencode".to_string(),
+            machine_id: machine_id.trim().to_string(),
+            sequence,
+            state: "attached".to_string(),
+            phase: Some(
+                overlay
+                    .and_then(|row| normalize_managed_phase(row.phase.as_deref()))
+                    .unwrap_or_else(|| "idle".to_string()),
+            ),
+            tool_name: overlay.and_then(|row| row.tool_name.clone()),
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: None,
+            observed_at: overlay
+                .and_then(|row| row.observed_at.clone())
+                .unwrap_or_else(|| obs.updated_at.clone())
+                .if_empty(observed_at.clone()),
+            lease_ttl_ms: 15 * 60 * 1000,
+        });
+    }
+
+    leases.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    leases
+}
+
+/// Cursor Helm leases: a live `longhouse cursor` launcher (pid alive + control
+/// socket present) is the readiness observation. Dead state files are omitted so
+/// the Runtime Host detaches the prior connection. There is no separate lease
+/// sidecar; the launcher's state file + socket IS the liveness signal.
+pub fn leases_from_cursor_helm_observations(
+    conn: &rusqlite::Connection,
+    machine_id: &str,
+    observations: &[CursorHelmObservation],
+    now: DateTime<Utc>,
+) -> Vec<ManagedSessionLease> {
+    let phase_overlay = load_managed_phase_overlay(conn);
+    let sequence = now.timestamp_millis().max(0) as u64;
+    let observed_at = now.to_rfc3339();
+    let mut leases = Vec::with_capacity(observations.len());
+
+    for obs in observations {
+        if !obs.live {
+            continue;
+        }
+        let overlay = phase_overlay.get(&obs.session_id);
+        leases.push(ManagedSessionLease {
+            session_id: obs.session_id.clone(),
+            provider: "cursor".to_string(),
             machine_id: machine_id.trim().to_string(),
             sequence,
             state: "attached".to_string(),
