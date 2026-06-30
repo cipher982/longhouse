@@ -1374,6 +1374,60 @@ def test_expired_attempt_allows_retry(monkeypatch, tmp_path):
         asyncio.run(session_lock_manager.release(str(session_id)))
 
 
+def test_expired_steer_attempt_is_not_silently_requeued(tmp_path):
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="stale steer",
+            owner_id=user_id,
+            intent="steer",
+            status=INPUT_STATUS_DELIVERING,
+            client_request_id="ios-stale-steer-1",
+            delivery_request_id="expired-steer-attempt",
+        )
+        db.add(
+            SessionInputDeliveryAttempt(
+                session_input_id=int(row.id),
+                session_id=session_id,
+                thread_id=row.thread_id,
+                owner_id=user_id,
+                request_id="expired-steer-attempt",
+                attempt_number=1,
+                status="acquired",
+                lease_owner="expired",
+                lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+        db.commit()
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+
+    result = asyncio.run(
+        wake_session_input_queue(
+            db_bind=db_bind,
+            session_id=session_id,
+            reason="test_expired_steer",
+            lock_scope_id=str(session_id),
+        )
+    )
+
+    with session_local() as db:
+        row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+        attempt = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_input_id == input_id).one()
+        assert row.status == INPUT_STATUS_DELIVERING
+        assert row.delivery_request_id == "expired-steer-attempt"
+        assert attempt.status == "expired"
+    assert result.dispatched is False
+    assert result.reason == "no_queued_input"
+
+
 def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch, tmp_path):
     from fastapi.responses import JSONResponse
 
@@ -1664,6 +1718,30 @@ def test_lock_watcher_timeout_recovers_from_fresh_runtime_idle_and_drains_queue(
             status=INPUT_STATUS_QUEUED,
             client_request_id="ios-timeout-recover-1",
         )
+        prior_input = create_session_input(
+            db,
+            session_id=session_id,
+            text="prior accepted input",
+            owner_id=user_id,
+            intent="auto",
+            status=INPUT_STATUS_DELIVERED,
+            client_request_id="prior-timeout-recover-1",
+            delivery_request_id="req-timeout-recover",
+        )
+        db.add(
+            SessionInputDeliveryAttempt(
+                session_input_id=int(prior_input.id),
+                session_id=session_id,
+                thread_id=prior_input.thread_id,
+                owner_id=user_id,
+                request_id="req-timeout-recover",
+                attempt_number=1,
+                status="accepted",
+                lease_owner="req-timeout-recover",
+                lease_expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+            )
+        )
+        db.commit()
         queued_id = int(queued.id)
         db_bind = db.get_bind()
 
@@ -1700,6 +1778,12 @@ def test_lock_watcher_timeout_recovers_from_fresh_runtime_idle_and_drains_queue(
             turn = db.query(SessionTurn).filter(SessionTurn.request_id == "req-timeout-recover").one()
             assert turn.terminal_phase == "idle"
             assert turn.terminal_at is not None
+            attempt = (
+                db.query(SessionInputDeliveryAttempt)
+                .filter(SessionInputDeliveryAttempt.request_id == "req-timeout-recover")
+                .one()
+            )
+            assert attempt.status == "completed"
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
 

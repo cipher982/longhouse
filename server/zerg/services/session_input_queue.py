@@ -177,6 +177,9 @@ async def wake_session_input_queue(
     db = SessionLocal()
     try:
         now = datetime.now(timezone.utc)
+        # Accepted attempts belong to an active provider turn; the terminal
+        # watcher marks them completed. Reap only pre-accept attempts here so a
+        # long healthy turn is not converted into a retry.
         expire_delivery_attempts(db, session_id=session_id, now=now, statuses=(ATTEMPT_STATUS_ACQUIRED, ATTEMPT_STATUS_SUBMITTED))
         requeue_delivering_without_active_attempt(db, session_id=session_id, now=now)
 
@@ -355,6 +358,7 @@ async def _dispatch_claimed_input(
         )
         return QueueWakeResult(input_id=int(claimed.id), reason="dispatch_failed")
 
+    mark_delivered(db, int(claimed.id))
     if attempt_id is not None:
         now = datetime.now(timezone.utc)
         mark_delivery_attempt_accepted(
@@ -363,7 +367,6 @@ async def _dispatch_claimed_input(
             accepted_at=now,
             lease_expires_at=now + timedelta(seconds=TURN_LEASE_SECS),
         )
-    mark_delivered(db, int(claimed.id))
     return QueueWakeResult(dispatched=True, input_id=int(claimed.id), reason="dispatched")
 
 
