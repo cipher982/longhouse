@@ -521,6 +521,7 @@ async def _dispatch_claimed_input(
                         error=response_error_message,
                     )
                 mark_failed(db, int(claimed.id), error=response_error_message)
+                await session_lock_manager.release(lock_scope, drain_request_id)
                 return QueueWakeResult(input_id=int(claimed.id), reason="max_attempts_failed")
             backoff = RETRY_BACKOFF_SECS[min(max(attempt_count, 1) - 1, len(RETRY_BACKOFF_SECS) - 1)]
             next_attempt_at = datetime.now(timezone.utc) + timedelta(seconds=backoff)
@@ -538,6 +539,7 @@ async def _dispatch_claimed_input(
                 source_session.id,
                 response_error_message,
             )
+            await session_lock_manager.release(lock_scope, drain_request_id)
             return QueueWakeResult(input_id=int(claimed.id), reason="transient_dispatch_failure")
         if attempt_id is not None:
             mark_delivery_attempt_failed(
@@ -556,6 +558,7 @@ async def _dispatch_claimed_input(
             dispatch_status,
             claimed.id,
         )
+        await session_lock_manager.release(lock_scope, drain_request_id)
         return QueueWakeResult(input_id=int(claimed.id), reason="dispatch_failed")
 
     mark_delivered(db, int(claimed.id))

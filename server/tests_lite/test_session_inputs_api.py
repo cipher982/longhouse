@@ -1646,8 +1646,7 @@ def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch,
         input_id = int(row.id)
         db_bind = db.get_bind()
 
-    async def fake_dispatch(*, lock_scope_id, request_id, **_kwargs):
-        await session_lock_manager.release(lock_scope_id, request_id)
+    async def fake_dispatch(**_kwargs):
         return JSONResponse(
             status_code=502,
             content={
@@ -1678,6 +1677,9 @@ def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch,
         attempt = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_input_id == input_id).one()
         assert attempt.status == "released"
         assert attempt.error_code == SESSION_TURN_ERROR_SEND_FAILED
+    probe = asyncio.run(session_lock_manager.acquire(session_id=str(session_id), holder="probe", ttl_seconds=1))
+    assert probe is not None
+    asyncio.run(session_lock_manager.release(str(session_id), "probe"))
     assert result.dispatched is False
     assert result.reason == "transient_dispatch_failure"
 
