@@ -1,17 +1,19 @@
 """Longhouse CLI for the Cursor agent harness.
 
-Unmanaged ingest + inspection only. ``longhouse cursor import`` scans
-``~/.cursor/chats`` for cursor-agent ``store.db`` sessions, decodes each
-through :mod:`zerg.services.cursor_transcript`, and posts the canonical
-``SessionIngest`` to the Runtime Host ``/api/agents/ingest`` endpoint using
-the stored device token. ``longhouse cursor decode`` is a local debug path
-that prints what would be ingested without contacting the server.
+Default invocation (``longhouse cursor``) launches a Cursor **Helm** session:
+an invisible interactive ``cursor-agent`` TUI with a background remote-control
+channel, matching the claude/codex/opencode managed pattern. See
+:mod:`zerg.cli.cursor_helm` for the PTY pass-through + per-session socket
+mechanism.
 
-A managed interactive ``longhouse cursor`` wrapper (invisible to the user,
-with a background remote control channel, matching the claude/codex/opencode
-pattern) is not yet implemented; it depends on cursor-agent exposing a
-steerable interactive control surface, which is unconfirmed. See
-``docs/specs/cursor-transcript-format.md``.
+Subcommands:
+- ``longhouse cursor import`` scans ``~/.cursor/chats`` for cursor-agent
+  ``store.db`` sessions (unmanaged Shadow ingest) and posts canonical
+  ``SessionIngest`` to the Runtime Host.
+- ``longhouse cursor decode`` is a local debug path that prints what would be
+  ingested without contacting the server.
+
+See ``docs/specs/cursor-transcript-format.md``.
 """
 
 from __future__ import annotations
@@ -22,12 +24,18 @@ import httpx
 import typer
 
 from zerg.cli._common import load_api_credentials
+from zerg.cli.cursor_helm import run_helm
 from zerg.services.cursor_transcript import decode_store_db
 from zerg.services.cursor_transcript import iter_local_cursor_stores
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
+from zerg.session_loop_mode import SessionLoopMode
 
-app = typer.Typer(help="Cursor agent harness: unmanaged ingest + inspection.", no_args_is_help=True)
+app = typer.Typer(
+    help="Cursor agent harness: managed Helm launch + unmanaged ingest/inspection.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
 
 
 def _load_creds(url: str | None, token: str | None, config_dir: Path | None) -> tuple[str, str]:
@@ -42,6 +50,54 @@ def _load_creds(url: str | None, token: str | None, config_dir: Path | None) -> 
 
 def _scan_stores(cursor_dir: Path | None) -> list[Path]:
     return sorted(iter_local_cursor_stores(cursor_dir), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+@app.callback(invoke_without_command=True)
+def launch(
+    cwd: Path = typer.Option(
+        Path("."),
+        "--cwd",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+        help="Working directory to launch cursor-agent from (defaults to current directory).",
+    ),
+    project: str | None = typer.Option(None, "--project", help="Optional session project label."),
+    loop_mode: SessionLoopMode = typer.Option(
+        SessionLoopMode.ASSIST,
+        "--loop-mode",
+        help="Loop mode to store on the Longhouse session.",
+    ),
+    name: str | None = typer.Option(None, "--name", help="Optional display name for the session."),
+    url: str | None = typer.Option(None, "--url", "-u", help="Longhouse API URL (uses stored URL if not specified)."),
+    token: str | None = typer.Option(None, "--token", "-t", help="Device token (uses stored token if not specified)."),
+    config_dir: str | None = typer.Option(
+        None,
+        "--config-dir",
+        help="Longhouse config directory (default: ~/.longhouse).",
+    ),
+    verbose: bool = typer.Option(False, "--verbose/--quiet", "-v", help="Show session id + timeline URL on launch."),
+    open_browser: bool = typer.Option(False, "--open/--no-open", help="Print the timeline URL after the session ends."),
+    cursor_args: list[str] = typer.Argument(
+        None,
+        help="Extra args forwarded to cursor-agent (use '--' to separate).",
+    ),
+) -> None:
+    """Launch a Longhouse Cursor Helm session: interactive cursor-agent TUI + remote steer."""
+    run_helm(
+        cwd=cwd,
+        project=project,
+        name=name,
+        loop_mode=loop_mode,
+        url=url,
+        token=token,
+        config_dir=config_dir,
+        permission_mode="bypass",
+        cursor_args=cursor_args,
+        verbose=verbose,
+        open_browser=open_browser,
+    )
 
 
 @app.command(name="import")
