@@ -689,7 +689,7 @@ impl<'a> Spool<'a> {
 
         let mut changed = 0usize;
         for id in ids {
-            let next_retry = Utc::now() + jittered_chrono_delay(delay);
+            let next_retry = Utc::now() + retry_after_chrono_delay(delay);
             changed += self.conn.execute(
                 "UPDATE spool_queue
                  SET last_error = ?1,
@@ -707,7 +707,8 @@ impl<'a> Spool<'a> {
     /// local pointer is bad. Older builds could leave every range parked behind
     /// a long retry clock; in drain mode that violates the product contract that
     /// reconstructable backlog should keep making progress as soon as the host
-    /// is accepting archive work again.
+    /// is accepting archive work again. Keep this above the runtime's normal
+    /// retry-after window so active host throttling does not become a retry loop.
     pub fn clip_archive_backpressure_deferrals(&self, max_delay: Duration) -> Result<usize> {
         let now = Utc::now();
         let cutoff = now + chrono_duration_from_std(max_delay);
@@ -1085,6 +1086,16 @@ fn jittered_chrono_delay(delay: Duration) -> chrono::Duration {
     chrono::Duration::milliseconds(jitter_millis)
 }
 
+fn retry_after_chrono_delay(delay: Duration) -> chrono::Duration {
+    let base = chrono_duration_from_std(delay);
+    let jitter_cap = (delay.as_millis() / 4)
+        .min(15_000)
+        .min((BACKOFF_MAX * 1000.0) as u128)
+        .max(1) as i64;
+    let jitter_millis = rand::thread_rng().gen_range(1..=jitter_cap);
+    base + chrono::Duration::milliseconds(jitter_millis)
+}
+
 fn chrono_duration_from_std(delay: Duration) -> chrono::Duration {
     chrono::Duration::from_std(delay)
         .unwrap_or_else(|_| chrono::Duration::seconds(BACKOFF_MAX as i64))
@@ -1250,10 +1261,19 @@ mod tests {
             [],
         )
         .unwrap();
+        let active_retry_at = (Utc::now() + chrono::Duration::seconds(15)).to_rfc3339();
+        conn.execute(
+            "INSERT INTO spool_queue
+                (provider, file_path, start_offset, end_offset, created_at, next_retry_at, retry_count, last_error, status)
+             VALUES
+                ('codex', '/active-backpressure.jsonl', 0, 1000, '2026-03-12T00:00:06+00:00', ?1, 4, '503:{\"detail\":\"Archive ingest backlog is throttled; retry shortly\"}', 'pending')",
+            [&active_retry_at],
+        )
+        .unwrap();
 
         let spool = Spool::new(&conn);
         let clipped = spool
-            .clip_archive_backpressure_deferrals(Duration::from_secs(5))
+            .clip_archive_backpressure_deferrals(Duration::from_secs(90))
             .unwrap();
         assert_eq!(clipped, 1);
 
@@ -1266,15 +1286,19 @@ mod tests {
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .unwrap()
         };
-        let backpressured_retry = DateTime::parse_from_rfc3339(&rows[0].1)
-            .unwrap()
-            .with_timezone(&Utc);
-        assert!(backpressured_retry <= Utc::now() + chrono::Duration::seconds(5));
-        for (file_path, next_retry_at) in rows.iter().skip(1) {
-            if file_path == "/short-backpressure.jsonl" {
-                assert_eq!(next_retry_at, "2000-01-01T00:00:00+00:00");
-            } else {
-                assert_eq!(next_retry_at, "2999-01-01T00:00:00+00:00");
+        for (file_path, next_retry_at) in rows.iter() {
+            match file_path.as_str() {
+                "/active-backpressure.jsonl" => assert_eq!(next_retry_at, &active_retry_at),
+                "/backpressured.jsonl" => {
+                    let backpressured_retry = DateTime::parse_from_rfc3339(next_retry_at)
+                        .unwrap()
+                        .with_timezone(&Utc);
+                    assert!(backpressured_retry <= Utc::now() + chrono::Duration::seconds(90));
+                }
+                "/short-backpressure.jsonl" => {
+                    assert_eq!(next_retry_at, "2000-01-01T00:00:00+00:00");
+                }
+                _ => assert_eq!(next_retry_at, "2999-01-01T00:00:00+00:00"),
             }
         }
     }
@@ -1632,6 +1656,7 @@ mod tests {
 
         spool.enqueue("claude", "/f", 0, 100, None).unwrap();
 
+        let before_defer = Utc::now();
         let changed = spool
             .defer_pending_for_path(
                 "/f",
@@ -1653,7 +1678,7 @@ mod tests {
         let next: DateTime<Utc> = DateTime::parse_from_rfc3339(&entry.2)
             .unwrap()
             .with_timezone(&Utc);
-        assert!(next > Utc::now());
+        assert!(next >= before_defer + chrono::Duration::seconds(60));
     }
 
     #[test]
