@@ -677,9 +677,7 @@ where
         ));
     }
 
-    if service.longhouse_home_matches == Some(false)
-        || (state_root.is_some() && service.longhouse_home_matches != Some(true))
-    {
+    if service.longhouse_home_matches != Some(true) {
         return Ok(native_repair_execution_result(
             dry_run,
             "rejected_service_mismatch",
@@ -2563,6 +2561,40 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         assert_eq!(
             execution.service.unwrap().longhouse_home_matches,
             Some(false)
+        );
+    }
+
+    #[test]
+    fn native_repair_execution_rejects_default_service_without_longhouse_home() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        write_configured_machine_state(state.path());
+        let path = service_path(NativeServicePlatform::Macos, home.path()).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "<plist><dict></dict></plist>").unwrap();
+
+        temp_env::with_vars(
+            [
+                ("LONGHOUSE_HOME", Some(state.path().display().to_string())),
+                ("HOME", Some(home.path().display().to_string())),
+                ("CLAUDE_CONFIG_DIR", None::<String>),
+            ],
+            || {
+                let execution = collect_native_repair_execution_with_runner(
+                    None,
+                    false,
+                    NativeServicePlatform::Macos,
+                    home.path(),
+                    |_| panic!("restart must not run for an ambiguous default service"),
+                )
+                .unwrap();
+
+                assert_eq!(execution.state, "rejected_service_mismatch");
+                assert_eq!(
+                    execution.service.unwrap().longhouse_home_matches,
+                    None
+                );
+            },
         );
     }
 
