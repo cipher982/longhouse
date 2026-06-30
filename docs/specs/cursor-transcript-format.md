@@ -373,7 +373,9 @@ two of the three session modes:
   invisibly while Longhouse owns a background control channel for send /
   interrupt / steer from browser/iOS — the pattern Claude (native channels),
   Codex (`app-server` + `--remote` TUI attach), and OpenCode (`serve` +
-  `attach`) follow. **Not built — blocked**, see "Helm gating question" below.
+  `attach`) follow. **Not built — definitively blocked**: cursor-agent
+  exposes no steerable interactive control surface. See "Helm gating
+  finding" below.
 
 ### Console mode — how it works
 
@@ -429,15 +431,38 @@ did; a live capture disproved it. Those events use a monotonic receipt clock
 anchored to the last real tool timestamp. Do not fabricate per-event
 timestamps beyond this.
 
-### Helm gating question (unconfirmed — do not fake)
+### Helm gating finding (definitive — Cursor cannot reach Helm parity today)
 
-Does `cursor-agent` expose a steerable interactive control surface — an
-app-server / `serve` / socket / MCP control channel / `--remote`-style
-attach — that a TUI can attach to while Longhouse fronts the control path,
-the way Codex and OpenCode do? If yes, build the Helm wrapper on that
-surface (user gets the normal TUI; Longhouse owns the control channel). If
-no, Cursor stays Shadow + Console only until Cursor exposes such a surface.
-A headless `--print` one-shot must not be shipped as `longhouse cursor`
-(Helm) — it gives no interactive TUI, so it is not invisible-to-the-user and
-not the daily-driver path. Mid-turn steer is likely an `unsupported_gap`
-regardless; record it honestly if/when the Helm wrapper is built.
+`cursor-agent` does **not** expose a steerable interactive control surface.
+This was verified directly against the installed binary, not assumed:
+
+- Subcommand inventory: `agent` (interactive TUI), `mcp` (manage MCP servers
+  the agent *uses* — not a steering channel), `worker` (Cursor's own
+  cloud/k8s worker; `--management-addr` is healthz/metrics only), `ls` /
+  `resume` / `create-chat` (chat selection), plus housekeeping (`login`,
+  `models`, `bedrock`, `about`, `update`).
+- `agent --help` has no `--remote` / `--attach` / `--socket` /
+  `--control-port` / `--app-server` / `--serve` option.
+- Binary strings scan: no `CURSOR_*CONTROL/SOCKET/IPC/PIPE/RPC/SERVER/REMOTE`
+  env vars; no remote/attach/socket/control-port/app-server flags.
+
+The three providers that *do* reach Helm each ship a real control surface
+that a TUI attaches to while Longhouse fronts control: Claude
+(`--dangerously-load-development-channels` — an MCP control channel running
+alongside the TUI), Codex (`app-server` + `--remote` TUI attach), OpenCode
+(`serve` + `attach`). Cursor ships none of these. Its interactive TUI is a
+closed loop; the only "control" is `--resume` (start a new turn) and
+`--print` (headless one-shot, i.e. Console).
+
+The only theoretical Helm path is PTY-wrapping (interpose a fake TTY,
+inject keystrokes). That is rejected: it degrades the TUI experience the
+Helm contract requires be invisible, and it yields only keystroke injection
++ Ctrl-C, not true mid-turn steer. The other providers reach Helm *without*
+PTY-wrapping because they have a real surface; Cursor does not, so the
+degraded PTY path is the only option and is not worth it.
+
+**Conclusion: Cursor's parity ceiling today is Shadow + Console.** Helm is
+unachievable until Cursor ships a control surface (app-server / `serve` /
+channel / `--remote`-style attach). Do not fake a `longhouse cursor`
+wrapper, do not PTY-wrap. Revisit when a Cursor release adds such a
+surface; until then this is a hard stop, not an open spike.
