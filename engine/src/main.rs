@@ -605,6 +605,10 @@ enum DeviceCommands {
         #[arg(long)]
         dry_run: bool,
 
+        /// Create or repair the stable-home Machine Agent service artifact
+        #[arg(long)]
+        repair_service: bool,
+
         /// Longhouse state root override; reads <state-root>/agent and <state-root>/machine
         #[arg(long)]
         state_root: Option<PathBuf>,
@@ -1400,9 +1404,10 @@ fn main() -> anyhow::Result<()> {
             DeviceCommands::Repair {
                 json,
                 dry_run,
+                repair_service,
                 state_root,
             } => {
-                device::cmd_device_repair(json, dry_run, state_root.as_deref())?;
+                device::cmd_device_repair(json, dry_run, repair_service, state_root.as_deref())?;
             }
         },
         Commands::ClaudeChannel { command } => match command {
@@ -1906,11 +1911,46 @@ mod tests {
                     DeviceCommands::Repair {
                         json,
                         dry_run,
+                        repair_service,
                         state_root,
                     },
             } => {
                 assert!(json);
                 assert!(dry_run);
+                assert!(!repair_service);
+                assert_eq!(state_root.unwrap(), PathBuf::from("/tmp/longhouse-state"));
+            }
+            _ => panic!("expected device repair command"),
+        }
+    }
+
+    #[test]
+    fn device_repair_service_cli_parses() {
+        let cli = Cli::try_parse_from([
+            "longhouse-engine",
+            "device",
+            "repair",
+            "--json",
+            "--dry-run",
+            "--repair-service",
+            "--state-root",
+            "/tmp/longhouse-state",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Device {
+                command:
+                    DeviceCommands::Repair {
+                        json,
+                        dry_run,
+                        repair_service,
+                        state_root,
+                    },
+            } => {
+                assert!(json);
+                assert!(dry_run);
+                assert!(repair_service);
                 assert_eq!(state_root.unwrap(), PathBuf::from("/tmp/longhouse-state"));
             }
             _ => panic!("expected device repair command"),

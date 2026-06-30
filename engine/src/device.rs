@@ -10,7 +10,10 @@ use crate::config;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::SystemTime;
@@ -23,6 +26,25 @@ const CURRENT_TRANSPORT_ERROR_DEGRADED_MIN_COUNT: u64 = 2;
 const TRANSPORT_ERROR_DEGRADED_MIN_COUNT: u64 = 3;
 const TRANSPORT_ERROR_DEGRADED_MIN_RATE: f64 = 0.25;
 const CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT: u64 = 2;
+const DEFAULT_FALLBACK_SCAN_SECS: u64 = 300;
+const DEFAULT_SPOOL_REPLAY_SECS: u64 = 30;
+const DEFAULT_COMPRESSION: &str = "zstd";
+const LAUNCHD_LABEL: &str = "com.longhouse.shipper";
+const SYSTEMD_UNIT: &str = "longhouse-shipper";
+const COMMON_SERVICE_PATH_SUFFIXES: &[&str] = &[
+    ".local/bin",
+    "bin",
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/home/linuxbrew/.linuxbrew/bin",
+    "/home/linuxbrew/.linuxbrew/sbin",
+    "/usr/bin",
+    "/bin",
+    "/usr/sbin",
+    "/sbin",
+];
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NativeDeviceContract {
@@ -185,6 +207,7 @@ struct NativeRepairAction {
 struct NativeRepairExecution {
     schema_version: u64,
     collection_tier: &'static str,
+    repair_mode: &'static str,
     dry_run: bool,
     state: String,
     headline: String,
@@ -237,6 +260,53 @@ struct NativeRestartCommand {
     display: String,
 }
 
+#[derive(Debug, Clone)]
+struct NativeServiceManagerCommand {
+    id: &'static str,
+    label: &'static str,
+    program: &'static str,
+    args: Vec<String>,
+    display: String,
+}
+
+#[derive(Debug, Clone)]
+struct NativeMachineStateDetail {
+    status: NativeMachineStateStatus,
+    runtime_url: String,
+    machine_name: String,
+    config_generation: Option<String>,
+    state_hash: String,
+}
+
+#[derive(Debug, Clone)]
+struct NativeServiceArtifactPlan {
+    service_path: PathBuf,
+    log_dir: PathBuf,
+    content: String,
+    platform: NativeServicePlatform,
+    redactions: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct NativeEngineExecutable {
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct NativeServiceRepairOptions {
+    allow_scratch_home: bool,
+    engine_executable_override: Option<PathBuf>,
+}
+
+impl Default for NativeServiceRepairOptions {
+    fn default() -> Self {
+        Self {
+            allow_scratch_home: false,
+            engine_executable_override: None,
+        }
+    }
+}
+
 pub fn cmd_device_plan(json: bool) -> anyhow::Result<()> {
     let contract = embedded_contract()?;
     if json {
@@ -284,9 +354,10 @@ pub fn cmd_device_repair_plan(json: bool, state_root: Option<&Path>) -> anyhow::
 pub fn cmd_device_repair(
     json: bool,
     dry_run: bool,
+    repair_service: bool,
     state_root: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let execution = collect_native_repair_execution(state_root, dry_run)?;
+    let execution = collect_native_repair_execution(state_root, dry_run, repair_service)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&execution)?);
     } else {
@@ -588,15 +659,27 @@ fn collect_native_repair_plan(state_root: Option<&Path>) -> anyhow::Result<Nativ
 fn collect_native_repair_execution(
     state_root: Option<&Path>,
     dry_run: bool,
+    repair_service: bool,
 ) -> anyhow::Result<NativeRepairExecution> {
     let home = home_dir()?;
-    collect_native_repair_execution_with_runner(
-        state_root,
-        dry_run,
-        NativeServicePlatform::current(),
-        &home,
-        run_restart_command,
-    )
+    if repair_service {
+        collect_native_service_artifact_repair_execution_with_runner(
+            state_root,
+            dry_run,
+            NativeServicePlatform::current(),
+            &home,
+            NativeServiceRepairOptions::default(),
+            run_service_manager_command,
+        )
+    } else {
+        collect_native_repair_execution_with_runner(
+            state_root,
+            dry_run,
+            NativeServicePlatform::current(),
+            &home,
+            run_restart_command,
+        )
+    }
 }
 
 fn collect_native_repair_execution_with_runner<F>(
@@ -794,6 +877,7 @@ fn native_repair_execution_result(
     NativeRepairExecution {
         schema_version: 1,
         collection_tier: "native_fast_write",
+        repair_mode: "existing_service_restart",
         dry_run,
         state: state.to_string(),
         headline: headline.to_string(),
@@ -803,6 +887,276 @@ fn native_repair_execution_result(
         before_health,
         after_health,
         notes: notes.into_iter().map(str::to_string).collect(),
+    }
+}
+
+fn collect_native_service_artifact_repair_execution_with_runner<F>(
+    state_root: Option<&Path>,
+    dry_run: bool,
+    platform: NativeServicePlatform,
+    home: &Path,
+    options: NativeServiceRepairOptions,
+    mut command_runner: F,
+) -> anyhow::Result<NativeRepairExecution>
+where
+    F: FnMut(&NativeServiceManagerCommand) -> Result<(), String>,
+{
+    let status_path = engine_status_path(state_root)?;
+    let machine_path = machine_state_path(state_root)?;
+    let before_health = collect_native_fast_local_health(&status_path);
+    let machine_status = collect_native_machine_state(&machine_path);
+
+    if platform == NativeServicePlatform::Unsupported {
+        return Ok(native_service_repair_execution_result(
+            dry_run,
+            "rejected_unsupported_platform",
+            "Native service repair is not available on this platform yet",
+            Vec::new(),
+            machine_status,
+            None,
+            before_health,
+            None,
+            vec!["Phase 2E supports launchd and systemd user services only."],
+        ));
+    }
+
+    if !options.allow_scratch_home {
+        if let Some(reason) = stable_home_rejection(state_root, home) {
+            return Ok(native_service_repair_execution_result(
+                dry_run,
+                "rejected_scratch_home",
+                "Longhouse refused to install a global service for scratch state",
+                Vec::new(),
+                machine_status,
+                None,
+                before_health,
+                None,
+                vec![reason],
+            ));
+        }
+    }
+
+    let machine_detail = match collect_native_machine_state_detail(&machine_path) {
+        Ok(detail) => detail,
+        Err((state, status, note)) => {
+            return Ok(native_service_repair_execution_result(
+                dry_run,
+                state,
+                "Longhouse needs complete machine state before native service repair can run",
+                Vec::new(),
+                status,
+                None,
+                before_health,
+                None,
+                vec![note],
+            ));
+        }
+    };
+
+    let service = collect_native_repair_service_status(platform, home, state_root);
+    if service.exists {
+        if service.error.is_some() {
+            return Ok(native_service_repair_execution_result(
+                dry_run,
+                "rejected_existing_service_ambiguous",
+                "Longhouse could not safely inspect the existing Machine Agent service",
+                Vec::new(),
+                machine_detail.status,
+                Some(service),
+                before_health,
+                None,
+                vec![
+                    "Native service repair refused to rewrite a service file it could not inspect.",
+                ],
+            ));
+        }
+        if service.longhouse_home_matches == Some(false) {
+            return Ok(native_service_repair_execution_result(
+                dry_run,
+                "rejected_existing_service_mismatch",
+                "Longhouse refused to rewrite a service for a different state root",
+                Vec::new(),
+                machine_detail.status,
+                Some(service),
+                before_health,
+                None,
+                vec!["The existing service must declare the target LONGHOUSE_HOME before native service repair can rewrite it."],
+            ));
+        }
+        if service.longhouse_home_matches != Some(true) {
+            return Ok(native_service_repair_execution_result(
+                dry_run,
+                "rejected_existing_service_ambiguous",
+                "Longhouse refused to rewrite an ambiguous Machine Agent service",
+                Vec::new(),
+                machine_detail.status,
+                Some(service),
+                before_health,
+                None,
+                vec!["The existing service must positively identify its LONGHOUSE_HOME before native service repair can rewrite it."],
+            ));
+        }
+        if let Some(reason) = existing_service_rewrite_rejection(platform, home) {
+            return Ok(native_service_repair_execution_result(
+                dry_run,
+                "rejected_existing_service_ambiguous",
+                "Longhouse refused to rewrite an unsafe service artifact",
+                Vec::new(),
+                machine_detail.status,
+                Some(service),
+                before_health,
+                None,
+                vec![reason],
+            ));
+        }
+    }
+
+    let artifact = match build_native_service_artifact_plan(
+        platform,
+        home,
+        state_root,
+        &machine_detail,
+        options.engine_executable_override.as_deref(),
+    ) {
+        Ok(plan) => plan,
+        Err(note) => {
+            return Ok(native_service_repair_execution_result(
+                dry_run,
+                "rejected_engine_executable_unavailable",
+                "Longhouse could not resolve an installed longhouse-engine binary",
+                Vec::new(),
+                machine_detail.status,
+                Some(service),
+                before_health,
+                None,
+                vec![note],
+            ));
+        }
+    };
+
+    if dry_run {
+        return Ok(native_service_repair_execution_result(
+            true,
+                "dry_run_planned",
+                "Longhouse can repair the stable Machine Agent service artifact",
+            service_artifact_actions(&artifact, true, service.exists, None),
+            machine_detail.status,
+            Some(service),
+            before_health,
+            None,
+            vec![
+                "Dry run only; no service file was written and no service manager command was run.",
+                "Native service repair does not touch tokens, hooks, Desktop App artifacts, backlog, or machine state.",
+            ],
+        ));
+    }
+
+    let mut actions = Vec::new();
+    if let Err(error) = write_service_artifact(&artifact) {
+        actions.push(NativeRepairExecutionAction {
+            id: "write_service_file",
+            label: "Write Machine Agent service file",
+            status: "failed",
+            platform: artifact.platform.as_str(),
+            command: Some(format!("write {}", artifact.service_path.display())),
+            error: Some(redact_service_error(&error, &artifact.redactions)),
+        });
+        return Ok(native_service_repair_execution_result(
+            false,
+            "failed",
+            "Longhouse failed to write the Machine Agent service artifact",
+            actions,
+            machine_detail.status,
+            Some(service),
+            before_health,
+            None,
+            vec!["Native service repair stopped before running service-manager commands."],
+        ));
+    }
+    actions.push(NativeRepairExecutionAction {
+        id: "write_service_file",
+        label: "Write Machine Agent service file",
+        status: "completed",
+        platform: artifact.platform.as_str(),
+        command: Some(format!("write {}", artifact.service_path.display())),
+        error: None,
+    });
+
+    for command in service_manager_commands(&artifact, service.exists) {
+        match command_runner(&command) {
+            Ok(()) => actions.push(NativeRepairExecutionAction {
+                id: command.id,
+                label: command.label,
+                status: "completed",
+                platform: artifact.platform.as_str(),
+                command: Some(command.display),
+                error: None,
+            }),
+            Err(error) => {
+                actions.push(NativeRepairExecutionAction {
+                    id: command.id,
+                    label: command.label,
+                    status: "failed",
+                    platform: artifact.platform.as_str(),
+                    command: Some(command.display),
+                    error: Some(redact_service_error(&error, &artifact.redactions)),
+                });
+                return Ok(native_service_repair_execution_result(
+                    false,
+                    "failed",
+                    "Longhouse failed to activate the Machine Agent service artifact",
+                    actions,
+                    machine_detail.status,
+                    Some(service),
+                    before_health,
+                    None,
+                    vec!["Native service repair did not attempt fallback process killing or legacy service cleanup."],
+                ));
+            }
+        }
+    }
+
+    let after_health = collect_native_fast_local_health(&status_path);
+    Ok(native_service_repair_execution_result(
+        false,
+        "completed",
+        "Longhouse repaired and activated the Machine Agent service artifact",
+        actions,
+        machine_detail.status,
+        Some(collect_native_repair_service_status(platform, home, state_root)),
+        before_health,
+        Some(after_health),
+        vec![
+            "Native service repair wrote only the service artifact and log directory.",
+            "Fast health is sampled immediately after service activation and may still be warming up.",
+        ],
+    ))
+}
+
+fn native_service_repair_execution_result<S: Into<String>>(
+    dry_run: bool,
+    state: &str,
+    headline: &str,
+    actions: Vec<NativeRepairExecutionAction>,
+    machine_state: NativeMachineStateStatus,
+    service: Option<NativeRepairServiceStatus>,
+    before_health: NativeFastLocalHealth,
+    after_health: Option<NativeFastLocalHealth>,
+    notes: Vec<S>,
+) -> NativeRepairExecution {
+    NativeRepairExecution {
+        schema_version: 1,
+        collection_tier: "native_fast_write",
+        repair_mode: "service_artifact",
+        dry_run,
+        state: state.to_string(),
+        headline: headline.to_string(),
+        actions,
+        machine_state,
+        service,
+        before_health,
+        after_health,
+        notes: notes.into_iter().map(Into::into).collect(),
     }
 }
 
@@ -848,6 +1202,100 @@ fn collect_native_machine_state(path: &Path) -> NativeMachineStateStatus {
     }
 }
 
+fn collect_native_machine_state_detail(
+    path: &Path,
+) -> Result<NativeMachineStateDetail, (&'static str, NativeMachineStateStatus, &'static str)> {
+    let status = collect_native_machine_state(path);
+    if status.error.is_some() {
+        return Err((
+            "rejected_machine_state_unreadable",
+            status,
+            "Native service repair requires readable canonical machine state.",
+        ));
+    }
+    if !status.exists {
+        return Err((
+            "rejected_machine_state_incomplete",
+            status,
+            "Run longhouse connect --install once to create canonical machine state.",
+        ));
+    }
+
+    let raw = fs::read_to_string(path).map_err(|_| {
+        (
+            "rejected_machine_state_unreadable",
+            status.clone(),
+            "Native service repair requires readable canonical machine state.",
+        )
+    })?;
+    let value: Value = serde_json::from_str(&raw).map_err(|_| {
+        (
+            "rejected_machine_state_unreadable",
+            status.clone(),
+            "Native service repair requires parseable canonical machine state.",
+        )
+    })?;
+    let Some(object) = value.as_object() else {
+        return Err((
+            "rejected_machine_state_unreadable",
+            status,
+            "Canonical machine state must be a JSON object.",
+        ));
+    };
+
+    let runtime_url = object
+        .get("runtime_url")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| runtime_url_looks_configured(value))
+        .map(str::to_string);
+    let machine_name = object
+        .get("machine_name")
+        .and_then(Value::as_str)
+        .and_then(sanitize_machine_name);
+
+    let (Some(runtime_url), Some(machine_name)) = (runtime_url, machine_name) else {
+        return Err((
+            "rejected_machine_state_incomplete",
+            status,
+            "Canonical machine state must include runtime_url and machine_name before native service repair can run.",
+        ));
+    };
+
+    let schema_version = object
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .unwrap_or(1);
+    let desktop_app_enabled = object.get("desktop_app_enabled").and_then(Value::as_bool);
+    let desired_bundle_version = object
+        .get("desired_bundle_version")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let config_generation = object
+        .get("config_generation")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let state_hash = machine_state_hash(
+        schema_version,
+        &runtime_url,
+        &machine_name,
+        desktop_app_enabled,
+        desired_bundle_version.as_deref(),
+    );
+
+    Ok(NativeMachineStateDetail {
+        status,
+        runtime_url,
+        machine_name,
+        config_generation,
+        state_hash,
+    })
+}
+
 fn machine_state_error(path: &Path, exists: bool, error: &str) -> NativeMachineStateStatus {
     NativeMachineStateStatus {
         path: path.display().to_string(),
@@ -889,6 +1337,52 @@ fn machine_name_looks_configured(value: &str) -> bool {
         .filter(|ch| !matches!(ch, '&' | '<' | '>' | '"' | '\''))
         .collect::<String>();
     !normalized.trim_matches('-').trim().is_empty()
+}
+
+fn sanitize_machine_name(value: &str) -> Option<String> {
+    let mut normalized = value.split_whitespace().collect::<Vec<_>>().join("-");
+    normalized = normalized
+        .chars()
+        .filter(|ch| !matches!(ch, '&' | '<' | '>' | '"' | '\''))
+        .collect::<String>();
+    while normalized.contains("--") {
+        normalized = normalized.replace("--", "-");
+    }
+    let normalized = normalized
+        .trim_matches('-')
+        .chars()
+        .take(64)
+        .collect::<String>();
+    if normalized.is_empty() {
+        None
+    } else {
+        Some(normalized)
+    }
+}
+
+fn machine_state_hash(
+    schema_version: u64,
+    runtime_url: &str,
+    machine_name: &str,
+    desktop_app_enabled: Option<bool>,
+    desired_bundle_version: Option<&str>,
+) -> String {
+    let mut payload = BTreeMap::new();
+    payload.insert("schema_version", Value::from(schema_version));
+    payload.insert("runtime_url", Value::from(runtime_url.to_string()));
+    payload.insert("machine_name", Value::from(machine_name.to_string()));
+    payload.insert(
+        "desktop_app_enabled",
+        desktop_app_enabled.map(Value::from).unwrap_or(Value::Null),
+    );
+    payload.insert(
+        "desired_bundle_version",
+        desired_bundle_version
+            .map(|value| Value::from(value.to_string()))
+            .unwrap_or(Value::Null),
+    );
+    let encoded = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+    format!("{:x}", Sha256::digest(encoded.as_bytes()))
 }
 
 fn native_repair_plan_from_parts(
@@ -1030,6 +1524,52 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
+fn stable_home_rejection(state_root: Option<&Path>, home: &Path) -> Option<&'static str> {
+    let canonical = canonical_longhouse_home(home);
+    if let Some(root) = state_root {
+        if !paths_match(root, &canonical) {
+            return Some("Native service repair only writes the stable ~/.longhouse service.");
+        }
+    }
+    if let Ok(value) = env::var("LONGHOUSE_HOME") {
+        if !value.trim().is_empty() && !paths_match(Path::new(value.trim()), &canonical) {
+            return Some("LONGHOUSE_HOME targets scratch state; native service repair refused to install a global service.");
+        }
+    }
+    if let Ok(value) = env::var("CLAUDE_CONFIG_DIR") {
+        if !value.trim().is_empty() {
+            let mapped = provider_home_to_longhouse_home(Path::new(value.trim()));
+            if !paths_match(&mapped, &canonical) {
+                return Some("CLAUDE_CONFIG_DIR maps to scratch state; native service repair refused to install a global service.");
+            }
+        }
+    }
+    let effective = state_root
+        .map(Path::to_path_buf)
+        .or_else(|| config::get_longhouse_home().ok())
+        .unwrap_or_else(|| canonical.clone());
+    if !paths_match(&effective, &canonical) {
+        return Some("Effective Longhouse home is scratch state; native service repair refused to install a global service.");
+    }
+    None
+}
+
+fn canonical_longhouse_home(home: &Path) -> PathBuf {
+    home.join(".longhouse")
+}
+
+fn provider_home_to_longhouse_home(path: &Path) -> PathBuf {
+    if matches!(
+        path.file_name().and_then(|value| value.to_str()),
+        Some(".longhouse")
+    ) {
+        return path.to_path_buf();
+    }
+    path.parent()
+        .map(|parent| parent.join(".longhouse"))
+        .unwrap_or_else(|| path.join(".longhouse"))
+}
+
 impl NativeServicePlatform {
     fn current() -> Self {
         #[cfg(target_os = "macos")]
@@ -1120,16 +1660,309 @@ fn service_path(platform: NativeServicePlatform, home: &Path) -> Option<PathBuf>
         NativeServicePlatform::Macos => Some(
             home.join("Library")
                 .join("LaunchAgents")
-                .join("com.longhouse.shipper.plist"),
+                .join(format!("{LAUNCHD_LABEL}.plist")),
         ),
         NativeServicePlatform::Linux => Some(
             home.join(".config")
                 .join("systemd")
                 .join("user")
-                .join("longhouse-shipper.service"),
+                .join(format!("{SYSTEMD_UNIT}.service")),
         ),
         NativeServicePlatform::Unsupported => None,
     }
+}
+
+fn build_native_service_artifact_plan(
+    platform: NativeServicePlatform,
+    home: &Path,
+    state_root: Option<&Path>,
+    machine: &NativeMachineStateDetail,
+    engine_executable_override: Option<&Path>,
+) -> Result<NativeServiceArtifactPlan, String> {
+    let Some(service_path) = service_path(platform, home) else {
+        return Err("Unsupported service manager platform.".to_string());
+    };
+    let longhouse_home = state_root
+        .map(Path::to_path_buf)
+        .or_else(|| config::get_longhouse_home().ok())
+        .unwrap_or_else(|| canonical_longhouse_home(home));
+    let log_dir = longhouse_home.join("agent").join("logs");
+    let engine = resolve_native_service_engine_executable(home, engine_executable_override)?;
+    let archive_mode = default_archive_repair_mode_for_url(&machine.runtime_url);
+
+    let content = match platform {
+        NativeServicePlatform::Macos => generate_launchd_plist(
+            &engine.path,
+            &longhouse_home,
+            &log_dir,
+            machine,
+            archive_mode,
+            home,
+        ),
+        NativeServicePlatform::Linux => generate_systemd_unit(
+            &engine.path,
+            &longhouse_home,
+            &log_dir,
+            machine,
+            archive_mode,
+            home,
+        ),
+        NativeServicePlatform::Unsupported => {
+            return Err("Unsupported service manager platform.".to_string())
+        }
+    };
+
+    Ok(NativeServiceArtifactPlan {
+        service_path,
+        log_dir,
+        content,
+        platform,
+        redactions: vec![machine.runtime_url.clone(), machine.machine_name.clone()],
+    })
+}
+
+fn resolve_native_service_engine_executable(
+    home: &Path,
+    override_path: Option<&Path>,
+) -> Result<NativeEngineExecutable, String> {
+    if let Some(path) = override_path {
+        let path = path.to_path_buf();
+        if path.is_file() {
+            return Ok(NativeEngineExecutable { path });
+        }
+        return Err(format!(
+            "Injected engine executable does not exist: {}",
+            path.display()
+        ));
+    }
+
+    let candidate = home.join(".local").join("bin").join("longhouse-engine");
+    if candidate.is_file() {
+        return Ok(NativeEngineExecutable { path: candidate });
+    }
+
+    if let Ok(current) = env::current_exe() {
+        if current.is_file()
+            && matches!(
+                current.file_name().and_then(|value| value.to_str()),
+                Some("longhouse-engine")
+            )
+        {
+            return Ok(NativeEngineExecutable { path: current });
+        }
+    }
+
+    if let Some(path) = find_executable_on_path("longhouse-engine") {
+        return Ok(NativeEngineExecutable { path });
+    }
+
+    Err(format!(
+        "Installed longhouse-engine not found at {}, current executable, or PATH.",
+        candidate.display()
+    ))
+}
+
+fn find_executable_on_path(name: &str) -> Option<PathBuf> {
+    let path_env = env::var_os("PATH")?;
+    env::split_paths(&path_env)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+fn default_archive_repair_mode_for_url(url: &str) -> &'static str {
+    let lower = url.to_ascii_lowercase();
+    let host = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .unwrap_or(&lower)
+        .split(['/', '?', '#', ':'])
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('.');
+    if host == "longhouse.ai" || host.ends_with(".longhouse.ai") {
+        "paused"
+    } else {
+        "drain"
+    }
+}
+
+fn generate_launchd_plist(
+    engine_path: &Path,
+    longhouse_home: &Path,
+    log_dir: &Path,
+    machine: &NativeMachineStateDetail,
+    archive_mode: &str,
+    home: &Path,
+) -> String {
+    let mut args = vec![
+        engine_path.display().to_string(),
+        "connect".to_string(),
+        "--fallback-scan-secs".to_string(),
+        DEFAULT_FALLBACK_SCAN_SECS.to_string(),
+        "--spool-replay-secs".to_string(),
+        DEFAULT_SPOOL_REPLAY_SECS.to_string(),
+        "--archive-repair-mode".to_string(),
+        archive_mode.to_string(),
+        "--compression".to_string(),
+        DEFAULT_COMPRESSION.to_string(),
+        "--machine-name".to_string(),
+        machine.machine_name.clone(),
+    ];
+    let program_args = args
+        .drain(..)
+        .map(|arg| format!("        <string>{}</string>", xml_escape(&arg)))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let environment_xml = service_environment(longhouse_home, log_dir, machine, home)
+        .into_iter()
+        .map(|(key, value)| {
+            format!(
+                "        <key>{}</key>\n        <string>{}</string>",
+                xml_escape(&key),
+                xml_escape(&value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>{label}</string>
+    <key>ProgramArguments</key>
+    <array>
+{program_args}
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+{environment_xml}
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>{log_dir}/engine.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>{log_dir}/engine.stdout.log</string>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>LowPriorityIO</key>
+    <true/>
+</dict>
+</plist>
+"#,
+        label = LAUNCHD_LABEL,
+        log_dir = xml_escape(&log_dir.display().to_string())
+    )
+}
+
+fn generate_systemd_unit(
+    engine_path: &Path,
+    longhouse_home: &Path,
+    log_dir: &Path,
+    machine: &NativeMachineStateDetail,
+    archive_mode: &str,
+    home: &Path,
+) -> String {
+    let exec_args = [
+        engine_path.display().to_string(),
+        "connect".to_string(),
+        "--fallback-scan-secs".to_string(),
+        DEFAULT_FALLBACK_SCAN_SECS.to_string(),
+        "--spool-replay-secs".to_string(),
+        DEFAULT_SPOOL_REPLAY_SECS.to_string(),
+        "--archive-repair-mode".to_string(),
+        archive_mode.to_string(),
+        "--compression".to_string(),
+        DEFAULT_COMPRESSION.to_string(),
+        "--machine-name".to_string(),
+        machine.machine_name.clone(),
+    ];
+    let exec_start = exec_args
+        .iter()
+        .map(|arg| systemd_quote_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let environment_block = service_environment(longhouse_home, log_dir, machine, home)
+        .into_iter()
+        .map(|(key, value)| format!("Environment=\"{}={}\"", key, systemd_escape_value(&value)))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        r#"[Unit]
+Description=Longhouse Engine - Session Sync
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={exec_start}
+Restart=on-failure
+RestartSec=10
+{environment_block}
+
+[Install]
+WantedBy=default.target
+"#
+    )
+}
+
+fn service_environment(
+    longhouse_home: &Path,
+    log_dir: &Path,
+    machine: &NativeMachineStateDetail,
+    home: &Path,
+) -> Vec<(String, String)> {
+    let mut env = vec![
+        (
+            "CLAUDE_CONFIG_DIR".to_string(),
+            home.join(".claude").display().to_string(),
+        ),
+        (
+            "LONGHOUSE_HOME".to_string(),
+            longhouse_home.display().to_string(),
+        ),
+        (
+            "LONGHOUSE_LOG_DIR".to_string(),
+            log_dir.display().to_string(),
+        ),
+        ("PATH".to_string(), common_service_path(home)),
+    ];
+    if let Some(generation) = &machine.config_generation {
+        env.push((
+            "LONGHOUSE_MACHINE_GENERATION".to_string(),
+            generation.clone(),
+        ));
+    }
+    env.push((
+        "LONGHOUSE_MACHINE_STATE_HASH".to_string(),
+        machine.state_hash.clone(),
+    ));
+    env
+}
+
+fn common_service_path(home: &Path) -> String {
+    COMMON_SERVICE_PATH_SUFFIXES
+        .iter()
+        .map(|suffix| {
+            if suffix.starts_with('/') {
+                (*suffix).to_string()
+            } else {
+                home.join(suffix).display().to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 fn extract_service_longhouse_home(platform: NativeServicePlatform, raw: &str) -> Option<String> {
@@ -1155,6 +1988,34 @@ fn xml_unescape(value: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&apos;", "'")
         .replace("&amp;", "&")
+}
+
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+fn systemd_quote_arg(value: &str) -> String {
+    let escaped = systemd_escape_value(value);
+    let safe = escaped
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':' | '='));
+    if safe {
+        escaped
+    } else {
+        format!("\"{escaped}\"")
+    }
+}
+
+fn systemd_escape_value(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('%', "%%")
 }
 
 fn extract_systemd_environment_value(raw: &str, key: &str) -> Option<String> {
@@ -1203,6 +2064,226 @@ fn systemd_environment_entries(rest: &str) -> Vec<String> {
         entries.push(current);
     }
     entries
+}
+
+fn existing_service_rewrite_rejection(
+    platform: NativeServicePlatform,
+    home: &Path,
+) -> Option<String> {
+    let path = service_path(platform, home)?;
+    let metadata = fs::symlink_metadata(&path).ok()?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Some(format!(
+            "Refusing to rewrite symlinked service file at {}.",
+            path.display()
+        ));
+    }
+    if !file_type.is_file() {
+        return Some(format!(
+            "Refusing to rewrite non-regular service file at {}.",
+            path.display()
+        ));
+    }
+    let raw = fs::read_to_string(&path).ok()?;
+    if !looks_like_longhouse_service(platform, &raw) {
+        return Some(format!(
+            "Refusing to rewrite service file at {} because it does not look like Longhouse's Machine Agent service.",
+            path.display()
+        ));
+    }
+    None
+}
+
+fn looks_like_longhouse_service(platform: NativeServicePlatform, raw: &str) -> bool {
+    match platform {
+        NativeServicePlatform::Macos => {
+            raw.contains(&format!("<string>{LAUNCHD_LABEL}</string>"))
+                && raw.contains("longhouse-engine")
+                && raw.contains("<string>connect</string>")
+        }
+        NativeServicePlatform::Linux => {
+            raw.contains("Description=Longhouse Engine - Session Sync")
+                && raw.contains("longhouse-engine")
+                && raw.contains(" connect")
+        }
+        NativeServicePlatform::Unsupported => false,
+    }
+}
+
+fn service_artifact_actions(
+    artifact: &NativeServiceArtifactPlan,
+    planned: bool,
+    existing_service: bool,
+    error: Option<String>,
+) -> Vec<NativeRepairExecutionAction> {
+    let status = if error.is_some() {
+        "failed"
+    } else if planned {
+        "planned"
+    } else {
+        "completed"
+    };
+    let mut actions = vec![NativeRepairExecutionAction {
+        id: "write_service_file",
+        label: "Write Machine Agent service file",
+        status,
+        platform: artifact.platform.as_str(),
+        command: Some(format!("write {}", artifact.service_path.display())),
+        error,
+    }];
+    for command in service_manager_commands(artifact, existing_service) {
+        actions.push(NativeRepairExecutionAction {
+            id: command.id,
+            label: command.label,
+            status: if planned { "planned" } else { "pending" },
+            platform: artifact.platform.as_str(),
+            command: Some(command.display),
+            error: None,
+        });
+    }
+    actions
+}
+
+fn service_manager_commands(
+    artifact: &NativeServiceArtifactPlan,
+    existing_service: bool,
+) -> Vec<NativeServiceManagerCommand> {
+    match artifact.platform {
+        NativeServicePlatform::Macos => {
+            let mut commands = Vec::new();
+            if existing_service {
+                commands.push(NativeServiceManagerCommand {
+                    id: "unload_launchd_service",
+                    label: "Unload existing launchd service",
+                    program: "launchctl",
+                    args: vec![
+                        "unload".to_string(),
+                        artifact.service_path.display().to_string(),
+                    ],
+                    display: format!(
+                        "launchctl unload {}",
+                        shell_quote(&artifact.service_path.display().to_string())
+                    ),
+                });
+            }
+            commands.push(NativeServiceManagerCommand {
+                id: "load_launchd_service",
+                label: "Load launchd service",
+                program: "launchctl",
+                args: vec![
+                    "load".to_string(),
+                    artifact.service_path.display().to_string(),
+                ],
+                display: format!(
+                    "launchctl load {}",
+                    shell_quote(&artifact.service_path.display().to_string())
+                ),
+            });
+            commands
+        }
+        NativeServicePlatform::Linux => vec![
+            NativeServiceManagerCommand {
+                id: "systemd_daemon_reload",
+                label: "Reload systemd user manager",
+                program: "systemctl",
+                args: vec!["--user".to_string(), "daemon-reload".to_string()],
+                display: "systemctl --user daemon-reload".to_string(),
+            },
+            NativeServiceManagerCommand {
+                id: "systemd_enable_service",
+                label: "Enable systemd user service",
+                program: "systemctl",
+                args: vec![
+                    "--user".to_string(),
+                    "enable".to_string(),
+                    SYSTEMD_UNIT.to_string(),
+                ],
+                display: format!("systemctl --user enable {SYSTEMD_UNIT}"),
+            },
+            NativeServiceManagerCommand {
+                id: if existing_service {
+                    "systemd_restart_service"
+                } else {
+                    "systemd_start_service"
+                },
+                label: if existing_service {
+                    "Restart systemd user service"
+                } else {
+                    "Start systemd user service"
+                },
+                program: "systemctl",
+                args: vec![
+                    "--user".to_string(),
+                    if existing_service { "restart" } else { "start" }.to_string(),
+                    SYSTEMD_UNIT.to_string(),
+                ],
+                display: format!(
+                    "systemctl --user {} {SYSTEMD_UNIT}",
+                    if existing_service { "restart" } else { "start" }
+                ),
+            },
+        ],
+        NativeServicePlatform::Unsupported => Vec::new(),
+    }
+}
+
+fn write_service_artifact(artifact: &NativeServiceArtifactPlan) -> Result<(), String> {
+    if let Some(parent) = artifact.service_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|err| format!("creating service directory {}: {err}", parent.display()))?;
+    }
+    fs::create_dir_all(&artifact.log_dir).map_err(|err| {
+        format!(
+            "creating log directory {}: {err}",
+            artifact.log_dir.display()
+        )
+    })?;
+    write_text_atomic(&artifact.service_path, &artifact.content)
+}
+
+fn write_text_atomic(path: &Path, content: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("service path has no parent: {}", path.display()))?;
+    let tmp = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("longhouse-service"),
+        std::process::id()
+    ));
+    fs::write(&tmp, content)
+        .map_err(|err| format!("writing temp service file {}: {err}", tmp.display()))?;
+    fs::rename(&tmp, path).map_err(|err| {
+        let _ = fs::remove_file(&tmp);
+        format!("installing service file {}: {err}", path.display())
+    })
+}
+
+fn run_service_manager_command(command: &NativeServiceManagerCommand) -> Result<(), String> {
+    let output = Command::new(command.program)
+        .args(&command.args)
+        .output()
+        .map_err(|err| format!("starting {}: {err}", command.program))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format_process_failure(
+        output.status.code(),
+        &output.stdout,
+        &output.stderr,
+    ))
+}
+
+fn redact_service_error(error: &str, redactions: &[String]) -> String {
+    let mut redacted = error.to_string();
+    for value in redactions {
+        if !value.is_empty() {
+            redacted = redacted.replace(value, "<redacted>");
+        }
+    }
+    redacted
 }
 
 fn paths_match(actual: &Path, expected: &Path) -> bool {
@@ -2590,10 +3671,7 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
                 .unwrap();
 
                 assert_eq!(execution.state, "rejected_service_mismatch");
-                assert_eq!(
-                    execution.service.unwrap().longhouse_home_matches,
-                    None
-                );
+                assert_eq!(execution.service.unwrap().longhouse_home_matches, None);
             },
         );
     }
@@ -2687,5 +3765,370 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         assert!(!raw.contains("zdt_secret"));
         assert!(!raw.contains("zdt_"));
         assert!(raw.contains("dry_run_planned"));
+    }
+
+    fn write_machine_state_payload(root: &Path, payload: Value) -> String {
+        let machine_path = machine_state_path(Some(root)).unwrap();
+        std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
+        let raw = serde_json::to_string_pretty(&payload).unwrap() + "\n";
+        std::fs::write(&machine_path, &raw).unwrap();
+        raw
+    }
+
+    fn write_fake_engine(home: &Path) -> PathBuf {
+        let path = home.join(".local").join("bin").join("longhouse-engine");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        path
+    }
+
+    fn service_repair_options(engine: &Path) -> NativeServiceRepairOptions {
+        NativeServiceRepairOptions {
+            allow_scratch_home: true,
+            engine_executable_override: Some(engine.to_path_buf()),
+        }
+    }
+
+    #[test]
+    fn native_service_repair_public_stable_home_dry_run_is_allowed() {
+        let home = tempfile::tempdir().unwrap();
+        let state = home.path().join(".longhouse");
+        write_configured_machine_state(&state);
+        write_fake_engine(home.path());
+
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.path().display().to_string())),
+                ("LONGHOUSE_HOME", None::<String>),
+                ("CLAUDE_CONFIG_DIR", None::<String>),
+            ],
+            || {
+                let execution = collect_native_service_artifact_repair_execution_with_runner(
+                    Some(&state),
+                    true,
+                    NativeServicePlatform::Macos,
+                    home.path(),
+                    NativeServiceRepairOptions::default(),
+                    |_| panic!("dry run must not run service-manager commands"),
+                )
+                .unwrap();
+
+                assert_eq!(execution.repair_mode, "service_artifact");
+                assert_eq!(execution.state, "dry_run_planned");
+                assert_eq!(execution.actions[0].id, "write_service_file");
+                assert_eq!(execution.actions[1].id, "load_launchd_service");
+                assert!(!service_path(NativeServicePlatform::Macos, home.path())
+                    .unwrap()
+                    .exists());
+            },
+        );
+    }
+
+    #[test]
+    fn native_service_repair_public_rejects_scratch_state_root() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        write_configured_machine_state(state.path());
+        write_fake_engine(home.path());
+
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.path().display().to_string())),
+                ("LONGHOUSE_HOME", None::<String>),
+                ("CLAUDE_CONFIG_DIR", None::<String>),
+            ],
+            || {
+                let execution = collect_native_service_artifact_repair_execution_with_runner(
+                    Some(state.path()),
+                    true,
+                    NativeServicePlatform::Macos,
+                    home.path(),
+                    NativeServiceRepairOptions::default(),
+                    |_| panic!("scratch rejection must not run service-manager commands"),
+                )
+                .unwrap();
+
+                assert_eq!(execution.state, "rejected_scratch_home");
+                assert!(execution.actions.is_empty());
+            },
+        );
+    }
+
+    #[test]
+    fn native_service_repair_writes_macos_plist_and_loads_service() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        write_machine_state_payload(
+            state.path(),
+            json!({
+                "schema_version": 1,
+                "config_generation": "gen-123",
+                "runtime_url": "https://david010.longhouse.ai",
+                "machine_name": "work macbook & <dev>",
+                "desktop_app_enabled": true,
+                "desired_bundle_version": "0.1.26",
+                "device_token": "zdt_secret"
+            }),
+        );
+        let mut commands = Vec::new();
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            false,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |command| {
+                commands.push(command.id);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        let service_path = service_path(NativeServicePlatform::Macos, home.path()).unwrap();
+        let content = std::fs::read_to_string(service_path).unwrap();
+
+        assert_eq!(execution.state, "completed");
+        assert_eq!(commands, vec!["load_launchd_service"]);
+        assert!(content.contains("<string>com.longhouse.shipper</string>"));
+        assert!(content.contains("<string>connect</string>"));
+        assert!(content.contains("<string>--archive-repair-mode</string>"));
+        assert!(content.contains("<string>paused</string>"));
+        assert!(content.contains("<string>work-macbook-dev</string>"));
+        assert!(content.contains("<key>LONGHOUSE_MACHINE_GENERATION</key>"));
+        assert!(content.contains("<key>LONGHOUSE_MACHINE_STATE_HASH</key>"));
+        assert!(state.path().join("agent").join("logs").exists());
+    }
+
+    #[test]
+    fn native_service_repair_writes_linux_unit_with_expected_order() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        write_machine_state_payload(
+            state.path(),
+            json!({
+                "runtime_url": "https://selfhost.example.test",
+                "machine_name": "linux box"
+            }),
+        );
+        let mut commands = Vec::new();
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            false,
+            NativeServicePlatform::Linux,
+            home.path(),
+            service_repair_options(&engine),
+            |command| {
+                commands.push(command.id);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        let service_path = service_path(NativeServicePlatform::Linux, home.path()).unwrap();
+        let content = std::fs::read_to_string(service_path).unwrap();
+
+        assert_eq!(execution.state, "completed");
+        assert_eq!(
+            commands,
+            vec![
+                "systemd_daemon_reload",
+                "systemd_enable_service",
+                "systemd_start_service"
+            ]
+        );
+        assert!(content.contains("ExecStart="));
+        assert!(content.contains("--archive-repair-mode drain"));
+        assert!(content.contains("--machine-name linux-box"));
+        assert!(content.contains("Environment=\"LONGHOUSE_HOME="));
+    }
+
+    #[test]
+    fn native_service_repair_rewrites_existing_matching_service() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        write_configured_machine_state(state.path());
+        let machine_detail =
+            collect_native_machine_state_detail(&machine_state_path(Some(state.path())).unwrap())
+                .unwrap();
+        let plan = build_native_service_artifact_plan(
+            NativeServicePlatform::Macos,
+            home.path(),
+            Some(state.path()),
+            &machine_detail,
+            Some(&engine),
+        )
+        .unwrap();
+        write_service_artifact(&plan).unwrap();
+        let mut commands = Vec::new();
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            false,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |command| {
+                commands.push(command.id);
+                Ok(())
+            },
+        )
+        .unwrap();
+
+        assert_eq!(execution.state, "completed");
+        assert_eq!(
+            commands,
+            vec!["unload_launchd_service", "load_launchd_service"]
+        );
+    }
+
+    #[test]
+    fn native_service_repair_rejects_existing_service_mismatch() {
+        let state = tempfile::tempdir().unwrap();
+        let other_state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        write_configured_machine_state(state.path());
+        write_macos_service(home.path(), other_state.path());
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            false,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |_| panic!("mismatched service must not be rewritten"),
+        )
+        .unwrap();
+
+        assert_eq!(execution.state, "rejected_existing_service_mismatch");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_service_repair_rejects_symlink_service_file() {
+        use std::os::unix::fs::symlink;
+
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        write_configured_machine_state(state.path());
+        let service_path = service_path(NativeServicePlatform::Macos, home.path()).unwrap();
+        std::fs::create_dir_all(service_path.parent().unwrap()).unwrap();
+        let target = home.path().join("target.plist");
+        let machine_detail =
+            collect_native_machine_state_detail(&machine_state_path(Some(state.path())).unwrap())
+                .unwrap();
+        let plan = build_native_service_artifact_plan(
+            NativeServicePlatform::Macos,
+            home.path(),
+            Some(state.path()),
+            &machine_detail,
+            Some(&engine),
+        )
+        .unwrap();
+        std::fs::write(&target, plan.content).unwrap();
+        symlink(&target, &service_path).unwrap();
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            false,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |_| panic!("symlink service must not be rewritten"),
+        )
+        .unwrap();
+
+        assert_eq!(execution.state, "rejected_existing_service_ambiguous");
+    }
+
+    #[test]
+    fn native_service_repair_reports_service_manager_failure_with_redaction() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        write_machine_state_payload(
+            state.path(),
+            json!({
+                "runtime_url": "https://david010.longhouse.ai",
+                "machine_name": "secret machine"
+            }),
+        );
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            false,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |_| Err("failed for https://david010.longhouse.ai secret-machine".to_string()),
+        )
+        .unwrap();
+        let raw = serde_json::to_string(&execution).unwrap();
+
+        assert_eq!(execution.state, "failed");
+        assert!(!raw.contains("david010.longhouse.ai"));
+        assert!(!raw.contains("secret-machine"));
+        assert!(raw.contains("<redacted>"));
+    }
+
+    #[test]
+    fn native_service_repair_does_not_mutate_machine_state_or_echo_secrets() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        let original = write_machine_state_payload(
+            state.path(),
+            json!({
+                "runtime_url": "https://demo.longhouse.test",
+                "machine_name": "cinder",
+                "device_token": "zdt_secret"
+            }),
+        );
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            false,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |_| Ok(()),
+        )
+        .unwrap();
+        let raw = serde_json::to_string(&execution).unwrap();
+        let after =
+            std::fs::read_to_string(machine_state_path(Some(state.path())).unwrap()).unwrap();
+
+        assert_eq!(after, original);
+        assert!(!state
+            .path()
+            .join("machine")
+            .join("state-journal.jsonl")
+            .exists());
+        assert!(!raw.contains("demo.longhouse.test"));
+        assert!(!raw.contains("cinder"));
+        assert!(!raw.contains("zdt_secret"));
+        assert!(!raw.contains("zdt_"));
+    }
+
+    #[test]
+    fn native_service_repair_hash_matches_python_contract_vector() {
+        let hash = machine_state_hash(
+            1,
+            "https://demo.longhouse.test",
+            "cinder",
+            Some(true),
+            Some("0.1.26"),
+        );
+
+        assert_eq!(
+            hash,
+            "323c324778672b567522d29687b14f1e273951dbba28ff1dc10f3bd8c5d2c09f"
+        );
     }
 }
