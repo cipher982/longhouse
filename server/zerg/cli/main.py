@@ -25,6 +25,7 @@ from zerg.cli.coordination import messages_app
 from zerg.cli.coordination import peers
 from zerg.cli.coordination import tail
 from zerg.cli.coordination import wall
+from zerg.cli.cursor import app as cursor_app
 from zerg.cli.doctor import doctor
 from zerg.cli.local_health import app as local_health_app
 from zerg.cli.machine import app as machine_app
@@ -307,6 +308,7 @@ app.add_typer(opencode_bridge_app, name="opencode-bridge", help="OpenCode bridge
 app.add_typer(opencode_channel_app, name="opencode-channel", help="OpenCode server bridge commands", hidden=True)
 app.add_typer(antigravity_channel_app, name="antigravity-channel", help="Antigravity hook-inbox commands", hidden=True)
 app.add_typer(codex_app, name="codex")
+app.add_typer(cursor_app, name="cursor")
 app.add_typer(local_health_app, name="local-health")
 app.add_typer(machine_app, name="machine", help="Machine runtime repair and reconciliation")
 app.add_typer(archive_app, name="archive", help="Archive backlog inspection and control")

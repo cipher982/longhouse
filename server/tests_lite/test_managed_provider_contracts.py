@@ -66,7 +66,7 @@ def _manifest_item(provider: str = "test") -> dict:
 
 
 def test_managed_provider_contract_matrix_covers_launch_scope_providers():
-    assert managed_provider_names() == frozenset({"codex", "claude", "opencode", "antigravity"})
+    assert managed_provider_names() == frozenset({"codex", "claude", "opencode", "antigravity", "cursor"})
     assert {contract.provider for contract in all_managed_provider_contracts()} == managed_provider_names()
 
 
@@ -93,6 +93,7 @@ def test_provider_identity_contracts_are_manifest_backed():
         "claude": True,
         "opencode": False,
         "antigravity": True,
+        "cursor": True,
     }
     assert sorted(
         control_plane for contract in all_managed_provider_contracts() for control_plane in contract.control_planes
@@ -103,6 +104,7 @@ def test_provider_identity_contracts_are_manifest_backed():
             "claude_channel_bridge",
             "opencode_server_bridge",
             "antigravity_hook_inbox",
+            "cursor_stream_json",
         }
     )
 
@@ -212,7 +214,7 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
         "resume_run_once",
     )
     assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
-    assert run_once_supported_providers() == frozenset({"codex"})
+    assert run_once_supported_providers() == frozenset({"codex", "cursor"})
 
 
 def test_codex_and_managed_claude_advertise_remote_pause_answering():
@@ -226,9 +228,10 @@ def test_codex_and_managed_claude_advertise_remote_pause_answering():
     assert "antigravity.answer_pause" not in supports_by_provider["antigravity"]
 
 
-def test_continue_supported_providers_is_codex_and_claude_only():
+def test_continue_supported_providers_matches_manifest_can_resume():
     # Driven by manifest can_resume=true. opencode/antigravity must stay out.
-    assert continue_supported_providers() == frozenset({"codex", "claude"})
+    # cursor qualifies via --resume <chatId> (one-shot turn continuation).
+    assert continue_supported_providers() == frozenset({"codex", "claude", "cursor"})
 
 
 def test_claude_contract_is_first_class_channel_control_provider():
@@ -483,10 +486,12 @@ def test_provider_cli_discovery_contract_comes_from_managed_provider_manifest():
         "claude": "claude",
         "opencode": "opencode",
         "antigravity": "agy",
+        "cursor": "cursor-agent",
     }
     assert PROVIDER_CLI_ENV_BY_PROVIDER == {
         "codex": "LONGHOUSE_CODEX_BIN",
         "claude": None,
         "opencode": "LONGHOUSE_OPENCODE_BIN",
         "antigravity": "LONGHOUSE_ANTIGRAVITY_BIN",
+        "cursor": "LONGHOUSE_CURSOR_BIN",
     }

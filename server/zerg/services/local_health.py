@@ -37,6 +37,7 @@ from zerg.provider_live_route_e2e import collect_provider_live_route_e2e
 from zerg.provider_live_route_e2e import expected_route_providers_from_live_proof
 from zerg.provider_release_status import collect_provider_release_status
 from zerg.services.archive_backlog import collect_archive_backlog
+from zerg.services.cursor_transcript import iter_local_cursor_session_summaries
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
@@ -95,6 +96,7 @@ CONTROL_PATH_UNMANAGED = "unmanaged"
 LIVENESS_MODEL_CODEX_BRIDGE = "codex_bridge"
 LIVENESS_MODEL_PROCESS_SCAN = "process_scan"
 LIVENESS_MODEL_ENGINE_STATUS = "engine_status"
+LIVENESS_MODEL_TRANSCRIPT = "transcript"
 LAUNCH_CAPABILITY_BY_PROVIDER = machine_control_launch_capability_by_provider()
 CODEX_BIN_ENV = PROVIDER_CLI_ENV_BY_PROVIDER["codex"]
 OPENCODE_BIN_ENV = PROVIDER_CLI_ENV_BY_PROVIDER["opencode"]
@@ -4121,6 +4123,52 @@ def _collect_managed_session_sources(
     return managed_summary, managed_sessions, orphan_bridges, unmanaged_processes
 
 
+def _collect_cursor_discovery(*, fast: bool) -> dict[str, Any]:
+    """Read-only discovery of local Cursor agent sessions.
+
+    Surfaces cursor-agent ``store.db`` sessions on the machine as *unmanaged*
+    rows (control_path=unmanaged, liveness_model=transcript, state=detached)
+    without ingesting them. This is observed discovery only — it does not
+    bind sessions to the timeline or create ingest state; ``longhouse cursor
+    import`` is the durable backfill path. The three axes (control_path,
+    liveness_model, state) are kept separate per the local-health contract.
+    """
+    if fast:
+        return {"status": "skipped", "skipped_reason": "fast", "sessions": []}
+    sessions: list[dict[str, Any]] = []
+    legacy_count = 0
+    try:
+        summaries = list(iter_local_cursor_session_summaries())
+    except Exception as exc:  # noqa: BLE001 - discovery must never break local_health
+        return {"status": "unavailable", "error": str(exc), "sessions": []}
+    for s in summaries:
+        if s.legacy:
+            legacy_count += 1
+        sessions.append(
+            {
+                "provider": "cursor",
+                "provider_session_id": s.agent_id,
+                "control_path": s.control_path,
+                "liveness_model": s.liveness_model,
+                "state": s.state,
+                "title": s.title,
+                "workspace": s.workspace,
+                "model": s.model,
+                "created_at_ms": s.created_at_ms,
+                "updated_at_ms": s.updated_at_ms,
+                "legacy_format": s.legacy,
+                "store_path": str(s.store_path),
+            }
+        )
+    sessions.sort(key=lambda row: row.get("updated_at_ms") or row.get("created_at_ms") or 0, reverse=True)
+    return {
+        "status": "ok",
+        "session_count": len(sessions),
+        "legacy_format_count": legacy_count,
+        "sessions": sessions,
+    }
+
+
 def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = False) -> dict[str, Any]:
     now = _utc_now()
     resolved_base_dir = _coerce_path(claude_dir)
@@ -4166,6 +4214,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     )
     provider_hook_diagnostics = _collect_provider_hook_diagnostics(resolved_base_dir, now=now, fast=fast)
     provider_binding_diagnostics = _collect_provider_binding_diagnostics(resolved_base_dir, now=now, fast=fast)
+    cursor_discovery = _collect_cursor_discovery(fast=fast)
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,
         engine_status=engine_status,
@@ -4304,6 +4353,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "managed_session_contracts": managed_session_contracts,
         "provider_hook_diagnostics": provider_hook_diagnostics,
         "provider_binding_diagnostics": provider_binding_diagnostics,
+        "cursor_discovery": cursor_discovery,
         "activity_summary": activity_summary,
         "managed_summary": managed_summary,
         "managed_sessions": managed_sessions,

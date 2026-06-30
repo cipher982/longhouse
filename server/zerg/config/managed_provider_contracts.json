@@ -270,6 +270,90 @@
       ]
     },
     {
+      "provider": "cursor",
+      "provider_cli_binary": "cursor-agent",
+      "provider_cli_env": "LONGHOUSE_CURSOR_BIN",
+      "requires_longhouse_cli": true,
+      "managed_transport": "cursor_stream_json",
+      "control_plane": "cursor_stream_json",
+      "control_plane_aliases": [],
+      "launch_local": true,
+      "launch_remote": false,
+      "run_once": true,
+      "reattach": false,
+      "send_input": false,
+      "interrupt": true,
+      "steer_active_turn": false,
+      "answer_pause": false,
+      "terminate": true,
+      "tail_output": true,
+      "runtime_phase": true,
+      "transcript_binding": true,
+      "can_resume": true,
+      "operation_evidence": {
+        "launch_local": {
+          "level": "live_no_token",
+          "source": "longhouse cursor wrapper launches stock cursor-agent --print --output-format stream-json and captures session_id from the system init event",
+          "next": "promote with live-token managed cursor transcript canary"
+        },
+        "launch_remote": {
+          "level": "none",
+          "source": "unsupported until a Runner-backed cursor launch path is designed"
+        },
+        "run_once": {
+          "level": "hermetic",
+          "source": "cursor_stream parser tests against recorded stream-json fixtures",
+          "next": "promote with live one-shot transcript canary"
+        },
+        "reattach": {
+          "level": "none",
+          "source": "unsupported: cursor-agent --print has no attach-to-live-process surface; --resume starts a new one-shot turn, not a reattach"
+        },
+        "send_input": {
+          "level": "none",
+          "source": "unsupported mid-turn: --print one-shot has no stdin injection. Follow-up turns use can_resume (--resume <chatId> <prompt>), not send_input"
+        },
+        "interrupt": {
+          "level": "hermetic",
+          "source": "longhouse cursor forwards SIGINT to the cursor-agent child process group",
+          "next": "promote with live interrupt transcript canary"
+        },
+        "steer_active_turn": {
+          "level": "none",
+          "source": "unsupported until Cursor exposes a mid-turn injection API"
+        },
+        "answer_pause": {
+          "level": "none",
+          "source": "unsupported until Cursor exposes pause-answer semantics"
+        },
+        "terminate": {
+          "level": "hermetic",
+          "source": "longhouse cursor terminates the child process group on exit/SIGTERM"
+        },
+        "tail_output": {
+          "level": "hermetic",
+          "source": "cursor_stream parser consumes stream-json stdout with real per-event timestamp_ms",
+          "next": "promote with live transcript assertion"
+        },
+        "runtime_phase": {
+          "level": "hermetic",
+          "source": "stream-json assistant/tool_call events carry real timestamp_ms / startedAtMs / completedAtMs",
+          "next": "prove freshness in live active-turn canary"
+        },
+        "transcript_binding": {
+          "level": "hermetic",
+          "source": "cursor_stream parser binds tool_call started/completed by toolCallId and session_id",
+          "next": "promote with live transcript binding assertion"
+        }
+      },
+      "machine_control_supports": [
+        "cursor.interrupt",
+        "cursor.terminate",
+        "cursor.continue",
+        "cursor.run_once"
+      ]
+    },
+    {
       "provider": "antigravity",
       "provider_cli_binary": "agy",
       "provider_cli_env": "LONGHOUSE_ANTIGRAVITY_BIN",
