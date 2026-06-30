@@ -259,6 +259,49 @@ Phase 2C does not replace `longhouse doctor`, `longhouse machine repair`, or
 `longhouse connect --install`. The `doctor-repair` command plan remains
 `planned` until a later phase ports the write-capable install and repair flow.
 
+## Phase 2D Native Existing-Service Repair
+
+Phase 2D adds the first write-capable native repair action:
+
+```text
+longhouse-engine device repair [--json] [--dry-run] [--state-root <path>]
+```
+
+This command is intentionally narrow. It can restart an existing configured
+Machine Agent service when native state proves that the command is touching the
+same Longhouse install:
+
+- macOS: `launchctl kickstart -k gui/$UID/com.longhouse.shipper`
+- Linux: `systemctl --user restart longhouse-shipper`
+
+The command reads the same fast engine status and canonical machine state as
+`repair-plan`, then inspects the existing launchd plist or systemd user unit.
+When `--state-root` is provided, the service file must declare a matching
+`LONGHOUSE_HOME`; otherwise native repair refuses to run. Machine state output
+continues to report only boolean completeness and path/error metadata. Runtime
+URL, machine name, device token, and token-like values are not echoed.
+
+The JSON contract includes:
+
+- `schema_version`
+- `collection_tier: native_fast_write`
+- `dry_run`
+- `state`: `completed`, `dry_run_planned`, `failed`,
+  `rejected_connect_install`, `rejected_no_service`,
+  `rejected_service_mismatch`, or `rejected_unsupported_platform`
+- `headline`
+- `actions` with restart command/status/error metadata
+- `machine_state`
+- `service` path/existence/platform and `LONGHOUSE_HOME` match metadata
+- `before_health`
+- `after_health` only after an attempted successful restart
+- `notes`
+
+Phase 2D does not create or rewrite service files, install hooks, regenerate
+Desktop App artifacts, replay backlog, rotate tokens, write machine state, or
+kill provider/engine processes directly. Those remain later repair/install
+parity work under the `doctor-repair` command group.
+
 ## Success Criteria
 
 - The repo has a reviewed Phase 2 spec that chooses the native owner and shim
@@ -272,6 +315,12 @@ Phase 2C does not replace `longhouse doctor`, `longhouse machine repair`, or
   read-only native repair recommendations from engine status and machine state
   without invoking Python, reading tokens, writing files, or spawning repair
   subprocesses.
+- `longhouse-engine device repair [--json] [--dry-run] [--state-root <path>]`
+  can restart only an existing configured launchd/systemd Machine Agent service
+  when service `LONGHOUSE_HOME` matches the target state root.
+- Native repair rejects incomplete machine state, missing service files,
+  mismatched/ambiguous service homes, and unsupported service managers without
+  attempting fallback process killing or artifact regeneration.
 - `config/native_device_entrypoints.json` names the native target for every
   normal device command category from the Phase 1 inventory.
 - `make validate-native-device-entrypoints` passes and is included in
@@ -284,6 +333,10 @@ Phase 2C does not replace `longhouse doctor`, `longhouse machine repair`, or
 - Phase 2C repair-plan tests cover configured/no-op, configured repair,
   unconfigured connect-install, transport-only inspection, corrupt state, and
   alternate state-root inputs.
+- Phase 2D repair tests cover dry-run, successful restart, restart failure,
+  macOS launchd service matching, Linux systemd service matching, missing
+  service, unconfigured machine state, service home mismatch, service home
+  ambiguity, unsupported platform, and no secret echo.
 - Provider launch, repair, provider proof, and rich local-health/menu-bar
   behavior remain planned until their implementation phases.
 

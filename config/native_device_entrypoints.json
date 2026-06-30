@@ -90,7 +90,7 @@
       "provider_binary_ownership": "not_applicable",
       "token_policy": "env_or_state_file",
       "cwd_policy": "not_applicable",
-      "notes": "Phase 2C adds read-only native repair recommendations via longhouse-engine device repair-plan. Full install/repair remains planned; when implemented it may read or write machine tokens, but token values must stay out of argv and logs."
+      "notes": "Phase 2C adds read-only native repair recommendations via longhouse-engine device repair-plan. Phase 2D adds a narrow write-capable native repair action that can restart only an existing configured launchd/systemd Machine Agent service after LONGHOUSE_HOME safety checks. Full install, hook regeneration, desktop artifact repair, backlog replay, and token rotation remain planned; token values must stay out of argv and logs."
     },
     {
       "id": "provider-live-proof",
