@@ -30,6 +30,7 @@ class ManagedSessionTransport(str, Enum):
     ANTIGRAVITY_PROCESS = "antigravity_process"
     CURSOR_EXEC = "cursor_exec"
     CURSOR_ACP = "cursor_acp"
+    CURSOR_HELM = "cursor_helm"
 
     @staticmethod
     def for_provider(

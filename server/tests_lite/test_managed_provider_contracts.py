@@ -106,6 +106,7 @@ def test_provider_identity_contracts_are_manifest_backed():
             "antigravity_hook_inbox",
             "cursor_acp",
             "cursor_exec",
+            "cursor_helm",
         }
     )
 

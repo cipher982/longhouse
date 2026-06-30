@@ -43,7 +43,7 @@ _MANAGED_LOCAL_NAME_MAX = 64
 # born ``attached`` with a fresh health stamp — there is no later signal to flip
 # them live, and the read-time freshness clamp still degrades them after the
 # lease TTL if no further evidence arrives.
-_HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex", "opencode"})
+_HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex", "opencode", "cursor"})
 
 
 class ManagedLocalLaunchError(RuntimeError):

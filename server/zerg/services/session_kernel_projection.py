@@ -26,6 +26,7 @@ _DIRECT_MACHINE_CONTROL_PLANES = frozenset(
         "antigravity_process",
         "cursor_acp",
         "cursor_exec",
+        "cursor_helm",
     }
 )
 

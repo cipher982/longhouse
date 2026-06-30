@@ -306,16 +306,23 @@ providers:
   provider_cli_binary: cursor-agent
   provider_cli_env: LONGHOUSE_CURSOR_BIN
   requires_longhouse_cli: false
-  managed_transport: cursor_acp
-  control_plane: cursor_acp
+  # cursor_helm is the LIVE control plane (interactive TUI + remote steer via
+  # PTY pass-through + per-session Unix socket; launcher owns the PTY master and
+  # cursor-agent child, engine forwards send/interrupt/terminate over the
+  # socket, observed via a heartbeat lease). cursor_acp remains the one-shot /
+  # Console control plane (headless ACP over stdio) and is selected explicitly
+  # by ONE_SHOT_CONTROL_PLANE_BY_PROVIDER; cursor_exec is a legacy alias.
+  managed_transport: cursor_helm
+  control_plane: cursor_helm
   control_plane_aliases:
+  - cursor_acp
   - cursor_exec
-  launch_local: false
+  launch_local: true
   launch_remote: true
   run_once: true
   reattach: false
-  send_input: false
-  interrupt: false
+  send_input: true
+  interrupt: true
   steer_active_turn: false
   answer_pause: false
   terminate: true
@@ -325,11 +332,14 @@ providers:
   can_resume: true
   operation_evidence:
     launch_local:
-      level: none
-      source: 'unsupported yet: Helm (invisible interactive TUI + remote steer) for Cursor
-        is planned via direct TTY injection (text -> Escape -> Enter, no tmux layer;
-        see claude-code#15553 / #52812). Not shipped. Do not advertise cursor.launch
-        until the Helm launcher + engine TTY-inject path land.'
+      level: hermetic
+      source: 'longhouse cursor launcher: pty.fork pass-through of cursor-agent (pristine
+        TUI, no tmux/emulation) + per-session Unix socket + state file scanned by the
+        engine into a managed-session lease. Live send validated: text -> 0.3s -> Escape
+        -> 0.1s -> Enter submits in cursor-agent (claude-code#15553 Ink workaround);
+        SIGINT exits cursor-agent (#52812). Engine cursor_helm_control forwards over
+        the socket. See docs/specs/cursor-transcript-format.md Helm section.'
+      next: promote to live_no_token with an interactive send/interrupt canary driven from web/iOS
     launch_remote:
       level: hermetic
       source: engine cursor_acp spawns `cursor-agent acp`, performs ACP initialize/session/new/session/prompt
@@ -346,14 +356,16 @@ providers:
       source: 'unsupported: ACP is a headless stdio process per turn; there is no attach-to-live-process
         surface. Resume is a new session/load + session/prompt turn, not a reattach.'
     send_input:
-      level: none
-      source: 'unsupported mid-turn: ACP has no mid-turn injection. Follow-up turns use
-        can_resume (session/load + session/prompt on the same ACP sessionId), not send_input'
+      level: hermetic
+      source: 'cursor_helm: engine forwards session.send_text to the launcher Unix socket;
+        launcher writes text -> Escape -> Enter to the PTY master (Ink submit workaround).
+        Validated live in the PTY pass-through spike (cursor-agent replied "ready").'
+      next: promote with live interactive send canary from web/iOS
     interrupt:
-      level: none
-      source: 'unsupported via ACP: cursor-agent returns "Method not found" for session/cancel.
-        Use terminate (SIGINT/SIGKILL on the pid) instead. Graceful mid-turn interrupt
-        is not available until Cursor ships session/cancel.'
+      level: hermetic
+      source: 'cursor_helm: engine forwards session.interrupt; launcher sends SIGINT to
+        the cursor-agent child pid (SIGINT exits cursor-agent, #52812).'
+      next: promote with live interrupt canary
     steer_active_turn:
       level: none
       source: unsupported until Cursor exposes a mid-turn injection API
@@ -362,18 +374,21 @@ providers:
       source: unsupported until Cursor exposes pause-answer semantics
     terminate:
       level: hermetic
-      source: cursor_acp owns the cursor-agent pid with kill_on_drop; SIGINT exits cursor-agent
-        (verified on macOS). A session-id pid-registry terminate command is a follow-up;
-        until then terminate is cleanup-on-drop, not a dispatched cursor.terminate command.
-      next: promote with live terminate canary once pid-registry terminate is wired
+      source: 'cursor_helm: engine forwards session.terminate; launcher sends SIGKILL to
+        the cursor-agent child pid, unlinks socket/state, exits. cursor_acp also owns the
+        pid with kill_on_drop for the one-shot path.'
+      next: promote with live terminate canary
     tail_output:
       level: hermetic
       source: cursor_acp consumes ACP session/update notifications (agent_message_chunk,
-        tool calls) as the durable transcript stream
+        tool calls) as the durable transcript stream; cursor_helm relies on engine ingest
+        of cursor-agent store.db / transcript files for the interactive path
       next: promote with live transcript assertion
     runtime_phase:
       level: hermetic
       source: ACP session/update notifications drive phase/progress/terminal runtime signals
+        for the one-shot path; cursor_helm runtime signals derive from transcript ingest
+        + lease liveness
       next: prove freshness in live one-shot canary
     transcript_binding:
       level: hermetic
@@ -383,3 +398,6 @@ providers:
   machine_control_supports:
   - cursor.run_once
   - cursor.resume_run_once
+  - cursor.send
+  - cursor.interrupt
+  - cursor.terminate
