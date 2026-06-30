@@ -235,13 +235,13 @@ synthesis could be avoided or anchored. Findings:
    14.3h session is idle-heavy and uniform spread is badly wrong. Treat as
    a future enhancement, not a launch dependency: separate DB, fuzzy join,
    and only helps code-heavy sessions.
-4. **Real timestamps for live sessions come from the `stream-json` stream,
-   not the filesystem.** When Longhouse launches a managed Cursor session via
-   `--print --output-format stream-json`, capture `timestamp_ms` from each
-   `assistant`/`tool_call` event and derive result time from `duration_ms`.
-   This is the clean path and another point in favor of the managed wrapper
-   (Phase 4). For unmanaged interactive sessions, tailing `store.db-wal` gives
-   coarse flush-delayed observation time — a fallback only. Historical backfill
+4. **The only real per-event clock is `stream-json`, which is headless-only.**
+   `cursor-agent --print --output-format stream-json` emits `timestamp_ms` on
+   `assistant`/`tool_call` events and `duration_ms` on `result` events — but
+   `--print` is one-shot/headless with no interactive TUI, so it cannot serve
+   the managed interactive `longhouse cursor` contract (see Phase 4). For
+   unmanaged interactive sessions, tailing `store.db-wal` gives coarse
+   flush-delayed observation time — a fallback only. Historical backfill
    remains synthetic.
 
 Longhouse must flag cursor sessions as **reduced timestamp fidelity** on the
@@ -312,10 +312,16 @@ This is safe because the ingest path (`/api/agents/ingest` →
 `AgentsStore.ingest_session`) does **not** call
 `require_contract_for_provider`; that function is only used by managed-launch
 paths (`managed_local_launcher`, `remote_session_launch`), which an
-unmanaged-only cursor ingest would never enter. Cursor is now registered in
-the managed provider contracts (transport `cursor_stream_json`) because the
-`longhouse cursor` managed wrapper is implemented — see "Phase 4" below.
-Unmanaged `store.db` ingest still works independently of the contract entry.
+unmanaged-only cursor ingest never enters. Cursor is **not** registered in
+the managed provider contracts because no managed interactive control path
+is implemented yet: a `longhouse cursor` managed wrapper must, like
+claude/codex/opencode, run the user's normal interactive cursor-agent TUI
+invisibly while Longhouse owns a background remote control channel. Whether
+cursor-agent exposes a steerable interactive control surface (an app-server
+/ serve / socket / channel akin to Codex `app-server` or OpenCode `serve`)
+is unconfirmed — that is the gating question before any managed contract
+entry is added. Unmanaged `store.db` ingest works independently of any
+contract entry.
 
 `SessionIngest.provider` already accepts `"cursor"` (it is a free-form
 string field), so ingest needs no schema change.
@@ -351,37 +357,31 @@ Three layers, landed explicitly:
   shipped half-tested. Pick it up in a focused engine session; until then,
   `longhouse cursor import` is the path to timeline presence.
 
-## Phase 4 — Managed control (implemented)
+## Phase 4 — Managed interactive control (not implemented)
 
-`longhouse cursor <prompt>` is the managed wrapper. It launches stock
-`cursor-agent --print --output-format stream-json --yolo --trust` as a child
-process group, streams stdout to the terminal, and parses each event through
-`server/zerg/services/cursor_stream.py` (`CursorStreamBuilder`) into
-`EventIngest` rows with **real per-event timestamps** (`timestamp_ms` on
-assistant/tool_call, `startedAtMs`/`completedAtMs` on tool calls). The
-resulting `SessionIngest` is POSTed to `/api/agents/ingest`
-(`execution_home=managed_local`). Re-posting is idempotent via event-hash
-dedup, so partial-then-final posting is safe.
+The product contract for every `longhouse <provider>` is: run the provider's
+normal interactive experience invisibly to the user (their TUI, untouched)
+while Longhouse owns a background remote control channel for send / interrupt
+/ steer from browser/iOS — the pattern Claude (native channels), Codex
+(`app-server` + `--remote` TUI attach), and OpenCode (`serve` + `attach`)
+follow. Cursor must match that contract or not be a managed provider at all.
 
-Capability contract (registered in `schemas/managed_providers.yml` /
-`managed_provider_contracts.json`, transport
-`ManagedSessionTransport.CURSOR_STREAM_JSON`):
+A headless `--print stream-json` one-shot wrapper was built and then
+**removed** (commit history) because it is the wrong model: it gives no
+interactive TUI, so it is not invisible-to-the-user and not the daily-driver
+path. It is not a substitute for the managed interactive wrapper and must
+not be shipped as `longhouse cursor`.
 
-- `launch_local=true`, `launch_remote=false` (no Runner path yet)
-- `run_once=true`, `can_resume=true` — `--resume <chatId> <prompt>` is the
-  honest send/continue path (turn-batched, not mid-turn injection)
-- `interrupt=true` — SIGINT forwarded to the child process group
-- `terminate=true` — process group terminated on exit/SIGTERM
-- `tail_output=true`, `runtime_phase=true`, `transcript_binding=true`
-- `send_input=false`, `reattach=false`, `steer_active_turn=false`,
-  `answer_pause=false` — explicit unsupported gaps. `--print` has no
-  stdin-injection or attach-to-live-process surface; steer needs a mid-turn
-  API Cursor does not expose. Recorded honestly, not faked.
+**Gating question (unconfirmed):** does `cursor-agent` expose a steerable
+interactive control surface — an app-server / `serve` / socket / MCP control
+channel / `--remote`-style attach — that a TUI can attach to while
+Longhouse fronts the control path, the way Codex and OpenCode do? If yes,
+build the managed interactive wrapper on that surface (user gets the normal
+TUI; Longhouse owns the control channel; ingest ships live with whatever
+timing that surface provides). If no, Cursor cannot match the managed
+control story and should ship as unmanaged ingest only until Cursor exposes
+such a surface — do not fake a one-shot wrapper as managed control.
 
-Machine-control supports: `cursor.interrupt`, `cursor.terminate`,
-`cursor.continue`, `cursor.run_once`. The binary is user-owned (resolved from
-PATH; override via `LONGHOUSE_CURSOR_BIN` / `--cursor-bin`) — Longhouse owns
-the wrapper/control path, not the provider binary.
-
-Evidence levels start at `hermetic`/`live_no_token` and promote via scheduled
-canaries, matching the other providers' promotion model.
+Mid-turn steer is likely an `unsupported_gap` regardless (Cursor exposes no
+mid-turn injection surface today); record it honestly if/when the managed
+wrapper is built.
