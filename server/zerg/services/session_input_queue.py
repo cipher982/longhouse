@@ -1,12 +1,13 @@
 """Managed session input queue wake/readiness service.
 
-Phase 1+2 centralizes the drain decision without changing the public
-SessionInput lifecycle. Delivery attempts are modeled in the DB in this phase,
-but the durable attempt lease becomes authoritative in the next phase.
+Centralizes managed input drain decisions without changing the public
+SessionInput lifecycle. Durable delivery attempts are the cross-process
+authority for injection; the in-memory lock is only the local provider guard.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -32,6 +33,7 @@ from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_inputs import ACTIVE_DELIVERY_ATTEMPT_STATUSES
 from zerg.services.session_inputs import ATTEMPT_STATUS_ACQUIRED
 from zerg.services.session_inputs import ATTEMPT_STATUS_SUBMITTED
+from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import claim_next_queued
 from zerg.services.session_inputs import expire_delivery_attempts
@@ -58,6 +60,8 @@ TRANSPORT_LEASE_SECS = 60
 TURN_LEASE_SECS = 300
 MAX_DELIVERY_ATTEMPTS = 5
 RETRY_BACKOFF_SECS = (5, 30, 120, 300)
+INPUT_QUEUE_RECOVERY_INTERVAL_SECS = 15.0
+INPUT_QUEUE_RECOVERY_BATCH_SIZE = 100
 
 
 @dataclass(frozen=True)
@@ -71,6 +75,12 @@ class QueueWakeResult:
     dispatched: bool = False
     input_id: int | None = None
     reason: str = "noop"
+
+
+@dataclass(frozen=True)
+class QueueRecoveryResult:
+    session_ids: tuple[UUID, ...] = ()
+    wake_results: tuple[QueueWakeResult, ...] = ()
 
 
 def _session_closed_for_input(db: Session, session_id: UUID) -> bool:
@@ -136,6 +146,163 @@ def _has_unexpired_active_attempt(db: Session, session_id: UUID, *, now: datetim
     )
 
 
+def _oldest_expired_pre_accept_attempt_age_secs(db: Session, *, session_id: UUID, now: datetime) -> float | None:
+    created_at = (
+        db.query(SessionInputDeliveryAttempt.created_at)
+        .filter(
+            SessionInputDeliveryAttempt.session_id == session_id,
+            SessionInputDeliveryAttempt.status.in_((ATTEMPT_STATUS_ACQUIRED, ATTEMPT_STATUS_SUBMITTED)),
+            SessionInputDeliveryAttempt.lease_expires_at <= now,
+        )
+        .order_by(SessionInputDeliveryAttempt.created_at.asc())
+        .limit(1)
+        .scalar()
+    )
+    if created_at is None:
+        return None
+    return _age_secs(created_at, now=now)
+
+
+def _queued_age_secs(row: SessionInput, *, now: datetime) -> float | None:
+    created_at = getattr(row, "created_at", None)
+    if created_at is None:
+        return None
+    return _age_secs(created_at, now=now)
+
+
+def _age_secs(started_at: datetime, *, now: datetime) -> float:
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    return max(0.0, (now - started_at).total_seconds())
+
+
+def _append_unique_session_ids(target: list[UUID], rows: list[tuple[UUID]], *, limit: int) -> None:
+    seen = set(target)
+    for row in rows:
+        session_id = row[0]
+        if session_id in seen:
+            continue
+        target.append(session_id)
+        seen.add(session_id)
+        if len(target) >= limit:
+            return
+
+
+def find_sessions_needing_input_queue_wake(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    limit: int = INPUT_QUEUE_RECOVERY_BATCH_SIZE,
+) -> list[UUID]:
+    """Return sessions whose queue state needs the shared wake policy."""
+    effective_now = now or datetime.now(timezone.utc)
+    remaining = max(1, int(limit))
+    session_ids: list[UUID] = []
+
+    queued_rows = (
+        db.query(SessionInput.session_id)
+        .filter(
+            SessionInput.status == INPUT_STATUS_QUEUED,
+            or_(SessionInput.next_attempt_at.is_(None), SessionInput.next_attempt_at <= effective_now),
+        )
+        .distinct()
+        .limit(remaining)
+        .all()
+    )
+    _append_unique_session_ids(session_ids, queued_rows, limit=remaining)
+    if len(session_ids) >= remaining:
+        return session_ids
+
+    expired_attempt_rows = (
+        db.query(SessionInputDeliveryAttempt.session_id)
+        .filter(
+            SessionInputDeliveryAttempt.status.in_((ATTEMPT_STATUS_ACQUIRED, ATTEMPT_STATUS_SUBMITTED)),
+            SessionInputDeliveryAttempt.lease_expires_at <= effective_now,
+        )
+        .distinct()
+        .limit(remaining - len(session_ids))
+        .all()
+    )
+    _append_unique_session_ids(session_ids, expired_attempt_rows, limit=remaining)
+    if len(session_ids) >= remaining:
+        return session_ids
+
+    active_attempt_input_ids = (
+        db.query(SessionInputDeliveryAttempt.session_input_id)
+        .filter(
+            SessionInputDeliveryAttempt.status.in_(ACTIVE_DELIVERY_ATTEMPT_STATUSES),
+            SessionInputDeliveryAttempt.lease_expires_at > effective_now,
+        )
+        .subquery()
+    )
+    delivering_rows = (
+        db.query(SessionInput.session_id)
+        .filter(
+            SessionInput.status == INPUT_STATUS_DELIVERING,
+            ~SessionInput.id.in_(active_attempt_input_ids),
+        )
+        .distinct()
+        .limit(remaining - len(session_ids))
+        .all()
+    )
+    _append_unique_session_ids(session_ids, delivering_rows, limit=remaining)
+    return session_ids
+
+
+async def recover_session_input_queues(
+    *,
+    db_bind,
+    reason: str = "periodic_recovery",
+    limit: int = INPUT_QUEUE_RECOVERY_BATCH_SIZE,
+) -> QueueRecoveryResult:
+    """Run one bounded recovery tick using the same wake path as live signals."""
+    SessionLocal = sessionmaker(bind=db_bind, expire_on_commit=False)
+    db = SessionLocal()
+    try:
+        session_ids = tuple(find_sessions_needing_input_queue_wake(db, limit=limit))
+    finally:
+        db.close()
+
+    if session_ids:
+        logger.info("Input queue recovery waking %d sessions after %s", len(session_ids), reason)
+
+    results: list[QueueWakeResult] = []
+    for session_id in session_ids:
+        try:
+            result = await wake_session_input_queue(
+                db_bind=db_bind,
+                session_id=session_id,
+                reason=reason,
+            )
+            results.append(result)
+        except Exception:
+            logger.exception("Input queue recovery wake failed for session %s after %s", session_id, reason)
+    return QueueRecoveryResult(session_ids=session_ids, wake_results=tuple(results))
+
+
+async def run_session_input_queue_recovery_loop(
+    *,
+    db_bind,
+    interval_secs: float = INPUT_QUEUE_RECOVERY_INTERVAL_SECS,
+    limit: int = INPUT_QUEUE_RECOVERY_BATCH_SIZE,
+) -> None:
+    """Periodic crash/missed-signal safety net for managed input queues."""
+    while True:
+        try:
+            await asyncio.sleep(interval_secs)
+            await recover_session_input_queues(
+                db_bind=db_bind,
+                reason="periodic_recovery",
+                limit=limit,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Input queue recovery tick failed")
+
+
 def evaluate_session_input_queue_readiness(
     db: Session,
     *,
@@ -180,8 +347,29 @@ async def wake_session_input_queue(
         # Accepted attempts belong to an active provider turn; the terminal
         # watcher marks them completed. Reap only pre-accept attempts here so a
         # long healthy turn is not converted into a retry.
-        expire_delivery_attempts(db, session_id=session_id, now=now, statuses=(ATTEMPT_STATUS_ACQUIRED, ATTEMPT_STATUS_SUBMITTED))
-        requeue_delivering_without_active_attempt(db, session_id=session_id, now=now)
+        expired_attempt_age_secs = _oldest_expired_pre_accept_attempt_age_secs(db, session_id=session_id, now=now)
+        expired_attempts = expire_delivery_attempts(
+            db,
+            session_id=session_id,
+            now=now,
+            statuses=(ATTEMPT_STATUS_ACQUIRED, ATTEMPT_STATUS_SUBMITTED),
+        )
+        if expired_attempts:
+            logger.info(
+                "Queue wake expired %d pre-accept attempts for session %s after %s (oldest_attempt_age_secs=%s)",
+                expired_attempts,
+                session_id,
+                reason,
+                f"{expired_attempt_age_secs:.1f}" if expired_attempt_age_secs is not None else "unknown",
+            )
+        requeued = requeue_delivering_without_active_attempt(db, session_id=session_id, now=now)
+        if requeued:
+            logger.info(
+                "Queue wake requeued %d delivering inputs without live attempts for session %s after %s",
+                requeued,
+                session_id,
+                reason,
+            )
 
         queued_exists = (
             db.query(SessionInput)
@@ -219,7 +407,13 @@ async def wake_session_input_queue(
             owner_id=queued_exists.owner_id,
         )
         if not readiness.ready:
-            logger.info("Queue wake deferred for session %s after %s: %s", session_id, reason, readiness.reason)
+            logger.info(
+                "Queue wake deferred for session %s after %s: %s (queued_age_secs=%s)",
+                session_id,
+                reason,
+                readiness.reason,
+                f"{_queued_age_secs(queued_exists, now=now):.1f}" if _queued_age_secs(queued_exists, now=now) is not None else "unknown",
+            )
             return QueueWakeResult(reason=readiness.reason)
 
         lock_scope = lock_scope_id or session_lock_scope_id(source_session.id)
@@ -258,7 +452,13 @@ async def wake_session_input_queue(
             drain_request_id=drain_request_id,
         )
         if result.dispatched:
-            logger.info("Queue wake drained SessionInput %s for session %s after %s", claimed.id, session_id, reason)
+            logger.info(
+                "Queue wake drained SessionInput %s for session %s after %s (queued_age_secs=%s)",
+                claimed.id,
+                session_id,
+                reason,
+                f"{_queued_age_secs(claimed, now=now):.1f}" if _queued_age_secs(claimed, now=now) is not None else "unknown",
+            )
         return result
     finally:
         db.close()

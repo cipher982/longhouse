@@ -30,6 +30,7 @@ from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionInputAttachment
 from zerg.models.agents import SessionInputDeliveryAttempt
 from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
@@ -1421,11 +1422,204 @@ def test_expired_steer_attempt_is_not_silently_requeued(tmp_path):
     with session_local() as db:
         row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
         attempt = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_input_id == input_id).one()
-        assert row.status == INPUT_STATUS_DELIVERING
+        assert row.status == INPUT_STATUS_FAILED
+        assert row.last_error == "steer delivery interrupted before accepted attempt"
         assert row.delivery_request_id == "expired-steer-attempt"
         assert attempt.status == "expired"
     assert result.dispatched is False
     assert result.reason == "no_queued_input"
+
+
+def test_expired_attachment_attempt_is_failed_not_requeued(tmp_path):
+    from zerg.services.session_input_queue import wake_session_input_queue
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="stale attachment",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_DELIVERING,
+            client_request_id="ios-stale-attachment-1",
+            delivery_request_id="expired-attachment-attempt",
+        )
+        db.add(
+            SessionInputAttachment(
+                session_input_id=int(row.id),
+                session_id=session_id,
+                mime_type="image/png",
+                byte_size=12,
+                sha256="a" * 64,
+                blob_path="/tmp/missing-attachment.png",
+            )
+        )
+        db.add(
+            SessionInputDeliveryAttempt(
+                session_input_id=int(row.id),
+                session_id=session_id,
+                thread_id=row.thread_id,
+                owner_id=user_id,
+                request_id="expired-attachment-attempt",
+                attempt_number=1,
+                status="submitted",
+                lease_owner="expired",
+                lease_expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+            )
+        )
+        db.commit()
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+
+    result = asyncio.run(
+        wake_session_input_queue(
+            db_bind=db_bind,
+            session_id=session_id,
+            reason="test_expired_attachment",
+            lock_scope_id=str(session_id),
+        )
+    )
+
+    with session_local() as db:
+        row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+        attempt = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_input_id == input_id).one()
+        assert row.status == INPUT_STATUS_FAILED
+        assert row.last_error == "attachment delivery interrupted before accepted attempt"
+        assert row.delivery_request_id == "expired-attachment-attempt"
+        assert attempt.status == "expired"
+    assert result.dispatched is False
+    assert result.reason == "no_queued_input"
+
+
+def test_input_queue_recovery_selector_finds_only_ready_recovery_sessions(tmp_path):
+    from zerg.services.session_input_queue import find_sessions_needing_input_queue_wake
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    queued_session_id, user_id = _seed_live_session(session_local)
+    future_retry_session_id, _ = _seed_live_session(session_local)
+    expired_attempt_session_id, _ = _seed_live_session(session_local)
+    delivering_session_id, _ = _seed_live_session(session_local)
+    delivered_session_id, _ = _seed_live_session(session_local)
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        create_session_input(
+            db,
+            session_id=queued_session_id,
+            text="eligible queued",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="recovery-queued",
+        )
+        future_retry = create_session_input(
+            db,
+            session_id=future_retry_session_id,
+            text="wait until later",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="recovery-future",
+        )
+        future_retry.next_attempt_at = now + timedelta(minutes=5)
+        expired_row = create_session_input(
+            db,
+            session_id=expired_attempt_session_id,
+            text="expired attempt",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_DELIVERING,
+            client_request_id="recovery-expired",
+            delivery_request_id="recovery-expired-attempt",
+        )
+        db.add(
+            SessionInputDeliveryAttempt(
+                session_input_id=int(expired_row.id),
+                session_id=expired_attempt_session_id,
+                thread_id=expired_row.thread_id,
+                owner_id=user_id,
+                request_id="recovery-expired-attempt",
+                attempt_number=1,
+                status="acquired",
+                lease_owner="expired",
+                lease_expires_at=now - timedelta(seconds=1),
+            )
+        )
+        create_session_input(
+            db,
+            session_id=delivering_session_id,
+            text="no active attempt",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_DELIVERING,
+            client_request_id="recovery-delivering",
+            delivery_request_id="missing-attempt",
+        )
+        create_session_input(
+            db,
+            session_id=delivered_session_id,
+            text="done",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_DELIVERED,
+            client_request_id="recovery-delivered",
+        )
+        db.commit()
+
+        selected = find_sessions_needing_input_queue_wake(db, now=now)
+
+    assert {str(session_id) for session_id in selected} == {
+        str(queued_session_id),
+        str(expired_attempt_session_id),
+        str(delivering_session_id),
+    }
+
+
+def test_input_queue_recovery_tick_drains_eligible_queued_input(monkeypatch, tmp_path):
+    from zerg.services.session_input_queue import recover_session_input_queues
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="recover me",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="recovery-drain-1",
+        )
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+
+    try:
+        result = asyncio.run(
+            recover_session_input_queues(
+                db_bind=db_bind,
+                reason="test_recovery_tick",
+            )
+        )
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+            attempts = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_input_id == input_id).all()
+            assert row.status == INPUT_STATUS_DELIVERED
+            assert len(attempts) == 1
+            assert attempts[0].status == "accepted"
+        assert result.session_ids == (session_id,)
+        assert len(result.wake_results) == 1
+        assert result.wake_results[0].dispatched is True
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
 
 
 def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch, tmp_path):

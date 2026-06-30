@@ -148,42 +148,32 @@ async def lifespan(app: FastAPI):
             raise
         logger.info("Database tables initialized")
 
-        # SessionInput reconciliation: any row stuck in `delivering` at boot
-        # means a prior process died mid-dispatch. Rewind to queued, then
-        # best-effort drain idle sessions so recovered queued rows don't sit
-        # indefinitely waiting for the next terminal release.
+        # SessionInput reconciliation: run one bounded queue recovery tick at
+        # boot so startup, periodic recovery, and missed-signal recovery share
+        # the same policy.
         if not _settings.testing:
             try:
                 with _timed_startup_step("session_input_reconciliation"):
-                    from zerg.database import get_session_factory
-                    from zerg.services.session_inputs import reconcile_startup_session_inputs
-
-                    session_factory = get_session_factory()
-                    with session_factory() as db:
-                        queued_session_ids = reconcile_startup_session_inputs(db)
-
-                if queued_session_ids:
                     from zerg.database import default_engine
-                    from zerg.services.session_input_queue import wake_session_input_queue
+                    from zerg.services.session_input_queue import recover_session_input_queues
 
-                    async def _boot_drain_all() -> None:
-                        for sid in queued_session_ids:
-                            try:
-                                await wake_session_input_queue(
-                                    db_bind=default_engine,
-                                    session_id=sid,
-                                    reason="startup_reconciliation",
-                                    lock_scope_id=str(sid),
+                    async def _boot_recover_session_inputs() -> None:
+                        try:
+                            result = await recover_session_input_queues(
+                                db_bind=default_engine,
+                                reason="startup_reconciliation",
+                            )
+                            if result.session_ids:
+                                logger.info(
+                                    "SessionInput startup recovery considered %d sessions",
+                                    len(result.session_ids),
                                 )
-                            except Exception:
-                                logger.exception(
-                                    "Boot drain failed for session %s (non-fatal)",
-                                    sid,
-                                )
+                        except Exception:
+                            logger.exception(
+                                "SessionInput startup recovery failed (non-fatal)",
+                            )
 
-                    import asyncio as _asyncio
-
-                    _asyncio.create_task(_boot_drain_all())
+                    asyncio.create_task(_boot_recover_session_inputs())
             except Exception as exc:
                 logger.warning(f"SessionInput reconciliation failed (non-fatal): {exc}")
         try:
@@ -294,6 +284,18 @@ async def lifespan(app: FastAPI):
             except Exception as e:  # noqa: BLE001
                 failed.append(f"watch_renewal ({e})")
                 logger.exception("Failed to start watch_renewal_service")
+
+            # Managed session input queue recovery: safety net for process
+            # restarts and missed local terminal/idle wakes.
+            try:
+                from zerg.database import default_engine as _default_engine_input_queue
+                from zerg.services.session_input_queue import run_session_input_queue_recovery_loop
+
+                asyncio.create_task(run_session_input_queue_recovery_loop(db_bind=_default_engine_input_queue))
+                started.append("session_input_queue_recovery")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"session_input_queue_recovery ({e})")
+                logger.exception("Failed to start session_input_queue_recovery")
 
             # Remote launch reaper: orphan expired launch rows.
             try:

@@ -406,6 +406,12 @@ def expire_delivery_attempts(
 
 
 def requeue_delivering_without_active_attempt(db: Session, *, session_id: UUID, now: datetime | None = None) -> int:
+    """Resolve delivering rows that no longer have a live durable attempt.
+
+    Text-only auto/queue rows are safe to retry. Steer and attachments are
+    intentionally terminal here: once their attempt is gone, replay would be a
+    silent semantic fallback or risk dropping payload bytes.
+    """
     effective_now = now or datetime.now(timezone.utc)
     active_attempt_input_ids = (
         db.query(SessionInputDeliveryAttempt.session_input_id)
@@ -416,6 +422,7 @@ def requeue_delivering_without_active_attempt(db: Session, *, session_id: UUID, 
         )
         .subquery()
     )
+    attached_input_ids = db.query(SessionInputAttachment.session_input_id)
     requeued = (
         db.query(SessionInput)
         .filter(
@@ -423,6 +430,7 @@ def requeue_delivering_without_active_attempt(db: Session, *, session_id: UUID, 
             SessionInput.status == INPUT_STATUS_DELIVERING,
             ~SessionInput.id.in_(active_attempt_input_ids),
             SessionInput.intent != INPUT_INTENT_STEER,
+            ~SessionInput.id.in_(attached_input_ids),
         )
         .update(
             {
@@ -433,7 +441,48 @@ def requeue_delivering_without_active_attempt(db: Session, *, session_id: UUID, 
             synchronize_session=False,
         )
     )
+    failed_with_attachments = (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.session_id == session_id,
+            SessionInput.status == INPUT_STATUS_DELIVERING,
+            ~SessionInput.id.in_(active_attempt_input_ids),
+            SessionInput.intent != INPUT_INTENT_STEER,
+            SessionInput.id.in_(attached_input_ids),
+        )
+        .update(
+            {
+                "status": INPUT_STATUS_FAILED,
+                "last_error": "attachment delivery interrupted before accepted attempt",
+                "updated_at": effective_now,
+            },
+            synchronize_session=False,
+        )
+    )
+    failed_steer = (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.session_id == session_id,
+            SessionInput.status == INPUT_STATUS_DELIVERING,
+            ~SessionInput.id.in_(active_attempt_input_ids),
+            SessionInput.intent == INPUT_INTENT_STEER,
+        )
+        .update(
+            {
+                "status": INPUT_STATUS_FAILED,
+                "last_error": "steer delivery interrupted before accepted attempt",
+                "updated_at": effective_now,
+            },
+            synchronize_session=False,
+        )
+    )
     db.commit()
+    if requeued:
+        logger.info("Requeued %d SessionInput rows without an active delivery attempt", requeued)
+    if failed_with_attachments:
+        logger.info("Failed %d attachment SessionInput rows without an active delivery attempt", failed_with_attachments)
+    if failed_steer:
+        logger.info("Failed %d steer SessionInput rows without an active delivery attempt", failed_steer)
     return int(requeued)
 
 
