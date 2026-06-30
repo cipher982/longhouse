@@ -1343,7 +1343,7 @@ fn sanitize_machine_name(value: &str) -> Option<String> {
     let mut normalized = value.split_whitespace().collect::<Vec<_>>().join("-");
     normalized = normalized
         .chars()
-        .filter(|ch| !matches!(ch, '&' | '<' | '>' | '"' | '\''))
+        .filter(|ch| !matches!(ch, '&' | '<' | '>' | '"' | '\'') && !ch.is_control())
         .collect::<String>();
     while normalized.contains("--") {
         normalized = normalized.replace("--", "-");
@@ -1727,22 +1727,22 @@ fn resolve_native_service_engine_executable(
 ) -> Result<NativeEngineExecutable, String> {
     if let Some(path) = override_path {
         let path = path.to_path_buf();
-        if path.is_file() {
+        if is_executable_file(&path) {
             return Ok(NativeEngineExecutable { path });
         }
         return Err(format!(
-            "Injected engine executable does not exist: {}",
+            "Injected engine executable does not exist or is not executable: {}",
             path.display()
         ));
     }
 
     let candidate = home.join(".local").join("bin").join("longhouse-engine");
-    if candidate.is_file() {
+    if is_executable_file(&candidate) {
         return Ok(NativeEngineExecutable { path: candidate });
     }
 
     if let Ok(current) = env::current_exe() {
-        if current.is_file()
+        if is_executable_file(&current)
             && matches!(
                 current.file_name().and_then(|value| value.to_str()),
                 Some("longhouse-engine")
@@ -1766,7 +1766,25 @@ fn find_executable_on_path(name: &str) -> Option<PathBuf> {
     let path_env = env::var_os("PATH")?;
     env::split_paths(&path_env)
         .map(|dir| dir.join(name))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| is_executable_file(candidate))
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    if !path.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        return path
+            .metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false);
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 fn default_archive_repair_mode_for_url(url: &str) -> &'static str {
@@ -3779,6 +3797,13 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
         let path = home.join(".local").join("bin").join("longhouse-engine");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&path, permissions).unwrap();
+        }
         path
     }
 
@@ -3852,6 +3877,190 @@ Environment="CLAUDE_CONFIG_DIR=/tmp/claude" "LONGHOUSE_HOME={}" "PATH=/bin"
                 assert!(execution.actions.is_empty());
             },
         );
+    }
+
+    #[test]
+    fn native_service_repair_public_rejects_scratch_longhouse_home_env() {
+        let home = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let state = home.path().join(".longhouse");
+        write_configured_machine_state(&state);
+        write_fake_engine(home.path());
+
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.path().display().to_string())),
+                ("LONGHOUSE_HOME", Some(scratch.path().display().to_string())),
+                ("CLAUDE_CONFIG_DIR", None::<String>),
+            ],
+            || {
+                let execution = collect_native_service_artifact_repair_execution_with_runner(
+                    Some(&state),
+                    true,
+                    NativeServicePlatform::Macos,
+                    home.path(),
+                    NativeServiceRepairOptions::default(),
+                    |_| panic!("scratch env rejection must not run service-manager commands"),
+                )
+                .unwrap();
+
+                assert_eq!(execution.state, "rejected_scratch_home");
+                assert!(execution.actions.is_empty());
+            },
+        );
+    }
+
+    #[test]
+    fn native_service_repair_public_rejects_scratch_claude_config_dir_env() {
+        let home = tempfile::tempdir().unwrap();
+        let scratch = tempfile::tempdir().unwrap();
+        let state = home.path().join(".longhouse");
+        write_configured_machine_state(&state);
+        write_fake_engine(home.path());
+
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.path().display().to_string())),
+                ("LONGHOUSE_HOME", None::<String>),
+                (
+                    "CLAUDE_CONFIG_DIR",
+                    Some(scratch.path().join(".claude").display().to_string()),
+                ),
+            ],
+            || {
+                let execution = collect_native_service_artifact_repair_execution_with_runner(
+                    Some(&state),
+                    true,
+                    NativeServicePlatform::Macos,
+                    home.path(),
+                    NativeServiceRepairOptions::default(),
+                    |_| panic!("scratch env rejection must not run service-manager commands"),
+                )
+                .unwrap();
+
+                assert_eq!(execution.state, "rejected_scratch_home");
+                assert!(execution.actions.is_empty());
+            },
+        );
+    }
+
+    #[test]
+    fn native_service_repair_rejects_missing_machine_state() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            true,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |_| panic!("missing machine state must not run service-manager commands"),
+        )
+        .unwrap();
+
+        assert_eq!(execution.state, "rejected_machine_state_incomplete");
+        assert!(execution.actions.is_empty());
+    }
+
+    #[test]
+    fn native_service_repair_rejects_unreadable_machine_state_json() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        let machine_path = machine_state_path(Some(state.path())).unwrap();
+        std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
+        std::fs::write(&machine_path, "{not-json").unwrap();
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            true,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |_| panic!("unreadable machine state must not run service-manager commands"),
+        )
+        .unwrap();
+
+        assert_eq!(execution.state, "rejected_machine_state_unreadable");
+        assert!(execution.actions.is_empty());
+    }
+
+    #[test]
+    fn native_service_repair_rejects_incomplete_machine_state() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let engine = write_fake_engine(home.path());
+        write_machine_state_payload(
+            state.path(),
+            json!({
+                "runtime_url": "https://demo.longhouse.test"
+            }),
+        );
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            true,
+            NativeServicePlatform::Macos,
+            home.path(),
+            service_repair_options(&engine),
+            |_| panic!("incomplete machine state must not run service-manager commands"),
+        )
+        .unwrap();
+
+        assert_eq!(execution.state, "rejected_machine_state_incomplete");
+        assert!(execution.actions.is_empty());
+    }
+
+    #[test]
+    fn native_service_repair_rejects_unsupported_platform() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        write_configured_machine_state(state.path());
+
+        let execution = collect_native_service_artifact_repair_execution_with_runner(
+            Some(state.path()),
+            true,
+            NativeServicePlatform::Unsupported,
+            home.path(),
+            NativeServiceRepairOptions {
+                allow_scratch_home: true,
+                engine_executable_override: None,
+            },
+            |_| panic!("unsupported platform must not run service-manager commands"),
+        )
+        .unwrap();
+
+        assert_eq!(execution.state, "rejected_unsupported_platform");
+        assert!(execution.actions.is_empty());
+    }
+
+    #[test]
+    fn native_service_repair_rejects_unavailable_engine_executable() {
+        let state = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let path_dir = tempfile::tempdir().unwrap();
+        write_configured_machine_state(state.path());
+        std::fs::write(path_dir.path().join("longhouse-engine"), "not executable").unwrap();
+
+        temp_env::with_var("PATH", Some(path_dir.path().display().to_string()), || {
+            let execution = collect_native_service_artifact_repair_execution_with_runner(
+                Some(state.path()),
+                true,
+                NativeServicePlatform::Macos,
+                home.path(),
+                NativeServiceRepairOptions {
+                    allow_scratch_home: true,
+                    engine_executable_override: None,
+                },
+                |_| panic!("missing engine must not run service-manager commands"),
+            )
+            .unwrap();
+
+            assert_eq!(execution.state, "rejected_engine_executable_unavailable");
+            assert!(execution.actions.is_empty());
+        });
     }
 
     #[test]
