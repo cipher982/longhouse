@@ -28,6 +28,24 @@ def _write_serializer_stale_queue_depth() -> int:
     return int(os.getenv("LONGHOUSE_WRITE_SERIALIZER_STALE_QUEUE_DEPTH", "5"))
 
 
+def _write_serializer_stall_check() -> tuple[bool, dict]:
+    try:
+        from zerg.services.write_serializer import get_write_serializer
+
+        ws = get_write_serializer()
+        if not ws.is_configured:
+            return False, {"status": "skip", "reason": "not configured"}
+        metrics = ws.get_metrics()
+        writer_stale = (
+            bool(metrics.get("writer_active"))
+            and int(metrics.get("queue_depth") or 0) >= _write_serializer_stale_queue_depth()
+            and float(metrics.get("active_age_ms") or 0.0) >= _write_serializer_stale_active_ms()
+        )
+        return writer_stale, {"status": "fail" if writer_stale else "pass", **metrics}
+    except Exception as e:
+        return False, {"status": "warn", "error": str(e)}
+
+
 def _session_projection_lag_check(session_factory=None) -> dict:
     """Return lag for sessions whose archive ingest skipped derived projections."""
     if session_factory is None:
@@ -248,6 +266,17 @@ def readyz_check():
                 content={"status": "unhealthy", "reason": "database unavailable"},
             )
 
+    writer_stale, writer_metrics = _write_serializer_stall_check()
+    if writer_stale:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "reason": "write_serializer_stalled",
+                "write_serializer": writer_metrics,
+            },
+        )
+
     return {"status": "ok"}
 
 
@@ -435,26 +464,12 @@ def health_check(request: Request):
     checks["migration"] = migration_status
 
     # 7. Write serializer metrics
-    try:
-        from zerg.services.write_serializer import get_write_serializer
-
-        ws = get_write_serializer()
-        if ws.is_configured:
-            metrics = ws.get_metrics()
-            writer_stale = (
-                bool(metrics.get("writer_active"))
-                and int(metrics.get("queue_depth") or 0) >= _write_serializer_stale_queue_depth()
-                and float(metrics.get("active_age_ms") or 0.0) >= _write_serializer_stale_active_ms()
-            )
-            checks["write_serializer"] = {"status": "fail" if writer_stale else "pass", **metrics}
-            if writer_stale:
-                health_status["status"] = "unhealthy"
-                health_status["message"] = "Write serializer is stalled"
-                critical_failure = True
-        else:
-            checks["write_serializer"] = {"status": "skip", "reason": "not configured"}
-    except Exception as e:
-        checks["write_serializer"] = {"status": "warn", "error": str(e)}
+    writer_stale, writer_metrics = _write_serializer_stall_check()
+    checks["write_serializer"] = writer_metrics
+    if writer_stale:
+        health_status["status"] = "unhealthy"
+        health_status["message"] = "Write serializer is stalled"
+        critical_failure = True
 
     # 8. Projection catch-up lag. Archive ingest may skip expensive derived
     # projections on the hot path; this should normally drain quickly in the

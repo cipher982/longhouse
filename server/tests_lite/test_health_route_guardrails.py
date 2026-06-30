@@ -124,3 +124,30 @@ def test_health_fails_stale_active_writer_with_queued_work(tmp_path, monkeypatch
 
     assert response.status_code == 503
     assert response.body
+
+
+def test_readyz_fails_stale_active_writer_with_queued_work(tmp_path, monkeypatch):
+    engine = make_engine(f"sqlite:///{tmp_path}/readyz_stale_writer.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
+
+    class StaleWriter:
+        is_configured = True
+
+        def get_metrics(self):
+            return {
+                "queue_depth": 38,
+                "writer_active": True,
+                "active_label": "ingest-live",
+                "active_age_ms": health_router._write_serializer_stale_active_ms() + 1,
+            }
+
+    import zerg.database as database_module
+
+    monkeypatch.setattr(database_module, "default_engine", engine)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: StaleWriter())
+
+    response = health_router.readyz_check()
+
+    assert response.status_code == 503
+    assert b"write_serializer_stalled" in response.body
