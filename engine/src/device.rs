@@ -3,7 +3,8 @@
 //! This module owns the first compiled `longhouse-engine device ...` surface.
 //! Phase 2A reports the native-entrypoint contract. Phase 2B adds a native
 //! fast local-health snapshot from the engine-owned status file, without
-//! porting repair, provider proof, or provider launch behavior yet.
+//! porting repair, provider proof, or provider launch behavior yet. Phase 2C
+//! adds a read-only repair-plan projection over the same native status inputs.
 
 use crate::config;
 use anyhow::Context;
@@ -143,6 +144,41 @@ struct NativeManagedSessionsStatus {
     count: usize,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct NativeRepairPlan {
+    schema_version: u64,
+    collection_tier: &'static str,
+    read_only: bool,
+    recommendation: String,
+    headline: String,
+    reasons: Vec<String>,
+    machine_state: NativeMachineStateStatus,
+    engine_health: NativeFastLocalHealth,
+    suggested_actions: Vec<NativeRepairAction>,
+    notes: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NativeMachineStateStatus {
+    path: String,
+    exists: bool,
+    readable: bool,
+    configured: bool,
+    runtime_url_present: bool,
+    machine_name_present: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NativeRepairAction {
+    id: &'static str,
+    label: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<String>,
+    status: &'static str,
+}
+
 pub fn cmd_device_plan(json: bool) -> anyhow::Result<()> {
     let contract = embedded_contract()?;
     if json {
@@ -173,6 +209,16 @@ pub fn cmd_device_local_health(json: bool, state_root: Option<&Path>) -> anyhow:
         println!("{}", serde_json::to_string_pretty(&health)?);
     } else {
         print_native_fast_local_health(&health);
+    }
+    Ok(())
+}
+
+pub fn cmd_device_repair_plan(json: bool, state_root: Option<&Path>) -> anyhow::Result<()> {
+    let plan = collect_native_repair_plan(state_root)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&plan)?);
+    } else {
+        print_native_repair_plan(&plan);
     }
     Ok(())
 }
@@ -275,6 +321,13 @@ fn engine_status_path(state_root: Option<&Path>) -> anyhow::Result<PathBuf> {
         return Ok(root.join("agent").join("engine-status.json"));
     }
     config::get_agent_status_path()
+}
+
+fn machine_state_path(state_root: Option<&Path>) -> anyhow::Result<PathBuf> {
+    if let Some(root) = state_root {
+        return Ok(root.join("machine").join("state.json"));
+    }
+    Ok(config::get_machine_dir()?.join("state.json"))
 }
 
 fn collect_native_fast_local_health(status_path: &Path) -> NativeFastLocalHealth {
@@ -448,6 +501,243 @@ fn native_fast_health_from_parts(
     }
 }
 
+fn collect_native_repair_plan(state_root: Option<&Path>) -> anyhow::Result<NativeRepairPlan> {
+    let status_path = engine_status_path(state_root)?;
+    let machine_path = machine_state_path(state_root)?;
+    let engine_health = collect_native_fast_local_health(&status_path);
+    let machine_state = collect_native_machine_state(&machine_path);
+    Ok(native_repair_plan_from_parts(
+        engine_health,
+        machine_state,
+        state_root.map(|path| path.display().to_string()),
+    ))
+}
+
+fn collect_native_machine_state(path: &Path) -> NativeMachineStateStatus {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => match serde_json::from_str::<Value>(&raw) {
+            Ok(Value::Object(object)) => {
+                let runtime_url_present = object
+                    .get("runtime_url")
+                    .and_then(Value::as_str)
+                    .map(runtime_url_looks_configured)
+                    .unwrap_or(false);
+                let machine_name_present = object
+                    .get("machine_name")
+                    .and_then(Value::as_str)
+                    .map(machine_name_looks_configured)
+                    .unwrap_or(false);
+                NativeMachineStateStatus {
+                    path: path.display().to_string(),
+                    exists: true,
+                    readable: true,
+                    configured: runtime_url_present && machine_name_present,
+                    runtime_url_present,
+                    machine_name_present,
+                    error: None,
+                }
+            }
+            Ok(_) => machine_state_error(path, true, "machine state payload must be a JSON object"),
+            Err(err) => {
+                machine_state_error(path, true, &format!("parsing machine state JSON: {err}"))
+            }
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => NativeMachineStateStatus {
+            path: path.display().to_string(),
+            exists: false,
+            readable: false,
+            configured: false,
+            runtime_url_present: false,
+            machine_name_present: false,
+            error: None,
+        },
+        Err(err) => machine_state_error(path, true, &format!("reading machine state file: {err}")),
+    }
+}
+
+fn machine_state_error(path: &Path, exists: bool, error: &str) -> NativeMachineStateStatus {
+    NativeMachineStateStatus {
+        path: path.display().to_string(),
+        exists,
+        readable: false,
+        configured: false,
+        runtime_url_present: false,
+        machine_name_present: false,
+        error: Some(error.to_string()),
+    }
+}
+
+fn runtime_url_looks_configured(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty()
+        || trimmed.contains("typer.models.OptionInfo")
+        || trimmed.contains('<')
+        || trimmed.contains('>')
+    {
+        return false;
+    }
+    let Some(rest) = trimmed
+        .strip_prefix("http://")
+        .or_else(|| trimmed.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    !authority.is_empty()
+        && !authority.starts_with('/')
+        && !authority.contains(char::is_whitespace)
+        && !authority.starts_with(':')
+}
+
+fn machine_name_looks_configured(value: &str) -> bool {
+    let normalized = value
+        .trim()
+        .chars()
+        .filter(|ch| !matches!(ch, '&' | '<' | '>' | '"' | '\''))
+        .collect::<String>();
+    !normalized.trim_matches('-').trim().is_empty()
+}
+
+fn native_repair_plan_from_parts(
+    engine_health: NativeFastLocalHealth,
+    machine_state: NativeMachineStateStatus,
+    state_root: Option<String>,
+) -> NativeRepairPlan {
+    let mut reasons = Vec::new();
+    if machine_state.error.is_some() {
+        reasons.push("machine_state_unreadable".to_string());
+    } else if !machine_state.exists {
+        reasons.push("machine_state_missing".to_string());
+    } else if !machine_state.runtime_url_present {
+        reasons.push("machine_state_missing_runtime_url".to_string());
+    } else if !machine_state.machine_name_present {
+        reasons.push("machine_state_missing_machine_name".to_string());
+    }
+    for reason in &engine_health.reasons {
+        if !reasons.contains(reason) {
+            reasons.push(reason.clone());
+        }
+    }
+
+    let (recommendation, headline, suggested_actions) = if !machine_state.configured {
+        (
+            "connect_install",
+            "Longhouse needs machine setup",
+            vec![NativeRepairAction {
+                id: "connect_install",
+                label: "Install or reconnect this machine",
+                command: Some("longhouse connect --install".to_string()),
+                status: "compatibility_shim",
+            }],
+        )
+    } else if engine_health.health_state == "healthy" {
+        ("healthy", "Longhouse is healthy and configured", Vec::new())
+    } else if engine_health_needs_repair(&engine_health) {
+        (
+            "machine_repair",
+            "Longhouse local shipping needs native repair planning",
+            repair_actions_with_inspection(&engine_health, state_root.as_deref()),
+        )
+    } else {
+        (
+            "inspect_logs",
+            "Longhouse local shipping needs inspection",
+            inspect_actions(&engine_health, state_root.as_deref()),
+        )
+    };
+
+    NativeRepairPlan {
+        schema_version: 1,
+        collection_tier: "native_fast",
+        read_only: true,
+        recommendation: recommendation.to_string(),
+        headline: headline.to_string(),
+        reasons,
+        machine_state,
+        engine_health,
+        suggested_actions,
+        notes: vec![
+            "device repair remains planned; this command only reports native repair recommendations.",
+            "compatibility commands may still route through the Python CLI during the transition.",
+        ],
+    }
+}
+
+fn engine_health_needs_repair(health: &NativeFastLocalHealth) -> bool {
+    health.reasons.iter().any(|reason| {
+        matches!(
+            reason.as_str(),
+            "engine_status_missing" | "engine_status_unreadable" | "engine_status_stale"
+        )
+    })
+}
+
+fn repair_actions_with_inspection(
+    health: &NativeFastLocalHealth,
+    state_root: Option<&str>,
+) -> Vec<NativeRepairAction> {
+    let mut actions = vec![NativeRepairAction {
+        id: "machine_repair",
+        label: "Repair the configured Longhouse machine",
+        command: Some("longhouse machine repair".to_string()),
+        status: "compatibility_shim",
+    }];
+    if !health.reasons.is_empty() {
+        actions.push(NativeRepairAction {
+            id: "inspect_native_status",
+            label: "Inspect native local health details",
+            command: Some(native_local_health_command(state_root)),
+            status: "native",
+        });
+    }
+    actions
+}
+
+fn inspect_actions(health: &NativeFastLocalHealth, state_root: Option<&str>) -> Vec<NativeRepairAction> {
+    let mut actions = vec![NativeRepairAction {
+        id: "inspect_native_status",
+        label: "Inspect native local health details",
+        command: Some(native_local_health_command(state_root)),
+        status: "native",
+    }];
+    if health.transport.status != "healthy" && health.transport.status != "unknown" {
+        actions.push(NativeRepairAction {
+            id: "inspect_engine_logs",
+            label: "Inspect Machine Agent logs",
+            command: None,
+            status: "operator_action",
+        });
+    }
+    actions
+}
+
+fn native_local_health_command(state_root: Option<&str>) -> String {
+    match state_root {
+        Some(path) => format!(
+            "longhouse-engine device local-health --json --state-root {}",
+            shell_quote(path)
+        ),
+        None => "longhouse-engine device local-health --json".to_string(),
+    }
+}
+
+fn shell_quote(value: &str) -> String {
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    let safe = value
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '/' | '.' | '_' | '-' | ':'));
+    if safe {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
 fn native_transport_status(
     object: Option<&serde_json::Map<String, Value>>,
 ) -> NativeTransportStatus {
@@ -564,6 +854,43 @@ fn native_transport_status(
     } else {
         transport_status("healthy", "healthy", "Shipping healthy.")
     }
+}
+
+fn print_native_repair_plan(plan: &NativeRepairPlan) {
+    println!("{} ({})", plan.headline, plan.recommendation);
+    println!("Machine State");
+    println!("  path: {}", plan.machine_state.path);
+    println!(
+        "  configured: {}",
+        if plan.machine_state.configured {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    if let Some(error) = &plan.machine_state.error {
+        println!("  error: {error}");
+    }
+    println!("Engine");
+    println!("  health: {}", plan.engine_health.health_state);
+    println!("  status file: {}", plan.engine_health.engine_status.path);
+    if !plan.reasons.is_empty() {
+        println!("Reasons");
+        for reason in &plan.reasons {
+            println!("  - {reason}");
+        }
+    }
+    if !plan.suggested_actions.is_empty() {
+        println!("Suggested Actions");
+        for action in &plan.suggested_actions {
+            match &action.command {
+                Some(command) => println!("  - {}: {}", action.label, command),
+                None => println!("  - {}", action.label),
+            }
+        }
+    }
+    println!("Note");
+    println!("  {}", plan.notes[0]);
 }
 
 fn transport_status(status: &str, reason: &str, summary: &str) -> NativeTransportStatus {
@@ -971,6 +1298,407 @@ mod tests {
         assert_eq!(
             engine_status_path(Some(&root)).unwrap(),
             PathBuf::from("/tmp/longhouse-state/agent/engine-status.json")
+        );
+    }
+
+    #[test]
+    fn native_repair_plan_reports_healthy_when_configured_and_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let machine_path = dir.path().join("machine").join("state.json");
+        let plan = native_repair_plan_from_parts(
+            native_fast_health_from_parts(
+                &status_path,
+                true,
+                Some(2),
+                Some(json!({
+                    "spool_pending_count": 0,
+                    "spool_dead_count": 0,
+                    "is_offline": false
+                })),
+                None,
+            ),
+            NativeMachineStateStatus {
+                path: machine_path.display().to_string(),
+                exists: true,
+                readable: true,
+                configured: true,
+                runtime_url_present: true,
+                machine_name_present: true,
+                error: None,
+            },
+            None,
+        );
+
+        assert_eq!(plan.recommendation, "healthy");
+        assert_eq!(plan.suggested_actions.len(), 0);
+        assert!(plan.read_only);
+    }
+
+    #[test]
+    fn native_repair_plan_prefers_machine_repair_for_configured_missing_engine_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let machine_path = dir.path().join("machine").join("state.json");
+        let plan = native_repair_plan_from_parts(
+            native_fast_health_from_parts(&status_path, false, None, None, None),
+            NativeMachineStateStatus {
+                path: machine_path.display().to_string(),
+                exists: true,
+                readable: true,
+                configured: true,
+                runtime_url_present: true,
+                machine_name_present: true,
+                error: None,
+            },
+            None,
+        );
+
+        assert_eq!(plan.recommendation, "machine_repair");
+        assert!(plan.reasons.contains(&"engine_status_missing".to_string()));
+        assert!(plan
+            .suggested_actions
+            .iter()
+            .any(|action| action.command.as_deref() == Some("longhouse machine repair")));
+    }
+
+    #[test]
+    fn native_repair_plan_prefers_machine_repair_for_configured_stale_engine_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let machine_path = dir.path().join("machine").join("state.json");
+        let plan = native_repair_plan_from_parts(
+            native_fast_health_from_parts(
+                &status_path,
+                true,
+                Some(ENGINE_STALE_SECONDS + 1),
+                Some(json!({
+                    "spool_pending_count": 0,
+                    "spool_dead_count": 0,
+                    "is_offline": false
+                })),
+                None,
+            ),
+            NativeMachineStateStatus {
+                path: machine_path.display().to_string(),
+                exists: true,
+                readable: true,
+                configured: true,
+                runtime_url_present: true,
+                machine_name_present: true,
+                error: None,
+            },
+            None,
+        );
+
+        assert_eq!(plan.recommendation, "machine_repair");
+        assert!(plan.reasons.contains(&"engine_status_stale".to_string()));
+    }
+
+    #[test]
+    fn native_repair_plan_prefers_connect_install_when_machine_state_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let machine_path = dir.path().join("machine").join("state.json");
+        let plan = native_repair_plan_from_parts(
+            native_fast_health_from_parts(
+                &status_path,
+                true,
+                Some(2),
+                Some(json!({
+                    "spool_pending_count": 0,
+                    "spool_dead_count": 0,
+                    "is_offline": false
+                })),
+                None,
+            ),
+            collect_native_machine_state(&machine_path),
+            None,
+        );
+
+        assert_eq!(plan.recommendation, "connect_install");
+        assert!(plan.reasons.contains(&"machine_state_missing".to_string()));
+        assert_eq!(
+            plan.suggested_actions[0].command.as_deref(),
+            Some("longhouse connect --install")
+        );
+    }
+
+    #[test]
+    fn native_repair_plan_prefers_connect_install_when_machine_state_incomplete() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine_path = dir.path().join("machine").join("state.json");
+        std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &machine_path,
+            serde_json::to_string(&json!({"runtime_url": "https://demo.longhouse.test"})).unwrap(),
+        )
+        .unwrap();
+
+        let state = collect_native_machine_state(&machine_path);
+
+        assert!(state.exists);
+        assert!(state.readable);
+        assert!(!state.configured);
+        assert!(state.runtime_url_present);
+        assert!(!state.machine_name_present);
+
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let plan = native_repair_plan_from_parts(
+            native_fast_health_from_parts(
+                &status_path,
+                true,
+                Some(2),
+                Some(json!({
+                    "spool_pending_count": 0,
+                    "spool_dead_count": 0,
+                    "is_offline": false
+                })),
+                None,
+            ),
+            state,
+            None,
+        );
+
+        assert_eq!(plan.recommendation, "connect_install");
+        assert!(plan
+            .reasons
+            .contains(&"machine_state_missing_machine_name".to_string()));
+    }
+
+    #[test]
+    fn native_repair_plan_prefers_connect_install_when_machine_state_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let machine_path = dir.path().join("machine").join("state.json");
+        std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
+        std::fs::write(&machine_path, "{not-json").unwrap();
+
+        let state = collect_native_machine_state(&machine_path);
+
+        assert!(state.exists);
+        assert!(!state.readable);
+        assert!(!state.configured);
+        assert!(state
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("parsing machine state JSON"));
+
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let plan = native_repair_plan_from_parts(
+            native_fast_health_from_parts(
+                &status_path,
+                true,
+                Some(2),
+                Some(json!({
+                    "spool_pending_count": 0,
+                    "spool_dead_count": 0,
+                    "is_offline": false
+                })),
+                None,
+            ),
+            state,
+            None,
+        );
+
+        assert_eq!(plan.recommendation, "connect_install");
+        assert!(plan
+            .reasons
+            .contains(&"machine_state_unreadable".to_string()));
+    }
+
+    #[test]
+    fn native_repair_plan_matches_canonical_machine_state_completeness() {
+        assert!(!runtime_url_looks_configured("https://?x"));
+        assert!(!runtime_url_looks_configured("http:///path"));
+        assert!(!runtime_url_looks_configured("ftp://demo.longhouse.test"));
+        assert!(!runtime_url_looks_configured(
+            "https://<typer.models.OptionInfo object>"
+        ));
+        assert!(runtime_url_looks_configured("http://127.0.0.1:8080"));
+        assert!(runtime_url_looks_configured("https://demo.longhouse.test"));
+
+        assert!(!machine_name_looks_configured("<>"));
+        assert!(!machine_name_looks_configured("   "));
+        assert!(machine_name_looks_configured("work macbook"));
+    }
+
+    #[test]
+    fn native_repair_plan_uses_inspection_for_transport_only_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        let machine_path = dir.path().join("machine").join("state.json");
+        let plan = native_repair_plan_from_parts(
+            native_fast_health_from_parts(
+                &status_path,
+                true,
+                Some(2),
+                Some(json!({
+                    "ship_attempts_10m": 4,
+                    "ship_server_errors_10m": 3,
+                    "last_ship_result": "server_error",
+                    "spool_pending_count": 0,
+                    "spool_dead_count": 0,
+                    "is_offline": false
+                })),
+                None,
+            ),
+            NativeMachineStateStatus {
+                path: machine_path.display().to_string(),
+                exists: true,
+                readable: true,
+                configured: true,
+                runtime_url_present: true,
+                machine_name_present: true,
+                error: None,
+            },
+            None,
+        );
+
+        assert_eq!(plan.recommendation, "inspect_logs");
+        assert!(plan.reasons.contains(&"server_errors".to_string()));
+        assert!(!plan
+            .suggested_actions
+            .iter()
+            .any(|action| action.command.as_deref() == Some("longhouse machine repair")));
+    }
+
+    #[test]
+    fn native_repair_plan_collects_from_state_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = engine_status_path(Some(dir.path())).unwrap();
+        let machine_path = machine_state_path(Some(dir.path())).unwrap();
+        std::fs::create_dir_all(status_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &status_path,
+            serde_json::to_string(&json!({
+                "spool_pending_count": 0,
+                "spool_dead_count": 0,
+                "is_offline": false
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &machine_path,
+            serde_json::to_string(&json!({
+                "runtime_url": "https://demo.longhouse.test",
+                "machine_name": "cinder"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let plan = collect_native_repair_plan(Some(dir.path())).unwrap();
+
+        assert_eq!(plan.recommendation, "healthy");
+        assert_eq!(
+            plan.engine_health.engine_status.path,
+            status_path.display().to_string()
+        );
+        assert_eq!(plan.machine_state.path, machine_path.display().to_string());
+    }
+
+    #[test]
+    fn native_repair_plan_state_root_preserves_native_inspection_command_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = engine_status_path(Some(dir.path())).unwrap();
+        let machine_path = machine_state_path(Some(dir.path())).unwrap();
+        std::fs::create_dir_all(status_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &status_path,
+            serde_json::to_string(&json!({
+                "ship_attempts_10m": 4,
+                "ship_server_errors_10m": 3,
+                "last_ship_result": "server_error",
+                "spool_pending_count": 0,
+                "spool_dead_count": 0,
+                "is_offline": false
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &machine_path,
+            serde_json::to_string(&json!({
+                "runtime_url": "https://demo.longhouse.test",
+                "machine_name": "cinder"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let plan = collect_native_repair_plan(Some(dir.path())).unwrap();
+        let expected = format!(
+            "longhouse-engine device local-health --json --state-root {}",
+            dir.path().display()
+        );
+
+        assert!(plan
+            .suggested_actions
+            .iter()
+            .any(|action| action.command.as_deref() == Some(expected.as_str())));
+    }
+
+    #[test]
+    fn native_repair_plan_quotes_state_root_in_suggested_commands() {
+        assert_eq!(
+            native_local_health_command(Some("/tmp/longhouse state;rm")),
+            "longhouse-engine device local-health --json --state-root '/tmp/longhouse state;rm'"
+        );
+        assert_eq!(
+            native_local_health_command(Some("/tmp/longhouse'root")),
+            "longhouse-engine device local-health --json --state-root '/tmp/longhouse'\\''root'"
+        );
+    }
+
+    #[test]
+    fn native_repair_plan_json_does_not_include_machine_state_values_or_tokens() {
+        let dir = tempfile::tempdir().unwrap();
+        let status_path = engine_status_path(Some(dir.path())).unwrap();
+        let machine_path = machine_state_path(Some(dir.path())).unwrap();
+        std::fs::create_dir_all(status_path.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(machine_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &status_path,
+            serde_json::to_string(&json!({
+                "spool_pending_count": 0,
+                "spool_dead_count": 0,
+                "is_offline": false
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &machine_path,
+            serde_json::to_string(&json!({
+                "runtime_url": "https://demo.longhouse.test",
+                "machine_name": "cinder",
+                "device_token": "zdt_secret"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let plan = collect_native_repair_plan(Some(dir.path())).unwrap();
+
+        let raw = serde_json::to_string(&plan).unwrap();
+
+        assert!(!raw.contains("demo.longhouse.test"));
+        assert!(!raw.contains("cinder"));
+        assert!(!raw.contains("zdt_secret"));
+        assert!(!raw.contains("zdt_"));
+        assert!(raw.contains("\"read_only\":true"));
+    }
+
+    #[test]
+    fn native_repair_plan_state_root_resolves_machine_state_path() {
+        let root = PathBuf::from("/tmp/longhouse-state");
+        assert_eq!(
+            machine_state_path(Some(&root)).unwrap(),
+            PathBuf::from("/tmp/longhouse-state/machine/state.json")
         );
     }
 }

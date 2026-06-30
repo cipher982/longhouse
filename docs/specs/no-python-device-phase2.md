@@ -220,6 +220,45 @@ The validator should fail when:
 This creates a bridge from Phase 1's debt ledger to the actual native command
 surface that later phases will implement.
 
+## Phase 2C Native Repair Planning
+
+Phase 2C adds the first native repair decision surface without performing
+repair:
+
+```text
+longhouse-engine device repair-plan [--json] [--state-root <path>]
+```
+
+The command is read-only. It reads:
+
+- `~/.longhouse/agent/engine-status.json`, or
+  `<state-root>/agent/engine-status.json`;
+- `~/.longhouse/machine/state.json`, or
+  `<state-root>/machine/state.json`.
+
+It then reports a native recommendation:
+
+- `healthy` when the fast engine status is healthy and machine state is
+  configured;
+- `machine_repair` when canonical machine state is complete but the local
+  status file is missing, stale, or unreadable;
+- `connect_install` when canonical machine state is missing, unreadable, or
+  incomplete;
+- `inspect_logs` when the machine is configured and the issue is a
+  transport/status inspection problem rather than a repairable configuration
+  gap.
+
+The JSON contract includes `schema_version`, `collection_tier`,
+`read_only`, `recommendation`, `headline`, `reasons`, `machine_state`,
+`engine_health`, `suggested_actions`, and `notes`. The `machine_state` object
+reports only path, boolean completeness fields, and non-secret read/parse
+errors; it must not echo the runtime URL, machine name, device token, or any
+other secret-bearing value.
+
+Phase 2C does not replace `longhouse doctor`, `longhouse machine repair`, or
+`longhouse connect --install`. The `doctor-repair` command plan remains
+`planned` until a later phase ports the write-capable install and repair flow.
+
 ## Success Criteria
 
 - The repo has a reviewed Phase 2 spec that chooses the native owner and shim
@@ -229,6 +268,10 @@ surface that later phases will implement.
 - `longhouse-engine device local-health [--json] [--state-root <path>]` reports
   a read-only native fast health snapshot from `engine-status.json` without
   invoking Python.
+- `longhouse-engine device repair-plan [--json] [--state-root <path>]` reports
+  read-only native repair recommendations from engine status and machine state
+  without invoking Python, reading tokens, writing files, or spawning repair
+  subprocesses.
 - `config/native_device_entrypoints.json` names the native target for every
   normal device command category from the Phase 1 inventory.
 - `make validate-native-device-entrypoints` passes and is included in
@@ -238,6 +281,9 @@ surface that later phases will implement.
 - Tests fail if a native target command points back through Python.
 - Phase 2B local-health tests cover fresh, missing, stale, unreadable, and
   alternate state-root status files.
+- Phase 2C repair-plan tests cover configured/no-op, configured repair,
+  unconfigured connect-install, transport-only inspection, corrupt state, and
+  alternate state-root inputs.
 - Provider launch, repair, provider proof, and rich local-health/menu-bar
   behavior remain planned until their implementation phases.
 
