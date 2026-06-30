@@ -302,6 +302,136 @@ Desktop App artifacts, replay backlog, rotate tokens, write machine state, or
 kill provider/engine processes directly. Those remain later repair/install
 parity work under the `doctor-repair` command group.
 
+## Phase 2E Native Service Artifact Repair
+
+Phase 2E should add the next deliberately scoped write-capable native repair
+action: creating or repairing the Machine Agent service manager artifact from
+already-configured canonical machine state.
+
+Proposed command shape:
+
+```text
+longhouse-engine device repair --repair-service [--json] [--dry-run] [--state-root <path>]
+```
+
+This is intentionally explicit. A plain `device repair` keeps the Phase 2D
+behavior: restart only an existing service whose `LONGHOUSE_HOME` positively
+matches the target Longhouse home. `--repair-service` opts into writing the
+service file when the machine is already configured.
+
+Native service repair may:
+
+- read canonical machine state from `~/.longhouse/machine/state.json`;
+- reject missing, unreadable, or incomplete machine state;
+- generate the canonical macOS launchd plist or Linux systemd user unit for
+  `longhouse-engine connect`;
+- include non-secret service environment such as `CLAUDE_CONFIG_DIR`,
+  `LONGHOUSE_HOME`, `LONGHOUSE_LOG_DIR`, `PATH`,
+  `LONGHOUSE_MACHINE_GENERATION`, and `LONGHOUSE_MACHINE_STATE_HASH`;
+- start/load the service through the platform service manager after writing
+  the artifact;
+- report dry-run actions without writing or spawning.
+
+Native service repair must not:
+
+- create or mutate `machine/state.json`;
+- create, read, write, echo, or rotate the device token;
+- install Claude/Codex/Antigravity hooks;
+- install or regenerate `Longhouse.app`;
+- replay backlog;
+- migrate legacy shipper DB state;
+- remove legacy service names;
+- kill provider or engine processes directly;
+- install global services for scratch `LONGHOUSE_HOME` overrides.
+
+The first implementation should target the stable default Longhouse home only:
+`~/.longhouse`. If `--state-root` or `LONGHOUSE_HOME` points somewhere else,
+native service repair should return a structured rejection instead of creating
+a global service for scratch state. Tests may still use injected home/service
+paths to exercise generation logic without touching the real user service.
+
+The generated service should match the current Python service contract closely
+enough that either implementation can inspect and restart it:
+
+- macOS path:
+  `~/Library/LaunchAgents/com.longhouse.shipper.plist`
+- Linux path:
+  `~/.config/systemd/user/longhouse-shipper.service`
+- service command:
+  `longhouse-engine connect --fallback-scan-secs 300 --spool-replay-secs 30
+  --archive-repair-mode <paused|drain> --compression zstd --machine-name <name>`
+- hosted `*.longhouse.ai` Runtime Hosts default archive repair mode to
+  `paused`; other Runtime Hosts default to `drain`.
+
+The JSON result should extend Phase 2D with action ids such as
+`write_service_file`, `load_launchd_service`, `systemd_daemon_reload`,
+`systemd_enable_service`, and `systemd_start_service`. It should report paths,
+booleans, action status, and redacted/truncated service-manager errors, but
+must not echo runtime URL, machine name, or token values.
+
+The JSON result should also include `repair_mode: service_artifact` so callers
+can distinguish service artifact repair from Phase 2D restart-only repair.
+Expected states are:
+
+- `dry_run_planned`
+- `completed`
+- `failed`
+- `rejected_scratch_home`
+- `rejected_machine_state_unreadable`
+- `rejected_machine_state_incomplete`
+- `rejected_existing_service_mismatch`
+- `rejected_existing_service_ambiguous`
+- `rejected_engine_executable_unavailable`
+- `rejected_unsupported_platform`
+
+Stable-home resolution is part of the safety boundary. The public command may
+write only when the effective Longhouse home resolves to canonical
+`~/.longhouse`. It must reject when `--state-root`, `LONGHOUSE_HOME`, or
+`CLAUDE_CONFIG_DIR` would target a scratch Longhouse home. Internal tests may
+inject alternate home/service roots, but the user-facing command must not
+install a global launchd/systemd service for scratch state.
+
+Phase 2E needs internal access to service-generation fields, but not broad
+machine-state behavior. It should read only whitelisted fields from
+`machine/state.json`, ignore unknown fields (including accidental token-shaped
+fields), sanitize the machine name with the same semantics as Python, and
+compute `LONGHOUSE_MACHINE_STATE_HASH` from the same whitelisted facts as
+Python: `schema_version`, `runtime_url`, `machine_name`,
+`desktop_app_enabled`, and `desired_bundle_version`. It may include existing
+`config_generation` in service env when present, but it must not rewrite
+machine state just to create a generation.
+
+Allowed filesystem writes are limited to:
+
+- the service file parent directory;
+- the service artifact file itself;
+- the stable-home agent log directory used by `LONGHOUSE_LOG_DIR` and
+  launchd `StandardOutPath` / `StandardErrorPath`.
+
+The service command must use an absolute `longhouse-engine` executable path.
+Real stable-home writes should prefer the installed runtime binary and reject
+missing or dev/build-tree executables unless an internal test hook explicitly
+injects an executable path. The result may report executable path/source
+metadata, but no secret-bearing machine facts.
+
+Before rewriting an existing service file, native repair must reject symlinks
+and non-regular files, require the canonical service path, require a positive
+`LONGHOUSE_HOME` match, and verify the file looks like the Longhouse Machine
+Agent service rather than an arbitrary user file.
+
+Service-manager sequencing should mirror the current Python contract without
+legacy cleanup:
+
+- macOS: unload/boot out only `com.longhouse.shipper` when present, write the
+  plist atomically, then load/bootstrap the plist.
+- Linux: write the unit atomically, run `systemctl --user daemon-reload`, enable
+  `longhouse-shipper`, and start/restart it so changed command/env takes
+  effect.
+
+Service-manager stdout/stderr may echo generated commands. Native repair should
+redact the runtime URL and machine name from errors before reporting them, then
+truncate as Phase 2D already does.
+
 ## Success Criteria
 
 - The repo has a reviewed Phase 2 spec that chooses the native owner and shim
@@ -321,6 +451,14 @@ parity work under the `doctor-repair` command group.
 - Native repair rejects incomplete machine state, missing service files,
   mismatched/ambiguous service homes, and unsupported service managers without
   attempting fallback process killing or artifact regeneration.
+- `longhouse-engine device repair --repair-service [--json] [--dry-run]`
+  creates or repairs only the stable-home launchd/systemd Machine Agent service
+  artifact from existing canonical machine state, then starts/loads the service
+  through the platform service manager.
+- Native service repair rejects scratch Longhouse homes, missing/incomplete
+  machine state, unsupported service managers, and mismatched existing service
+  homes without touching hooks, desktop app artifacts, tokens, backlog, or
+  machine state.
 - `config/native_device_entrypoints.json` names the native target for every
   normal device command category from the Phase 1 inventory.
 - `make validate-native-device-entrypoints` passes and is included in
@@ -337,6 +475,13 @@ parity work under the `doctor-repair` command group.
   macOS launchd service matching, Linux systemd service matching, missing
   service, unconfigured machine state, service home mismatch, service home
   ambiguity, unsupported platform, and no secret echo.
+- Phase 2E service-repair tests cover dry-run, stable-home rejection/acceptance,
+  macOS plist generation, Linux unit generation, service-manager action
+  sequencing, existing matching service rewrite, mismatched service rejection,
+  hosted archive repair mode defaulting, self-host archive repair mode
+  defaulting, no token-file requirement, machine-state hash parity with Python,
+  symlink/non-regular service rejection, no machine-state/journal mutation,
+  service-manager failure reporting, and no secret echo.
 - Provider launch, repair, provider proof, and rich local-health/menu-bar
   behavior remain planned until their implementation phases.
 
