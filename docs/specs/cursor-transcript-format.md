@@ -297,36 +297,24 @@ may change between cursor-agent releases. The decoder must be tolerant:
   first-class events vs. fold into assistant text with a marker). Prefer
   first-class to match the universal-harness `raw_evidence` rule.
 
-## Provider contract registration (Phase 2)
+## Provider contract registration
 
-Cursor is **intentionally NOT registered** in
-`server/zerg/config/managed_provider_contracts.json` or
-`PROVIDER_CLI_BINARY_BY_PROVIDER`. That registry is tightly coupled to
-managed-control surfaces (provider-CLI live-proof, release-status canaries,
-machine-control supports), and cursor has zero managed capabilities —
-registering it there would create half-supported canary surfaces with no
-real control behind them. The repo's "freeze half-supported surfaces"
-principle applies.
+Cursor **is** registered in `schemas/managed_providers.yml` and the generated
+`server/zerg/config/managed_provider_contracts.json` for **Console mode only**
+(`managed_transport: cursor_acp`, `control_plane: cursor_acp`, `cursor_exec`
+retained as a legacy alias). `provider_cli_binary: cursor-agent`,
+`provider_cli_env: LONGHOUSE_CURSOR_BIN`. Advertised machine-control supports:
+`cursor.run_once`, `cursor.resume_run_once`. `terminate` is a capability
+(kill_on_drop + SIGINT exits cursor-agent, verified) but `cursor.terminate` is
+not advertised in `machine_control_supports` until a pid-registry terminate
+command is wired (same precedent as codex one-shot exec).
 
-This is safe because the ingest path (`/api/agents/ingest` →
-`AgentsStore.ingest_session`) does **not** call
-`require_contract_for_provider`; that function is only used by managed-launch
-paths (`managed_local_launcher`, `remote_session_launch`), which an
-unmanaged-only cursor ingest never enters. Cursor is **not** registered in
-the managed provider contracts because no managed interactive control path
-is implemented yet: a `longhouse cursor` managed wrapper must, like
-claude/codex/opencode, run the user's normal interactive cursor-agent TUI
-invisibly while Longhouse owns a background remote control channel. Whether
-cursor-agent exposes a steerable interactive control surface (an app-server
-/ serve / socket / channel akin to Codex `app-server` or OpenCode `serve`)
-is unconfirmed — that is the gating question before any managed contract
-entry is added. Unmanaged `store.db` ingest works independently of any
-contract entry.
+The ingest path (`/api/agents/ingest` → `AgentsStore.ingest_session`) does not
+call `require_contract_for_provider`, so unmanaged Shadow ingest works
+independently of the contract entry. `SessionIngest.provider` accepts
+`"cursor"` as a free-form string.
 
-`SessionIngest.provider` already accepts `"cursor"` (it is a free-form
-string field), so ingest needs no schema change.
-
-## Discovery and live-binding status (Phase 3)
+## Discovery and live-binding status
 
 Three layers, landed explicitly:
 
@@ -342,51 +330,42 @@ Three layers, landed explicitly:
   `cursor_transcript.decode_store_db`, and POSTs the canonical
   `SessionIngest` to the Runtime Host `/api/agents/ingest` endpoint with the
   stored device token. `--dry-run` decodes without contacting the server.
-  This is the durable path that puts David's existing cursor sessions on the
-  timeline. Re-runs are idempotent via event-hash dedupe.
+  Re-runs are idempotent via event-hash dedupe.
 - **Engine live unmanaged binding** (`engine/src/unmanaged_bindings.rs`) —
-  DEFERRED, intentionally not landed. Making discovered cursor sessions
-  auto-appear on the timeline without a manual import requires a Rust
-  engine change: matching `cursor-agent` processes, enumerating
-  `~/.cursor/chats/*/store.db` (engine would need SQLite read support) or
-  the lossy `agent-transcripts/*.jsonl`, and emitting
-  `UnmanagedSessionBinding` rows. That change needs `make test-engine`, a
-  push-triggered runtime image rebuild, `make install-engine`, and a
-  dogfood-refresh. It is high-risk to land untested in a shared worktree
-  while David dogfoods, so it is frozen here as an explicit gap rather than
-  shipped half-tested. Pick it up in a focused engine session; until then,
-  `longhouse cursor import` is the path to timeline presence.
+  DEFERRED. Making discovered cursor sessions auto-appear on the timeline
+  without a manual import requires a Rust engine change (SQLite read support
+  in the engine, or tailing the lossy `agent-transcripts/*.jsonl`). Frozen as
+  an explicit gap; `longhouse cursor import` is the path to timeline presence
+  until then.
 
-## Phase 4 — Managed Cursor: Console mode (implemented), Helm mode (blocked)
+## Managed Cursor — Shadow / Console / Helm
 
 Per the Shadow / Helm / Console vocabulary (see `AGENTS.md`), Cursor ships in
-two of the three session modes:
+two of the three session modes today; Helm is the open one.
 
 - **Shadow** (unmanaged, live, observe-only): engine tails `~/.cursor/chats`
-  `store.db` and ships events via `cursor_transcript.py`. Built. See Phase 1-3.
+  `store.db` and ships events via `cursor_transcript.py`. Built.
 - **Console** (managed, headless, UI-driven): user launches a Cursor task from
   Longhouse web/iOS; the Runtime Host dispatches `session.run_once` to the
-  Machine Agent, which spawns `cursor-agent --print --output-format stream-json`
-  headless and ships the transcript to the timeline. **Built.** See below.
+  Machine Agent, which spawns `cursor-agent acp` and drives an ACP JSON-RPC
+  turn. **Built (cursor_acp).** See below.
 - **Helm** (managed, interactive, remote-steerable `longhouse cursor`): the
   user runs `longhouse cursor` and gets their normal interactive TUI
   invisibly while Longhouse owns a background control channel for send /
-  interrupt / steer from browser/iOS — the pattern Claude (native channels),
-  Codex (`app-server` + `--remote` TUI attach), and OpenCode (`serve` +
-  `attach`) follow. **Not built — definitively blocked**: cursor-agent
-  exposes no steerable interactive control surface. See "Helm gating
-  finding" below.
+  interrupt / terminate from browser/iOS. **Not built — planned via direct
+  TTY injection** (de-risked by prior art; see "Helm path" below).
 
-### Console mode — how it works
+### Console mode — ACP (cursor_acp)
 
 Contract: `schemas/managed_providers.yml` `provider: cursor`,
-`managed_transport: cursor_exec`, `control_plane: cursor_exec`,
+`managed_transport: cursor_acp`, `control_plane: cursor_acp`,
 `launch_local: false`, `launch_remote: true`, `run_once: true`,
-`can_resume: true` (via `--resume <chatId>`), `terminate: false` (relies on
-`kill_on_drop`; a pid-registry terminate is a follow-up). Advertises
-`cursor.run_once` and `cursor.resume_run_once` only. Mid-turn
-`send_input` / `interrupt` / `steer_active_turn` are explicit unsupported
-gaps — Console is turn-batched, not mid-turn steerable.
+`can_resume: true` (via `session/load` + `session/prompt`). Advertises
+`cursor.run_once` and `cursor.resume_run_once`. Mid-turn `send_input` /
+`interrupt` / `steer_active_turn` are explicit unsupported gaps — Console is
+turn-batched, not mid-turn steerable. `session/cancel` is "Method not found"
+on cursor, so terminate is cleanup-on-drop (`kill_on_drop`) until a
+pid-registry terminate command is wired.
 
 Flow mirrors codex `run_once`:
 
@@ -394,75 +373,95 @@ Flow mirrors codex `run_once`:
    execution_lifetime:"one_shot", initial_prompt, cwd, device_id}`.
 2. `remote_session_launch.launch_remote_session` pre-allocates the session +
    run, dispatches `session.run_once` over the control WebSocket. The one-shot
-   `SessionConnection.control_plane` is `cursor_exec` (derived via
-   `ONE_SHOT_CONTROL_PLANE_BY_PROVIDER`, no longer hardcoded to `codex_exec`).
+   `SessionConnection.control_plane` is `cursor_acp` (derived via
+   `ONE_SHOT_CONTROL_PLANE_BY_PROVIDER`).
 3. Engine `control_channel::handle_command_frame` `COMMAND_RUN_ONCE` dispatches
-   by provider → `cursor_exec::start_cursor_exec_once`.
-4. `cursor_exec.rs` spawns `cursor-agent --print --output-format stream-json
-   --yolo --trust --workspace <cwd> [--resume <chatId>] <prompt>` in its own
-   process group, `kill_on_drop`, env `LONGHOUSE_MANAGED_SESSION_ID`, returns
-   pid/argv upstream immediately (server flips connection → `attached`).
-5. Background: parses stream-json NDJSON → `EventIngest` rows → posts
-   `SessionIngest` to `/api/agents/ingest` with the managed session id (real
-   `timestamp_ms` on tool calls, monotonic receipt clock for assistant/user),
-   plus runtime phase/progress/terminal signals to
-   `/api/agents/runtime/events/batch` for the live overlay.
+   by provider → `cursor_acp::start_cursor_acp_once`.
+4. `cursor_acp.rs` spawns `cursor-agent acp` in its own process group,
+   `kill_on_drop`, env `LONGHOUSE_MANAGED_SESSION_ID`, returns pid/argv
+   upstream immediately (server flips connection → `attached`).
+5. Background ACP JSON-RPC handshake over stdio:
+   - `initialize` `{protocolVersion: 1 (NUMBER — cursor rejects strings),
+     clientCapabilities, clientInfo}`.
+   - `session/new` `{cwd, mcpServers: []}` → `sessionId` (or `session/load`
+     `{sessionId}` for a resume turn).
+   - `session/prompt` `{sessionId, prompt: [{type:"text","text":<prompt>}]}` →
+     streams `session/update` notifications until the prompt response
+     (`{stopReason: "end_turn" | ...}`).
+6. `session/update` notifications → `EventIngest` rows → posts `SessionIngest`
+   to `/api/agents/ingest` with the managed session id, plus runtime
+   phase/progress/terminal signals to `/api/agents/runtime/events/batch`.
 
-### stream-json event mapping (authoritative — captured from cursor-agent)
+### ACP session/update mapping
 
-- `system` (subtype init): `session_id` → `provider_session_id`. No event.
-- `user`: `message.content[].text` → `EventIngest(role=user, content_text)`.
-- `assistant`: `message.content[].text` → `EventIngest(role=assistant,
+- `agent_message_chunk` → `EventIngest(role=assistant, content_text =
+  update.content.text)`.
+- `agent_thought_chunk` → `EventIngest(role=assistant, kind=reasoning,
   content_text)`.
-- `tool_call` subtype=started: `tool_call.<toolName>.args`,
-  `toolCallId`, `timestamp_ms` → `EventIngest(role=assistant, tool_name,
-  tool_input_json, tool_call_id)`.
-- `tool_call` subtype=completed: `tool_call.<toolName>.result`,
-  `toolCallId`, `timestamp_ms` → `EventIngest(role=tool, tool_name,
-  tool_output_text, tool_call_id)`. Paired with the started event on
-  `tool_call_id` (mirrors web/iOS pairing).
-- `result`: terminal marker; `duration_ms` anchors `ended_at`. No event (the
-  final text is already in the `assistant` event).
+- `tool_call*` start variants → `EventIngest(role=assistant, tool_name,
+  tool_input_json, tool_call_id)` (provisional — exact Cursor variant names
+  not yet captured by a tool-using live canary).
+- `tool_call*` result/complete/end variants → `EventIngest(role=tool,
+  tool_name, tool_output_text, tool_call_id)`.
+- `available_commands_update` / other variants → progress signal only (no
+  transcript event).
 
-**Timestamp fidelity note:** only `tool_call` events carry a real
-`timestamp_ms` / `startedAtMs` / `completedAtMs`. `assistant` / `user` /
-`system` / `result` do **not** — an earlier draft of this spec claimed they
-did; a live capture disproved it. Those events use a monotonic receipt clock
-anchored to the last real tool timestamp. Do not fabricate per-event
-timestamps beyond this.
+**Timestamp fidelity:** ACP notifications carry **no per-event timestamps**
+(verified by live probe). Every event uses a monotonic receipt clock. Do not
+fabricate per-event timestamps beyond receipt time. (The earlier stream-json
+path had real `timestamp_ms` on tool calls; ACP does not — a fidelity
+regression on tool-call timing, accepted for the cleaner control surface.)
 
-### Helm gating finding (definitive — Cursor cannot reach Helm parity today)
+### Helm path — direct TTY injection (de-risked, planned)
 
-`cursor-agent` does **not** expose a steerable interactive control surface.
-This was verified directly against the installed binary, not assumed:
+`cursor-agent`'s interactive TUI exposes no steerable control surface (no
+`--remote` / `--attach` / `--socket` / `--app-server`; verified against the
+installed binary). Unlike Claude (`--dangerously-load-development-channels`),
+Codex (`app-server` + `--remote`), and OpenCode (`serve` + `attach`), Cursor
+did not build remote-control into its TUI binary. `cursor-agent acp` is a
+**headless** stdio mode — a separate process, not a control channel layered
+onto the live TUI — so ACP gives Console, not Helm.
 
-- Subcommand inventory: `agent` (interactive TUI), `mcp` (manage MCP servers
-  the agent *uses* — not a steering channel), `worker` (Cursor's own
-  cloud/k8s worker; `--management-addr` is healthz/metrics only), `ls` /
-  `resume` / `create-chat` (chat selection), plus housekeeping (`login`,
-  `models`, `bedrock`, `about`, `update`).
-- `agent --help` has no `--remote` / `--attach` / `--socket` /
-  `--control-port` / `--app-server` / `--serve` option.
-- Binary strings scan: no `CURSOR_*CONTROL/SOCKET/IPC/PIPE/RPC/SERVER/REMOTE`
-  env vars; no remote/attach/socket/control-port/app-server flags.
+The remaining Helm path is **direct TTY injection** (not PTY-wrapping):
+`longhouse cursor` spawns `cursor-agent` as a foreground child inheriting the
+user's **real terminal** (pristine TUI, no re-render layer), registers
+`session_id + tty_device + pid` with the engine/Runtime Host, and the engine
+injects input by writing bytes to that TTY device. This is de-risked by prior
+art, not assumed:
 
-The three providers that *do* reach Helm each ship a real control surface
-that a TUI attaches to while Longhouse fronts control: Claude
-(`--dangerously-load-development-channels` — an MCP control channel running
-alongside the TUI), Codex (`app-server` + `--remote` TUI attach), OpenCode
-(`serve` + `attach`). Cursor ships none of these. Its interactive TUI is a
-closed loop; the only "control" is `--resume` (start a new turn) and
-`--print` (headless one-shot, i.e. Console).
+- **Cross-process TTY write works on macOS without root or Accessibility
+  permission** — a separate process opening `/dev/ttysXXX` and writing
+  delivers bytes to the foreground process group's stdin (verified by spike:
+  `cat` and `cursor-agent` both received injected text).
+- **The Ink submit quirk is named and worked around.** Programmatic `\r` /
+  `\n` into an Ink text input creates a newline instead of submitting —
+  autocomplete intercepts Enter (anthropics/claude-code#15553). The reliable
+  fix is `text → sleep 0.3 → Escape → sleep 0.1 → Enter`. The 0.3s gap is
+  load-bearing. This is an Ink TUI behavior, so it applies to cursor-agent
+  (Ink-based) identically.
+- **tmux is the wrong layer; direct PTY/real-TTY is right.** Modern Claude
+  Code refuses all submit keystrokes when stdin is a tmux pane (18 encoding
+  variants tried, all fail) but `pty.fork() + \r` with no tmux works
+  (anthropics/claude-code#52812). This validates inheriting the real TTY
+  (or a direct pty.fork) over a tmux wrapper.
+- **Interrupt** = SIGINT to the pid (verified: SIGINT exits cursor-agent).
+  Ctrl-C *byte* (0x03) does not interrupt — the TUI traps it. **Terminate** =
+  SIGKILL. Mid-turn graceful steer is not available (no surface).
 
-The only theoretical Helm path is PTY-wrapping (interpose a fake TTY,
-inject keystrokes). That is rejected: it degrades the TUI experience the
-Helm contract requires be invisible, and it yields only keystroke injection
-+ Ctrl-C, not true mid-turn steer. The other providers reach Helm *without*
-PTY-wrapping because they have a real surface; Cursor does not, so the
-degraded PTY path is the only option and is not worth it.
+Scope of Helm-via-injection: **send / interrupt / terminate**. Not mid-turn
+steer. The hard engineering risk is **quiescence detection** — knowing when
+the agent is idle (safe to type) vs mid-turn. Shadow's `store.db` tail gives
+turn-commit; mid-turn busy detection needs screen-state inference (prior art:
+`tui-use` / `headless-terminal` use a VT-emulator + render-debounce;
+`claude-interactive-sdk` uses transcript tail + a Stop hook).
 
-**Conclusion: Cursor's parity ceiling today is Shadow + Console.** Helm is
-unachievable until Cursor ships a control surface (app-server / `serve` /
-channel / `--remote`-style attach). Do not fake a `longhouse cursor`
-wrapper, do not PTY-wrap. Revisit when a Cursor release adds such a
-surface; until then this is a hard stop, not an open spike.
+Prior art for the architecture: `Finndersen/claude-interactive-sdk` drives
+Claude Code's interactive TUI via PTY + `tmux paste-buffer`/`send-keys`,
+reads state via JSONL transcript tail + a `Stop` hook, `C-c` for interrupt —
+same shape, same motivation (keep usage on the subscription/TUI, not headless
+API). They use tmux; we inherit the real TTY (per #52812, tmux breaks on
+modern versions).
+
+Helm is **not** a hard stop — it is a planned Phase 2 build gated on a live
+interactive send test with David (the one step that needs a human at a real
+terminal).
