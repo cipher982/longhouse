@@ -104,6 +104,7 @@ def test_provider_identity_contracts_are_manifest_backed():
             "claude_channel_bridge",
             "opencode_server_bridge",
             "antigravity_hook_inbox",
+            "cursor_acp",
             "cursor_exec",
         }
     )

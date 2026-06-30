@@ -69,12 +69,13 @@ LAUNCH_LEASE_SECS = 120
 # One-shot (Console) runs record their SessionConnection against the engine's
 # direct exec control plane, not the provider's primary contract control_plane
 # (which for Helm providers like codex is the live bridge). codex_exec is
-# intentionally not contract-registered; cursor_exec is cursor's only plane so
-# it is both contract-registered and a direct machine control plane. Keep this
-# map explicit rather than deriving from the contract.
+# intentionally not contract-registered; cursor_acp is cursor's only plane so
+# it is both contract-registered and a direct machine control plane (cursor_exec
+# is retained as a legacy alias). Keep this map explicit rather than deriving
+# from the contract.
 ONE_SHOT_CONTROL_PLANE_BY_PROVIDER = {
     "codex": "codex_exec",
-    "cursor": "cursor_exec",
+    "cursor": "cursor_acp",
 }
 
 

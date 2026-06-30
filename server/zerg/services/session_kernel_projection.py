@@ -24,6 +24,7 @@ _DIRECT_MACHINE_CONTROL_PLANES = frozenset(
         "codex_exec",
         "antigravity_hook_inbox",
         "antigravity_process",
+        "cursor_acp",
         "cursor_exec",
     }
 )
