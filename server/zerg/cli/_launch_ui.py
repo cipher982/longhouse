@@ -27,6 +27,7 @@ PROVIDER_LABELS: dict[str, str] = {
     "codex": "Codex",
     "opencode": "OpenCode",
     "antigravity": "Antigravity",
+    "cursor": "Cursor",
 }
 
 

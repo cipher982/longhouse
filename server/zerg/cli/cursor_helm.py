@@ -48,6 +48,7 @@ from pathlib import Path
 import httpx
 import typer
 
+from zerg.cli import _launch_ui as launch_ui
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli._common import build_session_url
 from zerg.cli._common import ensure_managed_launch_preflight
@@ -515,6 +516,20 @@ def run_helm(
     # screen would clear a printed banner; the title persists.
     _set_window_title("Longhouse Helm · cursor-agent")
 
+    # Hearth splash: print once the control socket is bound (the steer surface
+    # is up, so the "steer from anywhere" claim is honest) and before pty.fork,
+    # so it lands on the cooked terminal before cursor-agent's alt-screen
+    # clears it. It remains in scrollback and reappears when the TUI exits.
+    launch_ui.launch_panel(
+        provider_label=launch_ui.PROVIDER_LABELS["cursor"],
+        base_url=resolved_url,
+        machine_name=machine_name,
+        session_id=session_id,
+        verbose=verbose,
+        steerable=True,
+        attach_command=result.attach_command or None,
+    )
+
     argv = [cursor_bin, *(cursor_args or [])]
 
     # Read the real terminal's mode + geometry before forking. We need the size
@@ -705,10 +720,7 @@ def run_helm(
             pass
         _remove_state(session_id, sock_path)
         _post_terminal_event(resolved_url, resolved_token, session_id, "helm_exit")
-        typer.secho(
-            f"\nLonghouse Helm session ended (cursor-agent exit {exit_code}).",
-            fg=typer.colors.CYAN,
-        )
+        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name)
         if open_browser:
             typer.echo(f"Timeline: {build_session_url(resolved_url, session_id)}")
 

@@ -143,8 +143,10 @@ message in the `field 1` list.
 
 ## Reconstruction algorithm (current format)
 
-1. Open `store.db` **immutable** (`file:...?immutable=1`, URI mode) so a live
-   cursor-agent's WAL does not race the reader. Do not attempt to checkpoint.
+1. Open `store.db` read-only and **WAL-aware** (`file:...?mode=ro`, URI mode) so
+   an in-flight cursor-agent's WAL is read (WAL readers don't block the writer).
+   Fall back to `immutable=1` only for a cold store whose `-shm` is gone/locked.
+   Do not attempt to checkpoint.
 2. Read `meta['0']`, hex-decode, `json.loads` → session metadata
    (`agentId`, `createdAt`, `lastUsedModel`, `name`, `mode`,
    `approvalMode`, `isRunEverything`, `latestRootBlobId`).
