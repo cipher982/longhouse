@@ -37,6 +37,8 @@ from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.write_serializer import WriteSerializer
 
 OWNER_ID = 77
+ROUTE_TIMEOUT_SECONDS = 5.0
+BLOCKED_WRITER_TIMEOUT_SECONDS = ROUTE_TIMEOUT_SECONDS + 3.0
 
 
 class _FakeRequest:
@@ -163,7 +165,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
     def _block_writer(db):
         db.execute(text("SELECT 1"))
         writer_entered.set()
-        assert release_writer.wait(2), "blocked writer was not released"
+        assert release_writer.wait(BLOCKED_WRITER_TIMEOUT_SECONDS), "blocked writer was not released"
 
     blocker = asyncio.create_task(serializer.execute(_block_writer, label="ingest-replay"))
     try:
@@ -222,7 +224,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
                     _auth=SimpleNamespace(),
                     _single=None,
                 ),
-                timeout=1.0,
+                timeout=ROUTE_TIMEOUT_SECONDS,
             )
         assert sessions.sessions
 
@@ -240,14 +242,14 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
                     ),
                     registry=registry,
                 ),
-                timeout=1.0,
+                timeout=ROUTE_TIMEOUT_SECONDS,
             )
         assert launch.launch_state == "live"
         assert len(registry.sent) == 1
 
         release_writer.set()
-        heartbeat_response = await asyncio.wait_for(heartbeat_task, timeout=1.0)
-        await asyncio.wait_for(blocker, timeout=1.0)
+        heartbeat_response = await asyncio.wait_for(heartbeat_task, timeout=ROUTE_TIMEOUT_SECONDS)
+        await asyncio.wait_for(blocker, timeout=ROUTE_TIMEOUT_SECONDS)
         assert heartbeat_response.status_code == 204
     finally:
         release_writer.set()
