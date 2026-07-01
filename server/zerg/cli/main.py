@@ -158,11 +158,17 @@ def db_doctor(
         "--identity-counts",
         help="With --deep, include thread_id NULL counts that may scan large archive tables.",
     ),
+    table_bytes: bool = typer.Option(
+        False,
+        "--table-bytes",
+        help="Walk SQLite dbstat pages and include physical table/index byte usage.",
+    ),
 ) -> None:
     """Inspect SQLite file, disk, planner, and optional backlog diagnostics."""
     from zerg.services.db_diagnostics import collect_sqlite_db_stats
     from zerg.services.db_diagnostics import collect_sqlite_deep_counts
     from zerg.services.db_diagnostics import collect_sqlite_schema_stats
+    from zerg.services.db_diagnostics import collect_sqlite_table_bytes
 
     engine, resolved_database_url = _resolve_db_engine(database_url)
     with engine.connect() as conn:
@@ -177,6 +183,12 @@ def db_doctor(
         else:
             payload["deep_counts"] = None
             payload["deep_counts_skipped"] = True
+        if table_bytes:
+            payload["table_bytes"] = collect_sqlite_table_bytes(conn)
+            payload["table_bytes_skipped"] = False
+        else:
+            payload["table_bytes"] = None
+            payload["table_bytes_skipped"] = True
 
     if json_output:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
@@ -191,6 +203,14 @@ def db_doctor(
     typer.echo(f"  freelist_count: {payload.get('db_freelist_count')}")
     if payload["deep_counts_skipped"]:
         typer.echo("  deep_counts: skipped (use --deep for explicit COUNT diagnostics)")
+    if payload["table_bytes_skipped"]:
+        typer.echo("  table_bytes: skipped (use --table-bytes to walk dbstat pages)")
+    elif payload["table_bytes"]["available"]:
+        typer.echo("  top_tables:")
+        for table_name, table_payload in list(payload["table_bytes"]["tables"].items())[:8]:
+            typer.echo(f"    {table_name}: {table_payload['bytes']}")
+    else:
+        typer.echo(f"  table_bytes: unavailable ({payload['table_bytes']['error']})")
 
 
 @db_app.command(name="optimize")

@@ -207,9 +207,7 @@ def collect_sqlite_deep_counts(
     if include_identity_counts:
         counts.update(
             {
-                "events_thread_id_null": _count_where(db, "events", "thread_id IS NULL")
-                if "thread_id" in events_columns
-                else None,
+                "events_thread_id_null": _count_where(db, "events", "thread_id IS NULL") if "thread_id" in events_columns else None,
                 "source_lines_thread_id_null": _count_where(db, "source_lines", "thread_id IS NULL")
                 if "thread_id" in source_columns
                 else None,
@@ -219,6 +217,84 @@ def collect_sqlite_deep_counts(
             }
         )
     return counts
+
+
+def collect_sqlite_table_bytes(db: Session | Connection) -> dict[str, Any]:
+    """Return physical SQLite page usage by table and index using dbstat.
+
+    dbstat walks the database pages, so callers should keep this behind an
+    explicit operator flag instead of collecting it on every health check.
+    """
+    try:
+        # Autoindexes without sqlite_master rows stay under their dbstat object
+        # name. This keeps the collector faithful to SQLite's physical btrees.
+        rows = db.execute(
+            text(
+                """
+                SELECT
+                    s.name AS object_name,
+                    COALESCE(m.type, 'internal') AS object_type,
+                    CASE
+                        WHEN m.type = 'index' AND m.tbl_name IS NOT NULL THEN m.tbl_name
+                        ELSE s.name
+                    END AS table_name,
+                    SUM(s.pgsize) AS bytes,
+                    COUNT(*) AS pages
+                FROM dbstat AS s
+                LEFT JOIN sqlite_master AS m ON m.name = s.name
+                GROUP BY s.name, m.type, m.tbl_name
+                ORDER BY bytes DESC, object_name ASC
+                """
+            )
+        ).mappings()
+    except Exception as exc:
+        return {
+            "available": False,
+            "error": str(exc),
+            "total_bytes": None,
+            "total_pages": None,
+            "tables": {},
+        }
+
+    tables: dict[str, dict[str, int]] = {}
+    total_bytes = 0
+    total_pages = 0
+    for row in rows:
+        object_type = str(row["object_type"])
+        table_name = str(row["table_name"])
+        object_bytes = int(row["bytes"] or 0)
+        object_pages = int(row["pages"] or 0)
+        total_bytes += object_bytes
+        total_pages += object_pages
+
+        table_entry = tables.setdefault(
+            table_name,
+            {
+                "bytes": 0,
+                "pages": 0,
+                "table_bytes": 0,
+                "index_bytes": 0,
+                "object_count": 0,
+                "index_count": 0,
+            },
+        )
+        table_entry["bytes"] += object_bytes
+        table_entry["pages"] += object_pages
+        table_entry["object_count"] += 1
+        if object_type == "index":
+            table_entry["index_bytes"] += object_bytes
+            table_entry["index_count"] += 1
+        else:
+            table_entry["table_bytes"] += object_bytes
+
+    sorted_tables = dict(sorted(tables.items(), key=lambda item: (-item[1]["bytes"], item[0])))
+    return {
+        "available": True,
+        "error": None,
+        "total_bytes": total_bytes,
+        "total_pages": total_pages,
+        "tables": sorted_tables,
+    }
 
 
 def collect_sqlite_db_stats(
@@ -269,9 +345,7 @@ def collect_sqlite_db_stats(
             "db_page_count": page_count,
             "db_freelist_count": freelist_count,
             "db_page_bytes": page_size * page_count if page_size is not None and page_count is not None else None,
-            "db_freelist_bytes": page_size * freelist_count
-            if page_size is not None and freelist_count is not None
-            else None,
+            "db_freelist_bytes": page_size * freelist_count if page_size is not None and freelist_count is not None else None,
             "db_freelist_ratio": freelist_count / page_count if page_count else None,
         }
     )

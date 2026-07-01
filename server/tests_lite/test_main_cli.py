@@ -126,6 +126,8 @@ def _make_db_diagnostics_fixture(tmp_path: Path) -> tuple[Path, str]:
             )
             """
         )
+        conn.execute("CREATE TABLE empty_payload(id INTEGER PRIMARY KEY, body TEXT)")
+        conn.execute("CREATE TABLE filled_payload(id INTEGER PRIMARY KEY, body TEXT)")
         conn.execute(
             """
             CREATE INDEX ix_events_raw_json_pending
@@ -144,6 +146,10 @@ def _make_db_diagnostics_fixture(tmp_path: Path) -> tuple[Path, str]:
         conn.execute("INSERT INTO events(raw_json, raw_json_codec, thread_id) VALUES ('{}', 0, NULL)")
         conn.execute("INSERT INTO source_lines(raw_json_codec, thread_id) VALUES (0, NULL)")
         conn.execute("INSERT INTO session_observations(thread_id) VALUES (NULL)")
+        conn.executemany(
+            "INSERT INTO filled_payload(body) VALUES (?)",
+            [("x" * 2048,) for _ in range(100)],
+        )
         conn.execute("ANALYZE")
     return db_path, f"sqlite:///{db_path}"
 
@@ -169,6 +175,41 @@ def test_db_doctor_json_reports_file_schema_and_deep_counts(tmp_path):
     assert payload["deep_counts"]["source_lines_raw_json_pending"] == 1
     assert payload["deep_counts"]["identity_counts_skipped"] is True
     assert payload["deep_counts"]["events_thread_id_null"] is None
+    assert payload["table_bytes_skipped"] is True
+    assert payload["table_bytes"] is None
+
+
+def test_db_doctor_table_bytes_are_separately_opted_in(tmp_path):
+    _db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+
+    result = CliRunner().invoke(app, ["db", "doctor", "--database-url", db_url, "--json", "--table-bytes"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    table_bytes = payload["table_bytes"]
+    assert payload["table_bytes_skipped"] is False
+    assert table_bytes["available"] is True
+    assert table_bytes["total_bytes"] > 0
+    assert table_bytes["total_pages"] > 0
+    assert table_bytes["tables"]["filled_payload"]["bytes"] > table_bytes["tables"]["empty_payload"]["bytes"]
+    assert table_bytes["tables"]["events"]["index_bytes"] > 0
+    assert table_bytes["tables"]["events"]["index_count"] >= 1
+    freelist_bytes = payload["db_freelist_count"] * payload["db_page_size"]
+    assert abs(payload["db_page_bytes"] - freelist_bytes - table_bytes["total_bytes"]) <= payload["db_page_size"]
+
+
+def test_collect_sqlite_table_bytes_gracefully_handles_unavailable_dbstat():
+    from zerg.services.db_diagnostics import collect_sqlite_table_bytes
+
+    class BrokenDbstatConnection:
+        def execute(self, *_args, **_kwargs):
+            raise RuntimeError("no such table: dbstat")
+
+    table_bytes = collect_sqlite_table_bytes(BrokenDbstatConnection())  # type: ignore[arg-type]
+
+    assert table_bytes["available"] is False
+    assert table_bytes["tables"] == {}
+    assert "dbstat" in table_bytes["error"]
 
 
 def test_db_doctor_identity_counts_are_separately_opted_in(tmp_path):
@@ -196,6 +237,8 @@ def test_db_doctor_without_deep_skips_counts(tmp_path):
     payload = json.loads(result.output)
     assert payload["deep_counts_skipped"] is True
     assert payload["deep_counts"] is None
+    assert payload["table_bytes_skipped"] is True
+    assert payload["table_bytes"] is None
 
 
 def test_db_optimize_json_runs_pragma(tmp_path):
