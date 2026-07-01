@@ -1,18 +1,27 @@
-"""Unit tests for the cursor Helm launcher's testable logic.
+"""Tests for the cursor Helm launcher.
 
-These cover the state-file round-trip, the socket command handler (send /
-interrupt / terminate / ping / unknown), and the inject byte sequence. The
-full PTY pass-through + live cursor-agent flow is exercised interactively
-with David, not here.
+Unit tests cover the state-file round-trip, the socket command handler (send /
+interrupt / terminate / ping / unknown), and the inject byte sequence.
+Integration tests exercise the real pty.fork -> socket-server -> inject -> echo
+path with `cat` as the child, plus the session_not_attached behavior when a
+send lands after the child has exited. The full live cursor-agent TUI flow is
+exercised interactively with David, not here.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import pty
+import select
+import shutil
+import signal
+import socket
 import subprocess
+import tempfile
 import threading
 import time
+from pathlib import Path
 
 from zerg.cli import cursor_helm
 
@@ -130,3 +139,173 @@ def test_handle_command_interrupt_dead_child_reports_not_attached():
     )
     assert reply["ok"] is False
     assert reply["error"]["code"] == "session_not_attached"
+
+
+def _start_helm_socket_server(tmp_path, master_fd, child_pid, stop_event):
+    """Bind a temp Unix socket, start the launcher's socket server thread, return (sock_path, thread, server)."""
+    # macOS sun_path is ~104 chars; tmp_path under /var/folders can exceed that,
+    # so bind under /tmp with a short unique dir.
+    short_dir = tempfile.mkdtemp(dir="/tmp", prefix="lh_helm_")
+    sock_path = Path(short_dir) / "helm.sock"
+    if sock_path.exists():
+        sock_path.unlink()
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(sock_path))
+    server.listen(4)
+    os.chmod(sock_path, 0o600)
+    lock = threading.Lock()
+    thread = threading.Thread(
+        target=cursor_helm._socket_server,
+        args=(server,),
+        kwargs={
+            "master_fd": master_fd,
+            "child_pid": child_pid,
+            "master_lock": lock,
+            "stop_event": stop_event,
+        },
+        daemon=True,
+        name="cursor-helm-test-socket",
+    )
+    thread.start()
+    return sock_path, thread, server, short_dir
+
+
+def _send_command(sock_path, request) -> dict:
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(5.0)
+    client.connect(str(sock_path))
+    try:
+        client.sendall((json.dumps(request) + "\n").encode())
+        buf = bytearray()
+        while b"\n" not in buf:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            buf.extend(chunk)
+        line, _, _ = bytes(buf).partition(b"\n")
+        return json.loads(line.decode("utf-8", errors="replace"))
+    finally:
+        client.close()
+
+
+def _read_pty_echo(master_fd: int, needle: bytes, timeout_s: float = 2.0) -> bytes:
+    """Drain the PTY master for up to timeout_s looking for needle; return captured bytes."""
+    deadline = time.time() + timeout_s
+    captured = bytearray()
+    while time.time() < deadline:
+        ready, _, _ = select.select([master_fd], [], [], 0.1)
+        if not ready:
+            continue
+        try:
+            chunk = os.read(master_fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        captured.extend(chunk)
+        if needle in captured:
+            break
+    return bytes(captured)
+
+
+def test_socket_protocol_send_injects_into_real_pty_and_interrupt_exits_child(tmp_path):
+    stop_event = threading.Event()
+    pid, master_fd = pty.fork()
+    if pid == 0:
+        # Child: `cat` echoes stdin to stdout under the PTY slave.
+        os.execvp("cat", ["cat"])
+        os._exit(127)
+
+    sock_path, thread, server, short_dir = _start_helm_socket_server(tmp_path, master_fd, pid, stop_event)
+    try:
+        # ping round-trips through the real socket server.
+        assert _send_command(sock_path, {"kind": "ping"})["ok"] is True
+
+        # send injects "hello" + Escape + Enter into the PTY master; cat echoes it.
+        reply = _send_command(sock_path, {"kind": "send", "text": "hello"})
+        assert reply["ok"] is True
+        echo = _read_pty_echo(master_fd, b"hello")
+        assert b"hello" in echo, f"expected 'hello' in PTY echo, got {echo!r}"
+
+        # interrupt sends SIGINT to cat; cat exits.
+        assert _send_command(sock_path, {"kind": "interrupt"})["ok"] is True
+        try:
+            _, status = os.waitpid(pid, 0)
+            assert os.WIFSIGNALED(status) or os.WIFEXITED(status)
+        except subprocess.TimeoutExpired:
+            raise AssertionError("interrupt did not exit cat")
+    finally:
+        stop_event.set()
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        try:
+            server.close()
+        except OSError:
+            pass
+        thread.join(timeout=3.0)
+        shutil.rmtree(short_dir, ignore_errors=True)
+
+
+def test_socket_protocol_terminate_kills_real_child_and_sets_stop(tmp_path):
+    stop_event = threading.Event()
+    pid, master_fd = pty.fork()
+    if pid == 0:
+        os.execvp("cat", ["cat"])
+        os._exit(127)
+
+    sock_path, thread, server, short_dir = _start_helm_socket_server(tmp_path, master_fd, pid, stop_event)
+    try:
+        reply = _send_command(sock_path, {"kind": "terminate"})
+        assert reply["ok"] is True
+        # terminate must set the stop event so the launcher's main loop exits.
+        assert stop_event.wait(timeout=3.0), "terminate did not set stop_event"
+        try:
+            _, status = os.waitpid(pid, 0)
+            assert os.WIFSIGNALED(status) or os.WIFEXITED(status)
+        except ChildProcessError:
+            pass
+    finally:
+        stop_event.set()
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        try:
+            server.close()
+        except OSError:
+            pass
+        thread.join(timeout=3.0)
+        shutil.rmtree(short_dir, ignore_errors=True)
+
+
+def test_send_after_child_exit_reports_session_not_attached():
+    """A remote send whose PTY master write fails must surface as
+    session_not_attached, not a generic command_failed. The launcher's
+    OSError handling is defense-in-depth for the narrow race between child
+    exit and socket teardown; in the steady state the engine gets
+    connection-refused (already mapped to not-attached) because the launcher
+    unlinks the socket on exit."""
+    # Use a read-only pipe end as master_fd: os.write on it raises OSError
+    # (EBADF) without the fd-reuse race that a closed fd would hit.
+    read_fd, write_fd = os.pipe()
+    try:
+        reply = cursor_helm._handle_command(
+            {"kind": "send", "text": "hello"},
+            master_fd=read_fd,
+            child_pid=1,
+            master_lock=threading.Lock(),
+            stop_event=threading.Event(),
+        )
+        assert reply["ok"] is False
+        assert reply["error"]["code"] == "session_not_attached"
+    finally:
+        try:
+            os.close(read_fd)
+        except OSError:
+            pass
+        try:
+            os.close(write_fd)
+        except OSError:
+            pass

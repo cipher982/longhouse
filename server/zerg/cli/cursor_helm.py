@@ -62,11 +62,26 @@ EXIT_SETUP_FAILED = 78
 EXIT_NOT_INTERACTIVE = 79
 _CURSOR_BIN_ENV = "LONGHOUSE_CURSOR_BIN"
 _CURSOR_BIN_DEFAULT = "cursor-agent"
+
+
 # Ink (cursor-agent's TUI) intercepts a programmatic Enter as autocomplete and
 # swallows the submit. Escape dismisses the autocomplete popup, then Enter
-# submits. Validated live in the PTY pass-through spike.
-_INJECT_TEXT_SETTLE_SECONDS = 0.3
-_INJECT_ESCAPE_SETTLE_SECONDS = 0.1
+# submits. Validated live in the PTY pass-through spike. The settle delays are
+# tunable via env so dogfooding can adjust them without a rebuild:
+#   LH_CURSOR_HELM_TEXT_SETTLE_MS    (default 300)
+#   LH_CURSOR_HELM_ESCAPE_SETTLE_MS  (default 100)
+def _env_seconds(name: str, default_ms: int) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default_ms / 1000.0
+    try:
+        return max(0.0, int(raw)) / 1000.0
+    except ValueError:
+        return default_ms / 1000.0
+
+
+_INJECT_TEXT_SETTLE_SECONDS = _env_seconds("LH_CURSOR_HELM_TEXT_SETTLE_MS", 300)
+_INJECT_ESCAPE_SETTLE_SECONDS = _env_seconds("LH_CURSOR_HELM_ESCAPE_SETTLE_MS", 100)
 _SOCKET_BACKLOG = 4
 _COMMAND_READ_TIMEOUT = 8.0
 _REGISTER_TIMEOUT = 30.0
@@ -296,7 +311,16 @@ def _handle_command(
         text = str(request.get("text") or "")
         if not text:
             return {"ok": False, "error": {"code": "bad_request", "message": "missing text"}}
-        _inject_send(master_fd, text, master_lock)
+        try:
+            _inject_send(master_fd, text, master_lock)
+        except OSError as exc:
+            # PTY master is closed — the cursor-agent child has exited. Report
+            # not-attached so the engine/UI marks the session gone instead of
+            # retrying or labeling it a transient command failure.
+            return {
+                "ok": False,
+                "error": {"code": "session_not_attached", "message": f"pty closed: {exc}"},
+            }
         return {"ok": True, "exit_code": 0, "stdout": "", "stderr": ""}
     if kind == "interrupt":
         try:
