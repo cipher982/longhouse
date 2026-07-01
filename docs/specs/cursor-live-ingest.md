@@ -88,3 +88,22 @@ decoder-attribution approach.
 Ship A (Helm launcher-side tailer) once ingest idempotency is confirmed; keep
 B on the roadmap. This matches "one session, one execution owner" — the
 launcher owns the Helm session, so it owns that session's live ingest too.
+
+## Status
+
+**A is implemented** in `server/zerg/cli/cursor_helm_ingest.py`, wired into the
+Helm launcher (`run_helm` spawns a `cursor-helm-ingest` daemon thread). It uses
+the append-only high-water-mark approach: each poll decodes the current
+`store.db`, stamps every event with a stable ordinal `source_offset`, ships
+only events with `ordinal >= hwm`, and advances the HWM only after a
+successful (<500) post. Each event is shipped exactly once, so synthesized
+timestamps never shift and no duplicates arise. Chat-dir discovery honors
+`LH_CURSOR_HELM_CHAT_DIR` for deterministic dogfood, else scans
+`~/.cursor/chats/*/*/store.db` for the newest store created around launch.
+Tests in `tests_lite/test_cursor_helm_ingest.py` cover the HWM/delta logic,
+retry-on-failure, and discovery.
+
+Open during first dogfood: confirm the discovery heuristic locks onto the
+right chat dir for a real `cursor-agent` session, and confirm events appear on
+the timeline bound to the managed session id. B (Shadow engine Rust tailer)
+remains deferred.

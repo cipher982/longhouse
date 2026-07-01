@@ -52,6 +52,7 @@ from zerg.cli._common import ensure_managed_launch_preflight
 from zerg.cli._common import git_output
 from zerg.cli._common import interactive_stdio
 from zerg.cli._common import load_api_credentials
+from zerg.cli.cursor_helm_ingest import run_helm_ingest_thread
 from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
@@ -539,6 +540,26 @@ def run_helm(
         name="cursor-helm-socket",
     )
     server_thread.start()
+
+    # Live transcript tailer: stream new turn events from cursor's store.db to
+    # the Runtime Host so the Helm session appears on the timeline as turns
+    # commit (not just live+steerable). Best-effort daemon thread; see
+    # zerg.cli.cursor_helm_ingest + docs/specs/cursor-live-ingest.md.
+    launch_time = datetime.now(timezone.utc)
+    ingest_thread = threading.Thread(
+        target=run_helm_ingest_thread,
+        kwargs={
+            "launch_time": launch_time,
+            "session_id": session_id,
+            "url": resolved_url,
+            "token": resolved_token,
+            "stop_event": stop_event,
+            "verbose": verbose,
+        },
+        daemon=True,
+        name="cursor-helm-ingest",
+    )
+    ingest_thread.start()
 
     try:
         tty.setraw(real_stdin)
