@@ -514,6 +514,16 @@ def run_helm(
             pass
         env = dict(os.environ)
         env.setdefault("LONGHOUSE_SESSION_ID", session_id)
+        # Ink (cursor-agent's TUI) disables ANSI erase/cursor manipulation,
+        # synchronized output, and SIGWINCH resize handling when it detects a
+        # CI environment or when stdout is not a TTY. The child's stdout is the
+        # PTY slave (a TTY), but CI-detection vars would still flip it into
+        # non-interactive mode and silently break the render. Strip the common
+        # CI sentinels and guarantee a real TERM so Ink stays interactive.
+        for _ci_var in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "CIRCLECI", "BUILD_NUMBER", "JENKINS_URL"):
+            env.pop(_ci_var, None)
+        if not env.get("TERM") or env.get("TERM") == "dumb":
+            env["TERM"] = "xterm-256color"
         try:
             os.execvpe(argv[0], argv, env)
         except OSError as exc:
