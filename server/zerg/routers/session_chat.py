@@ -1075,6 +1075,7 @@ async def terminate_live_session_agents(
     )
 
 
+@router.get("/{session_id}/pause-requests", response_model=PauseRequestListResponse)
 async def list_pause_requests_endpoint(
     session_id: str,
     status_filter: str | None = PAUSE_PENDING_STATUS,

@@ -317,6 +317,7 @@ class WriteSerializer:
         self._session_factory = session_factory
         self._session_factory_resolver = None
         self._configured = True
+        _last_write_timing.set(None)
         logger.info("WriteSerializer configured")
 
     def configure_resolver(self, session_factory_resolver: Callable[[], sessionmaker]) -> None:
@@ -328,6 +329,7 @@ class WriteSerializer:
         self._session_factory = None
         self._session_factory_resolver = session_factory_resolver
         self._configured = True
+        _last_write_timing.set(None)
         logger.info("WriteSerializer configured")
 
     @property
