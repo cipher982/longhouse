@@ -14,6 +14,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from zerg.cli import _managed_launch as managed_launch
 from zerg.cli import claude as claude_cli
 from zerg.cli import codex as codex_cli
 from zerg.cli.main import app
@@ -505,7 +506,7 @@ def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path
         )
     )
 
-    monkeypatch.setattr(claude_cli, "_infer_git_context", lambda cwd: ("/tmp/repo", "main"))
+    monkeypatch.setattr(managed_launch, "infer_git_context", lambda cwd: ("/tmp/repo", "main"))
     monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: fake_client)
 
     result = codex_cli._launch_managed_local_from_api(

@@ -21,15 +21,19 @@ from urllib.request import urlopen
 import typer
 
 from zerg.cli import _launch_ui as launch_ui
-from zerg.cli import claude as managed_local_cli
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli._common import build_session_url as _build_session_url
 from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_launch_preflight
 from zerg.cli._common import interactive_stdio as _interactive_stdio
-from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
-from zerg.cli._managed_contract import record_managed_provider_contract
 from zerg.cli._managed_contract import remove_managed_provider_contract
+from zerg.cli._managed_launch import EXIT_SETUP_FAILED
+from zerg.cli._managed_launch import finish_managed_launch_preflight
+from zerg.cli._managed_launch import launch_managed_local_from_api
+from zerg.cli._managed_launch import maybe_open_session_url
+from zerg.cli._managed_launch import record_contract_or_warn
+from zerg.cli._managed_launch import resolve_managed_launch_credentials as _load_api_credentials
+from zerg.cli._managed_launch import start_managed_launch
 from zerg.provider_cli_contract import CODEX_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_CODEX_BIN_FLAG
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
@@ -707,7 +711,7 @@ def _launch_managed_local_from_api(
     name: str | None,
     machine_name: str,
 ) -> ManagedLocalLaunchResponse:
-    return managed_local_cli._launch_managed_local_from_api(
+    return launch_managed_local_from_api(
         url=url,
         token=token,
         cwd=cwd,
@@ -800,14 +804,13 @@ def codex(
         return
 
     launch_ui.quiet_diagnostic_logs(verbose)
-
-    resolved_config_dir = Path(config_dir) if config_dir else None
-    resolved_url, resolved_token = _load_api_credentials(
+    resolved_url, resolved_token, resolved_config_dir = start_managed_launch(
+        config_dir=config_dir,
         url=url,
         token=token,
-        config_dir=resolved_config_dir,
-        exit_code=managed_local_cli.EXIT_SETUP_FAILED,
-        config_dir_is_provider_home=True,
+        verbose=verbose,
+        exit_code=EXIT_SETUP_FAILED,
+        load_credentials=_load_api_credentials,
     )
     resolved_codex_bin = _resolve_codex_binary(codex_bin)
     if not resolved_codex_bin:
@@ -819,15 +822,14 @@ def codex(
         raise typer.Exit(code=1)
     codex_bin_source = _codex_binary_source(codex_bin, resolved_codex_bin)
     machine_name = get_machine_name_label()
-    _ensure_managed_launch_preflight(
+    finish_managed_launch_preflight(
         url=resolved_url,
         machine_name=machine_name,
         config_dir=resolved_config_dir,
-        exit_code=managed_local_cli.EXIT_SETUP_FAILED,
+        exit_code=EXIT_SETUP_FAILED,
+        verbose=verbose,
+        run_preflight=_ensure_managed_launch_preflight,
     )
-    launch_ui.progress("Preparing your session…")
-    if verbose:
-        typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
         token=resolved_token,
@@ -875,30 +877,20 @@ def codex(
         if thread_id:
             typer.echo(f"  Codex thread: {thread_id}")
         typer.echo(f"  Remote target: {ws_url}")
-    try:
-        record_managed_provider_contract(
-            provider="codex",
-            session_id=result.session_id,
-            cwd=cwd,
-            config_dir=resolved_config_dir,
-            launch_mode=launch_mode,
-            provider_binary_path=resolved_codex_bin,
-            provider_binary_source=codex_bin_source,
-            control_kind="codex_bridge",
-            control_state_path=state_file,
-            config_dir_is_provider_home=True,
-        )
-    except Exception as exc:
-        typer.secho(
-            f"Longhouse warning: could not record managed-session contract: {exc}",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
+    record_contract_or_warn(
+        provider="codex",
+        session_id=result.session_id,
+        cwd=cwd,
+        config_dir=resolved_config_dir,
+        launch_mode=launch_mode,
+        provider_binary_path=resolved_codex_bin,
+        provider_binary_source=codex_bin_source,
+        control_kind="codex_bridge",
+        control_state_path=state_file,
+        config_dir_is_provider_home=True,
+    )
 
-    if open_browser:
-        typer.echo("Opening session in browser...")
-        if not _open_session_url(session_url):
-            typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
+    maybe_open_session_url(open_browser=open_browser, session_url=session_url, opener=_open_session_url)
 
     attach_cmd = _build_codex_attach_command(
         codex_bin=resolved_codex_bin,

@@ -20,12 +20,17 @@ from zerg.cli import _launch_ui as launch_ui
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli._common import build_session_url as _build_session_url
 from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_launch_preflight
-from zerg.cli._common import git_output
 from zerg.cli._common import interactive_stdio as _interactive_stdio
-from zerg.cli._common import load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
-from zerg.cli._managed_contract import record_managed_provider_contract
 from zerg.cli._managed_contract import remove_managed_provider_contract
+from zerg.cli._managed_launch import EXIT_SETUP_FAILED
+from zerg.cli._managed_launch import build_managed_local_launch_payload  # noqa: F401 (re-exported for tests)
+from zerg.cli._managed_launch import finish_managed_launch_preflight
+from zerg.cli._managed_launch import launch_managed_local_from_api as _launch_managed_local_from_api
+from zerg.cli._managed_launch import maybe_open_session_url
+from zerg.cli._managed_launch import record_contract_or_warn
+from zerg.cli._managed_launch import resolve_managed_launch_credentials as _load_api_credentials
+from zerg.cli._managed_launch import start_managed_launch
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
@@ -33,8 +38,6 @@ from zerg.services.claude_channel_bridge import install_claude_channel_mcp_serve
 from zerg.services.claude_channel_bridge import wait_for_claude_channel_state
 from zerg.services.longhouse_paths import get_agent_runtime_events_outbox_dir
 from zerg.services.session_continuity import get_machine_name_label
-from zerg.services.shipper import get_zerg_url
-from zerg.services.shipper import load_token
 from zerg.services.shipper.hooks import install_hooks
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
@@ -52,7 +55,6 @@ _CLAUDE_LAUNCH_ENV_KEYS = (
     "ANTHROPIC_MODEL",
 )
 _FORCE_NATIVE_CLAUDE_CHANNELS_ENV = "LONGHOUSE_FORCE_NATIVE_CLAUDE_CHANNELS"
-EXIT_SETUP_FAILED = 78
 _CLAUDE_TERMINAL_POST_TIMEOUT_SECS = 2.0
 _CLAUDE_TERMINAL_SOURCE = "claude_channel_wrapper"
 _CLAUDE_REMOTE_LAUNCH_LOG_DIR = "claude-channel-launch"
@@ -168,162 +170,6 @@ def _verify_claude_channel_mcp_server(*, workspace_path: Path, timeout_secs: flo
     if not detail:
         detail = f"claude mcp get {CLAUDE_CHANNEL_SERVER_NAME} exited {completed.returncode}"
     raise _NativeClaudeError(f"Claude cannot resolve MCP server {CLAUDE_CHANNEL_SERVER_NAME}: {detail}")
-
-
-def _load_api_credentials(
-    *,
-    url: str | None,
-    token: str | None,
-    config_dir: Path | None,
-    exit_code: int = EXIT_SETUP_FAILED,
-) -> tuple[str, str]:
-    return load_api_credentials(
-        url=url,
-        token=token,
-        config_dir=config_dir,
-        exit_code=exit_code,
-        config_dir_is_provider_home=True,
-        resolve_url=get_zerg_url,
-        resolve_token=load_token,
-    )
-
-
-def _infer_git_context(cwd: Path) -> tuple[str | None, str | None]:
-    git_repo = git_output(cwd, "rev-parse", "--show-toplevel")
-    git_branch = git_output(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-    if git_branch == "HEAD":
-        git_branch = None
-    return git_repo, git_branch
-
-
-def build_managed_local_launch_payload(
-    *,
-    cwd: Path,
-    provider: str,
-    project: str | None,
-    name: str | None,
-    loop_mode: SessionLoopMode,
-    machine_name: str,
-    native_claude_channels_available: bool | None = None,
-    claude_launch_env: dict[str, str] | None = None,
-    permission_mode: str = "bypass",
-) -> dict:
-    """Build the exact JSON body posted to /api/sessions/managed-local/this-device.
-
-    Public so contract tests can import it and validate against the live
-    server schema without reproducing the payload shape in two places.
-    """
-    git_repo, git_branch = _infer_git_context(cwd)
-    payload: dict = {
-        "cwd": str(cwd),
-        "provider": provider,
-        "project": project,
-        "git_repo": git_repo,
-        "git_branch": git_branch,
-        "display_name": name,
-        "loop_mode": loop_mode.value,
-        "machine_name": machine_name,
-        "permission_mode": permission_mode,
-    }
-    if provider == "claude":
-        payload["native_claude_channels_available"] = native_claude_channels_available
-        if claude_launch_env:
-            payload["claude_launch_env"] = claude_launch_env
-    return payload
-
-
-def _launch_managed_local_from_api(
-    *,
-    url: str,
-    token: str,
-    cwd: Path,
-    project: str | None,
-    loop_mode: SessionLoopMode,
-    name: str | None,
-    machine_name: str,
-    native_claude_channels_available: bool | None = None,
-    claude_launch_env: dict[str, str] | None = None,
-    provider: str = "claude",
-    permission_mode: str = "bypass",
-    verbose: bool = False,
-) -> ManagedLocalLaunchResponse:
-    payload = build_managed_local_launch_payload(
-        cwd=cwd,
-        provider=provider,
-        project=project,
-        name=name,
-        loop_mode=loop_mode,
-        machine_name=machine_name,
-        native_claude_channels_available=native_claude_channels_available,
-        claude_launch_env=claude_launch_env,
-        permission_mode=permission_mode,
-    )
-
-    launch_url = f"{url.rstrip('/')}/api/sessions/managed-local/this-device"
-    if verbose:
-        typer.echo(f"Creating Longhouse managed {provider} session: POST {launch_url}")
-    try:
-        with httpx.Client(timeout=30) as client:
-            response = client.post(
-                launch_url,
-                headers={"X-Agents-Token": token},
-                json=payload,
-            )
-    except httpx.ConnectError:
-        typer.secho(f"Could not connect to {url}", fg=typer.colors.RED)
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
-    except httpx.TimeoutException:
-        typer.secho(
-            f"Timed out waiting for Longhouse to create the managed {provider} session at {url}. "
-            f"No local {provider} process was started.",
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
-
-    if response.status_code == 401:
-        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
-
-    if response.status_code == 422:
-        # Almost always means CLI enum/schema drifted from the server since
-        # the user's CLI was installed. Surface a recovery path instead of a
-        # raw validation dump.
-        try:
-            errors = response.json()
-        except ValueError:
-            errors = response.text[:200]
-        typer.secho(
-            "Longhouse server rejected the launch request (422).\n"
-            "Your CLI likely drifted from the server schema. Update with:\n"
-            "  cd ~/git/zerg/longhouse && make dogfood-refresh\n"
-            f"Server detail: {errors}",
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
-
-    if response.status_code != 200:
-        detail = ""
-        try:
-            payload = response.json()
-            detail = str(payload.get("detail") or "").strip()
-        except ValueError:
-            detail = response.text.strip()
-        message = detail or response.text[:200] or "Longhouse session launch failed"
-        typer.secho(message, fg=typer.colors.RED)
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
-
-    body = response.json()
-    raw_provider_session_id = body.get("provider_session_id")
-    provider_session_id = str(raw_provider_session_id).strip() if raw_provider_session_id else None
-    return ManagedLocalLaunchResponse(
-        session_id=str(body["session_id"]),
-        provider_session_id=provider_session_id,
-        attach_command=str(body["attach_command"]),
-        source_runner_name=str(body.get("source_runner_name") or machine_name),
-        managed_transport=str(body.get("managed_transport") or "") or None,
-        permission_mode=str(body.get("permission_mode") or "bypass"),
-        hook_token=(str(body["hook_token"]) if body.get("hook_token") else None),
-    )
 
 
 def _ensure_native_claude_prereqs(
@@ -585,10 +431,7 @@ def _finalize_native_claude_launch(
         attach_command=result.attach_command,
     )
 
-    if open_browser:
-        typer.echo("Opening session in browser...")
-        if not _open_session_url(session_url):
-            typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
+    maybe_open_session_url(open_browser=open_browser, session_url=session_url, opener=_open_session_url)
 
     if not attach:
         return
@@ -603,24 +446,17 @@ def _finalize_native_claude_launch(
         raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     launch_ui.progress("Launching Claude…")
-    try:
-        record_managed_provider_contract(
-            provider="claude",
-            session_id=result.session_id,
-            cwd=cwd,
-            config_dir=config_dir,
-            launch_mode="tui",
-            provider_binary_path=_resolve_claude_command(),
-            provider_binary_source=PROVIDER_CLI_SOURCE_PATH,
-            control_kind="claude_channel_bridge",
-            config_dir_is_provider_home=True,
-        )
-    except Exception as exc:
-        typer.secho(
-            f"Longhouse warning: could not record managed-session contract: {exc}",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
+    record_contract_or_warn(
+        provider="claude",
+        session_id=result.session_id,
+        cwd=cwd,
+        config_dir=config_dir,
+        launch_mode="tui",
+        provider_binary_path=_resolve_claude_command(),
+        provider_binary_source=PROVIDER_CLI_SOURCE_PATH,
+        control_kind="claude_channel_bridge",
+        config_dir_is_provider_home=True,
+    )
     try:
         exit_code = _run_native_claude_tui(
             session_id=result.session_id,
@@ -706,13 +542,13 @@ def claude(
     """Launch a Longhouse Claude Code session on this machine via the Longhouse API."""
 
     launch_ui.quiet_diagnostic_logs(verbose)
-
-    resolved_config_dir = Path(config_dir) if config_dir else None
-    resolved_url, resolved_token = _load_api_credentials(
+    resolved_url, resolved_token, resolved_config_dir = start_managed_launch(
+        config_dir=config_dir,
         url=url,
         token=token,
-        config_dir=resolved_config_dir,
+        verbose=verbose,
         exit_code=EXIT_SETUP_FAILED,
+        load_credentials=_load_api_credentials,
     )
     machine_name = get_machine_name_label()
     claude_launch_env = _collect_claude_launch_env()
@@ -736,15 +572,14 @@ def claude(
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=EXIT_SETUP_FAILED)
-    _ensure_managed_launch_preflight(
+    finish_managed_launch_preflight(
         url=resolved_url,
         machine_name=machine_name,
         config_dir=resolved_config_dir,
         exit_code=EXIT_SETUP_FAILED,
+        verbose=verbose,
+        run_preflight=_ensure_managed_launch_preflight,
     )
-    launch_ui.progress("Preparing your session…")
-    if verbose:
-        typer.echo(f"Longhouse: {resolved_url}")
     try:
         _ensure_native_claude_prereqs(
             base_url=resolved_url,

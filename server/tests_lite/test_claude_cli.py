@@ -13,6 +13,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from zerg.cli import _managed_launch as managed_launch
 from zerg.cli import claude as claude_cli
 from zerg.cli.main import app
 from zerg.services.claude_channel_bridge import build_claude_channel_state_file
@@ -87,7 +88,7 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
         )
     )
 
-    monkeypatch.setattr(claude_cli, "_infer_git_context", lambda cwd: ("/tmp/repo", "main"))
+    monkeypatch.setattr(managed_launch, "infer_git_context", lambda cwd: ("/tmp/repo", "main"))
     monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: fake_client)
 
     result = claude_cli._launch_managed_local_from_api(
@@ -151,7 +152,7 @@ def test_launch_managed_local_from_api_preserves_missing_provider_session_id(mon
         )
     )
 
-    monkeypatch.setattr(claude_cli, "_infer_git_context", lambda cwd: (None, None))
+    monkeypatch.setattr(managed_launch, "infer_git_context", lambda cwd: (None, None))
     monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: fake_client)
 
     result = claude_cli._launch_managed_local_from_api(
@@ -182,7 +183,7 @@ def test_launch_managed_local_from_api_timeout_says_no_provider_started(monkeypa
         def post(self, *_args, **_kwargs):
             raise claude_cli.httpx.ReadTimeout("timed out")
 
-    monkeypatch.setattr(claude_cli, "_infer_git_context", lambda cwd: (None, None))
+    monkeypatch.setattr(managed_launch, "infer_git_context", lambda cwd: (None, None))
     monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: TimeoutClient())
 
     with pytest.raises(ClickExit) as exc_info:
