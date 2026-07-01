@@ -186,3 +186,62 @@ def test_discover_store_db_returns_none_when_nothing_new(tmp_path):
     os.utime(old_dir, (old_time, old_time))
     os.utime(s, (old_time, old_time))
     assert mod.discover_store_db(datetime.now(timezone.utc), cursor_root=root) is None
+
+
+def test_post_delta_treats_4xx_as_failure_not_success(monkeypatch):
+    """Regression: a 4xx (e.g. 422 validation rejection) must return False so
+    the tailer retries without advancing the high-water mark. Previously
+    ``status_code < 500`` returned True for 4xx, silently dropping rejected
+    events forever once hwm advanced.
+    """
+    import httpx
+
+    payload = _session([_ev("user", "a")])
+
+    def _resp(status: int):
+        return httpx.Response(status_code=status, text="{}", request=httpx.Request("POST", "http://x"))
+
+    cases = {200: True, 201: True, 204: True, 400: False, 401: False, 403: False, 422: False, 500: False, 503: False}
+    for status, expected in cases.items():
+        captured: dict[str, object] = {}
+
+        class _FakeClient:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, endpoint, headers=None, content=None):
+                captured["endpoint"] = endpoint
+                return _resp(status)
+
+        monkeypatch.setattr(httpx, "Client", _FakeClient)
+        got = mod._post_delta("http://x/", "tok", payload)
+        assert got is expected, f"status {status}: expected {expected}, got {got}"
+        assert captured["endpoint"] == "http://x/api/agents/ingest"
+
+
+def test_post_delta_returns_false_on_transport_error(monkeypatch):
+    import httpx
+
+    payload = _session([_ev("user", "a")])
+
+    class _BoomClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def post(self, *a, **k):
+            raise httpx.ConnectError("boom", request=httpx.Request("POST", "http://x"))
+
+    monkeypatch.setattr(httpx, "Client", _BoomClient)
+    assert mod._post_delta("http://x", "tok", payload) is False

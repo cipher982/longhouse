@@ -154,7 +154,15 @@ def _build_delta_payload(
     return payload, new_events
 
 
-def _post_delta(url: str, token: str, payload: SessionIngest) -> bool:
+def _post_delta(url: str, token: str, payload: "SessionIngest") -> bool:
+    """POST one delta to the Runtime Host ingest endpoint.
+
+    Returns True only on a 2xx acceptance. A 4xx (e.g. 422 validation
+    rejection) is a real failure — treating it as success would advance the
+    high-water mark and silently drop the rejected events forever, so we
+    return False and let the next poll retry (giving the operator a chance to
+    notice via verbose logs). 5xx and transport errors are also False.
+    """
     endpoint = f"{url.rstrip('/')}/api/agents/ingest"
     try:
         with httpx.Client(timeout=_INGEST_TIMEOUT) as client:
@@ -165,7 +173,7 @@ def _post_delta(url: str, token: str, payload: SessionIngest) -> bool:
             )
     except httpx.HTTPError:
         return False
-    return resp.status_code < 500
+    return 200 <= resp.status_code < 300
 
 
 def run_transcript_tailer(
@@ -203,16 +211,25 @@ def run_transcript_tailer(
                     if _post_delta(url, token, payload):
                         hwm += len(new_events)
                         if verbose:
-                            shipped_total = hwm
                             print(
-                                f"longhouse cursor: shipped {len(new_events)} new event(s) "
-                                f"({shipped_total} total) to session {session_id}",
+                                f"longhouse cursor: shipped {len(new_events)} new event(s) " f"({hwm} total) to session {session_id}",
                                 flush=True,
                             )
-        except Exception:
+                    elif verbose:
+                        print(
+                            "longhouse cursor: ingest post rejected (non-2xx); "
+                            "will retry next poll without advancing the high-water mark",
+                            flush=True,
+                        )
+        except Exception as exc:  # noqa: BLE001 - best-effort tailer must not die
             # Best-effort tailer: never let a decode/post error kill the thread.
-            # The next poll retries.
-            pass
+            # The next poll retries. Surface the failure on verbose so a silent
+            # crash (e.g. a missing-config import) is not invisible.
+            if verbose:
+                print(
+                    f"longhouse cursor: transcript poll failed ({type(exc).__name__}: " f"{str(exc)[:160]}); will retry next poll",
+                    flush=True,
+                )
         stop_event.wait(poll_seconds)
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -546,3 +547,43 @@ def test_managed_launcher_uses_shared_launch_ui_template(provider):
     assert "from zerg.cli import _launch_ui" in source or "import _launch_ui" in source, (
         f"{provider} launcher must import the shared _launch_ui module"
     )
+
+
+def test_agents_service_package_imports_without_database_url():
+    """Regression: remote-only CLI launchers (``longhouse cursor``) run with no
+    local ``DATABASE_URL``. The ``zerg.services.agents`` package init must not
+    eagerly import DB-bound submodules (``store``/``schema``/``helpers``), and
+    the Pydantic wire-contract models must import without triggering
+    ``zerg.database`` config validation. Verified in a clean subprocess so the
+    test process's own env cannot mask the regression.
+    """
+    import subprocess
+    import sys
+
+    code = (
+        "from zerg.services.agents.models import EventIngest, SessionIngest; "
+        "from zerg.services.agents import SessionIngest as S2, IngestResult; "
+        "from zerg.services.cursor_transcript import decode_store_db; "
+        "from zerg.cli.cursor_helm_ingest import _build_delta_payload; "
+        "print('IMPORT_OK')"
+    )
+    repo_root = Path(__file__).resolve().parents[2]
+    server_root = repo_root / "server"
+    env = {k: v for k, v in os.environ.items() if k not in {"DATABASE_URL", "FERNET_SECRET"}}
+    # Sanity: confirm the variables really are absent in the child.
+    env.pop("DATABASE_URL", None)
+    env.pop("FERNET_SECRET", None)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(server_root),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"agents package import failed without DATABASE_URL (the cursor Helm "
+        f"tailer would silently crash on every poll):\nSTDOUT:\n{result.stdout}\n"
+        f"STDERR:\n{result.stderr}"
+    )
+    assert "IMPORT_OK" in result.stdout
