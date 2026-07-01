@@ -165,7 +165,7 @@ def _resolve_cursor_bin() -> str:
     found = shutil.which(_CURSOR_BIN_DEFAULT)
     if not found:
         typer.secho(
-            f"`{_CURSOR_BIN_DEFAULT}` not found on PATH. Install Cursor's CLI " f"or set {_CURSOR_BIN_ENV}.",
+            f"`{_CURSOR_BIN_DEFAULT}` not found on PATH. Install Cursor's CLI or set {_CURSOR_BIN_ENV}.",
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=EXIT_SETUP_FAILED)
@@ -301,14 +301,25 @@ def _set_pty_size(fd: int, rows: int, cols: int) -> None:
         pass
 
 
+def _full_write(fd: int, data: bytes) -> int:
+    """Write all bytes to fd, looping past partial writes. Raises OSError on a
+    terminal write failure (caller decides whether that ends the session)."""
+    total = 0
+    while data:
+        n = os.write(fd, data)
+        total += n
+        data = data[n:]
+    return total
+
+
 def _inject_send(master_fd: int, text: str, lock: threading.Lock) -> None:
     data = text.encode("utf-8", errors="replace")
     with lock:
-        os.write(master_fd, data)
+        _full_write(master_fd, data)
         time.sleep(_INJECT_TEXT_SETTLE_SECONDS)
-        os.write(master_fd, b"\x1b")  # Escape dismisses Ink autocomplete popup
+        _full_write(master_fd, b"\x1b")  # Escape dismisses Ink autocomplete popup
         time.sleep(_INJECT_ESCAPE_SETTLE_SECONDS)
-        os.write(master_fd, b"\r")  # Enter submits
+        _full_write(master_fd, b"\r")  # Enter submits
 
 
 def _handle_command(
@@ -505,6 +516,16 @@ def run_helm(
     _set_window_title("Longhouse Helm · cursor-agent")
 
     argv = [cursor_bin, *(cursor_args or [])]
+
+    # Read the real terminal's mode + geometry before forking. We need the size
+    # in two places: to preseed LINES/COLUMNS in the child env (mitigates the
+    # startup race where cursor-agent samples the PTY's 0x0 winsize before our
+    # TIOCSWINSZ lands) and to set the PTY winsize immediately after fork.
+    real_stdin = sys.stdin.fileno()
+    real_stdout = sys.stdout.fileno()
+    saved_term = termios.tcgetattr(real_stdin)
+    real_rows, real_cols = _get_terminal_size(real_stdout)
+
     pid, master_fd = pty.fork()
     if pid == 0:
         # Child: cursor-agent under the PTY slave.
@@ -517,13 +538,34 @@ def run_helm(
         # Ink (cursor-agent's TUI) disables ANSI erase/cursor manipulation,
         # synchronized output, and SIGWINCH resize handling when it detects a
         # CI environment or when stdout is not a TTY. The child's stdout is the
-        # PTY slave (a TTY), but CI-detection vars would still flip it into
-        # non-interactive mode and silently break the render. Strip the common
-        # CI sentinels and guarantee a real TERM so Ink stays interactive.
-        for _ci_var in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "CIRCLECI", "BUILD_NUMBER", "JENKINS_URL"):
+        # PTY slave (a TTY), but CI-detection vars inherited from the parent
+        # shell would still flip it into non-interactive mode and silently
+        # break the render. Strip the common CI sentinels (the set ci-info /
+        # Ink detect) and guarantee a real TERM so Ink stays interactive. Leave
+        # user color prefs (NO_COLOR etc.) untouched.
+        for _ci_var in (
+            "CI",
+            "CONTINUOUS_INTEGRATION",
+            "GITHUB_ACTIONS",
+            "GITLAB_CI",
+            "CIRCLECI",
+            "TRAVIS",
+            "BUILDKITE",
+            "TEAMCITY_VERSION",
+            "BUILD_NUMBER",
+            "BUILD_ID",
+            "BITBUCKET_BUILD_NUMBER",
+            "JENKINS_URL",
+        ):
             env.pop(_ci_var, None)
         if not env.get("TERM") or env.get("TERM") == "dumb":
             env["TERM"] = "xterm-256color"
+        # Best-effort guard against the startup winsize race. The kernel also
+        # delivers SIGWINCH once the parent sets the PTY size, but preseeding
+        # LINES/COLUMNS covers cursor-agent's first frame if it samples before
+        # that lands.
+        env["LINES"] = str(real_rows)
+        env["COLUMNS"] = str(real_cols)
         try:
             os.execvpe(argv[0], argv, env)
         except OSError as exc:
@@ -532,11 +574,6 @@ def run_helm(
 
     # Parent: own the PTY master + child pid.
     _write_state(session_id, socket_path=sock_path, cursor_pid=pid, cwd=cwd, ready=True)
-
-    real_stdin = sys.stdin.fileno()
-    real_stdout = sys.stdout.fileno()
-    saved_term = termios.tcgetattr(real_stdin)
-    real_rows, real_cols = _get_terminal_size(real_stdout)
     _set_pty_size(master_fd, real_rows, real_cols)
 
     stop_event = threading.Event()
@@ -585,8 +622,21 @@ def run_helm(
 
     try:
         tty.setraw(real_stdin)
-    except termios.error:
-        pass
+    except termios.error as exc:
+        # A cooked terminal breaks the cursor-agent TUI render (escape sequences
+        # mangled, input line-buffered). Kill the child, let the finally below
+        # restore the terminal + close fds, and bail with a clear error rather
+        # than silently running a mangled session.
+        typer.secho(
+            f"longhouse cursor: cannot set terminal to raw mode: {exc}",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        stop_event.set()
 
     exit_code = 0
     try:
@@ -603,12 +653,12 @@ def run_helm(
                 if not data:
                     # stdin closed (Ctrl-D) — forward EOF to the child.
                     try:
-                        os.write(master_fd, b"\x04")
+                        _full_write(master_fd, b"\x04")
                     except OSError:
                         stop_event.set()
                 else:
                     try:
-                        os.write(master_fd, data)
+                        _full_write(master_fd, data)
                     except OSError:
                         stop_event.set()
                         break
@@ -622,7 +672,7 @@ def run_helm(
                     stop_event.set()
                     break
                 try:
-                    os.write(real_stdout, data)
+                    _full_write(real_stdout, data)
                 except OSError:
                     stop_event.set()
                     break
