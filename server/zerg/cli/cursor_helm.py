@@ -27,6 +27,7 @@ keeps running.
 from __future__ import annotations
 
 import json
+import logging as _logging
 import os
 import pty
 import select
@@ -58,6 +59,14 @@ from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 from zerg.session_loop_mode import SessionLoopMode
+
+# httpx logs every request at INFO to stderr. In Helm mode the real terminal is
+# in raw mode and the cursor-agent TUI owns the screen, so any stderr line from
+# the register call or the live-transcript tailer would land mid-render and
+# corrupt the TUI. Silence httpx/httpcore INFO so the launcher never emits
+# request logs to the terminal.
+_logging.getLogger("httpx").setLevel(_logging.WARNING)
+_logging.getLogger("httpcore").setLevel(_logging.WARNING)
 
 EXIT_SETUP_FAILED = 78
 EXIT_NOT_INTERACTIVE = 79
