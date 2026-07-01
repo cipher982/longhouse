@@ -2893,6 +2893,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/terminate-live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Terminate Live Session
+         * @description Browser-authenticated explicit terminate for managed-local sessions.
+         */
+        post: operations["terminate_live_session_sessions__session_id__terminate_live_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/pause-requests": {
         parameters: {
             query?: never;
@@ -3136,6 +3156,31 @@ export interface paths {
          *     source runner. It does not confirm that the provider stopped the turn.
          */
         post: operations["interrupt_live_session_agents_agents_sessions__session_id__interrupt_live_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/terminate-live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Terminate Live Session Agents
+         * @description Machine-facing explicit terminate for managed-local sessions.
+         *
+         *     A successful response means the terminate command was dispatched on the
+         *     source runner (the engine signalled the provider child). It is not a
+         *     confirmation that the OS has reaped the process, though most managed
+         *     transports kill the child synchronously.
+         */
+        post: operations["terminate_live_session_agents_agents_sessions__session_id__terminate_live_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7720,7 +7765,7 @@ export interface components {
          *     Transport is auto-determined by launch context — not user-selectable.
          * @enum {string}
          */
-        ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server" | "opencode_server_bridge" | "opencode_process" | "antigravity_hook_inbox" | "antigravity_process";
+        ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server" | "opencode_server_bridge" | "opencode_process" | "antigravity_hook_inbox" | "antigravity_process" | "cursor_exec" | "cursor_acp" | "cursor_helm";
         /** ManagedTurnProviderSummaryResponse */
         ManagedTurnProviderSummaryResponse: {
             /** Completed Turns */
@@ -10999,6 +11044,22 @@ export interface components {
              * @description Last assistant message (truncated)
              */
             last_ai_message?: string | null;
+        };
+        /** SessionTerminateResponse */
+        SessionTerminateResponse: {
+            /** Terminate Dispatched */
+            terminate_dispatched: boolean;
+            /** Session Id */
+            session_id: string;
+            /** Exit Code */
+            exit_code?: number | null;
+            /** Error */
+            error?: string | null;
+            /**
+             * Released Lock
+             * @default false
+             */
+            released_lock: boolean;
         };
         /**
          * SessionThreadResponse
@@ -17395,6 +17456,40 @@ export interface operations {
             };
         };
     };
+    terminate_live_session_sessions__session_id__terminate_live_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTerminateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_pause_requests_endpoint_sessions__session_id__pause_requests_get: {
         parameters: {
             query?: {
@@ -17843,6 +17938,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionInterruptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    terminate_live_session_agents_agents_sessions__session_id__terminate_live_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTerminateResponse"];
                 };
             };
             /** @description Validation Error */
