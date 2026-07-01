@@ -92,9 +92,7 @@ def _frontend_static_cache_control(static_file: Path, frontend_dist_dir: Path) -
     return "public, max-age=86400, stale-while-revalidate=604800"
 
 # --- Router imports ---
-from zerg.constants import AUTOMATIONS_PREFIX
 from zerg.constants import MODELS_PREFIX
-from zerg.constants import THREADS_PREFIX
 
 # Lifespan
 from zerg.lifespan import _enforce_single_tenant_startup  # noqa: F401 — re-exported for tests
@@ -121,20 +119,14 @@ from zerg.routers.agents_source_lines import router as agents_source_lines_route
 from zerg.routers.agents_turns import router as agents_turns_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.auth_internal import router as auth_internal_router
-from zerg.routers.automation_connectors import router as automation_connectors_router
 from zerg.routers.channels_webhooks import router as channels_webhooks_router
 from zerg.routers.connectors import router as connectors_router
-from zerg.routers.contacts import router as contacts_router
-from zerg.routers.conversations import router as conversations_router
 from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.email_config import router as email_config_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
-from zerg.routers.fiche_config import router as fiche_config_router
-from zerg.routers.fiches import router as fiches_router
 from zerg.routers.health import router as health_router
 from zerg.routers.health import set_health_app_ref
 from zerg.routers.heartbeat import router as heartbeat_router
-from zerg.routers.knowledge import router as knowledge_router
 from zerg.routers.mcp_servers import router as automation_mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
@@ -146,8 +138,6 @@ from zerg.routers.permission_gate import router as permission_gate_router
 from zerg.routers.presence import router as presence_router
 from zerg.routers.reliability import router as reliability_router
 from zerg.routers.runners import router as runners_router
-from zerg.routers.runs import automation_router as automation_runs_router
-from zerg.routers.runs import router as runs_router
 from zerg.routers.runtime import router as runtime_router
 from zerg.routers.session_chat import agents_router as agents_session_chat_router
 from zerg.routers.session_chat import router as session_chat_router
@@ -161,12 +151,10 @@ from zerg.routers.system import router as system_router
 from zerg.routers.telemetry import admin_router as telemetry_admin_router
 from zerg.routers.telemetry import beacon_router as telemetry_beacon_router
 from zerg.routers.telemetry import canary_router as telemetry_canary_router
-from zerg.routers.threads import router as threads_router
 from zerg.routers.timeline import canary_stream_router as timeline_canary_stream_router
 from zerg.routers.timeline import router as timeline_router
 from zerg.routers.timeline import timeline_stream_router
 from zerg.routers.traces import router as traces_router
-from zerg.routers.triggers import router as triggers_router
 from zerg.routers.users import router as users_router
 from zerg.routers.websocket import router as websocket_router
 from zerg.services.public_downloads import PublicDownloadUnavailable
@@ -255,9 +243,7 @@ app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 # ---------------------------------------------------------------------------
 # API routers
 # ---------------------------------------------------------------------------
-api_app.include_router(fiches_router, prefix=AUTOMATIONS_PREFIX)
 api_app.include_router(automation_mcp_servers_router)
-api_app.include_router(threads_router, prefix=THREADS_PREFIX)
 api_app.include_router(models_router, prefix=MODELS_PREFIX)
 api_app.include_router(websocket_router)
 api_app.include_router(admin_router)
@@ -265,17 +251,11 @@ api_app.include_router(admin_bootstrap_router)
 api_app.include_router(pubsub_webhook_router)
 api_app.include_router(channels_webhooks_router)
 api_app.include_router(connectors_router)
-api_app.include_router(conversations_router)
-api_app.include_router(triggers_router)
-api_app.include_router(knowledge_router)
-api_app.include_router(runs_router)
-api_app.include_router(automation_runs_router)
 api_app.include_router(runners_router)
 api_app.include_router(auth_router)
 api_app.include_router(auth_internal_router)
 api_app.include_router(oauth_router)
 api_app.include_router(users_router)
-api_app.include_router(contacts_router)
 api_app.include_router(stream_router)
 api_app.include_router(system_router)
 api_app.include_router(email_config_router)
@@ -285,8 +265,6 @@ api_app.include_router(telemetry_beacon_router)
 api_app.include_router(telemetry_admin_router)
 api_app.include_router(telemetry_canary_router)
 api_app.include_router(observability_router)
-api_app.include_router(fiche_config_router)
-api_app.include_router(automation_connectors_router)
 api_app.include_router(account_connectors_router)
 api_app.include_router(traces_router)
 api_app.include_router(reliability_router)
