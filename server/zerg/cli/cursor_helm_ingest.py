@@ -90,10 +90,11 @@ def discover_store_db(
             st_db = os.stat(store_path)
         except OSError:
             continue
-        # Birthtime is the true "chat dir created" signal on macOS; fall back to
-        # ctime/mtime where unavailable.
-        dir_born = getattr(st_dir, "st_birthtime", None) or st_dir.st_ctime
-        db_born = getattr(st_db, "st_birthtime", None) or st_db.st_ctime
+        # Birthtime is the true "chat dir created" signal on macOS. Linux lacks
+        # it; use mtime there because ctime changes on metadata updates such as
+        # utime/chmod and can make an old store look newly created.
+        dir_born = getattr(st_dir, "st_birthtime", None) or st_dir.st_mtime
+        db_born = getattr(st_db, "st_birthtime", None) or st_db.st_mtime
         created = max(dir_born, db_born)
         if created < window_start:
             continue

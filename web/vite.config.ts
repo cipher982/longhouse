@@ -135,6 +135,15 @@ export default defineConfig(({ mode }) => {
     build: {
       sourcemap: true,
       outDir: "dist",
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes("node_modules")) {
+              return "vendor";
+            }
+          },
+        },
+      },
       // The app shell already lazy-loads the heaviest routes; keep a warning floor
       // that still catches regressions without tripping on the intentional shell size.
       chunkSizeWarningLimit: 750,
