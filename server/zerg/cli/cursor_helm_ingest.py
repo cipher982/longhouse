@@ -31,23 +31,14 @@ import threading
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
 from uuid import UUID
 
 import httpx
 
+from zerg.services.agents.models import SessionIngest
 from zerg.services.cursor_transcript import decode_store_db
 from zerg.services.cursor_transcript import iter_local_cursor_stores
 from zerg.utils.log import BestEffortLogger
-
-# SessionIngest is imported lazily inside _build_delta_payload, NOT at module
-# top level. Importing zerg.services.agents.models eagerly would pull in
-# zerg.database, which calls get_settings()/_validate_required() at import
-# time and crash every `longhouse` command (including `--version`) when
-# DATABASE_URL is unset — which includes self-installed CLI users who only
-# configure a remote shipper URL. Keep this import lazy.
-if TYPE_CHECKING:
-    from zerg.services.agents.models import SessionIngest
 
 _CHAT_DIR_ENV = "LH_CURSOR_HELM_CHAT_DIR"
 _POLL_SECONDS_ENV = "LH_CURSOR_HELM_INGEST_POLL_SECONDS"
@@ -133,10 +124,6 @@ def _build_delta_payload(
         new_events.append(ev)
     if not new_events:
         return None
-    # Lazy import: see module-level note. SessionIngest pulls in zerg.database
-    # which validates config at import time; only import when actually shipping.
-    from zerg.services.agents.models import SessionIngest
-
     payload = SessionIngest(
         id=UUID(session_id),
         provider=decoded_session.provider,
@@ -254,7 +241,6 @@ def probe_ingest_path() -> tuple[bool, str | None]:
     """
     try:
         from zerg.services.agents.models import EventIngest
-        from zerg.services.agents.models import SessionIngest
 
         ev = EventIngest(role="system", content_text="", timestamp=datetime.now(timezone.utc))
         SessionIngest(

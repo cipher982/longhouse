@@ -1,19 +1,9 @@
-"""Pydantic and dataclass models for agent sessions and events.
-
-The ingest wire-contract models (``EventIngest``, ``SessionIngest``, ...) are
-pure Pydantic data shapes used by the engine and by remote-only CLI launchers
-(e.g. ``longhouse cursor``) that have no local ``DATABASE_URL``. To keep this
-module importable in those environments, the SQLAlchemy ORM models
-(``AgentEvent``/``AgentSession``) are imported only under ``TYPE_CHECKING``;
-``from __future__ import annotations`` makes the dataclass field annotations
-that reference them lazy strings, so they are never evaluated at import time.
-"""
+"""Pydantic and dataclass models for agent sessions and events."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING
 from typing import Any
 from typing import Dict
 from typing import List
@@ -23,9 +13,8 @@ from uuid import UUID
 from pydantic import BaseModel
 from pydantic import Field
 
-if TYPE_CHECKING:
-    from zerg.models.agents import AgentEvent
-    from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
 
 
 class EventIngest(BaseModel):

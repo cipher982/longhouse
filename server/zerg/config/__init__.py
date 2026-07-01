@@ -690,16 +690,50 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
 
 
 def get_settings() -> Settings:  # noqa: D401 – public accessor
-    """Return :class:`Settings` instance loaded from environment."""
+    """Return :class:`Settings` instance loaded from environment.
+
+    Validates required configuration on every call (fail-fast). Server-side
+    callers that need a configured environment should use this. Remote-only
+    CLI surfaces that must import config-adjacent modules without a local
+    ``DATABASE_URL`` (e.g. the cursor Helm launcher) should use
+    :func:`get_settings_unchecked` instead, and rely on
+    :func:`validate_required_settings` at explicit startup points.
+    """
 
     settings = _load_settings()
     _validate_required(settings)
     return settings
 
 
+def get_settings_unchecked() -> Settings:
+    """Return :class:`Settings` loaded from environment WITHOUT validating.
+
+    Safe to call at import time / in environments missing ``DATABASE_URL`` or
+    ``FERNET_SECRET`` (self-installed remote-only CLI launchers). The returned
+    object has defaults filled in (e.g. empty ``database_url``); callers that
+    actually need a working DB/LLM stack must call
+    :func:`validate_required_settings` explicitly at startup.
+    """
+
+    return _load_settings()
+
+
+def validate_required_settings() -> None:
+    """Explicit startup preflight: raise if mandatory config is missing.
+
+    Use at server / engine boot (and in CLI commands that need a local DB) to
+    preserve fail-fast. Equivalent to the validation ``get_settings()`` does
+    inline, split out so import-time config access can be validation-free.
+    """
+
+    _validate_required(_load_settings())
+
+
 __all__ = [
     "AppMode",
     "Settings",
     "get_settings",
+    "get_settings_unchecked",
+    "validate_required_settings",
     "resolve_app_mode",
 ]

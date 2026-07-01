@@ -26,12 +26,18 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from zerg.config import get_settings
+from zerg.config import get_settings_unchecked
 from zerg.session_execution_home import SessionExecutionHome
 
 logger = logging.getLogger(__name__)
 
-_settings = get_settings()
+# Import-time config access must be validation-free. zerg.database is imported
+# transitively by remote-only CLI surfaces (e.g. the cursor Helm launcher's
+# ingest models -> zerg.models.agents -> here) that have no local DATABASE_URL.
+# get_settings() would call _validate_required() and raise RuntimeError at
+# import time, crashing every such CLI. Use the unchecked accessor; the server
+# validates explicitly at boot via zerg.main's get_settings() call.
+_settings = get_settings_unchecked()
 
 # ---------------------------------------------------------------------------
 # Test-only commis DB routing (E2E isolation)

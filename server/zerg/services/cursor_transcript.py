@@ -24,13 +24,11 @@ from dataclasses import field
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
-from typing import TYPE_CHECKING
 from typing import Any
 from typing import Iterator
 
-if TYPE_CHECKING:
-    from zerg.services.agents.models import EventIngest
-    from zerg.services.agents.models import SessionIngest
+from zerg.services.agents.models import EventIngest
+from zerg.services.agents.models import SessionIngest
 
 PROVIDER = "cursor"
 
@@ -417,9 +415,6 @@ def decode_store_db(
     the store is missing, empty, legacy, or unreadable. Never raises on schema
     drift; raises only on unrecoverable I/O errors.
     """
-    from zerg.services.agents.models import EventIngest
-    from zerg.services.agents.models import SessionIngest
-
     path = Path(path)
     session_dir = path.parent
     diag = CursorDecodeDiagnostics()
