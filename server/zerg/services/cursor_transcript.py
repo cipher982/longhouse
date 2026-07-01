@@ -123,12 +123,26 @@ def _is_id(v: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _open_immutable(path: Path) -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{path}?immutable=1", uri=True)
+def _open_readonly(path: Path) -> sqlite3.Connection:
+    """Open a cursor store read-only and WAL-aware.
+
+    ``immutable=1`` deliberately ignores the ``-wal``/``-shm`` sidecars, so it
+    sees only the checkpointed main file. cursor-agent writes in WAL mode and
+    checkpoints on exit, which means ``immutable=1`` is fine for a cold
+    (post-exit) store but sees an empty file — and raises ``no such table:
+    meta`` — while the session is still live and the conversation is in the
+    WAL. ``mode=ro`` reads the WAL (WAL readers don't block the writer) so the
+    live-transcript tailer can decode an in-flight session. Fall back to
+    ``immutable=1`` for a cold store whose ``-shm`` is gone/locked.
+    """
+    try:
+        return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.OperationalError:
+        return sqlite3.connect(f"file:{path}?immutable=1", uri=True)
 
 
 def _load_meta_and_blobs(path: Path) -> tuple[dict[str, str], dict[bytes, bytes]]:
-    con = _open_immutable(path)
+    con = _open_readonly(path)
     try:
         meta = dict(con.execute("select key, value from meta"))
         blobs = {bytes.fromhex(r[0]): r[1] for r in con.execute("select id, data from blobs")}
