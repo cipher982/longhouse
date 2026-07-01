@@ -507,3 +507,42 @@ def test_provider_cli_discovery_contract_comes_from_managed_provider_manifest():
         "antigravity": "LONGHOUSE_ANTIGRAVITY_BIN",
         "cursor": "LONGHOUSE_CURSOR_BIN",
     }
+
+
+# Every managed local launcher must share the same _launch_ui launch
+# experience: the hearth splash (launch_panel), the closing bookend
+# (exit_bookend), the low-key progress line (progress), and the diagnostic-log
+# quieting (quiet_diagnostic_logs). This is a source-level contract guard so a
+# new provider can't silently hand-roll its own launch UI and drift from the
+# others (cursor_helm originally did — it missed the hearth splash entirely
+# because it wasn't on the shared template rail).
+_MANAGED_LAUNCHER_MODULES = {
+    "claude": "claude.py",
+    "codex": "codex.py",
+    "opencode": "opencode.py",
+    "antigravity": "antigravity.py",
+    "cursor": "cursor_helm.py",
+}
+_SHARED_LAUNCH_UI_HELPERS = (
+    "launch_ui.launch_panel(",
+    "launch_ui.exit_bookend(",
+    "launch_ui.progress(",
+    "launch_ui.quiet_diagnostic_logs(",
+)
+
+
+@pytest.mark.parametrize("provider", sorted(_MANAGED_LAUNCHER_MODULES))
+def test_managed_launcher_uses_shared_launch_ui_template(provider):
+    repo_root = Path(__file__).resolve().parents[2]
+    module_path = repo_root / "server" / "zerg" / "cli" / _MANAGED_LAUNCHER_MODULES[provider]
+    source = module_path.read_text(encoding="utf-8")
+    missing = [call for call in _SHARED_LAUNCH_UI_HELPERS if call not in source]
+    assert not missing, (
+        f"{provider} launcher {module_path.name} drifted from the shared "
+        f"_launch_ui template; missing: {missing}. Every managed local launcher "
+        f"must use the shared hearth splash / exit bookend / progress / "
+        f"quiet_diagnostic_logs so the launch experience can't diverge."
+    )
+    assert "from zerg.cli import _launch_ui" in source or "import _launch_ui" in source, (
+        f"{provider} launcher must import the shared _launch_ui module"
+    )
