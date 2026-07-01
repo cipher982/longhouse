@@ -51,7 +51,7 @@ RUN pip install --upgrade setuptools wheel \
     && pip download --no-binary=:all: pysqlite3==0.6.0 \
     && tar -xzf pysqlite3-0.6.0.tar.gz \
     && cp "sqlite-autoconf-${SQLITE_VERSION}/sqlite3.c" "sqlite-autoconf-${SQLITE_VERSION}/sqlite3.h" pysqlite3-0.6.0/ \
-    && cd pysqlite3-0.6.0 && python setup.py bdist_wheel \
+    && cd pysqlite3-0.6.0 && CFLAGS="-DSQLITE_ENABLE_DBSTAT_VTAB" python setup.py bdist_wheel \
     && mkdir -p /dist && cp dist/*.whl /dist/
 
 # =============================================================================
@@ -108,7 +108,8 @@ parts = tuple(int(x) for x in v.split('.')); \
 assert parts >= (3, 35, 0), f'SQLite {v} < 3.35.0'; \
 conn = pysqlite3.connect(':memory:'); \
 conn.execute('create virtual table t using fts5(x)'); \
-conn.close(); print(f'pysqlite3 OK: SQLite {v}, FTS5 available')"
+conn.execute('select count(*) from dbstat').fetchone(); \
+conn.close(); print(f'pysqlite3 OK: SQLite {v}, FTS5 + dbstat available')"
 
 # =============================================================================
 # Stage 4: Production Runtime
