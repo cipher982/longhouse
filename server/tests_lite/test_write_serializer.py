@@ -20,6 +20,7 @@ from zerg.services.write_serializer import execute_post_write
 from zerg.services.write_serializer import post_write_fallback_db
 from zerg.services.write_serializer import request_session_released_by_serializer
 from zerg.services.write_serializer import WriteSerializer
+from zerg.services.write_serializer import WriteQueueTimeoutError
 
 
 @pytest.mark.asyncio
@@ -100,6 +101,55 @@ async def test_runtime_writes_jump_ahead_of_presence_and_archive_chatter(tmp_pat
     await asyncio.gather(first, presence, ingest, runtime)
 
     assert run_order == ["first", "runtime", "presence", "ingest"]
+
+
+@pytest.mark.asyncio
+async def test_queue_timeout_removes_waiting_write_and_unblocks_followup(tmp_path):
+    db_path = tmp_path / "write-serializer-queue-timeout.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    started = threading.Event()
+    run_order: list[str] = []
+
+    def _write(label: str, delay: float = 0.0):
+        def _inner(db):
+            run_order.append(label)
+            if label == "first":
+                started.set()
+            if delay > 0:
+                time.sleep(delay)
+            db.execute(sa_text("INSERT INTO writes(label) VALUES (:label)"), {"label": label})
+
+        return _inner
+
+    first = asyncio.create_task(serializer.execute(_write("first", delay=0.1), label="ingest"))
+    await asyncio.to_thread(started.wait, 1.0)
+
+    with pytest.raises(WriteQueueTimeoutError):
+        await serializer.execute(
+            _write("timed-out"),
+            label="runtime-observations",
+            queue_timeout_seconds=0.01,
+        )
+
+    await first
+    await serializer.execute(_write("followup"), label="runtime-observations")
+
+    assert run_order == ["first", "followup"]
+    assert serializer.queue_depth == 0
+    assert not serializer.writer_active
+
+    with session_factory() as db:
+        persisted = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
+
+    assert persisted == ["first", "followup"]
 
 
 @pytest.mark.asyncio

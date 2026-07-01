@@ -8,8 +8,10 @@ Authentication: same X-Agents-Token / device token as the ingest endpoint.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import re
 import time
 from datetime import datetime
@@ -20,6 +22,7 @@ from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
@@ -49,6 +52,9 @@ from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.write_backpressure import raise_hot_write_backpressure
+from zerg.services.write_serializer import WriteQueueTimeoutError
+from zerg.services.write_serializer import execute_post_write
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
@@ -70,6 +76,9 @@ CODEX_ROLLOUT_ID_RE = re.compile(r"^rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-
 # current.
 MISSING_UNBOUND_UNMANAGED_PROVIDERS = {"claude", "codex", "antigravity"}
 UNBOUND_UNMANAGED_CLOSE_GRACE = timedelta(seconds=90)
+_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS = 2.0
+_HEARTBEAT_BOOKKEEPING_EXEC_TIMEOUT_SECONDS = 5.0
+_TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 
 class UnmanagedSessionBindingIn(UTCBaseModel):
@@ -836,12 +845,14 @@ async def ingest_heartbeat(
             )
             _unmanaged_bindings_present = _resolved_sessions_present or "unmanaged_session_bindings" in payload.model_fields_set
 
-            def _do_heartbeat(write_db: Session) -> dict[UUID, tuple[str | None, str]]:
-                publish_sessions: dict[UUID, tuple[str | None, str]] = {}
-                managed_snapshot_skip = False
-                incoming_sessions_digest = str(payload.sessions_digest or "").strip() or None
-                if _managed_leases_present and incoming_sessions_digest is not None:
-                    managed_snapshot_skip = _latest_heartbeat_sessions_digest(write_db, _device_id) == incoming_sessions_digest
+            incoming_sessions_digest = str(payload.sessions_digest or "").strip() or None
+
+            def _insert_heartbeat_stamp(write_db: Session) -> str | None:
+                previous_sessions_digest = (
+                    _latest_heartbeat_sessions_digest(write_db, _device_id)
+                    if _managed_leases_present and incoming_sessions_digest is not None
+                    else None
+                )
                 hb = AgentHeartbeat(
                     device_id=_device_id,
                     received_at=_now,
@@ -872,6 +883,17 @@ async def ingest_heartbeat(
                     sessions_sequence=payload.sessions_sequence,
                 )
                 write_db.add(hb)
+                return previous_sessions_digest
+
+            def _do_heartbeat_bookkeeping(
+                write_db: Session,
+                *,
+                previous_sessions_digest: str | None,
+            ) -> dict[UUID, tuple[str | None, str]]:
+                publish_sessions: dict[UUID, tuple[str | None, str]] = {}
+                managed_snapshot_skip = False
+                if _managed_leases_present and incoming_sessions_digest is not None:
+                    managed_snapshot_skip = previous_sessions_digest == incoming_sessions_digest
                 cutoff = _now - timedelta(days=30)
                 write_db.query(AgentHeartbeat).filter(
                     AgentHeartbeat.device_id == _device_id,
@@ -1000,7 +1022,16 @@ async def ingest_heartbeat(
             ws = get_write_serializer()
             with tracer.start_as_current_span("longhouse.heartbeat.write") as write_span:
                 write_started = time.monotonic()
-                publish_sessions = await ws.execute_after_closing_request_session(_do_heartbeat, db, label="heartbeat")
+                try:
+                    previous_sessions_digest = await ws.execute_after_closing_request_session(
+                        _insert_heartbeat_stamp,
+                        db,
+                        label="heartbeat-stamp",
+                        queue_timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
+                    )
+                except WriteQueueTimeoutError:
+                    request_status_label = "write_backpressure"
+                    raise_hot_write_backpressure(ws, admission_state="heartbeat_queue_timeout")
                 write_ms = round((time.monotonic() - write_started) * 1000, 1)
                 agents_heartbeat_write_seconds.observe(write_ms / 1000.0)
                 set_span_attributes(
@@ -1011,21 +1042,58 @@ async def ingest_heartbeat(
                     },
                 )
 
-            if publish_sessions:
-                from zerg.services.session_pubsub import publish_session_runtime_update
+            async def _run_heartbeat_bookkeeping() -> None:
+                try:
 
-                for session_id, (provider, source) in sorted(
-                    publish_sessions.items(),
-                    key=lambda item: str(item[0]),
-                ):
-                    publish_session_runtime_update(
-                        session_id=str(session_id),
-                        provider=provider,
-                        source=source,
-                    )
+                    def write_fn(write_db: Session) -> dict[UUID, tuple[str | None, str]]:
+                        return _do_heartbeat_bookkeeping(
+                            write_db,
+                            previous_sessions_digest=previous_sessions_digest,
+                        )
+
+                    if os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV:
+                        publish_sessions = await execute_post_write(
+                            ws,
+                            write_fn,
+                            db,
+                            label="heartbeat-bookkeeping",
+                            timeout_seconds=_HEARTBEAT_BOOKKEEPING_EXEC_TIMEOUT_SECONDS,
+                        )
+                    else:
+                        publish_sessions = await ws.execute(
+                            write_fn,
+                            label="heartbeat-bookkeeping",
+                            timeout_seconds=_HEARTBEAT_BOOKKEEPING_EXEC_TIMEOUT_SECONDS,
+                        )
+                    if publish_sessions:
+                        from zerg.services.session_pubsub import publish_session_runtime_update
+
+                        for session_id, (provider, source) in sorted(
+                            publish_sessions.items(),
+                            key=lambda item: str(item[0]),
+                        ):
+                            publish_session_runtime_update(
+                                session_id=str(session_id),
+                                provider=provider,
+                                source=source,
+                            )
+                except Exception:
+                    logger.exception("Failed to run heartbeat bookkeeping for device %s", _device_id)
+
+            if os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV:
+                await _run_heartbeat_bookkeeping()
+            else:
+                task = asyncio.create_task(_run_heartbeat_bookkeeping())
+                task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
 
             request_status_label = "ok"
             return Response(status_code=status.HTTP_204_NO_CONTENT)
+        except HTTPException:
+            # Preserve typed route errors such as hot-write backpressure instead
+            # of logging them as heartbeat ingest internals.
+            if request_status_label == "internal_error":
+                request_status_label = "http_error"
+            raise
         except Exception:
             logger.exception("Failed to ingest heartbeat")
             request_status_label = "internal_error"

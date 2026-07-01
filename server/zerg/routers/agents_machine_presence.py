@@ -20,10 +20,14 @@ from zerg.models.device_token import DeviceToken
 from zerg.models.machine_presence import MachinePresence
 from zerg.models.user import User
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
+from zerg.services.write_backpressure import raise_hot_write_backpressure
+from zerg.services.write_serializer import WriteQueueTimeoutError
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+_HOT_MACHINE_PRESENCE_QUEUE_TIMEOUT_SECONDS = 2.0
 
 MachinePresenceState = Literal["active", "idle_5m", "idle_10m", "locked", "unknown"]
 
@@ -162,4 +166,12 @@ async def update_machine_presence(
         )
 
     ws = get_write_serializer()
-    return await ws.execute_after_closing_request_session(_write, db, label="machine-presence")
+    try:
+        return await ws.execute_after_closing_request_session(
+            _write,
+            db,
+            label="machine-presence",
+            queue_timeout_seconds=_HOT_MACHINE_PRESENCE_QUEUE_TIMEOUT_SECONDS,
+        )
+    except WriteQueueTimeoutError:
+        raise_hot_write_backpressure(ws, admission_state="machine_presence_queue_timeout")

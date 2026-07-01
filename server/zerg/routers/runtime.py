@@ -38,12 +38,16 @@ from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
+from zerg.services.write_backpressure import raise_hot_write_backpressure
+from zerg.services.write_serializer import WriteQueueTimeoutError
 from zerg.services.write_serializer import execute_post_write
 from zerg.services.write_serializer import get_write_serializer
 from zerg.services.write_serializer import post_write_db_session
 from zerg.services.write_serializer import post_write_fallback_db
 
 router = APIRouter(prefix="/agents/runtime", tags=["agents"])
+
+_HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS = 2.0
 
 
 @router.post("/events/batch", response_model=RuntimeEventBatchResult)
@@ -123,11 +127,15 @@ async def ingest_runtime_observation_batch(
             ]
             return ingest_result, push_contexts
 
-        result, push_contexts = await ws.execute_after_closing_request_session(
-            _do_runtime_state,
-            db,
-            label="runtime-live" if live_transcript_only else "runtime-observations",
-        )
+        try:
+            result, push_contexts = await ws.execute_after_closing_request_session(
+                _do_runtime_state,
+                db,
+                label="runtime-live" if live_transcript_only else "runtime-observations",
+                queue_timeout_seconds=_HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS,
+            )
+        except WriteQueueTimeoutError:
+            raise_hot_write_backpressure(ws, admission_state="runtime_queue_timeout")
         from zerg.services.write_serializer import last_write_timing
 
         timing = last_write_timing()

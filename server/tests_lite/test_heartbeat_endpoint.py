@@ -12,6 +12,7 @@ targeting api_app. No shared conftest.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from datetime import datetime
@@ -20,6 +21,7 @@ from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -180,6 +182,90 @@ def test_heartbeat_releases_request_db_before_serialized_write(tmp_path, monkeyp
         engine.dispose()
 
     assert observations == {"before_close": 1, "after_close": 0}
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_response_returns_after_stamp_before_bookkeeping(tmp_path, monkeypatch):
+    import zerg.routers.heartbeat as heartbeat_router
+
+    monkeypatch.delenv("TESTING", raising=False)
+
+    engine = make_engine(f"sqlite:///{tmp_path}/heartbeat_split.db")
+    Base.metadata.create_all(bind=engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    stamp_done = asyncio.Event()
+    bookkeeping_started = asyncio.Event()
+    release_bookkeeping = asyncio.Event()
+
+    class SplitSerializer:
+        is_configured = True
+
+        async def execute_after_closing_request_session(self, fn, fallback_db, **kwargs):
+            assert kwargs["label"] == "heartbeat-stamp"
+            fallback_db.close()
+            with SessionLocal() as write_db:
+                result = fn(write_db)
+                write_db.commit()
+            stamp_done.set()
+            return result
+
+        async def execute(self, fn, **kwargs):
+            assert kwargs["label"] == "heartbeat-bookkeeping"
+            bookkeeping_started.set()
+            await release_bookkeeping.wait()
+            return {}
+
+    class _FakeRequest:
+        client = SimpleNamespace(host="127.0.0.1")
+
+        def __init__(self, body: bytes) -> None:
+            self._body = body
+
+        async def body(self) -> bytes:
+            return self._body
+
+    monkeypatch.setattr(heartbeat_router, "get_write_serializer", lambda: SplitSerializer())
+
+    payload = heartbeat_router.HeartbeatIn(
+        version="0.5.0",
+        daemon_pid=12345,
+        spool_pending_count=0,
+        parse_error_count_1h=0,
+        consecutive_ship_failures=0,
+        disk_free_bytes=50_000_000_000,
+        is_offline=False,
+        managed_sessions=[
+            heartbeat_router.ManagedSessionLeaseIn(
+                session_id=uuid4(),
+                provider="codex",
+                machine_id="heartbeat-split",
+                sequence=1,
+                state="attached",
+            )
+        ],
+    )
+    request_db = SessionLocal()
+    try:
+        response = await asyncio.wait_for(
+            heartbeat_router.ingest_heartbeat(
+                payload,
+                _FakeRequest(payload.model_dump_json().encode()),
+                request_db,
+                SimpleNamespace(device_id="heartbeat-split", id="token-1"),
+            ),
+            timeout=0.5,
+        )
+        assert response.status_code == 204
+        assert stamp_done.is_set()
+        await asyncio.wait_for(bookkeeping_started.wait(), timeout=0.5)
+        assert not release_bookkeeping.is_set()
+        with SessionLocal() as db:
+            assert db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "heartbeat-split").count() == 1
+    finally:
+        release_bookkeeping.set()
+        await asyncio.sleep(0)
+        engine.dispose()
 
 
 def test_heartbeat_endpoint_appends_history_rows(tmp_path):

@@ -71,6 +71,8 @@ from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
+from zerg.services.write_backpressure import raise_hot_write_backpressure
+from zerg.services.write_serializer import WriteQueueTimeoutError
 from zerg.services.write_serializer import execute_post_write
 from zerg.services.write_serializer import get_write_serializer
 from zerg.services.write_serializer import post_write_db_session
@@ -81,6 +83,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 VALID_STATES = {"thinking", "running", "idle", "needs_user", "blocked"}
+_HOT_PRESENCE_QUEUE_TIMEOUT_SECONDS = 2.0
 
 # States that trigger auto-resume of snoozed sessions (genuine work restart)
 _AUTO_RESUME_STATES = {"thinking", "running"}
@@ -241,18 +244,22 @@ async def upsert_presence(
         )
 
     ws = get_write_serializer()
-    (
-        canonical_presence_state,
-        should_publish_runtime_update,
-        attention_push,
-        attention_resolution_push,
-        widget_push,
-        live_activity_pushes,
-    ) = await ws.execute_after_closing_request_session(
-        _do_presence_writes,
-        db,
-        label="presence",
-    )
+    try:
+        (
+            canonical_presence_state,
+            should_publish_runtime_update,
+            attention_push,
+            attention_resolution_push,
+            widget_push,
+            live_activity_pushes,
+        ) = await ws.execute_after_closing_request_session(
+            _do_presence_writes,
+            db,
+            label="presence",
+            queue_timeout_seconds=_HOT_PRESENCE_QUEUE_TIMEOUT_SECONDS,
+        )
+    except WriteQueueTimeoutError:
+        raise_hot_write_backpressure(ws, admission_state="presence_queue_timeout")
 
     if session_uuid is not None and should_publish_runtime_update:
         from zerg.services.session_pubsub import publish_session_runtime_update
