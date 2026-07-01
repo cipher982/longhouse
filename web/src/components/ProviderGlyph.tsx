@@ -26,6 +26,7 @@ const PROVIDER_BRAND: Record<string, string> = {
   openai: "#F3EAD9",
   opencode: "#C9C4C4",
   antigravity: "#4F87ED",
+  cursor: "#6E56CF",
   zai: "#B06E8A",
 };
 
@@ -90,6 +91,15 @@ function AntigravityMark() {
   );
 }
 
+/** Cursor — the mouse-pointer arrow mark (Cursor's icon-only identity). */
+function CursorMark() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+      <path d="M5 2.5 5 16.8 8.6 13.2 11 19.3 13 18.4 10.7 12.7 15.6 12.7Z" />
+    </svg>
+  );
+}
+
 /** Fallback for unknown providers — a simple terminal/code chevron. */
 function FallbackMark() {
   return (
@@ -118,6 +128,7 @@ const PROVIDER_DISPLAY: Record<string, string> = {
   openai: "OpenAI",
   opencode: "OpenCode",
   antigravity: "Antigravity",
+  cursor: "Cursor",
   zai: "Z.ai",
 };
 
@@ -132,6 +143,8 @@ function MarkFor(provider: string) {
       return <OpenCodeMark />;
     case "antigravity":
       return <AntigravityMark />;
+    case "cursor":
+      return <CursorMark />;
     default:
       return <FallbackMark />;
   }

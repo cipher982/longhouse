@@ -25,7 +25,7 @@ longhouse serve --port 9090    # custom port
 longhouse serve --demo         # start with demo data`}
       </CodeBlock>
 
-      <h3>longhouse claude / codex / agy / opencode</h3>
+      <h3>longhouse claude / codex / agy / opencode / cursor</h3>
       <p>
         Launch a managed provider CLI session with a Longhouse control channel.
         The session runs in your terminal and stays reachable from other
@@ -35,15 +35,18 @@ longhouse serve --demo         # start with demo data`}
         {`longhouse claude               # start Claude Code (steerable)
 longhouse codex                # start Codex CLI (steerable)
 longhouse agy                  # start Antigravity CLI (managed observe-only)
-longhouse opencode             # start OpenCode (managed live control)`}
+longhouse opencode             # start OpenCode (managed live control)
+longhouse cursor               # start Cursor Agent (steerable TUI + live transcript)`}
       </CodeBlock>
       <p>
         Use these as the default launch path for new work. Bare{" "}
-        <code>claude</code>, <code>codex</code>, <code>antigravity</code>, and{" "}
-        <code>opencode</code> runs still import into the timeline, but they
-        remain unmanaged history. Claude and Codex support the strongest live control;{" "}
-        OpenCode supports managed send, interrupt, launch, and terminate but
-        not active-turn steer; Antigravity is managed observe-only today.
+        <code>claude</code>, <code>codex</code>, <code>antigravity</code>,{" "}
+        <code>opencode</code>, and <code>cursor-agent</code> runs still import
+        into the timeline, but they remain unmanaged history. Claude and Codex
+        support the strongest live control; Cursor ships a steerable TUI with
+        live transcript and headless Console launch; OpenCode supports managed
+        send, interrupt, launch, and terminate but not active-turn steer;
+        Antigravity is managed observe-only today.
       </p>
 
       <h3>longhouse ship</h3>

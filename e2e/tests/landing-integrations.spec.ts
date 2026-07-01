@@ -18,6 +18,11 @@ const EXPECTED_PROVIDERS: ProviderExpectation[] = [
     status: 'Control-ready',
   },
   {
+    name: 'Cursor Agent',
+    description: 'Archive, launch, send, interrupt, and terminate',
+    status: 'Helm + Console',
+  },
+  {
     name: 'Antigravity CLI',
     description: 'Archive, launch, and hook-backed phase signals',
     status: 'Observe-only today',

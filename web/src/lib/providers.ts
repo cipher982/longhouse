@@ -6,7 +6,7 @@
  * Add new providers here when onboarding them.
  */
 
-export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity";
+export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity" | "cursor";
 
 export type LaunchProviderSupport = {
   id: LaunchProviderId;
@@ -60,6 +60,16 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
     hooksSupport: "live",
     telemetryQuality: "structured",
   },
+  cursor: {
+    id: "cursor",
+    marketingName: "Cursor Agent",
+    cardDescription: "Archive, launch, send, interrupt, and terminate",
+    statusLabel: "Helm + Console",
+    archiveVisibility: "live",
+    cloudSessionStart: "live",
+    hooksSupport: "none",
+    telemetryQuality: "structured",
+  },
 };
 
 /** Map deprecated provider ids to their canonical successor. */
@@ -79,6 +89,8 @@ export function getProviderColor(provider: string): string {
       return "var(--color-provider-opencode)";
     case "antigravity":
       return "var(--color-provider-antigravity)";
+    case "cursor":
+      return "var(--color-provider-cursor)";
     case "zai":
       return "var(--color-provider-zai)";
     default:
@@ -93,6 +105,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   openai: "OpenAI",
   opencode: "OpenCode",
   antigravity: "Antigravity",
+  cursor: "Cursor",
   zai: "Z.ai",
 };
 
@@ -116,5 +129,6 @@ export function getLaunchProviderSupportList(): LaunchProviderSupport[] {
     LAUNCH_PROVIDER_SUPPORT.codex,
     LAUNCH_PROVIDER_SUPPORT.antigravity,
     LAUNCH_PROVIDER_SUPPORT.opencode,
+    LAUNCH_PROVIDER_SUPPORT.cursor,
   ];
 }
