@@ -165,7 +165,9 @@ def _resolve_cursor_bin() -> str:
 def _infer_git_context(cwd: Path) -> tuple[str | None, str | None]:
     repo = git_output(cwd, "config", "--get", "remote.origin.url")
     branch = git_output(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-    return (repo.strip() or None, branch.strip() or None)
+    if branch == "HEAD":
+        branch = None
+    return (repo or None, branch or None)
 
 
 def _register_session(

@@ -309,3 +309,12 @@ def test_send_after_child_exit_reports_session_not_attached():
             os.close(write_fd)
         except OSError:
             pass
+
+
+def test_infer_git_context_handles_non_git_dir(tmp_path):
+    """git_output returns None outside a git repo (or with no origin remote);
+    _infer_git_context must not call .strip() on None. Regression for the
+    `lhcu` crash when launched from a non-git cwd."""
+    repo, branch = cursor_helm._infer_git_context(tmp_path)
+    assert repo is None
+    assert branch is None
