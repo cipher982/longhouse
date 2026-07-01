@@ -231,6 +231,14 @@ def _validate_managed_local_launch_response_contract(
             raise RuntimeError("Antigravity managed local launch response should not include an attach command")
         return
 
+    if transport == ManagedSessionTransport.CURSOR_HELM:
+        # Helm is a PTY pass-through running in the user's terminal; there is no
+        # separate attach command (you are already attached via the TUI), so the
+        # response should carry an empty attach_command like Antigravity.
+        if attach_command:
+            raise RuntimeError("Cursor Helm managed local launch response should not include an attach command")
+        return
+
     raise RuntimeError(f"Unsupported managed local launch response transport: {transport}")
 
 

@@ -646,6 +646,7 @@ def test_this_device_launch_uses_token_device_id_for_runner_lookup(monkeypatch, 
         ("codex", "codex_app_server"),
         ("opencode", "opencode_server_bridge"),
         ("antigravity", "antigravity_hook_inbox"),
+        ("cursor", "cursor_helm"),
     ],
 )
 def test_this_device_launch_response_contract_matrix(monkeypatch, tmp_path, provider, expected_transport):
@@ -702,6 +703,10 @@ def test_this_device_launch_response_contract_matrix(monkeypatch, tmp_path, prov
         assert payload["session_id"] in payload["attach_command"]
     elif provider == "antigravity":
         assert payload["provider_session_id"] is None
+        assert payload["attach_command"] == ""
+    elif provider == "cursor":
+        assert payload["provider_session_id"] is None
+        # Helm is a PTY pass-through in the user's terminal; no separate attach.
         assert payload["attach_command"] == ""
 
 
