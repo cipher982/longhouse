@@ -311,10 +311,30 @@ def test_send_after_child_exit_reports_session_not_attached():
             pass
 
 
-def test_infer_git_context_handles_non_git_dir(tmp_path):
-    """git_output returns None outside a git repo (or with no origin remote);
-    _infer_git_context must not call .strip() on None. Regression for the
-    `lhcu` crash when launched from a non-git cwd."""
-    repo, branch = cursor_helm._infer_git_context(tmp_path)
+def test_infer_git_context_handles_none_git_output(monkeypatch):
+    """git_output returns None when git fails or a value is unset (no origin
+    remote, detached HEAD, not a repo). _infer_git_context must not call
+    .strip() on None. Regression for the `lhcu` crash when launched from a
+    non-git cwd. Monkeypatch git_output so the test does not depend on
+    tmp_path being outside a repo (in CI tmp_path is nested inside the
+    checkout, so git would otherwise resolve the parent origin URL)."""
+    monkeypatch.setattr(cursor_helm, "git_output", lambda *_a, **_k: None)
+    repo, branch = cursor_helm._infer_git_context(Path("/does/not/matter"))
     assert repo is None
+    assert branch is None
+
+
+def test_infer_git_context_normalizes_detached_head(monkeypatch):
+    """A detached HEAD returns the literal string 'HEAD'; the launcher should
+    normalize that to None so the session isn't tagged with branch 'HEAD'."""
+    def fake_git(_cwd, *args):
+        if args and args[0] == "config":
+            return "https://github.com/example/repo"
+        if args and args[0] == "rev-parse":
+            return "HEAD"
+        return None
+
+    monkeypatch.setattr(cursor_helm, "git_output", fake_git)
+    repo, branch = cursor_helm._infer_git_context(Path("/does/not/matter"))
+    assert repo == "https://github.com/example/repo"
     assert branch is None
