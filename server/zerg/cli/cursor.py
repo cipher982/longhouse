@@ -24,9 +24,6 @@ import httpx
 import typer
 
 from zerg.cli._common import load_api_credentials
-from zerg.cli.cursor_helm import run_helm
-from zerg.services.cursor_transcript import decode_store_db
-from zerg.services.cursor_transcript import iter_local_cursor_stores
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 from zerg.session_loop_mode import SessionLoopMode
@@ -49,6 +46,8 @@ def _load_creds(url: str | None, token: str | None, config_dir: Path | None) -> 
 
 
 def _scan_stores(cursor_dir: Path | None) -> list[Path]:
+    from zerg.services.cursor_transcript import iter_local_cursor_stores
+
     return sorted(iter_local_cursor_stores(cursor_dir), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
@@ -85,6 +84,8 @@ def launch(
     ),
 ) -> None:
     """Launch a Longhouse Cursor Helm session: interactive cursor-agent TUI + remote steer."""
+    from zerg.cli.cursor_helm import run_helm
+
     run_helm(
         cwd=cwd,
         project=project,
@@ -128,6 +129,8 @@ def import_(
     ingested = 0
     skipped_gap = 0
     failed = 0
+    from zerg.services.cursor_transcript import decode_store_db
+
     for store_path in stores:
         result = decode_store_db(store_path)
         title = result.diagnostics.title or store_path.parent.name
@@ -191,6 +194,8 @@ def decode(
     json_output: bool = typer.Option(False, "--json", help="Emit full decoded events as JSON."),
 ) -> None:
     """Decode one Cursor store.db locally for inspection (no server contact)."""
+    from zerg.services.cursor_transcript import decode_store_db
+
     result = decode_store_db(store_db)
     diag = result.diagnostics
     if result.session is None:

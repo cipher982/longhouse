@@ -44,8 +44,7 @@ longhouse cursor               # start Cursor Agent (steerable TUI + live transc
         <code>opencode</code>, and <code>cursor-agent</code> runs still import
         into the timeline, but they remain unmanaged history. Claude and Codex
         support the strongest live control; Cursor ships a steerable TUI with
-        live transcript and headless Console launch; OpenCode supports managed
-        send, interrupt, launch, and terminate but not active-turn steer;
+        live transcript and headless Console launch; OpenCode supports managed send, interrupt, launch, and terminate but not active-turn steer;
         Antigravity is managed observe-only today.
       </p>
 

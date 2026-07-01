@@ -36,8 +36,8 @@ export function IntegrationsSection() {
 
         <p className="landing-providers-foot">
           Codex launch-through-Longhouse is supported; Cursor ships Helm (steerable
-          TUI with live transcript) plus headless Console launch; OpenCode supports
-          managed send, interrupt, launch, and terminate without active-turn steer;
+          TUI with live transcript) plus headless Console launch; OpenCode supports managed
+          send, interrupt, launch, and terminate without active-turn steer;
           Antigravity is managed observe-only today. Claude is still the strongest
           continuation path. Older Google CLI JSON imports remain searchable under Antigravity.
         </p>
