@@ -18,6 +18,7 @@ network or the Longhouse DB. Callers (CLI, ingest wiring) feed the resulting
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from dataclasses import field
@@ -294,6 +295,62 @@ def _burst_aware_timestamps(
     return out
 
 
+# Cursor auto-injected context markers. A `role="user"` message containing any
+# of these (and no <user_query> wrapper) is Cursor's environment injection, not
+# user-authored input.
+_CURSOR_INJECTION_MARKERS = (
+    "<user_info>",
+    "<agent_transcripts>",
+    "<rules>",
+    "<system_reminder>",
+    "<attached_files>",
+    "<system_notification>",
+)
+
+_USER_QUERY_RE = re.compile(r"<user_query>\s*(.*?)\s*</user_query>", re.DOTALL)
+
+
+def _coerce_user_content_to_text(content: Any) -> str | None:
+    """Collapse a user message's content to a single string for classification.
+
+    Returns the joined text for string content or a list of only `text` blocks.
+    Returns None for mixed content (e.g. text + image), so the caller falls
+    through to block-level handling and does not lose non-text blocks.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "text":
+                return None
+            parts.append(_coerce_text(block.get("text")))
+        return "".join(parts)
+    return None
+
+
+def _classify_cursor_user_content(content: Any) -> tuple[str | None, str] | None:
+    """Classify a Cursor `role="user"` message.
+
+    Returns ``(text, effective_role)`` or None when the content shape is not
+    classifiable (mixed blocks) and should fall through to default handling.
+
+    - Real user turn (wrapped in <user_query>): inner text, role "user".
+    - Cursor context injection (markers, no <user_query>): full text, role
+      "system". raw_json still preserves Cursor's original role="user".
+    - Plain user turn (no wrapper, no markers): full text, role "user".
+    """
+    text = _coerce_user_content_to_text(content)
+    if text is None:
+        return None
+    m = _USER_QUERY_RE.search(text)
+    if m:
+        return m.group(1), "user"
+    if any(marker in text for marker in _CURSOR_INJECTION_MARKERS):
+        return text, "system"
+    return text, "user"
+
+
 def _map_message(
     msg: dict[str, Any],
     occurred_at: datetime,
@@ -303,6 +360,29 @@ def _map_message(
 ) -> list[EventIngest]:
     role = msg.get("role") or "assistant"
     content = msg.get("content")
+
+    # Cursor injects a large environment-context block (user_info, rules,
+    # agent_transcripts, system_reminders, ...) as a `role="user"` turn that the
+    # user never typed, and wraps the real user input in <user_query>...</user_query>.
+    # Re-classify the injection as `system` (ingested + archived in raw_json, but
+    # hidden from the timeline by the existing system-role filter) and unwrap the
+    # real user turn so the timeline shows only what the user actually typed.
+    if role == "user":
+        classified = _classify_cursor_user_content(content)
+        if classified is not None:
+            user_text, effective_role = classified
+            if user_text is None:
+                return []
+            return [
+                event_cls(
+                    role=effective_role,
+                    content_text=user_text,
+                    timestamp=occurred_at,
+                    source_path=source_path,
+                    raw_json=json.dumps(msg, ensure_ascii=False),
+                )
+            ]
+
     # content may be a plain string (system messages)
     if isinstance(content, str):
         return [
