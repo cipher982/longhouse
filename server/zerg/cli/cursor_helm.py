@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import fcntl
 import json
-import logging as _logging
 import os
 import pty
 import select
@@ -61,14 +60,6 @@ from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 from zerg.session_loop_mode import SessionLoopMode
-
-# httpx logs every request at INFO to stderr. In Helm mode the real terminal is
-# in raw mode and the cursor-agent TUI owns the screen, so any stderr line from
-# the register call or the live-transcript tailer would land mid-render and
-# corrupt the TUI. Silence httpx/httpcore INFO so the launcher never emits
-# request logs to the terminal.
-_logging.getLogger("httpx").setLevel(_logging.WARNING)
-_logging.getLogger("httpcore").setLevel(_logging.WARNING)
 
 EXIT_SETUP_FAILED = 78
 EXIT_NOT_INTERACTIVE = 79
@@ -456,6 +447,8 @@ def run_helm(
         )
         raise typer.Exit(code=EXIT_NOT_INTERACTIVE)
 
+    launch_ui.quiet_diagnostic_logs(verbose)
+
     resolved_config_dir = Path(config_dir) if config_dir else None
     resolved_url, resolved_token = load_api_credentials(
         url=url,
@@ -475,7 +468,7 @@ def run_helm(
     )
     cursor_bin = _resolve_cursor_bin()
 
-    typer.secho("Preparing your Longhouse cursor session…", fg=typer.colors.CYAN)
+    launch_ui.progress("Preparing your session…")
     result = _register_session(
         url=resolved_url,
         token=resolved_token,
