@@ -311,6 +311,30 @@ def test_send_after_child_exit_reports_session_not_attached():
             pass
 
 
+def test_set_pty_size_actually_sets_winsize():
+    """Regression: _set_pty_size must really set the PTY winsize, not silently
+    no-op. An earlier version called `termios.ioctl(...)` which does not exist
+    on CPython (the ioctl *function* lives in `fcntl`); the call raised
+    AttributeError and was swallowed by the try/except, so the PTY stayed at
+    its default 0x0 winsize and cursor-agent wrapped every character to its
+    own line. Verify via a real pty.openpty pair that the size round-trips."""
+    import fcntl
+    import struct
+    import termios
+
+    master, slave = pty.openpty()
+    try:
+        cursor_helm._set_pty_size(master, 40, 132)
+        packed = fcntl.ioctl(slave, termios.TIOCGWINSZ, b"\x00" * 8)
+        rows, cols, _, _ = struct.unpack("hhhh", packed)
+        assert (rows, cols) == (40, 132), f"winsize did not round-trip: got {(rows, cols)}"
+        # And _get_terminal_size reads it back from the master.
+        assert cursor_helm._get_terminal_size(master) == (40, 132)
+    finally:
+        os.close(master)
+        os.close(slave)
+
+
 def test_infer_git_context_handles_none_git_output(monkeypatch):
     """git_output returns None when git fails or a value is unset (no origin
     remote, detached HEAD, not a repo). _infer_git_context must not call

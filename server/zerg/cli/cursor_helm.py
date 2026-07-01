@@ -26,6 +26,7 @@ keeps running.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging as _logging
 import os
@@ -285,7 +286,7 @@ def _set_window_title(text: str) -> None:
 
 def _get_terminal_size(fd: int) -> tuple[int, int]:
     try:
-        packed = termios.ioctl(fd, termios.TIOCGWINSZ, b"\x00" * 8)
+        packed = fcntl.ioctl(fd, termios.TIOCGWINSZ, b"\x00" * 8)
         rows, cols, _, _ = struct.unpack("hhhh", packed)
         return rows, cols
     except Exception:
@@ -295,7 +296,7 @@ def _get_terminal_size(fd: int) -> tuple[int, int]:
 def _set_pty_size(fd: int, rows: int, cols: int) -> None:
     try:
         winsize = struct.pack("HHHH", rows, cols, 0, 0)
-        termios.ioctl(fd, termios.TIOCSWINSZ, winsize)
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
     except Exception:
         pass
 
