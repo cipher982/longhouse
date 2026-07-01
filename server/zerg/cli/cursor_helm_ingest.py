@@ -38,6 +38,7 @@ import httpx
 
 from zerg.services.cursor_transcript import decode_store_db
 from zerg.services.cursor_transcript import iter_local_cursor_stores
+from zerg.utils.log import BestEffortLogger
 
 # SessionIngest is imported lazily inside _build_delta_payload, NOT at module
 # top level. Importing zerg.services.agents.models eagerly would pull in
@@ -185,6 +186,7 @@ def run_transcript_tailer(
     stop_event: threading.Event,
     poll_seconds: float | None = None,
     verbose: bool = False,
+    bf: BestEffortLogger | None = None,
 ) -> None:
     """Stream new turn events from the cursor store.db to the Runtime Host.
 
@@ -192,7 +194,12 @@ def run_transcript_tailer(
     decode/post errors are swallowed and retried on the next poll. Advances the
     high-water mark only after a successful (2xx) post, so transient failures
     retry without dropping events.
+
+    Pass a shared ``bf`` (BestEffortLogger) so the caller can emit an end-of-run
+    ingest summary at session exit. If omitted, a fresh one is created.
     """
+    if bf is None:
+        bf = BestEffortLogger("zerg.cursor_helm.ingest")
     if poll_seconds is None:
         raw = os.environ.get(_POLL_SECONDS_ENV, "").strip()
         try:
@@ -210,27 +217,55 @@ def run_transcript_tailer(
                     payload, new_events = built
                     if _post_delta(url, token, payload):
                         hwm += len(new_events)
+                        bf.success()
                         if verbose:
                             print(
                                 f"longhouse cursor: shipped {len(new_events)} new event(s) " f"({hwm} total) to session {session_id}",
                                 flush=True,
                             )
-                    elif verbose:
-                        print(
-                            "longhouse cursor: ingest post rejected (non-2xx); "
-                            "will retry next poll without advancing the high-water mark",
-                            flush=True,
-                        )
+                    else:
+                        # Non-2xx: server rejected the delta. Treat as a
+                        # best-effort failure so it is logged rate-limited and
+                        # counted in ingest health, then retry without
+                        # advancing the high-water mark.
+                        bf.failure("ingest post rejected (non-2xx)", RuntimeError("non-2xx response"))
         except Exception as exc:  # noqa: BLE001 - best-effort tailer must not die
-            # Best-effort tailer: never let a decode/post error kill the thread.
-            # The next poll retries. Surface the failure on verbose so a silent
-            # crash (e.g. a missing-config import) is not invisible.
-            if verbose:
-                print(
-                    f"longhouse cursor: transcript poll failed ({type(exc).__name__}: " f"{str(exc)[:160]}); will retry next poll",
-                    flush=True,
-                )
+            # Best-effort tailer: never let a decode/post/build error kill the
+            # thread. The next poll retries. BestEffortLogger surfaces the
+            # failure (rate-limited, at WARNING) so a silent crash — e.g. a
+            # missing-config import raising RuntimeError every poll — is
+            # visible without --verbose, not buried in `except: pass`.
+            bf.failure("transcript poll", exc)
         stop_event.wait(poll_seconds)
+
+
+def probe_ingest_path() -> tuple[bool, str | None]:
+    """Exercise the exact import + model-construction path the tailer uses on
+    every poll, without needing a real ``store.db``.
+
+    Returns ``(ok, error)``. This catches the class of bug that silently killed
+    Helm transcript ingest for weeks — a transitive import (e.g.
+    ``zerg.database`` → ``get_settings()`` → ``_validate_required()``) raising
+    at call time when ``DATABASE_URL`` is unset on a remote-only CLI. The
+    tailer's best-effort ``except`` would swallow that crash on every poll; the
+    probe surfaces it at launch instead of after the first turn, so the user
+    knows the session will be steerable but blind rather than discovering it
+    from an empty timeline 30 minutes in.
+    """
+    try:
+        from zerg.services.agents.models import EventIngest
+        from zerg.services.agents.models import SessionIngest
+
+        ev = EventIngest(role="system", content_text="", timestamp=datetime.now(timezone.utc))
+        SessionIngest(
+            provider="cursor",
+            environment="production",
+            started_at=datetime.now(timezone.utc),
+            events=[ev],
+        )
+        return True, None
+    except Exception as exc:  # noqa: BLE001 - probe must not crash launch
+        return False, f"{type(exc).__name__}: {str(exc)[:200]}"
 
 
 def run_helm_ingest_thread(
@@ -241,12 +276,15 @@ def run_helm_ingest_thread(
     token: str,
     stop_event: threading.Event,
     verbose: bool = False,
+    bf: BestEffortLogger | None = None,
 ) -> None:
     """Discover this session's cursor store.db, then stream its transcript.
 
     Polls for the chat dir cursor-agent creates after launch (or honors
     ``LH_CURSOR_HELM_CHAT_DIR``), then hands off to ``run_transcript_tailer``.
     Safe to run as a daemon thread; exits when ``stop_event`` is set.
+
+    Pass a shared ``bf`` so the launcher can emit an end-of-run ingest summary.
     """
     poll_seconds = _DEFAULT_POLL_SECONDS
     raw = os.environ.get(_POLL_SECONDS_ENV, "").strip()
@@ -274,4 +312,5 @@ def run_helm_ingest_thread(
         token=token,
         stop_event=stop_event,
         verbose=verbose,
+        bf=bf,
     )

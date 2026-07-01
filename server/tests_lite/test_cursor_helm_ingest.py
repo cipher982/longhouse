@@ -245,3 +245,66 @@ def test_post_delta_returns_false_on_transport_error(monkeypatch):
 
     monkeypatch.setattr(httpx, "Client", _BoomClient)
     assert mod._post_delta("http://x", "tok", payload) is False
+
+
+def test_probe_ingest_path_returns_ok_without_database_url():
+    """probe_ingest_path must succeed when DATABASE_URL is unset — it exercises
+    the exact import + model-build path the tailer uses, catching the class of
+    transitive zerg.database import crash that silently killed Helm ingest."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[2]
+    env = {k: v for k, v in os.environ.items() if k not in {"DATABASE_URL", "FERNET_SECRET"}}
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "from zerg.cli.cursor_helm_ingest import probe_ingest_path; "
+         "ok, err = probe_ingest_path(); "
+         "import sys; sys.exit(0 if ok else 1); print(err)"],
+        cwd=str(repo_root / "server"),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"probe_ingest_path failed without DATABASE_URL (the launch self-check "
+        f"would warn falsely, or worse a real regression would hide):\n{result.stderr}"
+    )
+
+
+def test_run_transcript_tailer_records_failures_on_shared_best_effort_logger(monkeypatch):
+    """The tailer must record decode failures on the shared BestEffortLogger so
+    the launcher can summarize ingest health at exit — not swallow them in a
+    bare except: pass."""
+    from zerg.utils.log import BestEffortLogger
+
+    session_id = str(uuid4())
+
+    def boom_decode(_path):
+        raise RuntimeError("synthetic config crash")
+
+    monkeypatch.setattr(mod, "decode_store_db", boom_decode)
+    bf = BestEffortLogger("zerg.test.tailer", every=100)
+
+    stop = threading.Event()
+    t = threading.Thread(
+        target=mod.run_transcript_tailer,
+        kwargs={"store_db_path": Path("/tmp/x"), "session_id": session_id, "url": "http://x",
+                "token": "t", "stop_event": stop, "poll_seconds": 0.05, "bf": bf},
+        daemon=True,
+    )
+    t.start()
+    try:
+        deadline = time.time() + 2.0
+        while bf.total_failures < 3 and time.time() < deadline:
+            time.sleep(0.02)
+    finally:
+        stop.set()
+        t.join(timeout=2.0)
+
+    assert bf.total_failures >= 3, "tailer did not record decode failures on the shared logger"
+    assert bf.consecutive_failures >= 3
+    assert bf.last_error is not None and "synthetic config crash" in bf.last_error

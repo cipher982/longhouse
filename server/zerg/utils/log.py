@@ -107,3 +107,92 @@ def get_logger(**bindings: Any):  # noqa: D401 – factory helper
         return log.bind(**bindings)  # type: ignore[attr-defined]
     else:
         return log
+
+
+class BestEffortLogger:
+    """Rate-limited logger for long-running best-effort loops.
+
+    Background threads (transcript tailers, cleanup loops) must never crash
+    the process, but they also must never fail silently — a thread that
+    swallows the same exception every poll for an entire session is how
+    "steerable but zero timeline messages" hides for weeks.
+
+    Usage::
+
+        bf = BestEffortLogger("zerg.cursor_helm.ingest")
+        try:
+            ...  # one poll iteration
+            bf.success()
+        except Exception as exc:  # noqa: BLE001 - best-effort
+            bf.failure("transcript poll", exc)
+
+    - First failure logs WARNING immediately (so it is visible without --verbose).
+    - Subsequent failures log every ``every`` attempts (noisy-but-not-flooded).
+    - ``success()`` after failures logs INFO once ("recovered after N failures").
+    - ``consecutive_failures`` is exposed so callers can write ingest health to
+      state files / runtime signals.
+    """
+
+    def __init__(self, name: str, *, every: int = 10) -> None:
+        self._log = get_logger(component=name)
+        self._every = max(1, every)
+        self._failures = 0
+        self._total_failures = 0
+        self._total_successes = 0
+        self._last_error: str | None = None
+
+    def failure(self, context: str, exc: BaseException) -> None:
+        self._failures += 1
+        self._total_failures += 1
+        self._last_error = f"{type(exc).__name__}: {str(exc)[:200]}"
+        if self._failures == 1 or self._failures % self._every == 0:
+            self._log.warning(
+                "best-effort failure",
+                context=context,
+                attempt=self._failures,
+                error=self._last_error,
+            )
+
+    def success(self) -> None:
+        self._total_successes += 1
+        if self._failures > 0:
+            self._log.info("best-effort recovered", context="transcript", after_failures=self._failures)
+        self._failures = 0
+        self._last_error = None
+
+    @property
+    def consecutive_failures(self) -> int:
+        return self._failures
+
+    @property
+    def total_failures(self) -> int:
+        return self._total_failures
+
+    @property
+    def total_successes(self) -> int:
+        return self._total_successes
+
+    @property
+    def last_error(self) -> str | None:
+        return self._last_error
+
+    def summarize(self, context: str) -> None:
+        """Emit one end-of-run summary line. Logs WARNING if the loop ended
+        while degraded (consecutive failures at exit), else INFO. Safe to call
+        once after the loop's stop event has been set."""
+        if self._failures > 0:
+            self._log.warning(
+                "best-effort summary",
+                context=context,
+                consecutive_failures=self._failures,
+                total_failures=self._total_failures,
+                total_successes=self._total_successes,
+                last_error=self._last_error,
+            )
+        else:
+            self._log.info(
+                "best-effort summary",
+                context=context,
+                total_failures=self._total_failures,
+                total_successes=self._total_successes,
+            )
