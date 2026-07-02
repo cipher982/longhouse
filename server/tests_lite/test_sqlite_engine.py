@@ -1,5 +1,7 @@
 from zerg.database import _checkpoint_counts
+from zerg.database import _run_wal_checkpoint
 from zerg.database import make_engine
+from zerg.database import make_live_engine
 
 
 def _pragma_scalar(conn, name: str):
@@ -64,3 +66,37 @@ def test_checkpoint_counts_interprets_sqlite_wal_tuple():
     # (busy, checkpointed, remaining).
     assert _checkpoint_counts((0, 5521, 5521)) == (0, 5521, 5521, 0)
     assert _checkpoint_counts((0, 5521, 5000)) == (0, 5521, 5000, 521)
+
+
+def test_wal_checkpoint_helper_accepts_live_engine(tmp_path):
+    db_path = tmp_path / "live.db"
+    engine = make_live_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY)")
+        conn.exec_driver_sql("INSERT INTO writes DEFAULT VALUES")
+
+    payload = _run_wal_checkpoint(engine, label="live", truncate_bytes=0)
+
+    assert payload["label"] == "live"
+    assert payload["skipped"] is False
+    assert {"busy", "log_frames", "checkpointed_frames", "remaining_frames"} <= set(payload)
+
+
+def test_get_live_wal_bytes_returns_int_or_none(tmp_path, monkeypatch):
+    db_path = tmp_path / "live-wal-probe.db"
+    engine = make_live_engine(f"sqlite:///{db_path}")
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY)")
+        conn.exec_driver_sql("INSERT INTO writes DEFAULT VALUES")
+
+    import zerg.database as database_mod
+
+    original_engine = database_mod.live_engine
+    monkeypatch.setattr(database_mod, "live_engine", engine)
+    try:
+        wal_bytes = database_mod.get_live_wal_bytes()
+        assert wal_bytes is not None
+        assert isinstance(wal_bytes, int)
+        assert wal_bytes >= 0
+    finally:
+        monkeypatch.setattr(database_mod, "live_engine", original_engine)
