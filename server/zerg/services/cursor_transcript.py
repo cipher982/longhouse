@@ -329,26 +329,34 @@ def _coerce_user_content_to_text(content: Any) -> str | None:
     return None
 
 
-def _classify_cursor_user_content(content: Any) -> tuple[str | None, str] | None:
-    """Classify a Cursor `role="user"` message.
+def _classify_cursor_user_text(text: str) -> tuple[str, str]:
+    """Classify a Cursor user-message text string.
 
-    Returns ``(text, effective_role)`` or None when the content shape is not
-    classifiable (mixed blocks) and should fall through to default handling.
+    Returns ``(effective_text, effective_role)``:
 
     - Real user turn (wrapped in <user_query>): inner text, role "user".
     - Cursor context injection (markers, no <user_query>): full text, role
-      "system". raw_json still preserves Cursor's original role="user".
+      "system". The caller keeps raw_json as Cursor's original role="user".
     - Plain user turn (no wrapper, no markers): full text, role "user".
     """
-    text = _coerce_user_content_to_text(content)
-    if text is None:
-        return None
     m = _USER_QUERY_RE.search(text)
     if m:
         return m.group(1), "user"
     if any(marker in text for marker in _CURSOR_INJECTION_MARKERS):
         return text, "system"
     return text, "user"
+
+
+def _classify_cursor_user_content(content: Any) -> tuple[str | None, str] | None:
+    """Classify a Cursor `role="user"` message's content.
+
+    Returns ``(text, effective_role)`` or None when the content shape is not
+    classifiable (mixed blocks) and should fall through to default handling.
+    """
+    text = _coerce_user_content_to_text(content)
+    if text is None:
+        return None
+    return _classify_cursor_user_text(text)
 
 
 def _map_message(

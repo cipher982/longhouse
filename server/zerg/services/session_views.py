@@ -1304,6 +1304,17 @@ class MediaBackfillInlineDataUrlsResponse(BaseModel):
     message: str = ""
 
 
+class CursorRoleBackfillResponse(BaseModel):
+    """Response for one batch of Cursor user-event role re-classification."""
+
+    dry_run: bool
+    scanned: int = 0
+    re_roleed: int = 0
+    unwrapped: int = 0
+    last_id: Optional[int] = None
+    message: str = ""
+
+
 class IngestHealthResponse(UTCBaseModel):
     status: str  # "ok" | "stale" | "unknown"
     last_session_at: Optional[datetime] = None

@@ -371,6 +371,72 @@ def test_ingest_through_agents_store(tmp_path: Path) -> None:
         assert again.events_inserted == 0
 
 
+def test_ingest_classifies_cursor_user_messages_through_full_round_trip(tmp_path: Path) -> None:
+    """Decoder -> ingest -> query: context injection becomes role=system,
+    real user turn is unwrapped from <user_query>, raw_json preserves truth."""
+    from sqlalchemy.orm import sessionmaker
+
+    from zerg.database import Base
+    from zerg.database import make_engine
+    from zerg.models.agents import AgentEvent
+    from zerg.models.agents import AgentSession
+
+    db_path = tmp_path / "ingest.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    Base.metadata.create_all(bind=engine)
+    SessionLocal = sessionmaker(bind=engine)
+
+    messages = [
+        {"role": "system", "content": "You are an AI coding assistant, powered by Composer."},
+        {
+            "role": "user",
+            "content": (
+                "<user_info>\nOS Version: darwin 25.5.0\n\n"
+                "<rules>\n<always_applied_workspace_rule>do thing</...>\n"
+                "<agent_transcripts>past chats</agent_transcripts>\n"
+                "<system_reminder>plan mode</system_reminder>"
+            ),
+        },
+        {"role": "user", "content": "<user_query>\nhello test, banana\n</user_query>"},
+        {"role": "assistant", "content": [{"type": "text", "text": "got it"}]},
+    ]
+    store = _write_store(
+        tmp_path / "sess",
+        agent_id="zzz-roundtrip",
+        created_at_ms=1_700_000_000_000,
+        updated_at_ms=1_700_000_060_000,
+        messages=messages,
+    )
+
+    with SessionLocal() as db:
+        result = ingest_cursor_store_db(db, store)
+        assert result.diagnostics.unsupported_gap is None
+        assert result.ingest is not None
+
+        sess = db.query(AgentSession).one()
+        assert sess.provider == "cursor"
+        events = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == sess.id)
+            .order_by(AgentEvent.id)
+            .all()
+        )
+        roles = [e.role for e in events]
+        # system prompt + context injection both system; real turn user; assistant assistant.
+        assert roles == ["system", "system", "user", "assistant"]
+
+        ctx_ev = next(e for e in events if e.content_text and e.content_text.startswith("<user_info>"))
+        assert ctx_ev.role == "system"
+        from zerg.services.raw_json_compression import decode_raw_json
+
+        assert json.loads(decode_raw_json(ctx_ev))["role"] == "user"  # ground truth preserved
+
+        user_ev = next(e for e in events if e.role == "user")
+        assert user_ev.content_text == "hello test, banana"
+        assert "<user_query>" not in user_ev.content_text
+
+
 def test_ingest_skips_legacy_gap(tmp_path: Path) -> None:
     from sqlalchemy.orm import sessionmaker
 

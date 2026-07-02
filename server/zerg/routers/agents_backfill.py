@@ -29,6 +29,7 @@ from zerg.services.session_views import BackfillEmbeddingsProgressResponse
 from zerg.services.session_views import BackfillEmbeddingsResponse
 from zerg.services.session_views import BackfillProgressResponse
 from zerg.services.session_views import BackfillSummariesResponse
+from zerg.services.session_views import CursorRoleBackfillResponse
 from zerg.services.session_views import IngestHealthResponse
 from zerg.services.session_views import MediaBackfillInlineDataUrlsResponse
 from zerg.services.session_views import UsageStatsByProvider
@@ -426,6 +427,42 @@ async def backfill_inline_data_url_media(
     message = f"Inline media backfill {mode}: {candidates} candidate refs in {scanned} source lines"
     return MediaBackfillInlineDataUrlsResponse(
         **result.__dict__,
+        message=message,
+    )
+
+
+@router.post("/backfill-cursor-roles", response_model=CursorRoleBackfillResponse)
+async def backfill_cursor_roles(
+    dry_run: bool = Query(True, description="When true, classify and report without writing"),
+    after_id: int = Query(0, ge=0, description="Only scan Cursor user events with id greater than this value"),
+    batch_size: int = Query(5000, ge=1, le=20000, description="Max events to scan in this batch"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> CursorRoleBackfillResponse:
+    """Repair one batch of legacy Cursor ``role="user"`` events.
+
+    Re-roles Cursor's environment-context injection to ``system`` and unwraps
+    the real user turn from ``<user_query>...</user_query>`` for rows that
+    predate the decoder fix. Idempotent; paginated via ``after_id`` (loop until
+    ``scanned == 0``). ``raw_json`` is never modified.
+    """
+    from zerg.services.cursor_role_backfill import backfill_cursor_user_roles
+
+    result = backfill_cursor_user_roles(db, after_id=after_id, batch_size=batch_size, dry_run=dry_run)
+    if not dry_run:
+        db.commit()
+    mode = "dry run" if dry_run else "write"
+    message = (
+        f"Cursor role backfill {mode}: scanned={result.scanned} "
+        f"re_roleed={result.re_roleed} unwrapped={result.unwrapped} last_id={result.last_id}"
+    )
+    return CursorRoleBackfillResponse(
+        dry_run=dry_run,
+        scanned=result.scanned,
+        re_roleed=result.re_roleed,
+        unwrapped=result.unwrapped,
+        last_id=result.last_id,
         message=message,
     )
 
