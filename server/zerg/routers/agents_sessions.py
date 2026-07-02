@@ -144,6 +144,15 @@ def _active_live_session_candidates(*, limit: int, days_back: int, now: datetime
         )
 
 
+def _bounded_preview(value: str | None, *, max_len: int) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped[:max_len]
+
+
 def _parse_message_session_header(request: Request) -> UUID | None:
     raw = str(request.headers.get(_CURRENT_SESSION_HEADER, "") or "").strip()
     if not raw:
@@ -442,15 +451,12 @@ def list_session_summaries(
             anchor_on_activity=query is None,
         )
 
-        session_ids = [s.id for s in sessions]
-        last_user = store.get_last_message_map(session_ids, role="user", max_len=200)
-        last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=200)
-
         summaries: List[SessionSummaryResponse] = []
         now = datetime.now(timezone.utc)
         for s in sessions:
-            end_time = s.ended_at or now
-            duration_minutes = int((end_time - s.started_at).total_seconds() / 60) if s.started_at else None
+            started_at = normalize_utc_datetime(s.started_at)
+            end_time = normalize_utc_datetime(s.ended_at) or now
+            duration_minutes = int((end_time - started_at).total_seconds() / 60) if started_at else None
             turn_count = s.user_messages or 0
 
             summaries.append(
@@ -464,8 +470,8 @@ def list_session_summaries(
                     ended_at=s.ended_at,
                     duration_minutes=duration_minutes,
                     turn_count=turn_count,
-                    last_user_message=last_user.get(s.id),
-                    last_ai_message=last_ai.get(s.id),
+                    last_user_message=_bounded_preview(s.last_user_message_preview, max_len=200),
+                    last_ai_message=_bounded_preview(s.last_assistant_message_preview, max_len=200),
                 )
             )
 
@@ -698,8 +704,6 @@ def list_active_sessions(
 
         session_ids = [s.id for s in sessions]
         last_activity = store.get_last_activity_map(session_ids)
-        last_user = store.get_last_message_map(session_ids, role="user", max_len=300)
-        last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
         runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
         pause_request_map = load_active_pause_request_map(db, session_ids)
         control_state_map = load_managed_control_state_map(db, [session.id for session in sessions])
@@ -728,8 +732,8 @@ def list_active_sessions(
                     last_activity_at=last_activity_at,
                     runtime_overlay=runtime_overlay,
                     attention=attention_level,
-                    last_user_message=last_user.get(s.id),
-                    last_assistant_message=last_ai.get(s.id),
+                    last_user_message=_bounded_preview(s.last_user_message_preview, max_len=300),
+                    last_assistant_message=_bounded_preview(s.last_assistant_message_preview, max_len=300),
                     now=now,
                     control_overlay=control_state_map.get(s.id),
                     kernel_capabilities=kernel_capabilities_map.get(s.id),

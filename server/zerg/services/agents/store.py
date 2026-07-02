@@ -91,6 +91,8 @@ logger = logging.getLogger(__name__)
 
 _SESSION_FIRST_USER_PREVIEW_CHARS = 300
 _SESSION_LAST_VISIBLE_PREVIEW_CHARS = 500
+_SESSION_LAST_USER_PREVIEW_CHARS = 300
+_SESSION_LAST_ASSISTANT_PREVIEW_CHARS = 500
 
 
 def _bounded_session_preview(value: str | None, *, max_len: int) -> str | None:
@@ -1734,6 +1736,32 @@ class AgentsStore:
             .limit(1)
             .scalar()
         )
+        last_user_preview = (
+            self.db.query(AgentEvent.content_text)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(thread_filter)
+            .filter(durable_transcript_event_predicate())
+            .filter(AgentEvent.role == "user")
+            .filter(AgentEvent.content_text.isnot(None))
+            .filter(func.lower(func.trim(AgentEvent.content_text)) != "warmup")
+            .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
+            .limit(1)
+            .scalar()
+        )
+        last_assistant_preview = (
+            self.db.query(AgentEvent.content_text)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(thread_filter)
+            .filter(visible_transcript_event_predicate())
+            .filter(AgentEvent.role == "assistant")
+            .filter(AgentEvent.tool_name.is_(None))
+            .filter(AgentEvent.content_text.isnot(None))
+            .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
+            .limit(1)
+            .scalar()
+        )
         session_obj.first_user_message_preview = _bounded_session_preview(
             first_user_preview,
             max_len=_SESSION_FIRST_USER_PREVIEW_CHARS,
@@ -1741,6 +1769,14 @@ class AgentsStore:
         session_obj.last_visible_text_preview = _bounded_session_preview(
             last_visible_preview,
             max_len=_SESSION_LAST_VISIBLE_PREVIEW_CHARS,
+        )
+        session_obj.last_user_message_preview = _bounded_session_preview(
+            last_user_preview,
+            max_len=_SESSION_LAST_USER_PREVIEW_CHARS,
+        )
+        session_obj.last_assistant_message_preview = _bounded_session_preview(
+            last_assistant_preview,
+            max_len=_SESSION_LAST_ASSISTANT_PREVIEW_CHARS,
         )
 
     def _apply_incremental_session_count_deltas(
@@ -1752,6 +1788,8 @@ class AgentsStore:
         tool_delta: int,
         first_user_preview: str | None,
         last_visible_preview: str | None,
+        last_user_preview: str | None,
+        last_assistant_preview: str | None,
     ) -> None:
         """Apply cheap count deltas for archive-admitted compatibility ingest."""
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -1769,6 +1807,16 @@ class AgentsStore:
             session_obj.last_visible_text_preview = _bounded_session_preview(
                 last_visible_preview,
                 max_len=_SESSION_LAST_VISIBLE_PREVIEW_CHARS,
+            )
+        if last_user_preview:
+            session_obj.last_user_message_preview = _bounded_session_preview(
+                last_user_preview,
+                max_len=_SESSION_LAST_USER_PREVIEW_CHARS,
+            )
+        if last_assistant_preview:
+            session_obj.last_assistant_message_preview = _bounded_session_preview(
+                last_assistant_preview,
+                max_len=_SESSION_LAST_ASSISTANT_PREVIEW_CHARS,
             )
 
     def _align_head_branch_from_leaf_uuid(
@@ -2181,6 +2229,8 @@ class AgentsStore:
         tool_count_delta = 0
         first_user_preview_delta: tuple[datetime, int, str] | None = None
         last_visible_preview_delta: tuple[datetime, int, str] | None = None
+        last_user_preview_delta: tuple[datetime, int, str] | None = None
+        last_assistant_preview_delta: tuple[datetime, int, str] | None = None
 
         # Chunk commits every N events to release the SQLite write lock
         # periodically. A single 1000+ event transaction can hold the lock for
@@ -2294,10 +2344,16 @@ class AgentsStore:
                             candidate = (event_ts, event_order, content_clean)
                             if first_user_preview_delta is None or candidate[:2] < first_user_preview_delta[:2]:
                                 first_user_preview_delta = candidate
+                            if last_user_preview_delta is None or candidate[:2] > last_user_preview_delta[:2]:
+                                last_user_preview_delta = candidate
                     elif role == "assistant" and event_data.tool_name is not None:
                         tool_count_delta += 1
                     elif role == "assistant":
                         assistant_count_delta += 1
+                        if content_clean:
+                            candidate = (event_ts, event_order, content_clean)
+                            if last_assistant_preview_delta is None or candidate[:2] > last_assistant_preview_delta[:2]:
+                                last_assistant_preview_delta = candidate
                     if role in {"user", "assistant"} and (role != "assistant" or event_data.tool_name is None) and content_clean:
                         candidate = (event_ts, event_order, content_clean)
                         if last_visible_preview_delta is None or candidate[:2] > last_visible_preview_delta[:2]:
@@ -2459,6 +2515,8 @@ class AgentsStore:
                 tool_delta=tool_count_delta,
                 first_user_preview=first_user_preview_delta[2] if first_user_preview_delta else None,
                 last_visible_preview=last_visible_preview_delta[2] if last_visible_preview_delta else None,
+                last_user_preview=last_user_preview_delta[2] if last_user_preview_delta else None,
+                last_assistant_preview=last_assistant_preview_delta[2] if last_assistant_preview_delta else None,
             )
 
         transcript_changed = bool(source_lines_inserted) or raw_source_archived or not source_lines or rewind_signal is not None

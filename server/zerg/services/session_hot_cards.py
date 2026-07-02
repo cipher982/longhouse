@@ -47,6 +47,8 @@ def upsert_timeline_card_from_session(
         "summary_title": session.summary_title,
         "first_user_message_preview": session.first_user_message_preview,
         "last_visible_text_preview": session.last_visible_text_preview,
+        "last_user_message_preview": session.last_user_message_preview,
+        "last_assistant_message_preview": session.last_assistant_message_preview,
         "user_messages": int(session.user_messages or 0),
         "assistant_messages": int(session.assistant_messages or 0),
         "tool_calls": int(session.tool_calls or 0),

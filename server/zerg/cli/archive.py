@@ -562,7 +562,8 @@ def backfill_previews_command(
     typer.echo(
         f"{status}: selected={result.selected_sessions} updated={result.updated_sessions} "
         f"cards={result.updated_timeline_cards} first_user={result.first_user_filled} "
-        f"last_visible={result.last_visible_filled}"
+        f"last_visible={result.last_visible_filled} last_user={result.last_user_filled} "
+        f"last_assistant={result.last_assistant_filled}"
     )
 
 

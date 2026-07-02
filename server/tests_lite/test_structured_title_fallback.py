@@ -44,6 +44,8 @@ def _seed_session(
     project=None,
     git_branch=None,
     first_user_message_preview=None,
+    last_user_message_preview=None,
+    last_assistant_message_preview=None,
 ):
     db = factory()
     s = AgentSession(
@@ -58,6 +60,8 @@ def _seed_session(
         tool_calls=0,
         summary_title=summary_title,
         first_user_message_preview=first_user_message_preview,
+        last_user_message_preview=last_user_message_preview,
+        last_assistant_message_preview=last_assistant_message_preview,
     )
     db.add(s)
     db.flush()
@@ -302,6 +306,19 @@ def test_sessions_list_uses_preview_backfill_for_existing_rows(tmp_path):
         assert result.updated_sessions == 1
         assert result.first_user_filled == 1
         assert result.last_visible_filled == 1
+        assert result.last_user_filled == 1
+        assert result.last_assistant_filled == 1
+
+        db = factory()
+        try:
+            repaired = db.query(AgentSession).filter(AgentSession.id == session.id).one()
+            card = db.query(TimelineCard).filter(TimelineCard.session_id == session.id).one()
+        finally:
+            db.close()
+        assert repaired.last_user_message_preview == "Legacy first question"
+        assert repaired.last_assistant_message_preview == "Legacy answer"
+        assert card.last_user_message_preview == "Legacy first question"
+        assert card.last_assistant_message_preview == "Legacy answer"
 
         with patch(
             "zerg.services.agents.store.AgentsStore.get_first_message_map",
@@ -331,6 +348,8 @@ def test_preview_backfill_creates_missing_timeline_card_for_hot_legacy_row(tmp_p
     try:
         existing = db.query(AgentSession).filter(AgentSession.id == session.id).one()
         existing.last_visible_text_preview = "Already latest"
+        existing.last_user_message_preview = "Already last user"
+        existing.last_assistant_message_preview = "Already last assistant"
         db.query(TimelineCard).filter(TimelineCard.session_id == session.id).delete()
         db.commit()
 
@@ -344,5 +363,9 @@ def test_preview_backfill_creates_missing_timeline_card_for_hot_legacy_row(tmp_p
     assert result.selected_sessions == 1
     assert result.updated_sessions == 0
     assert result.updated_timeline_cards == 1
+    assert result.last_user_filled == 0
+    assert result.last_assistant_filled == 0
     assert card.first_user_message_preview == "Already hot"
     assert card.last_visible_text_preview == "Already latest"
+    assert card.last_user_message_preview == "Already last user"
+    assert card.last_assistant_message_preview == "Already last assistant"

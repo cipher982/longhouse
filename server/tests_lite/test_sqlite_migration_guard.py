@@ -42,12 +42,52 @@ from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionTurn
+from zerg.models.agents import TimelineCard
 
 
 def _table_columns(engine, table_name: str) -> set[str]:
     with engine.connect() as conn:
         rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
     return {row[1] for row in rows}
+
+
+def test_sqlite_migration_adds_role_preview_columns(tmp_path):
+    db_path = tmp_path / "role_preview_column_migration.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE sessions (
+                id VARCHAR(36) PRIMARY KEY,
+                provider VARCHAR(50) NOT NULL,
+                environment VARCHAR(20) NOT NULL,
+                started_at DATETIME NOT NULL,
+                first_user_message_preview TEXT,
+                last_visible_text_preview TEXT
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE timeline_cards (
+                session_id VARCHAR(36) PRIMARY KEY,
+                provider VARCHAR(50) NOT NULL,
+                environment VARCHAR(20) NOT NULL,
+                started_at DATETIME NOT NULL,
+                first_user_message_preview TEXT,
+                last_visible_text_preview TEXT,
+                parser_revision VARCHAR(128) NOT NULL
+            )
+            """
+        )
+
+    _migrate_agents_columns(engine)
+
+    session_columns = _table_columns(engine, "sessions")
+    timeline_card_columns = _table_columns(engine, "timeline_cards")
+    assert {col.name for col in AgentSession.__table__.columns if col.name.endswith("_message_preview")} <= session_columns
+    assert {col.name for col in TimelineCard.__table__.columns if col.name.endswith("_message_preview")} <= timeline_card_columns
 
 
 def test_sqlite_migration_renames_session_input_request_identity(tmp_path):

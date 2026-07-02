@@ -87,6 +87,7 @@ def test_tool_call_events_count_as_tools_not_turns(tmp_path):
     assert result.events_inserted == 4
 
     from zerg.models.agents import AgentSession
+    from zerg.models.agents import TimelineCard
 
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     assert session is not None
@@ -96,6 +97,12 @@ def test_tool_call_events_count_as_tools_not_turns(tmp_path):
     assert session.tool_calls == 1, f"expected 1 tool call, got {session.tool_calls}"
     assert session.first_user_message_preview == "hi"
     assert session.last_visible_text_preview == "Done."
+    assert session.last_user_message_preview == "hi"
+    assert session.last_assistant_message_preview == "Done."
+
+    card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+    assert card.last_user_message_preview == "hi"
+    assert card.last_assistant_message_preview == "Done."
 
 
 def test_multiple_tool_calls_per_turn(tmp_path):

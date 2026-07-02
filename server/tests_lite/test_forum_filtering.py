@@ -24,6 +24,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession, SessionRuntimeState
 from zerg.models.live_store import LiveSession as LiveSessionRow
 from zerg.routers import agents_sessions as agents_sessions_router
+from zerg.services.agents import AgentsStore
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 
@@ -34,7 +35,16 @@ def _make_db(tmp_path, name="forum.db"):
     return make_sessionmaker(engine)
 
 
-def _seed(factory, user_state="active", provider_session_id=None, *, started_at=None, project=None):
+def _seed(
+    factory,
+    user_state="active",
+    provider_session_id=None,
+    *,
+    started_at=None,
+    project=None,
+    last_user_message_preview=None,
+    last_assistant_message_preview=None,
+):
     db = factory()
     session_started_at = started_at or datetime.now(timezone.utc)
     s = AgentSession(
@@ -47,7 +57,9 @@ def _seed(factory, user_state="active", provider_session_id=None, *, started_at=
         assistant_messages=2,
         tool_calls=0,
         user_state=user_state,
-            )
+        last_user_message_preview=last_user_message_preview,
+        last_assistant_message_preview=last_assistant_message_preview,
+    )
     db.add(s)
     db.flush()
     upsert_timeline_card_from_session(db, s)
@@ -293,6 +305,60 @@ def test_active_sessions_uses_live_store_candidates_when_configured(tmp_path, mo
 
         api_app.dependency_overrides.clear()
         live_engine.dispose()
+
+
+def test_active_sessions_use_projected_role_previews(tmp_path, monkeypatch):
+    """Active listing must not scan event rows for last-message previews."""
+    factory = _make_db(tmp_path, "active_projected_previews.db")
+    session_id = _seed(
+        factory,
+        user_state="active",
+        last_user_message_preview="Projected user text",
+        last_assistant_message_preview="Projected assistant text",
+    )
+
+    def fail_get_last_message_map(self, session_ids, *, role, max_len=None):
+        raise AssertionError("active sessions must use projected preview columns")
+
+    monkeypatch.setattr(AgentsStore, "get_last_message_map", fail_get_last_message_map)
+    client = _client(factory)
+    try:
+        resp = client.get("/agents/sessions/active", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200
+        session = next(item for item in resp.json()["sessions"] if item["id"] == session_id)
+        assert session["last_user_message"] == "Projected user text"
+        assert session["last_assistant_message"] == "Projected assistant text"
+    finally:
+        from zerg.main import api_app
+
+        api_app.dependency_overrides.clear()
+
+
+def test_session_summaries_use_projected_role_previews(tmp_path, monkeypatch):
+    """Summary listing must not scan event rows for last-message previews."""
+    factory = _make_db(tmp_path, "summary_projected_previews.db")
+    session_id = _seed(
+        factory,
+        user_state="active",
+        last_user_message_preview="Summary projected user",
+        last_assistant_message_preview="Summary projected assistant",
+    )
+
+    def fail_get_last_message_map(self, session_ids, *, role, max_len=None):
+        raise AssertionError("session summaries must use projected preview columns")
+
+    monkeypatch.setattr(AgentsStore, "get_last_message_map", fail_get_last_message_map)
+    client = _client(factory)
+    try:
+        resp = client.get("/agents/sessions/summary", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200
+        summary = next(item for item in resp.json()["sessions"] if item["id"] == session_id)
+        assert summary["last_user_message"] == "Summary projected user"
+        assert summary["last_ai_message"] == "Summary projected assistant"
+    finally:
+        from zerg.main import api_app
+
+        api_app.dependency_overrides.clear()
 
 
 # ---------------------------------------------------------------------------

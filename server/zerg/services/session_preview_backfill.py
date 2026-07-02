@@ -33,6 +33,8 @@ class SessionPreviewBackfillResult:
     updated_timeline_cards: int
     first_user_filled: int
     last_visible_filled: int
+    last_user_filled: int
+    last_assistant_filled: int
 
 
 def backfill_missing_session_previews(
@@ -57,6 +59,12 @@ def backfill_missing_session_previews(
             or_(
                 AgentSession.first_user_message_preview.is_(None),
                 AgentSession.last_visible_text_preview.is_(None),
+                AgentSession.last_user_message_preview.is_(None),
+                AgentSession.last_assistant_message_preview.is_(None),
+                TimelineCard.first_user_message_preview.is_(None),
+                TimelineCard.last_visible_text_preview.is_(None),
+                TimelineCard.last_user_message_preview.is_(None),
+                TimelineCard.last_assistant_message_preview.is_(None),
                 TimelineCard.session_id.is_(None),
             )
         )
@@ -71,11 +79,15 @@ def backfill_missing_session_previews(
             updated_timeline_cards=0,
             first_user_filled=0,
             last_visible_filled=0,
+            last_user_filled=0,
+            last_assistant_filled=0,
         )
 
     session_ids = [session.id for session in sessions]
     missing_first_ids = [session.id for session in sessions if not _has_preview(session.first_user_message_preview)]
     missing_last_ids = [session.id for session in sessions if not _has_preview(session.last_visible_text_preview)]
+    missing_last_user_ids = [session.id for session in sessions if not _has_preview(session.last_user_message_preview)]
+    missing_last_assistant_ids = [session.id for session in sessions if not _has_preview(session.last_assistant_message_preview)]
 
     first_user_map = _preview_map(
         db,
@@ -89,17 +101,33 @@ def backfill_missing_session_previews(
         kind="last_visible",
         max_len=SESSION_LAST_VISIBLE_PREVIEW_CHARS,
     )
+    last_user_map = _preview_map(
+        db,
+        session_ids=missing_last_user_ids,
+        kind="last_user",
+        max_len=SESSION_FIRST_USER_PREVIEW_CHARS,
+    )
+    last_assistant_map = _preview_map(
+        db,
+        session_ids=missing_last_assistant_ids,
+        kind="last_assistant",
+        max_len=SESSION_LAST_VISIBLE_PREVIEW_CHARS,
+    )
     cards_by_session = {card.session_id: card for card in db.query(TimelineCard).filter(TimelineCard.session_id.in_(session_ids)).all()}
 
     updated_sessions = 0
     updated_cards: set[UUID] = set()
     first_user_filled = 0
     last_visible_filled = 0
+    last_user_filled = 0
+    last_assistant_filled = 0
     for session in sessions:
         session_changed = False
         card = cards_by_session.get(session.id)
 
-        first_user = first_user_map.get(session.id)
+        first_user = (
+            session.first_user_message_preview if _has_preview(session.first_user_message_preview) else first_user_map.get(session.id)
+        )
         if first_user and not _has_preview(session.first_user_message_preview):
             session.first_user_message_preview = first_user
             session_changed = True
@@ -108,13 +136,37 @@ def backfill_missing_session_previews(
             card.first_user_message_preview = first_user
             updated_cards.add(session.id)
 
-        last_visible = last_visible_map.get(session.id)
+        last_visible = (
+            session.last_visible_text_preview if _has_preview(session.last_visible_text_preview) else last_visible_map.get(session.id)
+        )
         if last_visible and not _has_preview(session.last_visible_text_preview):
             session.last_visible_text_preview = last_visible
             session_changed = True
             last_visible_filled += 1
         if last_visible and card is not None and not _has_preview(card.last_visible_text_preview):
             card.last_visible_text_preview = last_visible
+            updated_cards.add(session.id)
+
+        last_user = session.last_user_message_preview if _has_preview(session.last_user_message_preview) else last_user_map.get(session.id)
+        if last_user and not _has_preview(session.last_user_message_preview):
+            session.last_user_message_preview = last_user
+            session_changed = True
+            last_user_filled += 1
+        if last_user and card is not None and not _has_preview(card.last_user_message_preview):
+            card.last_user_message_preview = last_user
+            updated_cards.add(session.id)
+
+        last_assistant = (
+            session.last_assistant_message_preview
+            if _has_preview(session.last_assistant_message_preview)
+            else last_assistant_map.get(session.id)
+        )
+        if last_assistant and not _has_preview(session.last_assistant_message_preview):
+            session.last_assistant_message_preview = last_assistant
+            session_changed = True
+            last_assistant_filled += 1
+        if last_assistant and card is not None and not _has_preview(card.last_assistant_message_preview):
+            card.last_assistant_message_preview = last_assistant
             updated_cards.add(session.id)
 
         if session_changed:
@@ -129,6 +181,8 @@ def backfill_missing_session_previews(
         updated_timeline_cards=len(updated_cards),
         first_user_filled=first_user_filled,
         last_visible_filled=last_visible_filled,
+        last_user_filled=last_user_filled,
+        last_assistant_filled=last_assistant_filled,
     )
 
 
@@ -157,6 +211,16 @@ def _preview_map(
         transcript_predicate = durable_transcript_event_predicate()
         role_filter = AgentEvent.role == "user"
         content_filter = func.lower(func.trim(AgentEvent.content_text)) != "warmup"
+    elif kind == "last_user":
+        order_by = (AgentEvent.timestamp.desc(), AgentEvent.id.desc())
+        transcript_predicate = durable_transcript_event_predicate()
+        role_filter = AgentEvent.role == "user"
+        content_filter = func.lower(func.trim(AgentEvent.content_text)) != "warmup"
+    elif kind == "last_assistant":
+        order_by = (AgentEvent.timestamp.desc(), AgentEvent.id.desc())
+        transcript_predicate = visible_transcript_event_predicate()
+        role_filter = AgentEvent.role == "assistant"
+        content_filter = AgentEvent.tool_name.is_(None)
     elif kind == "last_visible":
         order_by = (AgentEvent.timestamp.desc(), AgentEvent.id.desc())
         transcript_predicate = visible_transcript_event_predicate()
