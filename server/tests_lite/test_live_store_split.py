@@ -34,6 +34,7 @@ from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveLaunchReadiness
+from zerg.models.live_store import LiveSession as LiveSessionRow
 from zerg.models.live_store import LiveRuntimeState
 from zerg.services.agents import AgentsStore
 from zerg.services.live_archive_outbox import HEARTBEAT_STAMP_KIND
@@ -41,6 +42,8 @@ from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
 from zerg.services.live_archive_outbox import drain_live_archive_outbox
 from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
+from zerg.services.live_session_state import mark_missing_live_sessions
+from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
 from zerg.services.live_launch_readiness import get_live_launch_readiness_by_client_request
 from zerg.services.live_launch_readiness import get_live_launch_readiness_by_session_id
 from zerg.services.live_launch_readiness import latest_live_launch_readiness_map
@@ -60,6 +63,7 @@ from zerg.services.session_views import build_session_response
 from zerg.services.session_views import latest_live_launch_readiness
 from zerg.services.write_serializer import get_live_write_serializer
 from zerg.services.write_serializer import get_write_serializer
+from zerg.utils.time import normalize_utc
 
 
 def test_live_write_serializer_is_distinct_from_archive_serializer():
@@ -83,6 +87,81 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
     assert "sessions" not in tables
     assert "agent_heartbeats" not in tables
     assert "events" not in tables
+
+
+def test_live_session_state_upserts_and_marks_missing(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(engine)
+    LiveSession = sessionmaker(bind=engine)
+    first_session_id = uuid4()
+    second_session_id = uuid4()
+    first_seen_at = datetime.now(timezone.utc)
+    second_seen_at = first_seen_at + timedelta(seconds=1)
+    missing_seen_at = second_seen_at + timedelta(seconds=1)
+
+    try:
+        with LiveSession() as live_db:
+            touched = upsert_live_sessions_from_managed_leases(
+                live_db,
+                [
+                    SimpleNamespace(
+                        session_id=first_session_id,
+                        provider="codex",
+                        machine_id="cinder",
+                        state="attached",
+                        observed_at=first_seen_at,
+                    ),
+                    SimpleNamespace(
+                        session_id=second_session_id,
+                        provider="claude",
+                        machine_id="cinder",
+                        state="attached",
+                        observed_at=first_seen_at,
+                    ),
+                ],
+                device_id="cinder",
+                owner_id=123,
+                received_at=first_seen_at,
+            )
+            live_db.commit()
+            assert touched == {first_session_id, second_session_id}
+
+            touched = upsert_live_sessions_from_managed_leases(
+                live_db,
+                [
+                    SimpleNamespace(
+                        session_id=first_session_id,
+                        provider="codex",
+                        machine_id="cinder",
+                        state="degraded",
+                        observed_at=second_seen_at,
+                    )
+                ],
+                device_id="cinder",
+                owner_id=None,
+                received_at=second_seen_at,
+            )
+            missing = mark_missing_live_sessions(
+                live_db,
+                touched,
+                device_id="cinder",
+                received_at=missing_seen_at,
+            )
+            live_db.commit()
+
+            first = live_db.get(LiveSessionRow, str(first_session_id))
+            second = live_db.get(LiveSessionRow, str(second_session_id))
+            assert first is not None
+            assert first.owner_id == "123"
+            assert first.state == "degraded"
+            assert normalize_utc(first.last_seen_at) == second_seen_at
+            assert second is not None
+            assert second.state == "missing"
+            assert normalize_utc(second.last_seen_at) == first_seen_at
+            assert normalize_utc(second.updated_at) == missing_seen_at
+            assert missing == {second_session_id}
+    finally:
+        engine.dispose()
 
 
 def test_archive_and_live_heartbeat_stamp_columns_stay_in_sync():
@@ -1094,6 +1173,12 @@ async def test_heartbeat_live_stamp_returns_while_archive_bookkeeping_waits(tmp_
             assert control.provider == "codex"
             assert control.state == "attached"
             assert control.sequence == 7
+            live_session = live_db.get(LiveSessionRow, str(session_id))
+            assert live_session is not None
+            assert live_session.device_id == "live-split"
+            assert live_session.provider == "codex"
+            assert live_session.state == "attached"
+            assert live_session.last_seen_at is not None
             outbox = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == HEARTBEAT_STAMP_KIND).one()
             assert outbox.drained_at is None
             assert "live-split" in outbox.idempotency_key

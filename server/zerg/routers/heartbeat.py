@@ -48,6 +48,8 @@ from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
+from zerg.services.live_session_state import mark_missing_live_sessions
+from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
 from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import mark_missing_managed_control_leases
 from zerg.services.managed_control_state import refresh_managed_control_lease_health
@@ -927,10 +929,23 @@ async def ingest_heartbeat(
                         device_id=_device_id,
                         received_at=_now,
                     )
+                    upsert_live_sessions_from_managed_leases(
+                        write_db,
+                        _managed_leases,
+                        device_id=_device_id,
+                        owner_id=getattr(_token, "owner_id", None),
+                        received_at=_now,
+                    )
                 if _managed_leases_present:
                     mark_missing_live_control_leases(
                         write_db,
                         _managed_leases,
+                        device_id=_device_id,
+                        received_at=_now,
+                    )
+                    mark_missing_live_sessions(
+                        write_db,
+                        _managed_lease_session_ids(_managed_leases),
                         device_id=_device_id,
                         received_at=_now,
                     )
