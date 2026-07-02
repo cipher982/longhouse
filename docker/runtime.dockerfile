@@ -109,7 +109,9 @@ assert parts >= (3, 35, 0), f'SQLite {v} < 3.35.0'; \
 conn = pysqlite3.connect(':memory:'); \
 conn.execute('create virtual table t using fts5(x)'); \
 conn.execute('select count(*) from dbstat').fetchone(); \
-conn.close(); print(f'pysqlite3 OK: SQLite {v}, FTS5 + dbstat available')"
+assert hasattr(conn, 'set_progress_handler'), 'set_progress_handler unavailable'; \
+assert hasattr(conn, 'interrupt'), 'interrupt unavailable'; \
+conn.close(); print(f'pysqlite3 OK: SQLite {v}, FTS5 + dbstat + progress handler available')"
 
 # =============================================================================
 # Stage 4: Production Runtime

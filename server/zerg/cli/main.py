@@ -3,6 +3,7 @@
 import json
 import sys
 import time
+from pathlib import Path
 
 import typer
 
@@ -140,6 +141,16 @@ def _resolve_db_engine(database_url: str | None):
     return default_engine, str(default_engine.url)
 
 
+def _resolve_db_url(database_url: str | None) -> str:
+    from zerg.database import default_engine
+
+    if database_url:
+        return database_url
+    if default_engine is None:
+        raise typer.Exit(code=2)
+    return str(default_engine.url)
+
+
 @db_app.command(name="doctor")
 def db_doctor(
     database_url: str | None = typer.Option(
@@ -163,12 +174,24 @@ def db_doctor(
         "--table-bytes",
         help="Walk SQLite dbstat pages and include physical table/index byte usage.",
     ),
+    table_bytes_cache: bool = typer.Option(
+        False,
+        "--table-bytes-cache",
+        help="Include the full cached physical table/index byte map when available.",
+    ),
+    table_bytes_cache_max_age_seconds: int = typer.Option(
+        86400,
+        "--table-bytes-cache-max-age-seconds",
+        min=1,
+        help="Freshness threshold for cached table-byte samples.",
+    ),
 ) -> None:
     """Inspect SQLite file, disk, planner, and optional backlog diagnostics."""
     from zerg.services.db_diagnostics import collect_sqlite_db_stats
     from zerg.services.db_diagnostics import collect_sqlite_deep_counts
     from zerg.services.db_diagnostics import collect_sqlite_schema_stats
     from zerg.services.db_diagnostics import collect_sqlite_table_bytes
+    from zerg.services.db_diagnostics import load_sqlite_table_bytes_cache
 
     engine, resolved_database_url = _resolve_db_engine(database_url)
     with engine.connect() as conn:
@@ -189,6 +212,12 @@ def db_doctor(
         else:
             payload["table_bytes"] = None
             payload["table_bytes_skipped"] = True
+        payload["table_bytes_cache"] = load_sqlite_table_bytes_cache(
+            resolved_database_url,
+            max_age_seconds=table_bytes_cache_max_age_seconds,
+            current_stats=payload,
+            include_table_bytes=table_bytes_cache,
+        )
 
     if json_output:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
@@ -211,6 +240,68 @@ def db_doctor(
             typer.echo(f"    {table_name}: {table_payload['bytes']}")
     else:
         typer.echo(f"  table_bytes: unavailable ({payload['table_bytes']['error']})")
+    cache = payload["table_bytes_cache"]
+    if cache["exists"]:
+        age = cache["age_seconds"]
+        age_text = f"{age}s ago" if age is not None else "unknown age"
+        fresh_text = "fresh" if cache["fresh"] else "stale"
+        typer.echo(f"  table_bytes_cache: {cache['status']} ({fresh_text}, sampled {age_text})")
+        for row in cache["top_tables"][:3]:
+            typer.echo(f"    cached {row['table']}: {row['bytes']}")
+    else:
+        suggestion = f", run {cache['suggested_command']}" if cache.get("suggested_command") else ""
+        typer.echo(f"  table_bytes_cache: {cache['status']}{suggestion}")
+
+
+@db_app.command(name="sample-table-bytes")
+def db_sample_table_bytes(
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="SQLite DATABASE_URL override (defaults to env).",
+    ),
+    output_path: Path | None = typer.Option(
+        None,
+        "--output",
+        help="Override table-byte cache artifact path.",
+    ),
+    timeout_seconds: int = typer.Option(
+        300,
+        "--timeout-seconds",
+        min=1,
+        help="Abort the dbstat page walk after this many seconds.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Sample SQLite physical table/index byte usage into a cache artifact."""
+    from zerg.services.db_diagnostics import sample_sqlite_table_bytes_to_cache
+    from zerg.services.db_diagnostics import sqlite_table_bytes_cache_path
+
+    resolved_database_url = _resolve_db_url(database_url)
+    try:
+        payload = sample_sqlite_table_bytes_to_cache(
+            resolved_database_url,
+            output_path=output_path,
+            timeout_seconds=timeout_seconds,
+        )
+    except ValueError as exc:
+        if json_output:
+            typer.echo(json.dumps({"status": "error", "error": str(exc)}, indent=2, sort_keys=True))
+        else:
+            typer.echo(str(exc), err=True)
+        raise typer.Exit(code=2) from exc
+
+    cache_path = sqlite_table_bytes_cache_path(resolved_database_url, output_path)
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        status = payload["status"]
+        elapsed_ms = payload["elapsed_ms"]
+        typer.echo(f"SQLite table-byte sample {status} elapsed_ms={elapsed_ms} output={cache_path}")
+        if payload.get("error"):
+            typer.echo(f"  error: {payload['error']}", err=True)
+    if payload["status"] != "ok":
+        raise typer.Exit(code=1)
 
 
 @db_app.command(name="optimize")

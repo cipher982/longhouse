@@ -198,6 +198,169 @@ def test_db_doctor_table_bytes_are_separately_opted_in(tmp_path):
     assert abs(payload["db_page_bytes"] - freelist_bytes - table_bytes["total_bytes"]) <= payload["db_page_size"]
 
 
+def test_db_sample_table_bytes_writes_cache_and_doctor_reports_fresh_cache(tmp_path):
+    db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+    cache_path = Path(f"{db_path}.table-bytes.json")
+
+    sample = CliRunner().invoke(app, ["db", "sample-table-bytes", "--database-url", db_url, "--json"])
+
+    assert sample.exit_code == 0, sample.output
+    sample_payload = json.loads(sample.output)
+    assert sample_payload["status"] == "ok"
+    assert sample_payload["table_bytes"]["available"] is True
+    assert cache_path.exists()
+
+    doctor = CliRunner().invoke(app, ["db", "doctor", "--database-url", db_url, "--json", "--table-bytes-cache"])
+
+    assert doctor.exit_code == 0, doctor.output
+    payload = json.loads(doctor.output)
+    cache = payload["table_bytes_cache"]
+    assert cache["exists"] is True
+    assert cache["status"] == "ok"
+    assert cache["fresh"] is True
+    assert cache["db_bytes_at_sample"] == sample_payload["db_bytes_at_sample"]
+    assert cache["db_bytes_now"] == payload["db_bytes"]
+    assert cache["table_bytes"]["tables"]["filled_payload"]["bytes"] > 0
+    assert cache["top_tables"][0]["bytes"] >= cache["top_tables"][-1]["bytes"]
+
+
+def test_db_doctor_reports_missing_cache_without_sampling_small_db(tmp_path):
+    _db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+
+    result = CliRunner().invoke(app, ["db", "doctor", "--database-url", db_url, "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    cache = payload["table_bytes_cache"]
+    assert cache["exists"] is False
+    assert cache["status"] == "missing"
+    assert cache["suggested_command"] is None
+
+
+def test_db_doctor_reports_stale_and_corrupt_cache(tmp_path):
+    db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+    cache_path = Path(f"{db_path}.table-bytes.json")
+    sample = CliRunner().invoke(app, ["db", "sample-table-bytes", "--database-url", db_url, "--json"])
+    assert sample.exit_code == 0, sample.output
+
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    payload["completed_at"] = "2020-01-01T00:00:00Z"
+    cache_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    stale = CliRunner().invoke(
+        app,
+        ["db", "doctor", "--database-url", db_url, "--json", "--table-bytes-cache-max-age-seconds", "1"],
+    )
+
+    assert stale.exit_code == 0, stale.output
+    stale_cache = json.loads(stale.output)["table_bytes_cache"]
+    assert stale_cache["status"] == "ok"
+    assert stale_cache["fresh"] is False
+    assert stale_cache["age_seconds"] > 1
+
+    cache_path.write_text("{", encoding="utf-8")
+    corrupt = CliRunner().invoke(app, ["db", "doctor", "--database-url", db_url, "--json"])
+
+    assert corrupt.exit_code == 0, corrupt.output
+    corrupt_cache = json.loads(corrupt.output)["table_bytes_cache"]
+    assert corrupt_cache["status"] == "corrupt"
+    assert corrupt_cache["error"]
+
+
+def test_table_bytes_cache_rejects_oversized_and_schema_mismatch(tmp_path):
+    from zerg.services.db_diagnostics import load_sqlite_table_bytes_cache
+
+    db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+    cache_path = Path(f"{db_path}.table-bytes.json")
+    cache_path.write_text(json.dumps({"schema_version": 999}), encoding="utf-8")
+
+    mismatch = load_sqlite_table_bytes_cache(db_url, max_cache_bytes=1024)
+    assert mismatch["status"] == "schema_version_unsupported"
+
+    cache_path.write_text("x" * 32, encoding="utf-8")
+    oversized = load_sqlite_table_bytes_cache(db_url, max_cache_bytes=8)
+    assert oversized["status"] == "cache_too_large"
+
+
+def test_table_bytes_cache_concurrent_writes_leave_valid_json(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from zerg.services.db_diagnostics import write_sqlite_table_bytes_cache
+
+    cache_path = tmp_path / "doctor.db.table-bytes.json"
+
+    def _write(index: int) -> None:
+        write_sqlite_table_bytes_cache(
+            {
+                "schema_version": 1,
+                "status": "ok",
+                "writer": index,
+                "table_bytes": {"available": True, "error": None, "total_bytes": index, "total_pages": 1, "tables": {}},
+            },
+            cache_path,
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        list(executor.map(_write, [1, 2]))
+
+    payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "ok"
+    assert payload["writer"] in {1, 2}
+
+
+def test_db_sample_table_bytes_timeout_and_unavailable_write_cache(tmp_path, monkeypatch):
+    from zerg.services import db_diagnostics
+
+    db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+
+    def _timeout(*_args, **_kwargs):
+        raise db_diagnostics.SQLiteTableBytesTimeout("interrupted")
+
+    monkeypatch.setattr(db_diagnostics, "collect_sqlite_table_bytes_with_deadline", _timeout)
+    timeout = CliRunner().invoke(app, ["db", "sample-table-bytes", "--database-url", db_url, "--json"])
+
+    assert timeout.exit_code == 1, timeout.output
+    timeout_payload = json.loads(timeout.output)
+    assert timeout_payload["status"] == "timeout"
+    cached_timeout = json.loads(Path(f"{db_path}.table-bytes.json").read_text(encoding="utf-8"))
+    assert cached_timeout["status"] == "timeout"
+
+    def _unavailable(*_args, **_kwargs):
+        return {
+            "available": False,
+            "error": "no such table: dbstat",
+            "total_bytes": None,
+            "total_pages": None,
+            "tables": {},
+        }
+
+    monkeypatch.setattr(db_diagnostics, "collect_sqlite_table_bytes_with_deadline", _unavailable)
+    unavailable = CliRunner().invoke(app, ["db", "sample-table-bytes", "--database-url", db_url, "--json"])
+
+    assert unavailable.exit_code == 1, unavailable.output
+    unavailable_payload = json.loads(unavailable.output)
+    assert unavailable_payload["status"] == "unavailable"
+    assert "dbstat" in unavailable_payload["error"]
+
+
+def test_db_sample_table_bytes_rejects_bad_timeout_and_missing_db(tmp_path):
+    db_path = tmp_path / "missing.db"
+    db_url = f"sqlite:///{db_path}"
+
+    bad_timeout = CliRunner().invoke(
+        app,
+        ["db", "sample-table-bytes", "--database-url", db_url, "--json", "--timeout-seconds", "0"],
+    )
+    assert bad_timeout.exit_code == 2
+
+    missing = CliRunner().invoke(app, ["db", "sample-table-bytes", "--database-url", db_url, "--json"])
+    assert missing.exit_code == 1, missing.output
+    payload = json.loads(missing.output)
+    assert payload["status"] == "error"
+    assert payload["error"] == "database file not found"
+    assert Path(f"{db_path}.table-bytes.json").exists()
+
+
 def test_collect_sqlite_table_bytes_gracefully_handles_unavailable_dbstat():
     from zerg.services.db_diagnostics import collect_sqlite_table_bytes
 
@@ -289,10 +452,7 @@ def test_migrate_can_skip_schema_convergence(tmp_path):
     assert payload["schema_converged"] is False
     assert payload["pending_before"] == []
     with sqlite3.connect(db_path) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
-        }
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
     assert "migration_runs" in tables
     assert "sessions" not in tables
 
