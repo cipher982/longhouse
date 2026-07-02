@@ -13,13 +13,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
 # Interval between runner-health reconcile passes (seconds).
 RUNNER_HEALTH_RECONCILE_INTERVAL = 120
+LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_INTERVAL_SECONDS", "10"))
+LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_BATCH_SIZE", "100"))
 
 _maintenance_task: asyncio.Task | None = None
+_live_archive_drain_task: asyncio.Task | None = None
 
 
 async def _reconcile_runner_health_once() -> None:
@@ -34,6 +38,47 @@ async def _reconcile_runner_health_once() -> None:
         db.close()
 
 
+async def _drain_live_archive_outbox_once() -> dict[str, int]:
+    """Drain one live archive outbox batch through the archive writer lane."""
+
+    from zerg.database import get_live_session_factory
+    from zerg.database import live_store_configured
+    from zerg.models.live_store import LiveArchiveOutbox
+    from zerg.services.live_archive_outbox import drain_live_archive_outbox
+    from zerg.services.write_serializer import get_write_serializer
+
+    if not live_store_configured():
+        return {"processed": 0, "drained": 0, "failed": 0}
+    live_session_factory = get_live_session_factory()
+    if live_session_factory is None:
+        return {"processed": 0, "drained": 0, "failed": 0}
+
+    with live_session_factory() as live_db:
+        pending = (
+            live_db.query(LiveArchiveOutbox.id)
+            .filter(LiveArchiveOutbox.drained_at.is_(None))
+            .order_by(LiveArchiveOutbox.created_at.asc(), LiveArchiveOutbox.id.asc())
+            .first()
+        )
+    if pending is None:
+        return {"processed": 0, "drained": 0, "failed": 0}
+
+    def _drain(archive_db):
+        with live_session_factory() as live_db:
+            result = drain_live_archive_outbox(
+                live_db,
+                archive_db,
+                limit=LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE,
+            )
+        return result.as_dict()
+
+    return await get_write_serializer().execute(
+        _drain,
+        auto_commit=False,
+        label="live-archive-drain",
+    )
+
+
 async def _loop() -> None:
     while True:
         try:
@@ -45,22 +90,52 @@ async def _loop() -> None:
             logger.warning("Maintenance tick failed (non-fatal)", exc_info=True)
 
 
+async def _live_archive_drain_loop() -> None:
+    while True:
+        try:
+            await asyncio.sleep(LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL)
+            result = await _drain_live_archive_outbox_once()
+            if result["processed"]:
+                logger.info(
+                    "Live archive outbox drain processed=%d drained=%d failed=%d",
+                    result["processed"],
+                    result["drained"],
+                    result["failed"],
+                )
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.warning("Live archive outbox drain tick failed (non-fatal)", exc_info=True)
+
+
 def start_maintenance_loop() -> None:
     """Start the periodic maintenance loop. Idempotent."""
-    global _maintenance_task
+    global _live_archive_drain_task, _maintenance_task
     if _maintenance_task and not _maintenance_task.done():
-        return
-    _maintenance_task = asyncio.create_task(_loop())
+        pass
+    else:
+        _maintenance_task = asyncio.create_task(_loop())
+    if _live_archive_drain_task and not _live_archive_drain_task.done():
+        pass
+    else:
+        _live_archive_drain_task = asyncio.create_task(_live_archive_drain_loop())
     logger.info("Maintenance loop started (runner-health reconcile every %ds)", RUNNER_HEALTH_RECONCILE_INTERVAL)
 
 
 async def stop_maintenance_loop() -> None:
     """Stop the periodic maintenance loop."""
-    global _maintenance_task
+    global _live_archive_drain_task, _maintenance_task
     if _maintenance_task and not _maintenance_task.done():
         _maintenance_task.cancel()
         try:
             await _maintenance_task
         except Exception:
             pass
+    if _live_archive_drain_task and not _live_archive_drain_task.done():
+        _live_archive_drain_task.cancel()
+        try:
+            await _live_archive_drain_task
+        except Exception:
+            pass
     _maintenance_task = None
+    _live_archive_drain_task = None
