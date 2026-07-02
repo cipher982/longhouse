@@ -493,6 +493,19 @@ def current_presence_state_for_session(
     return runtime_overlay.presence_state
 
 
+def _latest_applied_signal_at(state: Any) -> datetime | None:
+    """Latest signal-clock timestamp of any applied signal kind.
+
+    Mirrors the reducer's own recency composite (phase/progress/terminal) so
+    the cross-lane merge ranks rows the way a single reducer would.
+    """
+    return _latest_timestamp(
+        normalize_utc(getattr(state, "last_runtime_signal_at", None)),
+        normalize_utc(getattr(state, "last_progress_at", None)),
+        normalize_utc(getattr(state, "terminal_at", None)),
+    )
+
+
 def _runtime_state_newer_than(candidate: Any, existing: Any | None) -> bool:
     """Pick the runtime row whose latest signal OCCURRED most recently.
 
@@ -500,19 +513,26 @@ def _runtime_state_newer_than(candidate: Any, existing: Any | None) -> bool:
     write-clock, not signal-clock: transcript ingest can stamp an archive row
     (progress-derived idle) in the same instant a fresher live phase_signal
     lands, and a write-clock comparison would let the stale phase win. Compare
-    last_runtime_signal_at first; fall back to write clock only when neither
-    row has an applied signal.
+    the composite signal clock first; fall back to write clock only when
+    neither row has an applied signal.
     """
     if existing is None:
         return True
-    candidate_signal_at = normalize_utc(getattr(candidate, "last_runtime_signal_at", None))
-    existing_signal_at = normalize_utc(getattr(existing, "last_runtime_signal_at", None))
+    candidate_signal_at = _latest_applied_signal_at(candidate)
+    existing_signal_at = _latest_applied_signal_at(existing)
     if candidate_signal_at != existing_signal_at:
         if candidate_signal_at is None:
             return False
         if existing_signal_at is None:
             return True
         return candidate_signal_at > existing_signal_at
+    # Equal signal clocks: each lane may have applied a different subset of
+    # signals for the same instant. A row holding a semantic phase signal is
+    # richer truth than a progress-only row.
+    candidate_has_phase_signal = normalize_utc(getattr(candidate, "last_runtime_signal_at", None)) is not None
+    existing_has_phase_signal = normalize_utc(getattr(existing, "last_runtime_signal_at", None)) is not None
+    if candidate_has_phase_signal != existing_has_phase_signal:
+        return candidate_has_phase_signal
     candidate_updated_at = normalize_utc(getattr(candidate, "updated_at", None))
     existing_updated_at = normalize_utc(getattr(existing, "updated_at", None))
     if candidate_updated_at != existing_updated_at:
