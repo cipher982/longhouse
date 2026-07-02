@@ -2,16 +2,6 @@ import type { components } from "../../generated/openapi-types";
 
 type Schemas = components["schemas"];
 
-type AutomationSchema = Schemas["Automation"];
-type AutomationCreateSchema = Schemas["AutomationCreate"];
-type AutomationUpdateSchema = Schemas["AutomationUpdate"];
-
-export type Automation = AutomationSchema;
-export type AutomationSummary = Automation;
-export type Run = Schemas["RunOut"];
-export type Thread = Schemas["Thread"];
-export type ThreadMessage = Schemas["ThreadMessageResponse"] & { created_at?: string };
-export type ThreadUpdatePayload = Schemas["ThreadUpdate"];
 export type SessionLockInfo = Schemas["SessionLockInfo"];
 
 export type TokenBreakdown = Schemas["TokenBreakdown"];
@@ -77,27 +67,6 @@ export type McpServerAddRequest = components["schemas"]["MCPServerAddRequest"];
 export type McpServerResponse = components["schemas"]["MCPServerResponse"];
 export type McpTestConnectionResponse = components["schemas"]["MCPTestConnectionResponse"];
 
-export type AutomationCreatePayload = Pick<AutomationCreateSchema, "system_instructions" | "task_instructions" | "model"> &
-  Partial<Omit<AutomationCreateSchema, "system_instructions" | "task_instructions" | "model">>;
-
-export type AutomationUpdatePayload = AutomationUpdateSchema;
-
-export interface AutomationRunsBundle {
-  automationId: number;
-  runs: Run[];
-}
-
-export interface AutomationOverviewSnapshot {
-  scope: "my" | "all";
-  fetchedAt: string;
-  runsLimit: number;
-  automations: AutomationSummary[];
-  runs: AutomationRunsBundle[];
-}
-
-export type DashboardRunsBundle = AutomationRunsBundle;
-export type DashboardSnapshot = AutomationOverviewSnapshot;
-
 export interface ModelConfig {
   id: string;
   display_name: string;
@@ -124,12 +93,6 @@ export type RotateSecretResponse = {
 
 export type RunnerStatusItem = Schemas["RunnerStatusItem"];
 export type RunnerStatusResponse = Schemas["RunnerStatusResponse"];
-
-export type KnowledgeSource = Schemas["KnowledgeSource"];
-export type KnowledgeSourceCreate = Schemas["KnowledgeSourceCreate"];
-export type KnowledgeSourceUpdate = Schemas["KnowledgeSourceUpdate"];
-export type KnowledgeDocument = Schemas["KnowledgeDocument"];
-export type KnowledgeSearchResult = Schemas["KnowledgeSearchResult"];
 
 export interface GitHubRepo {
   full_name: string;
