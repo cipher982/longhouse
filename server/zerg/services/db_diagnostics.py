@@ -771,6 +771,7 @@ def collect_sqlite_store_stats(
             "database_url": None,
             "db_path": None,
             "warnings": [],
+            "live_archive_outbox": {"checked": False, "reason": "store_disabled"},
         }
 
     payload = collect_sqlite_db_stats(database_url, db=db)
@@ -781,6 +782,7 @@ def collect_sqlite_store_stats(
             "database_url": database_url,
             "db_path": None,
             "warnings": ["not_file_backed_sqlite"],
+            "live_archive_outbox": {"checked": False, "reason": "unsupported_store"},
         }
 
     warnings: list[str] = []
@@ -815,4 +817,44 @@ def collect_sqlite_store_stats(
     payload["warnings"] = warnings
     payload["same_db_path_as_archive"] = same_db_path
     payload["same_directory_as_archive"] = same_directory
+    payload["live_archive_outbox"] = (
+        _collect_live_archive_outbox_stats(db)
+        if db is not None
+        else {
+            "checked": False,
+            "reason": "no_connection",
+        }
+    )
     return payload
+
+
+def _collect_live_archive_outbox_stats(db: Session | Connection) -> dict[str, Any]:
+    if not _table_exists(db, "live_archive_outbox"):
+        return {
+            "checked": True,
+            "table_exists": False,
+            "pending_count": None,
+            "failed_count": None,
+            "oldest_pending_created_at": None,
+            "max_attempts": None,
+        }
+    row = db.execute(
+        text(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE drained_at IS NULL) AS pending_count,
+                COUNT(*) FILTER (WHERE drained_at IS NULL AND last_error IS NOT NULL) AS failed_count,
+                MIN(CASE WHEN drained_at IS NULL THEN created_at END) AS oldest_pending_created_at,
+                MAX(attempts) AS max_attempts
+            FROM live_archive_outbox
+            """
+        )
+    ).fetchone()
+    return {
+        "checked": True,
+        "table_exists": True,
+        "pending_count": int(row[0] or 0) if row is not None else 0,
+        "failed_count": int(row[1] or 0) if row is not None else 0,
+        "oldest_pending_created_at": str(row[2]) if row is not None and row[2] is not None else None,
+        "max_attempts": int(row[3] or 0) if row is not None else 0,
+    }

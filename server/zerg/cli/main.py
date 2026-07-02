@@ -198,6 +198,7 @@ def db_doctor(
     from zerg.services.db_diagnostics import collect_sqlite_store_stats
     from zerg.services.db_diagnostics import collect_sqlite_table_bytes
     from zerg.services.db_diagnostics import load_sqlite_table_bytes_cache
+    from zerg.services.db_diagnostics import sqlite_db_paths
 
     engine, resolved_database_url = _resolve_db_engine(database_url)
     if live_database_url is None:
@@ -228,10 +229,26 @@ def db_doctor(
             current_stats=payload,
             include_table_bytes=table_bytes_cache,
         )
-        payload["live_store"] = collect_sqlite_store_stats(
-            live_database_url,
-            archive_database_url=resolved_database_url,
-        )
+        live_store_paths = sqlite_db_paths(live_database_url) if live_database_url else None
+        live_store_db_path = live_store_paths[0].expanduser() if live_store_paths is not None else None
+        if live_database_url and live_store_db_path is not None and live_store_db_path.exists():
+            from zerg.database import make_live_engine
+
+            live_engine = make_live_engine(live_database_url)
+            try:
+                with live_engine.connect() as live_conn:
+                    payload["live_store"] = collect_sqlite_store_stats(
+                        live_database_url,
+                        archive_database_url=resolved_database_url,
+                        db=live_conn,
+                    )
+            finally:
+                live_engine.dispose()
+        else:
+            payload["live_store"] = collect_sqlite_store_stats(
+                live_database_url,
+                archive_database_url=resolved_database_url,
+            )
 
     if json_output:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
@@ -270,6 +287,14 @@ def db_doctor(
     if live_store.get("db_path"):
         typer.echo(f"    path: {live_store['db_path']}")
         typer.echo(f"    db_bytes: {live_store.get('db_bytes')}")
+    live_outbox = live_store.get("live_archive_outbox") or {}
+    if live_outbox.get("checked") and live_outbox.get("table_exists"):
+        typer.echo(
+            "    outbox: "
+            f"{live_outbox.get('pending_count')} pending, "
+            f"{live_outbox.get('failed_count')} failed, "
+            f"max_attempts={live_outbox.get('max_attempts')}"
+        )
     if live_store.get("warnings"):
         typer.echo(f"    warnings: {', '.join(live_store['warnings'])}")
 

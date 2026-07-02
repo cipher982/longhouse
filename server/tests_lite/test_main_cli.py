@@ -259,6 +259,70 @@ def test_db_doctor_reports_configured_live_store_path(tmp_path):
     assert live_store["same_directory_as_archive"] is False
 
 
+def test_db_doctor_reports_live_archive_outbox_stats(tmp_path):
+    from datetime import datetime
+    from datetime import timezone
+
+    from sqlalchemy.orm import sessionmaker
+
+    from zerg.database import initialize_live_database
+    from zerg.database import make_live_engine
+    from zerg.models.live_store import LiveArchiveOutbox
+
+    _db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+    live_path = tmp_path / "live.db"
+    live_url = f"sqlite:///{live_path}"
+    live_engine = make_live_engine(live_url)
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    now = datetime.now(timezone.utc)
+    try:
+        with LiveSession() as live_db:
+            live_db.add_all(
+                [
+                    LiveArchiveOutbox(
+                        idempotency_key="pending-ok",
+                        kind="heartbeat_stamp.v1",
+                        payload_json="{}",
+                        created_at=now,
+                    ),
+                    LiveArchiveOutbox(
+                        idempotency_key="pending-failed",
+                        kind="heartbeat_stamp.v1",
+                        payload_json="{}",
+                        created_at=now,
+                        attempts=3,
+                        last_error="boom",
+                    ),
+                    LiveArchiveOutbox(
+                        idempotency_key="drained",
+                        kind="heartbeat_stamp.v1",
+                        payload_json="{}",
+                        created_at=now,
+                        drained_at=now,
+                        attempts=1,
+                    ),
+                ]
+            )
+            live_db.commit()
+
+        result = CliRunner().invoke(
+            app,
+            ["db", "doctor", "--database-url", db_url, "--live-database-url", live_url, "--json"],
+        )
+    finally:
+        live_engine.dispose()
+
+    assert result.exit_code == 0, result.output
+    outbox = json.loads(result.output)["live_store"]["live_archive_outbox"]
+    assert outbox["checked"] is True
+    assert outbox["table_exists"] is True
+    assert outbox["pending_count"] == 2
+    assert outbox["failed_count"] == 1
+    assert outbox["max_attempts"] == 3
+    assert outbox["oldest_pending_created_at"] is not None
+
+
 def test_db_doctor_warns_when_live_store_is_archive_db(tmp_path):
     db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
 
