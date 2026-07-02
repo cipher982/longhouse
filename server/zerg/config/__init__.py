@@ -105,8 +105,10 @@ def _sqlite_url_for_path(path_value: str) -> str:
 def _resolve_live_database_url() -> str:
     """Resolve the optional Live Store database URL.
 
-    The live store must be explicitly configured. Falling back to DATABASE_URL
-    would silently keep hot and archive writes on the same physical SQLite file.
+    Explicit env vars (LONGHOUSE_LIVE_DATABASE_URL / LONGHOUSE_LIVE_DB_PATH) win.
+    When neither is set and DATABASE_URL points to a file-backed SQLite path,
+    derive a default sibling file: <archive-stem>-live.db in the same directory.
+    Non-SQLite or in-memory archive URLs keep the live store disabled.
     """
     explicit_url = _strip_env_quotes(os.getenv("LONGHOUSE_LIVE_DATABASE_URL") or "")
     if explicit_url:
@@ -114,7 +116,23 @@ def _resolve_live_database_url() -> str:
     explicit_path = _strip_env_quotes(os.getenv("LONGHOUSE_LIVE_DB_PATH") or "")
     if explicit_path:
         return _sqlite_url_for_path(explicit_path)
-    return ""
+    database_url = _strip_env_quotes(os.getenv("DATABASE_URL") or "")
+    if not database_url or not database_url.startswith("sqlite"):
+        return ""
+    archive_path = _sqlite_file_path(database_url)
+    if archive_path is None:
+        return ""
+    # Resolve to detect in-memory (sqlite_file_path returns None for :memory:).
+    expanded = archive_path.expanduser()
+    try:
+        resolved = expanded.resolve()
+    except OSError:
+        resolved = expanded.absolute()
+    if not str(resolved) or str(resolved) == ":memory:":
+        return ""
+    stem = resolved.stem
+    live_path = resolved.parent / f"{stem}-live.db"
+    return f"sqlite:///{live_path}"
 
 
 def resolve_app_mode() -> AppMode:
