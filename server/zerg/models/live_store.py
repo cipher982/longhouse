@@ -15,6 +15,9 @@ from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
+from sqlalchemy.sql import text
+
+from zerg.models.types import GUID
 
 LiveBase = declarative_base()
 
@@ -36,16 +39,35 @@ class LiveSession(LiveBase):
 class LiveRuntimeState(LiveBase):
     __tablename__ = "live_runtime_state"
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    runtime_key = Column(String(512), nullable=False, unique=True)
-    session_id = Column(String(36), nullable=True, index=True)
-    provider = Column(String(50), nullable=True, index=True)
+    runtime_key = Column(String(255), primary_key=True)
+    session_id = Column(GUID(), nullable=True, index=True)
+    thread_id = Column(GUID(), nullable=True, index=True)
+    run_id = Column(GUID(), nullable=True, index=True)
+    provider = Column(String(64), nullable=False, index=True)
     device_id = Column(String(255), nullable=True, index=True)
-    phase = Column(String(64), nullable=False)
-    source = Column(String(128), nullable=False)
-    observed_at = Column(DateTime(timezone=True), nullable=False, index=True)
-    payload_json = Column(Text, nullable=True)
+    phase = Column(String(32), nullable=False)
+    phase_source = Column(String(32), nullable=False)
+    active_tool = Column(String(128), nullable=True)
+    phase_started_at = Column(DateTime(timezone=True), nullable=True)
+    execution_started_at = Column(DateTime(timezone=True), nullable=True)
+    last_runtime_signal_at = Column(DateTime(timezone=True), nullable=True)
+    last_progress_at = Column(DateTime(timezone=True), nullable=True)
+    last_live_at = Column(DateTime(timezone=True), nullable=True)
+    timeline_anchor_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    freshness_expires_at = Column(DateTime(timezone=True), nullable=True)
+    terminal_state = Column(String(32), nullable=True)
+    terminal_reason = Column(String(64), nullable=True)
+    terminal_source = Column(String(64), nullable=True)
+    terminal_at = Column(DateTime(timezone=True), nullable=True)
+    runtime_version = Column(Integer, nullable=False, server_default=text("0"))
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_live_runtime_state_session_updated_version", "session_id", "updated_at", "runtime_version"),
+        Index("ix_live_runtime_state_anchor", "timeline_anchor_at"),
+        Index("ix_live_runtime_state_updated", "updated_at"),
+        Index("ix_live_runtime_state_device_provider", "device_id", "provider"),
+    )
 
 
 class LiveControlLease(LiveBase):

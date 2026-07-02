@@ -27,6 +27,7 @@ from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.live_store import LiveRuntimeState
 from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
 from zerg.services.session_live_previews import upsert_session_live_preview
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
@@ -73,12 +74,7 @@ def session_is_closed_for_input(db: Session, session_id: UUID | None) -> bool:
     """Return whether runtime terminal truth makes a session reject new input."""
     if session_id is None:
         return False
-    runtime_state = (
-        db.query(SessionRuntimeState)
-        .filter(SessionRuntimeState.session_id == session_id)
-        .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
-        .first()
-    )
+    runtime_state = load_runtime_state_map(db, [session_id]).get(str(session_id))
     terminal_state = str(getattr(runtime_state, "terminal_state", "") or "").strip()
     if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
         return True
@@ -497,7 +493,47 @@ def current_presence_state_for_session(
     return runtime_overlay.presence_state
 
 
-def load_runtime_state_map(db: Session, session_ids: list[UUID]) -> dict[str, SessionRuntimeState]:
+def _runtime_state_newer_than(candidate: Any, existing: Any | None) -> bool:
+    if existing is None:
+        return True
+    candidate_updated_at = normalize_utc(getattr(candidate, "updated_at", None))
+    existing_updated_at = normalize_utc(getattr(existing, "updated_at", None))
+    if candidate_updated_at != existing_updated_at:
+        if candidate_updated_at is None:
+            return False
+        if existing_updated_at is None:
+            return True
+        return candidate_updated_at > existing_updated_at
+    return int(getattr(candidate, "runtime_version", 0) or 0) > int(getattr(existing, "runtime_version", 0) or 0)
+
+
+def _load_live_runtime_state_map(session_ids: list[UUID]) -> dict[str, LiveRuntimeState]:
+    from zerg.database import get_live_session_factory
+    from zerg.database import live_store_configured
+
+    if not live_store_configured():
+        return {}
+    live_session_factory = get_live_session_factory()
+    if live_session_factory is None:
+        return {}
+
+    with live_session_factory() as live_db:
+        rows = (
+            live_db.query(LiveRuntimeState)
+            .filter(LiveRuntimeState.session_id.in_(session_ids))
+            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+            .all()
+        )
+        state_by_session: dict[str, LiveRuntimeState] = {}
+        for row in rows:
+            if row.session_id is None:
+                continue
+            key = str(row.session_id)
+            state_by_session.setdefault(key, row)
+        return state_by_session
+
+
+def load_runtime_state_map(db: Session, session_ids: list[UUID]) -> dict[str, SessionRuntimeState | LiveRuntimeState]:
     if not session_ids:
         return {}
 
@@ -508,12 +544,15 @@ def load_runtime_state_map(db: Session, session_ids: list[UUID]) -> dict[str, Se
         .all()
     )
 
-    state_by_session: dict[str, SessionRuntimeState] = {}
+    state_by_session: dict[str, SessionRuntimeState | LiveRuntimeState] = {}
     for row in rows:
         if row.session_id is None:
             continue
         key = str(row.session_id)
         state_by_session.setdefault(key, row)
+    for key, live_row in _load_live_runtime_state_map(session_ids).items():
+        if _runtime_state_newer_than(live_row, state_by_session.get(key)):
+            state_by_session[key] = live_row
     return state_by_session
 
 
@@ -670,6 +709,35 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
     return RuntimeEventBatchResult(
         accepted=accepted,
         duplicates=duplicates,
+        updated_runtime_keys=updated_runtime_keys,
+    )
+
+
+def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> RuntimeEventBatchResult:
+    """Materialize runtime state into the hot Live Store without archive side effects.
+
+    The live lane intentionally does not write SessionObservation rows, pause
+    requests, notification ledgers, SessionRun, or AgentSession lifecycle
+    fields. Those remain archive responsibilities. This reducer exists so
+    user-visible phase/control freshness can update before archive storage
+    catches up.
+    """
+
+    updated_runtime_keys: list[str] = []
+    for event in events:
+        outcome = _apply_runtime_event(
+            db,
+            event,
+            state_model=LiveRuntimeState,
+            archive_side_effects=False,
+        )
+        _record_managed_codex_runtime_observation(event, f"live_{outcome}")
+        if outcome == "applied" and event.runtime_key not in updated_runtime_keys:
+            updated_runtime_keys.append(event.runtime_key)
+
+    return RuntimeEventBatchResult(
+        accepted=len(events),
+        duplicates=0,
         updated_runtime_keys=updated_runtime_keys,
     )
 
@@ -843,16 +911,24 @@ def _state_snapshot(state: SessionRuntimeState | None) -> tuple[Any, ...] | None
     )
 
 
-def _ensure_state(db: Session, event: RuntimeEventIngest) -> SessionRuntimeState:
-    state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).first()
+def _ensure_state(
+    db: Session,
+    event: RuntimeEventIngest,
+    *,
+    state_model: type[SessionRuntimeState] | type[LiveRuntimeState] = SessionRuntimeState,
+    archive_side_effects: bool = True,
+) -> SessionRuntimeState | LiveRuntimeState:
+    state = db.query(state_model).filter(state_model.runtime_key == event.runtime_key).first()
     if state is not None:
         return state
 
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
-    from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
+    thread_id = event.thread_id
+    if thread_id is None and archive_side_effects and event.session_id is not None:
+        from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
 
-    thread_id = event.thread_id or (ensure_thread_id_for_session(db, event.session_id) if event.session_id is not None else None)
-    state = SessionRuntimeState(
+        thread_id = ensure_thread_id_for_session(db, event.session_id)
+    state = state_model(
         runtime_key=event.runtime_key,
         session_id=event.session_id,
         thread_id=thread_id,
@@ -888,13 +964,26 @@ def _phase_reanchors(prev_phase: str | None, next_phase: str) -> bool:
     return prev_phase not in LIVE_EXECUTION_PHASES and next_phase in LIVE_EXECUTION_PHASES
 
 
-def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEventApplyOutcome:
+def _apply_runtime_event(
+    db: Session,
+    event: RuntimeEventIngest,
+    *,
+    state_model: type[SessionRuntimeState] | type[LiveRuntimeState] = SessionRuntimeState,
+    archive_side_effects: bool = True,
+) -> RuntimeEventApplyOutcome:
     if event.kind in {"pause_request", "pause_resolution"}:
+        if not archive_side_effects:
+            return "ignored"
         from zerg.services.session_pause_requests import apply_pause_runtime_event
 
         return "applied" if apply_pause_runtime_event(db, event) else "ignored"
 
-    state = _ensure_state(db, event)
+    state = _ensure_state(
+        db,
+        event,
+        state_model=state_model,
+        archive_side_effects=archive_side_effects,
+    )
     before = _state_snapshot(state)
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
     pause_changed = False
@@ -912,9 +1001,12 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
 
     if event.session_id is not None and state.session_id != event.session_id:
         state.session_id = event.session_id
-        from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
+        if event.thread_id is not None:
+            state.thread_id = event.thread_id
+        elif archive_side_effects:
+            from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
 
-        state.thread_id = event.thread_id or ensure_thread_id_for_session(db, event.session_id)
+            state.thread_id = ensure_thread_id_for_session(db, event.session_id)
     elif event.thread_id is not None and state.thread_id != event.thread_id:
         state.thread_id = event.thread_id
     if event.run_id is not None and state.run_id != event.run_id:
@@ -1001,7 +1093,11 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         # Event-driven provider phases can close a pending question once the
         # provider continues. Do not replace this with heartbeat-style signals
         # without preserving transcript-derived AskUserQuestion waits.
-        if next_phase in LIVE_EXECUTION_PHASES and not bool((event.payload or {}).get("pause_request_still_pending")):
+        if (
+            archive_side_effects
+            and next_phase in LIVE_EXECUTION_PHASES
+            and not bool((event.payload or {}).get("pause_request_still_pending"))
+        ):
             from zerg.services.session_pause_requests import resolve_pending_pause_requests_for_runtime
 
             pause_changed = (
@@ -1059,6 +1155,8 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             and (event.run_id is None or event.run_id == state.run_id)
         )
         if same_run_terminal_replay:
+            if not archive_side_effects:
+                return "ignored"
             return "applied" if _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at) else "ignored"
         latest_terminal_related_at = _latest_timestamp(
             state.last_runtime_signal_at,
@@ -1091,7 +1189,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         phase_started_at = normalize_utc(state.phase_started_at)
         if phase_started_at is None or phase_started_at < occurred_at:
             state.phase_started_at = occurred_at
-        if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES and event.session_id is not None:
+        if archive_side_effects and terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES and event.session_id is not None:
             session = db.query(AgentSession).filter(AgentSession.id == event.session_id).first()
             if session is not None and session.ended_at is None:
                 session.ended_at = occurred_at
@@ -1112,7 +1210,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
                 )
                 > 0
             )
-        else:
+        elif archive_side_effects:
             from zerg.services.session_pause_requests import expire_pending_pause_requests_for_runtime
 
             pause_changed = (
@@ -1124,7 +1222,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
                 )
                 > 0
             )
-        if terminal_state in RUN_TERMINAL_STATES:
+        if archive_side_effects and terminal_state in RUN_TERMINAL_STATES:
             _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at)
 
     elif event.kind == "binding_signal":

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
 
@@ -14,6 +16,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import event_age_at_ingest_seconds
@@ -35,13 +38,16 @@ from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
 from zerg.services.session_pause_requests import load_active_pause_request_map
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
+from zerg.services.session_runtime import ingest_live_runtime_events
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.write_backpressure import raise_hot_write_backpressure
 from zerg.services.write_serializer import WriteQueueTimeoutError
 from zerg.services.write_serializer import execute_post_write
+from zerg.services.write_serializer import get_live_write_serializer
 from zerg.services.write_serializer import get_write_serializer
+from zerg.services.write_serializer import last_write_timing
 from zerg.services.write_serializer import post_write_db_session
 from zerg.services.write_serializer import post_write_fallback_db
 
@@ -127,28 +133,11 @@ async def ingest_runtime_observation_batch(
             ]
             return ingest_result, push_contexts
 
-        try:
-            result, push_contexts = await ws.execute_after_closing_request_session(
-                _do_runtime_state,
-                db,
-                label="runtime-live" if live_transcript_only else "runtime-observations",
-                queue_timeout_seconds=_HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS,
-            )
-        except WriteQueueTimeoutError:
-            raise_hot_write_backpressure(ws, admission_state="runtime_queue_timeout")
-        from zerg.services.write_serializer import last_write_timing
+        def _publish_runtime_updates(result: RuntimeEventBatchResult) -> None:
+            updated_runtime_keys = set(result.updated_runtime_keys)
+            if not updated_runtime_keys:
+                return
 
-        timing = last_write_timing()
-        if timing is not None:
-            response.headers["X-Runtime-Queue-Wait-Ms"] = f"{timing.queue_wait_ms:.1f}"
-            response.headers["X-Runtime-Exec-Ms"] = f"{timing.exec_ms:.1f}"
-            if timing.label:
-                response.headers["X-Runtime-Label"] = timing.label
-
-        # Publish per-session after a successful runtime-state write; SSE
-        # subscribers should not wait behind APNs/widget/queued-message prep.
-        updated_runtime_keys = set(result.updated_runtime_keys)
-        if updated_runtime_keys:
             from zerg.services.session_pubsub import publish_session_runtime_update
 
             session_ids_published: set[str] = set()
@@ -165,189 +154,273 @@ async def ingest_runtime_observation_batch(
                     source=ev.source,
                 )
 
-        prepared_per_session: list[dict] = []
-        widget_push = None
+        async def _run_runtime_followups(
+            push_contexts: list[dict],
+            fallback_db: Session | None,
+        ) -> None:
+            prepared_per_session: list[dict] = []
+            widget_push = None
 
-        if push_contexts:
-            push_context_by_session = {item["session_id"]: item for item in push_contexts}
-            push_session_ids = list(push_context_by_session.keys())
+            if push_contexts:
+                push_context_by_session = {item["session_id"]: item for item in push_contexts}
+                push_session_ids = list(push_context_by_session.keys())
 
-            def _do_runtime_push_prep(wdb: Session):
-                # Pre-fetch APNs target sets ONCE per (owner, platform) for the batch
-                # rather than per-session × per-prep-fn. The widget timeline push is
-                # owner-scoped (not session-scoped), so prepare it ONCE per changed batch.
-                ios_targets = (
-                    active_ios_targets_for_owner(
-                        wdb,
-                        owner_id=owner_id,
-                        log_context="runtime batch",
-                    )
-                    if owner_id is not None
-                    else None
-                )
-                widget_targets = (
-                    active_ios_targets_for_owner(
-                        wdb,
-                        owner_id=owner_id,
-                        platform=WIDGET_PUSH_PLATFORM,
-                        log_context="runtime batch widget",
-                    )
-                    if owner_id is not None
-                    else None
-                )
-                next_widget_push = prepare_widget_timeline_push(
-                    wdb,
-                    owner_id=owner_id,
-                    occurred_at=now_utc,
-                    targets=widget_targets,
-                )
-
-                prepared: list[dict] = []
-                session_rows = wdb.query(AgentSession).filter(AgentSession.id.in_(push_session_ids)).all()
-                runtime_state_map = load_runtime_state_map(wdb, push_session_ids)
-                pause_request_map = load_active_pause_request_map(wdb, push_session_ids)
-                for session_row in session_rows:
-                    canonical_state = resolve_runtime_overlay(
-                        session_row,
-                        last_activity_at=session_row.last_activity_at,
-                        runtime_state_map=runtime_state_map,
-                        now=now_utc,
-                    ).presence_state
-                    sid = session_row.id
-                    context = push_context_by_session.get(sid, {})
-                    previous_attention_state = _previous_attention_state_from_session(session_row)
-                    active_pause_request = pause_request_map.get(sid)
-                    use_needs_answer = (
-                        active_pause_request is not None and str(active_pause_request.kind or "").strip() == PAUSE_KIND_STRUCTURED_QUESTION
-                    )
-                    attention_state = "needs_answer" if use_needs_answer else canonical_state
-                    if use_needs_answer:
-                        attention_push = prepare_session_needs_answer_push(
+                def _do_runtime_push_prep(wdb: Session):
+                    # Pre-fetch APNs target sets ONCE per (owner, platform) for the batch
+                    # rather than per-session × per-prep-fn. The widget timeline push is
+                    # owner-scoped (not session-scoped), so prepare it ONCE per changed batch.
+                    ios_targets = (
+                        active_ios_targets_for_owner(
                             wdb,
                             owner_id=owner_id,
-                            session_id=sid,
-                            pause_request=active_pause_request,
-                            previous_state=previous_attention_state,
-                            occurred_at=now_utc,
-                            targets=ios_targets,
+                            log_context="runtime batch",
                         )
-                    else:
-                        attention_push = prepare_session_attention_push(
+                        if owner_id is not None
+                        else None
+                    )
+                    widget_targets = (
+                        active_ios_targets_for_owner(
                             wdb,
                             owner_id=owner_id,
-                            session_id=sid,
-                            previous_state=previous_attention_state,
-                            current_state=canonical_state,
-                            occurred_at=now_utc,
-                            current_tool_name=context.get("tool"),
-                            targets=ios_targets,
+                            platform=WIDGET_PUSH_PLATFORM,
+                            log_context="runtime batch widget",
                         )
-                        if attention_push is None:
-                            attention_push = prepare_session_blocked_reminder_push(
+                        if owner_id is not None
+                        else None
+                    )
+                    next_widget_push = prepare_widget_timeline_push(
+                        wdb,
+                        owner_id=owner_id,
+                        occurred_at=now_utc,
+                        targets=widget_targets,
+                    )
+
+                    prepared: list[dict] = []
+                    session_rows = wdb.query(AgentSession).filter(AgentSession.id.in_(push_session_ids)).all()
+                    runtime_state_map = load_runtime_state_map(wdb, push_session_ids)
+                    pause_request_map = load_active_pause_request_map(wdb, push_session_ids)
+                    for session_row in session_rows:
+                        canonical_state = resolve_runtime_overlay(
+                            session_row,
+                            last_activity_at=session_row.last_activity_at,
+                            runtime_state_map=runtime_state_map,
+                            now=now_utc,
+                        ).presence_state
+                        sid = session_row.id
+                        context = push_context_by_session.get(sid, {})
+                        previous_attention_state = _previous_attention_state_from_session(session_row)
+                        active_pause_request = pause_request_map.get(sid)
+                        use_needs_answer = (
+                            active_pause_request is not None
+                            and str(active_pause_request.kind or "").strip() == PAUSE_KIND_STRUCTURED_QUESTION
+                        )
+                        attention_state = "needs_answer" if use_needs_answer else canonical_state
+                        if use_needs_answer:
+                            attention_push = prepare_session_needs_answer_push(
                                 wdb,
                                 owner_id=owner_id,
                                 session_id=sid,
-                                current_state=canonical_state,
-                                occurred_at=now_utc,
-                                current_tool_name=context.get("tool"),
-                                targets=ios_targets,
-                            )
-                        if attention_push is None:
-                            attention_push = prepare_long_run_waiting_push(
-                                wdb,
-                                owner_id=owner_id,
-                                session_id=sid,
-                                current_state=canonical_state,
+                                pause_request=active_pause_request,
+                                previous_state=previous_attention_state,
                                 occurred_at=now_utc,
                                 targets=ios_targets,
                             )
-                    prepared.append(
-                        {
-                            "session_id": sid,
-                            "canonical_state": canonical_state,
-                            "attention_push": attention_push,
-                            "attention_resolution_push": prepare_session_attention_resolution_push(
+                        else:
+                            attention_push = prepare_session_attention_push(
                                 wdb,
                                 owner_id=owner_id,
                                 session_id=sid,
                                 previous_state=previous_attention_state,
-                                current_state=attention_state,
-                                occurred_at=now_utc,
-                                targets=ios_targets,
-                            ),
-                            "live_activity_pushes": prepare_session_live_activity_pushes(
-                                wdb,
-                                owner_id=owner_id,
-                                session_id=sid,
                                 current_state=canonical_state,
-                                current_tool_name=context.get("tool"),
                                 occurred_at=now_utc,
-                                runtime_state_map=runtime_state_map,
-                            ),
-                        }
+                                current_tool_name=context.get("tool"),
+                                targets=ios_targets,
+                            )
+                            if attention_push is None:
+                                attention_push = prepare_session_blocked_reminder_push(
+                                    wdb,
+                                    owner_id=owner_id,
+                                    session_id=sid,
+                                    current_state=canonical_state,
+                                    occurred_at=now_utc,
+                                    current_tool_name=context.get("tool"),
+                                    targets=ios_targets,
+                                )
+                            if attention_push is None:
+                                attention_push = prepare_long_run_waiting_push(
+                                    wdb,
+                                    owner_id=owner_id,
+                                    session_id=sid,
+                                    current_state=canonical_state,
+                                    occurred_at=now_utc,
+                                    targets=ios_targets,
+                                )
+                        prepared.append(
+                            {
+                                "session_id": sid,
+                                "canonical_state": canonical_state,
+                                "attention_push": attention_push,
+                                "attention_resolution_push": prepare_session_attention_resolution_push(
+                                    wdb,
+                                    owner_id=owner_id,
+                                    session_id=sid,
+                                    previous_state=previous_attention_state,
+                                    current_state=attention_state,
+                                    occurred_at=now_utc,
+                                    targets=ios_targets,
+                                ),
+                                "live_activity_pushes": prepare_session_live_activity_pushes(
+                                    wdb,
+                                    owner_id=owner_id,
+                                    session_id=sid,
+                                    current_state=canonical_state,
+                                    current_tool_name=context.get("tool"),
+                                    occurred_at=now_utc,
+                                    runtime_state_map=runtime_state_map,
+                                ),
+                            }
+                        )
+                    return prepared, next_widget_push
+
+                prepared_per_session, widget_push = await execute_post_write(
+                    ws,
+                    _do_runtime_push_prep,
+                    fallback_db,
+                    label="runtime-push",
+                )
+
+            def _fallback_send_db() -> Session | None:
+                if fallback_db is None:
+                    return None
+                return post_write_fallback_db(ws, fallback_db)
+
+            @contextmanager
+            def _dispatch_db():
+                if fallback_db is not None:
+                    with post_write_db_session(ws, fallback_db) as dispatch_db:
+                        yield dispatch_db
+                    return
+                from zerg.database import get_session_factory
+
+                SessionLocal = get_session_factory()
+                with SessionLocal() as dispatch_db:
+                    yield dispatch_db
+
+            # Send pre-prepared APNs pushes + deliver queued messages, per session.
+            # Per-session exception fence so one bad dispatch doesn't skip the rest.
+            # The widget timeline push is owner-scoped and fires once per batch (on
+            # the first session iteration); subsequent iterations pass widget_push=None.
+            # If there are no prepared sessions but a widget push exists, send it standalone.
+            if widget_push is not None and not prepared_per_session:
+                try:
+                    await send_presence_pushes(
+                        attention_push=None,
+                        attention_resolution_push=None,
+                        widget_push=widget_push,
+                        live_activity_pushes=(),
+                        db=_fallback_send_db(),
+                        ws=ws,
+                        dispatch_label_prefix="runtime",
                     )
-                return prepared, next_widget_push
+                except Exception:
+                    logging.getLogger(__name__).exception("APNs widget dispatch failed; continuing")
 
-            prepared_per_session, widget_push = await execute_post_write(
-                ws,
-                _do_runtime_push_prep,
+            for index, item in enumerate(prepared_per_session):
+                sid = item["session_id"]
+                canonical_state = item["canonical_state"]
+                try:
+                    await send_presence_pushes(
+                        attention_push=item["attention_push"],
+                        attention_resolution_push=item["attention_resolution_push"],
+                        widget_push=widget_push if index == 0 else None,
+                        live_activity_pushes=item["live_activity_pushes"],
+                        db=_fallback_send_db(),
+                        ws=ws,
+                        dispatch_label_prefix="runtime",
+                    )
+                    if is_session_message_deliverable_state(canonical_state):
+                        with _dispatch_db() as dispatch_db:
+                            await deliver_queued_session_messages(
+                                db=dispatch_db,
+                                owner_id=owner_id,
+                                target_session_id=sid,
+                                target_presence_state=canonical_state,
+                            )
+                            from zerg.services.session_input_queue import wake_session_input_queue
+
+                            await wake_session_input_queue(
+                                db_bind=dispatch_db.get_bind(),
+                                session_id=sid,
+                                reason="runtime_state_deliverable",
+                            )
+                except Exception:
+                    logging.getLogger(__name__).exception("APNs dispatch failed for session %s; continuing batch", sid)
+
+        if live_store_configured():
+            live_ws = get_live_write_serializer()
+            if not live_ws.is_configured:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Live Store write serializer is not configured",
+                )
+
+            def _do_live_runtime_state(live_db: Session):
+                return ingest_live_runtime_events(live_db, events)
+
+            try:
+                db.close()
+                result = await live_ws.execute(
+                    _do_live_runtime_state,
+                    label="runtime-live-state",
+                    queue_timeout_seconds=_HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS,
+                )
+            except WriteQueueTimeoutError:
+                raise_hot_write_backpressure(live_ws, admission_state="runtime_live_queue_timeout")
+
+            timing = last_write_timing()
+            if timing is not None:
+                response.headers["X-Runtime-Queue-Wait-Ms"] = f"{timing.queue_wait_ms:.1f}"
+                response.headers["X-Runtime-Exec-Ms"] = f"{timing.exec_ms:.1f}"
+                if timing.label:
+                    response.headers["X-Runtime-Label"] = timing.label
+
+            _publish_runtime_updates(result)
+
+            async def _run_archive_runtime_observations() -> None:
+                try:
+                    _archive_result, push_contexts = await ws.execute(
+                        _do_runtime_state,
+                        label="runtime-observations-archive",
+                    )
+                    await _run_runtime_followups(push_contexts, None)
+                except Exception:
+                    logging.getLogger(__name__).exception("Failed to archive live runtime observations")
+
+            task = asyncio.create_task(_run_archive_runtime_observations())
+            task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+            return result
+
+        try:
+            result, push_contexts = await ws.execute_after_closing_request_session(
+                _do_runtime_state,
                 db,
-                label="runtime-push",
+                label="runtime-live" if live_transcript_only else "runtime-observations",
+                queue_timeout_seconds=_HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS,
             )
+        except WriteQueueTimeoutError:
+            raise_hot_write_backpressure(ws, admission_state="runtime_queue_timeout")
+        timing = last_write_timing()
+        if timing is not None:
+            response.headers["X-Runtime-Queue-Wait-Ms"] = f"{timing.queue_wait_ms:.1f}"
+            response.headers["X-Runtime-Exec-Ms"] = f"{timing.exec_ms:.1f}"
+            if timing.label:
+                response.headers["X-Runtime-Label"] = timing.label
 
-        # Send pre-prepared APNs pushes + deliver queued messages, per session.
-        # Per-session exception fence so one bad dispatch doesn't skip the rest.
-        # The widget timeline push is owner-scoped and fires once per batch (on
-        # the first session iteration); subsequent iterations pass widget_push=None.
-        # If there are no prepared sessions but a widget push exists, send it standalone.
-        if widget_push is not None and not prepared_per_session:
-            try:
-                await send_presence_pushes(
-                    attention_push=None,
-                    attention_resolution_push=None,
-                    widget_push=widget_push,
-                    live_activity_pushes=(),
-                    db=post_write_fallback_db(ws, db),
-                    ws=ws,
-                    dispatch_label_prefix="runtime",
-                )
-            except Exception:
-                import logging
+        # Publish per-session after a successful runtime-state write; SSE
+        # subscribers should not wait behind APNs/widget/queued-message prep.
+        _publish_runtime_updates(result)
 
-                logging.getLogger(__name__).exception("APNs widget dispatch failed; continuing")
-
-        for index, item in enumerate(prepared_per_session):
-            sid = item["session_id"]
-            canonical_state = item["canonical_state"]
-            try:
-                await send_presence_pushes(
-                    attention_push=item["attention_push"],
-                    attention_resolution_push=item["attention_resolution_push"],
-                    widget_push=widget_push if index == 0 else None,
-                    live_activity_pushes=item["live_activity_pushes"],
-                    db=post_write_fallback_db(ws, db),
-                    ws=ws,
-                    dispatch_label_prefix="runtime",
-                )
-                if is_session_message_deliverable_state(canonical_state):
-                    with post_write_db_session(ws, db) as dispatch_db:
-                        await deliver_queued_session_messages(
-                            db=dispatch_db,
-                            owner_id=owner_id,
-                            target_session_id=sid,
-                            target_presence_state=canonical_state,
-                        )
-                        from zerg.services.session_input_queue import wake_session_input_queue
-
-                        await wake_session_input_queue(
-                            db_bind=dispatch_db.get_bind(),
-                            session_id=sid,
-                            reason="runtime_state_deliverable",
-                        )
-            except Exception:
-                import logging
-
-                logging.getLogger(__name__).exception("APNs dispatch failed for session %s; continuing batch", sid)
+        await _run_runtime_followups(push_contexts, db)
 
         return result
     except HTTPException:

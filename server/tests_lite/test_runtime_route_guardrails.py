@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
+from fastapi import Response
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -13,11 +16,16 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import Base
 from zerg.database import get_db
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
+from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
+from zerg.models.agents import SessionRuntimeState
+from zerg.models.live_store import LiveRuntimeState
+from zerg.services.session_runtime import RuntimeEventBatchIngest
 
 
 def test_runtime_batch_releases_request_db_before_serialized_write(tmp_path, monkeypatch):
@@ -85,3 +93,158 @@ def test_runtime_batch_releases_request_db_before_serialized_write(tmp_path, mon
         engine.dispose()
 
     assert observations == {"before_close": 1, "after_close": 0}
+
+
+def test_runtime_batch_uses_live_store_before_archive_observations(tmp_path, monkeypatch):
+    import zerg.routers.runtime as runtime_router
+
+    async def run_test():
+        archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+        Base.metadata.create_all(bind=archive_engine)
+        ArchiveSession = sessionmaker(bind=archive_engine)
+
+        live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+        initialize_live_database(live_engine)
+        LiveSession = sessionmaker(bind=live_engine)
+
+        archive_started = asyncio.Event()
+        release_archive = asyncio.Event()
+
+        class LiveSerializer:
+            is_configured = True
+
+            async def execute(self, fn, **kwargs):
+                assert kwargs["label"] == "runtime-live-state"
+                with LiveSession() as live_db:
+                    result = fn(live_db)
+                    live_db.commit()
+                    return result
+
+        class ArchiveSerializer:
+            is_configured = True
+
+            async def execute(self, fn, **kwargs):
+                assert kwargs["label"] == "runtime-observations-archive"
+                archive_started.set()
+                await release_archive.wait()
+                with ArchiveSession() as archive_db:
+                    result = fn(archive_db)
+                    archive_db.commit()
+                    return result
+
+            async def execute_after_closing_request_session(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+                raise AssertionError("live-configured runtime ingest must not wait on archive serializer")
+
+        monkeypatch.setattr(runtime_router, "live_store_configured", lambda: True)
+        monkeypatch.setattr(runtime_router, "get_live_write_serializer", lambda: LiveSerializer())
+        monkeypatch.setattr(runtime_router, "get_write_serializer", lambda: ArchiveSerializer())
+
+        payload = RuntimeEventBatchIngest(
+            events=[
+                {
+                    "runtime_key": "codex:runtime-live-route",
+                    "provider": "codex",
+                    "device_id": "cinder",
+                    "source": "codex_bridge",
+                    "kind": "phase_signal",
+                    "phase": "running",
+                    "tool_name": "Shell",
+                    "occurred_at": "2026-01-01T00:00:00Z",
+                    "freshness_ms": 60000,
+                    "dedupe_key": "runtime-live-route-1",
+                    "payload": {},
+                }
+            ]
+        )
+
+        request_db = ArchiveSession()
+        try:
+            result = await asyncio.wait_for(
+                runtime_router.ingest_runtime_observation_batch(
+                    payload,
+                    Response(),
+                    request_db,
+                    SimpleNamespace(device_id="cinder", id="token-1", owner_id=1),
+                    None,
+                ),
+                timeout=0.5,
+            )
+            assert result.accepted == 1
+            assert result.updated_runtime_keys == ["codex:runtime-live-route"]
+            await asyncio.wait_for(archive_started.wait(), timeout=0.5)
+
+            with LiveSession() as live_db:
+                live_state = live_db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == "codex:runtime-live-route").one()
+                assert live_state.phase == "running"
+                assert live_state.active_tool == "Shell"
+            with ArchiveSession() as archive_db:
+                assert archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == "codex:runtime-live-route").count() == 0
+
+            release_archive.set()
+            await asyncio.sleep(0)
+            with ArchiveSession() as archive_db:
+                assert archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == "codex:runtime-live-route").count() == 1
+        finally:
+            release_archive.set()
+            request_db.close()
+            archive_engine.dispose()
+            live_engine.dispose()
+
+    asyncio.run(run_test())
+
+
+def test_runtime_batch_live_store_requires_configured_live_serializer(tmp_path, monkeypatch):
+    import zerg.routers.runtime as runtime_router
+
+    async def run_test():
+        archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+        Base.metadata.create_all(bind=archive_engine)
+        ArchiveSession = sessionmaker(bind=archive_engine)
+
+        class UnconfiguredLiveSerializer:
+            is_configured = False
+
+        class ArchiveSerializer:
+            is_configured = True
+
+        monkeypatch.setattr(runtime_router, "live_store_configured", lambda: True)
+        monkeypatch.setattr(runtime_router, "get_live_write_serializer", lambda: UnconfiguredLiveSerializer())
+        monkeypatch.setattr(runtime_router, "get_write_serializer", lambda: ArchiveSerializer())
+
+        payload = RuntimeEventBatchIngest(
+            events=[
+                {
+                    "runtime_key": "codex:runtime-live-unconfigured",
+                    "provider": "codex",
+                    "device_id": "cinder",
+                    "source": "codex_bridge",
+                    "kind": "phase_signal",
+                    "phase": "idle",
+                    "occurred_at": "2026-01-01T00:00:00Z",
+                    "freshness_ms": 60000,
+                    "dedupe_key": "runtime-live-unconfigured-1",
+                    "payload": {},
+                }
+            ]
+        )
+
+        request_db = ArchiveSession()
+        try:
+            try:
+                await runtime_router.ingest_runtime_observation_batch(
+                    payload,
+                    Response(),
+                    request_db,
+                    SimpleNamespace(device_id="cinder", id="token-1", owner_id=1),
+                    None,
+                )
+            except runtime_router.HTTPException as exc:
+                assert exc.status_code == 503
+                assert "Live Store write serializer is not configured" in str(exc.detail)
+            else:  # pragma: no cover - regression guard
+                raise AssertionError("expected runtime live store misconfiguration to return 503")
+        finally:
+            request_db.close()
+            archive_engine.dispose()
+
+    asyncio.run(run_test())

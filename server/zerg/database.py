@@ -877,6 +877,8 @@ def initialize_live_database(engine: Engine | None = None) -> None:
 
     with _timed_database_step("live_metadata_create_all"):
         LiveBase.metadata.create_all(bind=target_engine)
+    with _timed_database_step("live_auto_add_missing_columns"):
+        _auto_add_missing_columns(target_engine, LiveBase.metadata, apply=True)
 
 
 def _migrate_agents_columns(engine: Engine) -> None:
