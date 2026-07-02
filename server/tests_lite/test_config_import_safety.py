@@ -12,6 +12,7 @@ subprocess check.
 
 from __future__ import annotations
 
+import ast
 import os
 import subprocess
 import sys
@@ -87,6 +88,10 @@ def test_zerg_database_uses_unchecked_accessor():
         "crash remote-only CLI surfaces at import time again."
     )
     assert "_settings = get_settings_unchecked()" in src
+    assert "dotenv.load_dotenv" not in src, "zerg.database must not load dotenv at import time"
+    assert "default_engine = make_engine(_settings.database_url)" not in src, (
+        "zerg.database must not create the default engine at import time"
+    )
 
 
 def test_zerg_main_still_validates_at_import():
@@ -101,6 +106,42 @@ def test_zerg_main_still_validates_at_import():
         "server's fail-fast validation point. Moving it to get_settings_unchecked "
         "would let the server boot with missing DATABASE_URL/FERNET_SECRET."
     )
+
+
+def test_zerg_main_fails_fast_without_database_url():
+    repo_root = Path(__file__).resolve().parents[2]
+    stripped = {
+        "APP_MODE",
+        "AUTH_DISABLED",
+        "DATABASE_URL",
+        "DEMO_MODE",
+        "ENVIRONMENT",
+        "FERNET_SECRET",
+        "TESTING",
+    }
+    env = {k: v for k, v in os.environ.items() if k not in stripped}
+    result = subprocess.run(
+        [sys.executable, "-c", "import zerg.main"],
+        cwd=str(repo_root / "server"),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode != 0
+    assert "DATABASE_URL" in result.stderr
+
+
+def test_cli_common_does_not_import_local_health_at_module_load():
+    repo_root = Path(__file__).resolve().parents[2]
+    src = (repo_root / "server" / "zerg" / "cli" / "_common.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    top_level_imports = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == "zerg.services.local_health"
+    ]
+    assert not top_level_imports, "managed launcher imports must not load broad local-health diagnostics"
 
 
 def test_zerg_database_imports_without_database_url():
