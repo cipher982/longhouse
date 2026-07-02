@@ -89,8 +89,9 @@ for required in [
     "docs/specs/managed-provider-session-contract.md",
     "server/zerg/cli/_common.py",
     "server/zerg/cli/_managed_contract.py",
+    "server/zerg/cli/_managed_launch.py",
     "server/zerg/services/managed_session_contracts.py",
-    "server/zerg/services/local_health.py",
+    "server/zerg/services/local_health/__init__.py",
     "server/zerg/cli/claude.py",
     "server/zerg/cli/codex.py",
     "server/zerg/cli/opencode.py",
@@ -109,15 +110,16 @@ require_contains(
     r"config_dir_is_provider_home",
 )
 require_contains(
-    "server/zerg/cli/claude.py",
-    "Claude credentials map provider config dir to Longhouse home",
-    r"load_api_credentials\([^)]*config_dir_is_provider_home\s*=\s*True",
+    "server/zerg/cli/_managed_launch.py",
+    "Claude/Codex credentials map provider config dir to Longhouse home",
+    r"_common_load_api_credentials\([^)]*config_dir_is_provider_home\s*=\s*True",
 )
-require_contains(
-    "server/zerg/cli/codex.py",
-    "Codex credentials map provider config dir to Longhouse home",
-    r"_load_api_credentials\([^)]*config_dir_is_provider_home\s*=\s*True",
-)
+for relative in ["server/zerg/cli/claude.py", "server/zerg/cli/codex.py"]:
+    require_contains(
+        relative,
+        "Claude/Codex launchers use the shared provider-home credential loader",
+        r"resolve_managed_launch_credentials\s+as\s+_load_api_credentials",
+    )
 for relative in ["server/zerg/cli/opencode.py", "server/zerg/cli/antigravity.py"]:
     require_contains(
         relative,
@@ -135,19 +137,19 @@ require_contains(
     r"def\s+remove_managed_session_contract\(",
 )
 require_contains(
-    "server/zerg/services/local_health.py",
+    "server/zerg/services/local_health/__init__.py",
     "local-health filters contracts to active managed session ids",
     r"managed_session_ids\s*=\s*\{[^}]*for\s+session\s+in\s+managed_sessions",
 )
 require_contains(
-    "server/zerg/services/local_health.py",
+    "server/zerg/services/local_health/__init__.py",
     "local-health passes active session ids into contract scan",
     r"collect_managed_session_contract_diagnostics\([^)]*session_ids\s*=\s*managed_session_ids",
 )
 
 for relative in ["server/zerg/cli/claude.py", "server/zerg/cli/codex.py"]:
     tree = parse_python(relative)
-    for function_name in ["record_managed_provider_contract", "remove_managed_provider_contract"]:
+    for function_name in ["record_contract_or_warn", "remove_managed_provider_contract"]:
         found = calls_named(tree, function_name)
         if not found:
             fail(f"{relative} does not call {function_name}")
@@ -158,6 +160,16 @@ for relative in ["server/zerg/cli/claude.py", "server/zerg/cli/codex.py"]:
                     f"{relative}:{getattr(call, 'lineno', '?')} calls {function_name} "
                     "without config_dir_is_provider_home=True"
                 )
+
+managed_launch_tree = parse_python("server/zerg/cli/_managed_launch.py")
+record_contract_or_warn = next(
+    (node for node in ast.walk(managed_launch_tree) if isinstance(node, ast.FunctionDef) and node.name == "record_contract_or_warn"),
+    None,
+)
+if record_contract_or_warn is None:
+    fail("server/zerg/cli/_managed_launch.py is missing record_contract_or_warn")
+elif not calls_named(record_contract_or_warn, "record_managed_provider_contract"):
+    fail("record_contract_or_warn must call record_managed_provider_contract")
 
 opencode_tree = parse_python("server/zerg/cli/opencode.py")
 native_opencode = next(

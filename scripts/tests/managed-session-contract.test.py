@@ -47,6 +47,19 @@ def remove_managed_provider_contract(*, config_dir=None, config_dir_is_provider_
 """,
     )
     _write(
+        root / "server/zerg/cli/_managed_launch.py",
+        """
+from zerg.cli._common import load_api_credentials as _common_load_api_credentials
+from zerg.cli._managed_contract import record_managed_provider_contract
+
+def resolve_managed_launch_credentials(*, url=None, token=None, config_dir=None, exit_code=1):
+    return _common_load_api_credentials(url=url, token=token, config_dir=config_dir, config_dir_is_provider_home=True)
+
+def record_contract_or_warn(**kwargs):
+    return record_managed_provider_contract(**kwargs)
+""",
+    )
+    _write(
         root / "server/zerg/services/managed_session_contracts.py",
         """
 def capture_provider_version(provider_binary_path, *, timeout_seconds: float = 1.0):
@@ -57,7 +70,7 @@ def remove_managed_session_contract(*, provider, session_id, base_dir=None):
 """,
     )
     _write(
-        root / "server/zerg/services/local_health.py",
+        root / "server/zerg/services/local_health/__init__.py",
         """
 def collect():
     managed_session_ids = {session["session_id"] for session in managed_sessions}
@@ -67,18 +80,20 @@ def collect():
     _write(
         root / "server/zerg/cli/claude.py",
         """
+from zerg.cli._managed_launch import resolve_managed_launch_credentials as _load_api_credentials
+
 def run():
-    load_api_credentials(config_dir_is_provider_home=True)
-    record_managed_provider_contract(provider="claude", config_dir_is_provider_home=True)
+    record_contract_or_warn(provider="claude", config_dir_is_provider_home=True)
     remove_managed_provider_contract(provider="claude", config_dir_is_provider_home=True)
 """,
     )
     _write(
         root / "server/zerg/cli/codex.py",
         """
+from zerg.cli._managed_launch import resolve_managed_launch_credentials as _load_api_credentials
+
 def run():
-    _load_api_credentials(config_dir_is_provider_home=True)
-    record_managed_provider_contract(provider="codex", config_dir_is_provider_home=True)
+    record_contract_or_warn(provider="codex", config_dir_is_provider_home=True)
     remove_managed_provider_contract(provider="codex", config_dir_is_provider_home=True)
 """,
     )
@@ -148,7 +163,7 @@ def test_rejects_claude_contract_in_provider_home_semantics() -> None:
             root / "server/zerg/cli/claude.py",
             """
 def run():
-    record_managed_provider_contract(provider="claude")
+    record_contract_or_warn(provider="claude")
     remove_managed_provider_contract(provider="claude", config_dir_is_provider_home=True)
 """,
         )
@@ -163,7 +178,7 @@ def test_rejects_codex_contract_cleanup_in_provider_home_semantics() -> None:
             root / "server/zerg/cli/codex.py",
             """
 def run():
-    record_managed_provider_contract(provider="codex", config_dir_is_provider_home=True)
+    record_contract_or_warn(provider="codex", config_dir_is_provider_home=True)
     remove_managed_provider_contract(provider="codex")
 """,
         )
@@ -275,7 +290,7 @@ def test_rejects_local_health_without_active_session_filter() -> None:
         root = Path(temp_dir)
         _write_minimal_contract_root(root)
         _write(
-            root / "server/zerg/services/local_health.py",
+            root / "server/zerg/services/local_health/__init__.py",
             """
 def collect():
     return collect_managed_session_contract_diagnostics(base_dir=longhouse_home)
