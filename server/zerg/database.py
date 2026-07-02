@@ -2323,11 +2323,11 @@ def _sqlite_wal_path_for_engine(engine: Engine | None) -> Path | None:
 
 
 def _sqlite_wal_path() -> Path | None:
-    return _sqlite_wal_path_for_engine(default_engine)
+    return _sqlite_wal_path_for_engine(get_default_engine())
 
 
 def _live_sqlite_wal_path() -> Path | None:
-    return _sqlite_wal_path_for_engine(live_engine)
+    return _sqlite_wal_path_for_engine(get_live_engine())
 
 
 def get_wal_bytes() -> int | None:
@@ -2443,8 +2443,8 @@ async def start_wal_checkpoint_loop() -> None:
 
     def _do_checkpoint():
         """Run checkpoint in a thread — never block the event loop."""
-        _run_wal_checkpoint(default_engine, label="archive", truncate_bytes=WAL_TRUNCATE_BYTES)
-        _run_wal_checkpoint(live_engine, label="live", truncate_bytes=LIVE_WAL_TRUNCATE_BYTES)
+        _run_wal_checkpoint(get_default_engine(), label="archive", truncate_bytes=WAL_TRUNCATE_BYTES)
+        _run_wal_checkpoint(get_live_engine(), label="live", truncate_bytes=LIVE_WAL_TRUNCATE_BYTES)
 
     async def _loop():
         while True:

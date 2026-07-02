@@ -58,14 +58,16 @@ def apns_smoke_command(
             )
             raise typer.Exit(code=2)
     else:
-        from zerg.database import default_engine
-        from zerg.database import make_sessionmaker
+        from zerg.database import configure_database
+        from zerg.database import get_session_factory
         from zerg.models.apns_device_registration import APNSDeviceRegistration
 
-        if default_engine is None:
+        configure_database(settings)
+        try:
+            SessionLocal = get_session_factory()
+        except RuntimeError:
             _emit({"ok": False, "reason": "database_unavailable", "config": config}, json_output=json_output)
             raise typer.Exit(code=2)
-        SessionLocal = make_sessionmaker(default_engine)
         with SessionLocal() as db:
             registration = (
                 db.query(APNSDeviceRegistration)

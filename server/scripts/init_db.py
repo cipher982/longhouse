@@ -5,27 +5,25 @@ from sqlalchemy import inspect
 # Add /app to sys.path to allow imports from zerg
 sys.path.append("/app")
 
-from zerg.database import Base
-from zerg.database import default_engine
+from zerg.database import configure_database
+from zerg.database import get_default_engine
+from zerg.database import initialize_database
 
 
 def init_db():
     print("🔍 Checking database schema...")
-    inspector = inspect(default_engine)
+    configure_database()
+    engine = get_default_engine()
+    if engine is None:
+        print("❌ DATABASE_URL is not configured.")
+        sys.exit(1)
+    inspector = inspect(engine)
 
     # Check for 'users' table as a proxy for schema existence
     if not inspector.has_table("users"):
         print("🏗️ Creating initial database schema...")
         try:
-            # Import models to ensure they are registered
-            from zerg.models.models import Fiche  # noqa: F401
-            from zerg.models.models import Run  # noqa: F401
-            from zerg.models.models import Thread  # noqa: F401
-            from zerg.models.models import ThreadMessage  # noqa: F401
-            from zerg.models.models import User  # noqa: F401
-            from zerg.models.models import Workflow  # noqa: F401
-
-            Base.metadata.create_all(bind=default_engine)
+            initialize_database(engine)
             print("✅ Database schema created successfully.")
         except Exception as e:
             print(f"❌ Failed to create database schema: {e}")
