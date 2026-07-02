@@ -115,3 +115,23 @@ def test_zerg_database_imports_without_database_url():
         f"cursor Helm ingest path would be broken again:\n{result.stderr}"
     )
     assert "DATABASE_IMPORT_OK" in result.stdout
+
+
+def test_zerg_codex_import_does_not_warn_about_missing_database_url():
+    """Managed Codex launcher imports must stay quiet when DATABASE_URL is unset."""
+    repo_root = Path(__file__).resolve().parents[2]
+    env = {k: v for k, v in os.environ.items() if k not in {"DATABASE_URL", "FERNET_SECRET"}}
+    result = subprocess.run(
+        [sys.executable, "-c", "import zerg.cli.codex; print('CODEX_IMPORT_OK')"],
+        cwd=str(repo_root / "server"),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"zerg.cli.codex import failed without DATABASE_URL — managed Codex launch would be noisy again:\n"
+        f"{result.stderr}"
+    )
+    assert "CODEX_IMPORT_OK" in result.stdout
+    assert "DATABASE_URL not set - using placeholder" not in result.stderr

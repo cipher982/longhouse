@@ -433,7 +433,9 @@ if _settings.database_url:
     _write_session_factory = make_sessionmaker(_write_engine)
 else:
     # Unit tests will override these in conftest.py before any actual usage
-    logger.warning("DATABASE_URL not set - using placeholder (will be overridden by tests)")
+    # Keep import-time fallback silent for remote-only CLI surfaces. Managed
+    # launchers import zerg.database before a runtime DB is always present.
+    logger.debug("DATABASE_URL not set - deferring engine setup until configured")
     default_engine = None  # type: ignore[assignment]
     default_session_factory = None  # type: ignore[assignment]
     _write_engine = None
