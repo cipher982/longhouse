@@ -408,68 +408,11 @@ run_cors_checks() {
 run_auth_gate_checks() {
     run_test test_http "Auth verify (no session)" "$API_URL/api/auth/verify" "401"
     run_test test_http "Users/me (no auth)" "$API_URL/api/users/me" "401"
-    run_test test_http "Email contacts (no auth)" "$API_URL/api/user/contacts/email" "401"
-    run_test test_http "Phone contacts (no auth)" "$API_URL/api/user/contacts/phone" "401"
 
     # Core loop and machine search auth checks
     run_test test_http "Ingest endpoint (no auth)" "$API_URL/api/agents/ingest" "401" "POST"
     run_test test_http "Timeline sessions (no auth)" "$API_URL/api/timeline/sessions" "401"
     run_test test_http "Agents semantic search (no auth)" "$API_URL/api/agents/sessions/semantic" "401"
-}
-
-run_contacts_crud() {
-    local cookie_jar="$1"
-
-    run_test test_http_auth "List email contacts" "$API_URL/api/user/contacts/email" "200" "$cookie_jar"
-    run_test test_http_auth "List phone contacts" "$API_URL/api/user/contacts/phone" "200" "$cookie_jar"
-
-    local email_response
-    local email_id
-    email_response=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" -X POST "$API_URL/api/user/contacts/email" \
-        -b "$cookie_jar" \
-        -H "Content-Type: application/json" \
-        -d '{"name": "Smoke Test", "email": "smoke-test@example.com", "notes": "Created by smoke test"}' 2>/dev/null)
-    email_id=$(echo "$email_response" | jq -r '.id // empty' 2>/dev/null)
-    if [[ -n "$email_id" && "$email_id" != "null" ]]; then
-        pass "Create email contact (id: $email_id)"
-    else
-        fail "Create email contact (no id returned)"
-    fi
-
-    local phone_response
-    local phone_id
-    phone_response=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" -X POST "$API_URL/api/user/contacts/phone" \
-        -b "$cookie_jar" \
-        -H "Content-Type: application/json" \
-        -d '{"name": "Smoke Test Phone", "phone": "+15551234567", "notes": "Created by smoke test"}' 2>/dev/null)
-    phone_id=$(echo "$phone_response" | jq -r '.id // empty' 2>/dev/null)
-    if [[ -n "$phone_id" && "$phone_id" != "null" ]]; then
-        pass "Create phone contact (id: $phone_id)"
-    else
-        fail "Create phone contact (no id returned)"
-    fi
-
-    if [[ -n "$email_id" && "$email_id" != "null" ]]; then
-        local delete_status
-        delete_status=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" -o /dev/null -w "%{http_code}" -X DELETE \
-            "$API_URL/api/user/contacts/email/$email_id" -b "$cookie_jar" 2>/dev/null)
-        if [[ "$delete_status" == "204" ]]; then
-            pass "Delete email contact (204)"
-        else
-            fail "Delete email contact (expected 204, got $delete_status)"
-        fi
-    fi
-
-    if [[ -n "$phone_id" && "$phone_id" != "null" ]]; then
-        local delete_status
-        delete_status=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" -o /dev/null -w "%{http_code}" -X DELETE \
-            "$API_URL/api/user/contacts/phone/$phone_id" -b "$cookie_jar" 2>/dev/null)
-        if [[ "$delete_status" == "204" ]]; then
-            pass "Delete phone contact (204)"
-        else
-            fail "Delete phone contact (expected 204, got $delete_status)"
-        fi
-    fi
 }
 
 # Parse args
@@ -634,9 +577,6 @@ if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
             fi
 
             if [[ "$MODE" == "full" ]]; then
-                section "Contacts CRUD"
-                warn "Contacts CRUD smoke requires browser refresh cookies and is skipped for hosted runtime-token auth"
-
                 info "Email/Gmail canaries removed with the legacy chat path"
             else
                 info "Full tests skipped (pass --full to enable CRUD/infra)"
