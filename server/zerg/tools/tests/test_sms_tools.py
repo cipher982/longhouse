@@ -1,9 +1,21 @@
 """Tests for SMS (Twilio) tools."""
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 from unittest.mock import Mock
 from unittest.mock import patch
 
 from zerg.tools.builtin.sms_tools import send_sms
+
+
+def _fake_db_session(counter_count: int = 0):
+    db = MagicMock()
+    counter = SimpleNamespace(count=counter_count)
+    db.query.return_value.filter.return_value.with_for_update.return_value.first.return_value = counter
+    session = MagicMock()
+    session.__enter__.return_value = db
+    session.__exit__.return_value = False
+    return session, db
 
 
 class TestSendSms:
@@ -26,7 +38,7 @@ class TestSendSms:
         result = send_sms(
             account_sid="AC" + "x" * 32,
             auth_token="x" * 32,
-            from_number="1234567890",  # Missing + and country code
+            from_number="1234567890",
             to_number="+15559876543",
             message="Test message",
         )
@@ -66,8 +78,10 @@ class TestSendSms:
         )
         assert result["ok"] is False
 
+    @patch("zerg.tools.builtin.sms_tools.get_commis_context", return_value=SimpleNamespace(owner_id=1))
+    @patch("zerg.tools.builtin.sms_tools.db_session")
     @patch("zerg.tools.builtin.sms_tools.httpx.Client")
-    def test_successful_sms(self, mock_client):
+    def test_successful_sms(self, mock_client, mock_db_session, _mock_ctx):
         """Test successful SMS sending."""
         mock_response = Mock()
         mock_response.status_code = 201
@@ -78,6 +92,8 @@ class TestSendSms:
             "price": "-0.0075",
         }
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+        session, _ = _fake_db_session()
+        mock_db_session.return_value = session
 
         result = send_sms(
             account_sid="AC" + "x" * 32,
@@ -90,13 +106,17 @@ class TestSendSms:
         assert result["ok"] is True
         assert result["data"]["message_sid"] == "SM123456"
 
+    @patch("zerg.tools.builtin.sms_tools.get_commis_context", return_value=SimpleNamespace(owner_id=1))
+    @patch("zerg.tools.builtin.sms_tools.db_session")
     @patch("zerg.tools.builtin.sms_tools.httpx.Client")
-    def test_unauthorized_error(self, mock_client):
+    def test_unauthorized_error(self, mock_client, mock_db_session, _mock_ctx):
         """Test handling of unauthorized error."""
         mock_response = Mock()
         mock_response.status_code = 401
         mock_response.json.return_value = {"message": "Invalid credentials"}
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+        session, _ = _fake_db_session()
+        mock_db_session.return_value = session
 
         result = send_sms(
             account_sid="AC" + "x" * 32,
@@ -108,13 +128,17 @@ class TestSendSms:
 
         assert result["ok"] is False
 
+    @patch("zerg.tools.builtin.sms_tools.get_commis_context", return_value=SimpleNamespace(owner_id=1))
+    @patch("zerg.tools.builtin.sms_tools.db_session")
     @patch("zerg.tools.builtin.sms_tools.httpx.Client")
-    def test_rate_limit(self, mock_client):
+    def test_rate_limit(self, mock_client, mock_db_session, _mock_ctx):
         """Test rate limit handling."""
         mock_response = Mock()
         mock_response.status_code = 429
         mock_response.json.return_value = {"message": "Too many requests"}
         mock_client.return_value.__enter__.return_value.post.return_value = mock_response
+        session, _ = _fake_db_session()
+        mock_db_session.return_value = session
 
         result = send_sms(
             account_sid="AC" + "x" * 32,
@@ -126,14 +150,18 @@ class TestSendSms:
 
         assert result["ok"] is False
 
+    @patch("zerg.tools.builtin.sms_tools.get_commis_context", return_value=SimpleNamespace(owner_id=1))
+    @patch("zerg.tools.builtin.sms_tools.db_session")
     @patch("zerg.tools.builtin.sms_tools.httpx.Client")
-    def test_sms_with_callback(self, mock_client):
+    def test_sms_with_callback(self, mock_client, mock_db_session, _mock_ctx):
         """Test SMS with status callback URL."""
         mock_response = Mock()
         mock_response.status_code = 201
         mock_response.json.return_value = {"sid": "SM789012", "status": "queued"}
         mock_post = mock_client.return_value.__enter__.return_value.post
         mock_post.return_value = mock_response
+        session, _ = _fake_db_session()
+        mock_db_session.return_value = session
 
         result = send_sms(
             account_sid="AC" + "x" * 32,

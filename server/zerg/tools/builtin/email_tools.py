@@ -1,7 +1,7 @@
 """Email tool for sending emails.
 
 Supports platform-level email (zero config) and optional user credentials for custom sender.
-Includes approved contacts validation and rate limiting.
+Includes rate limiting.
 """
 
 import logging
@@ -23,9 +23,7 @@ from zerg.connectors.registry import ConnectorType
 from zerg.context import get_commis_context
 from zerg.database import db_session
 from zerg.models.models import EmailSendLog
-from zerg.models.models import User
 from zerg.models.models import UserDailyEmailCounter
-from zerg.models.models import UserEmailContact
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
@@ -166,36 +164,6 @@ def _get_all_recipients(
     return [r for r in recipients if r]  # Filter empty
 
 
-def _is_approved_recipient(user_id: int, email: str, db) -> bool:
-    """Check if normalized email is user's own or in approved contacts.
-
-    Args:
-        user_id: User ID to check contacts for
-        email: Normalized email address to check
-        db: Database session
-
-    Returns:
-        True if approved, False otherwise
-    """
-    normalized = _normalize_email(email)
-
-    # Check user's own email
-    user = db.query(User).filter(User.id == user_id).first()
-    if user and _normalize_email(user.email) == normalized:
-        return True
-
-    # Check approved contacts (stored normalized)
-    contact = (
-        db.query(UserEmailContact)
-        .filter(
-            UserEmailContact.owner_id == user_id,
-            UserEmailContact.email_normalized == normalized,
-        )
-        .first()
-    )
-    return contact is not None
-
-
 def _reserve_rate_limit(user_id: int, recipient_count: int, db) -> tuple[bool, str]:
     """Atomically check and reserve rate limit BEFORE sending.
 
@@ -260,8 +228,7 @@ def send_email(
 ) -> Dict[str, Any]:
     """Send an email to one or more recipients.
 
-    Recipients must be in your approved contacts list (Settings → Contacts)
-    or be your own email address. Subject to daily rate limits.
+    Subject to daily rate limits.
 
     Args:
         to: Recipient email address(es) - string or list
@@ -287,7 +254,7 @@ def send_email(
         {"success": True, "message_id": "abc123..."}
     """
     try:
-        # Get user context for contact validation and rate limiting
+        # Get user context for rate limiting and audit logging
         user_id = _get_user_id()
 
         # Credential resolution order:
@@ -413,7 +380,7 @@ def send_email(
                 connector="email",
             )
 
-        # Contact validation and rate limiting (requires user context)
+        # Rate limiting and audit logging (requires user context)
         # SECURITY: Fail closed - require user context for all sends
         if not user_id:
             logger.error("No user context for email send - rejecting for security")
@@ -427,17 +394,6 @@ def send_email(
         unique_recipients = list(set(all_recipients))
 
         with db_session() as db:
-            # Validate ALL recipients are approved
-            for recipient in unique_recipients:
-                if not _is_approved_recipient(user_id, recipient, db):
-                    return tool_error(
-                        error_type=ErrorType.VALIDATION_ERROR,
-                        user_message=(
-                            f"'{recipient}' is not in your approved contacts. " "Add them in Settings → Contacts before sending."
-                        ),
-                        connector="email",
-                    )
-
             # Atomic rate limit check (counts unique recipients)
             allowed, msg = _reserve_rate_limit(user_id, len(unique_recipients), db)
             if not allowed:
@@ -551,10 +507,6 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=send_email,
         name="send_email",
-        description=(
-            "Send an email to one or more recipients. "
-            "Recipients must be in your approved contacts (Settings → Contacts). "
-            "Supports plain text or HTML content, CC, BCC, and reply-to addresses."
-        ),
+        description=("Send an email to one or more recipients. " "Supports plain text or HTML content, CC, BCC, and reply-to addresses."),
     ),
 ]
