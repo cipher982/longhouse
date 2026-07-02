@@ -45,6 +45,8 @@ _settings = get_settings_unchecked()
 
 _test_commis_id: ContextVar[str | None] = ContextVar("test_commis_id", default=None)
 _commis_session_factories: dict[str, sessionmaker] = {}
+_live_commis_session_factories: dict[str, sessionmaker] = {}
+_live_commis_write_session_factories: dict[str, sessionmaker] = {}
 _commis_factories_lock = Lock()
 
 
@@ -88,11 +90,14 @@ def _commis_db_url(commis_id: str) -> str:
     base_url = _settings.database_url
     if not base_url:
         raise ValueError("DATABASE_URL not set in environment")
+    return _derived_commis_db_url(base_url, commis_id, "commis")
 
+
+def _derived_commis_db_url(base_url: str, commis_id: str, label: str) -> str:
     parsed = make_url(base_url)
     db_path = parsed.database or ""
     if not db_path:
-        raise ValueError("DATABASE_URL missing sqlite path")
+        raise ValueError("SQLite URL missing path")
 
     # Allow explicit override for E2E db root (handy for temp dirs)
     e2e_db_dir = os.getenv("E2E_DB_DIR")
@@ -104,7 +109,7 @@ def _commis_db_url(commis_id: str) -> str:
         base_name = Path(db_path).stem
 
     safe_id = _safe_commis_id(commis_id)
-    commis_path = base_dir / f"{base_name}_commis_{safe_id}.db"
+    commis_path = base_dir / f"{base_name}_{label}_{safe_id}.db"
     return f"sqlite:///{commis_path}"
 
 
@@ -128,6 +133,34 @@ def _get_or_create_commis_session_factory(commis_id: str) -> sessionmaker:
 
         _commis_session_factories[safe_id] = factory
         return factory
+
+
+def _live_commis_db_url(commis_id: str) -> str:
+    base_url = _settings.live_database_url
+    if not base_url:
+        raise ValueError("LONGHOUSE_LIVE_DATABASE_URL not set in environment")
+    return _derived_commis_db_url(base_url, commis_id, "live_commis")
+
+
+def _get_or_create_live_commis_session_factories(commis_id: str) -> tuple[sessionmaker, sessionmaker]:
+    safe_id = _safe_commis_id(commis_id)
+    existing = _live_commis_session_factories.get(safe_id)
+    existing_write = _live_commis_write_session_factories.get(safe_id)
+    if existing is not None and existing_write is not None:
+        return existing, existing_write
+
+    with _commis_factories_lock:
+        existing = _live_commis_session_factories.get(safe_id)
+        existing_write = _live_commis_write_session_factories.get(safe_id)
+        if existing is not None and existing_write is not None:
+            return existing, existing_write
+
+        db_url = _live_commis_db_url(safe_id)
+        factory = make_sessionmaker(make_live_engine(db_url))
+        write_factory = make_sessionmaker(make_live_write_engine(db_url))
+        _live_commis_session_factories[safe_id] = factory
+        _live_commis_write_session_factories[safe_id] = write_factory
+        return factory, write_factory
 
 
 # Use override=True to ensure proper quote stripping even if vars are inherited from parent process.
@@ -340,6 +373,26 @@ def make_write_engine(db_url: str) -> Engine:
     return make_engine(db_url, busy_timeout_ms=_busy_timeout, pool_size=1, max_overflow=0)
 
 
+def make_live_engine(db_url: str, **kwargs) -> Engine:
+    """Create a Live Store engine with short lock waits.
+
+    Live DB callers should fail with typed pressure instead of waiting behind a
+    stuck archive-style write. Route adoption happens separately; this only
+    establishes the independent engine/session factory.
+    """
+
+    busy_timeout = int(os.getenv("LONGHOUSE_LIVE_SQLITE_BUSY_TIMEOUT_MS", "250"))
+    return make_engine(db_url, busy_timeout_ms=busy_timeout, **kwargs)
+
+
+def make_live_write_engine(db_url: str) -> Engine:
+    parsed = make_url(db_url)
+    is_memory = parsed.database in (None, "", ":memory:")
+    if is_memory:
+        return make_live_engine(db_url)
+    return make_live_engine(db_url, pool_size=1, max_overflow=0)
+
+
 def get_session_factory() -> sessionmaker:
     """Get the default session factory for the application.
 
@@ -384,6 +437,17 @@ else:
     _write_engine = None
     _write_session_factory = None
 
+if _settings.live_database_url:
+    live_engine = make_live_engine(_settings.live_database_url)
+    live_session_factory = make_sessionmaker(live_engine)
+    live_write_engine = make_live_write_engine(_settings.live_database_url)
+    live_write_session_factory = make_sessionmaker(live_write_engine)
+else:
+    live_engine = None
+    live_session_factory = None
+    live_write_engine = None
+    live_write_session_factory = None
+
 
 def configure_write_serializer() -> None:
     """Configure the WriteSerializer with the dedicated write engine.
@@ -422,6 +486,40 @@ def _resolve_write_session_factory() -> sessionmaker:
 def get_write_engine() -> Engine | None:
     """Return the dedicated write engine (for WAL checkpoint etc.)."""
     return _write_engine
+
+
+def get_live_engine() -> Engine | None:
+    """Return the optional Live Store read engine."""
+    return live_engine
+
+
+def get_live_session_factory() -> sessionmaker | None:
+    """Return the optional Live Store session factory."""
+    if _settings.testing:
+        commis_id = get_test_commis_id()
+        if commis_id and _settings.live_database_url:
+            factory, _write_factory = _get_or_create_live_commis_session_factories(commis_id)
+            return factory
+    return live_session_factory
+
+
+def get_live_write_engine() -> Engine | None:
+    """Return the optional Live Store write engine."""
+    return live_write_engine
+
+
+def get_live_write_session_factory() -> sessionmaker | None:
+    """Return the optional Live Store write session factory."""
+    if _settings.testing:
+        commis_id = get_test_commis_id()
+        if commis_id and _settings.live_database_url:
+            _factory, write_factory = _get_or_create_live_commis_session_factories(commis_id)
+            return write_factory
+    return live_write_session_factory
+
+
+def live_store_configured() -> bool:
+    return bool(_settings.live_database_url)
 
 
 def get_pool_status(engine: Engine | None = None) -> dict[str, Any] | None:

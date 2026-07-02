@@ -235,6 +235,102 @@ def test_db_doctor_reports_missing_cache_without_sampling_small_db(tmp_path):
     assert cache["exists"] is False
     assert cache["status"] == "missing"
     assert cache["suggested_command"] is None
+    assert payload["live_store"]["status"] == "disabled"
+    assert payload["live_store"]["configured"] is False
+
+
+def test_db_doctor_reports_configured_live_store_path(tmp_path):
+    _db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+    live_path = tmp_path / "live" / "live.db"
+    live_url = f"sqlite:///{live_path}"
+
+    result = CliRunner().invoke(
+        app,
+        ["db", "doctor", "--database-url", db_url, "--live-database-url", live_url, "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    live_store = json.loads(result.output)["live_store"]
+    assert live_store["configured"] is True
+    assert live_store["status"] == "missing"
+    assert live_store["db_path"] == str(live_path)
+    assert live_store["db_exists"] is False
+    assert live_store["same_db_path_as_archive"] is False
+    assert live_store["same_directory_as_archive"] is False
+
+
+def test_db_doctor_warns_when_live_store_is_archive_db(tmp_path):
+    db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        ["db", "doctor", "--database-url", db_url, "--live-database-url", db_url, "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    live_store = json.loads(result.output)["live_store"]
+    assert live_store["status"] == "ok"
+    assert live_store["db_path"] == str(db_path)
+    assert live_store["same_db_path_as_archive"] is True
+    assert "same_as_archive_db" in live_store["warnings"]
+
+
+def test_collect_sqlite_store_stats_warning_branches(tmp_path):
+    from zerg.services.db_diagnostics import collect_sqlite_store_stats
+
+    db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+
+    same_directory = collect_sqlite_store_stats(
+        f"sqlite:///{tmp_path / 'live.db'}",
+        archive_database_url=db_url,
+    )
+    assert same_directory["status"] == "missing"
+    assert same_directory["same_directory_as_archive"] is True
+    assert "same_directory_as_archive_db" in same_directory["warnings"]
+
+    same_file = collect_sqlite_store_stats(db_url, archive_database_url=db_url)
+    assert same_file["status"] == "ok"
+    assert same_file["db_path"] == str(db_path)
+    assert same_file["same_db_path_as_archive"] is True
+    assert "same_as_archive_db" in same_file["warnings"]
+
+    tmp_path_store = collect_sqlite_store_stats("sqlite:////tmp/longhouse-live-test.db")
+    assert tmp_path_store["status"] == "missing"
+    assert "tmp_path" in tmp_path_store["warnings"]
+
+    unsupported = collect_sqlite_store_stats("sqlite://")
+    assert unsupported["status"] == "unsupported"
+    assert "not_file_backed_sqlite" in unsupported["warnings"]
+
+
+def test_live_store_factories_route_by_test_commis(tmp_path, monkeypatch):
+    from zerg import database as database_module
+
+    monkeypatch.setattr(database_module._settings, "testing", True)
+    monkeypatch.setattr(database_module._settings, "live_database_url", f"sqlite:///{tmp_path / 'live.db'}")
+    monkeypatch.setenv("E2E_DB_DIR", str(tmp_path))
+    database_module._live_commis_session_factories.clear()
+    database_module._live_commis_write_session_factories.clear()
+
+    token = database_module.set_test_commis_id("alpha")
+    try:
+        alpha = database_module.get_live_session_factory()
+        alpha_write = database_module.get_live_write_session_factory()
+    finally:
+        database_module.reset_test_commis_id(token)
+
+    token = database_module.set_test_commis_id("beta")
+    try:
+        beta = database_module.get_live_session_factory()
+    finally:
+        database_module.reset_test_commis_id(token)
+
+    assert alpha is not None
+    assert alpha_write is not None
+    assert beta is not None
+    assert alpha.kw["bind"].url.database.endswith("live_live_commis_alpha.db")
+    assert alpha_write.kw["bind"].url.database.endswith("live_live_commis_alpha.db")
+    assert beta.kw["bind"].url.database.endswith("live_live_commis_beta.db")
 
 
 def test_db_doctor_reports_stale_and_corrupt_cache(tmp_path):

@@ -95,6 +95,28 @@ def _resolve_archive_root(database_url: str) -> str:
     return str(root / "archive")
 
 
+def _sqlite_url_for_path(path_value: str) -> str:
+    path = Path(_strip_env_quotes(path_value)).expanduser()
+    if not path.is_absolute():
+        path = path.resolve()
+    return f"sqlite:///{path}"
+
+
+def _resolve_live_database_url() -> str:
+    """Resolve the optional Live Store database URL.
+
+    The live store must be explicitly configured. Falling back to DATABASE_URL
+    would silently keep hot and archive writes on the same physical SQLite file.
+    """
+    explicit_url = _strip_env_quotes(os.getenv("LONGHOUSE_LIVE_DATABASE_URL") or "")
+    if explicit_url:
+        return explicit_url
+    explicit_path = _strip_env_quotes(os.getenv("LONGHOUSE_LIVE_DB_PATH") or "")
+    if explicit_path:
+        return _sqlite_url_for_path(explicit_path)
+    return ""
+
+
 def resolve_app_mode() -> AppMode:
     """Resolve the application mode from environment variables.
 
@@ -235,6 +257,7 @@ class Settings:  # noqa: D401 – simple data container
     umami_script_src: str | None = None
     umami_domains: str | None = None
     umami_tag: str | None = None
+    live_database_url: str = ""
 
     # Telegram channel integration ------------------------------------
     telegram_bot_token: str | None = None  # TELEGRAM_BOT_TOKEN from @BotFather
@@ -495,6 +518,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
     demo_mode = _truthy(os.getenv("DEMO_MODE")) or app_mode is AppMode.DEMO
 
     database_url = os.getenv("DATABASE_URL", "")
+    live_database_url = _resolve_live_database_url()
     archive_root = _resolve_archive_root(database_url)
     archive_shadow_tenant_id = (
         os.getenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID")
@@ -520,6 +544,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         github_client_secret=os.getenv("GITHUB_CLIENT_SECRET"),
         trigger_signing_secret=os.getenv("TRIGGER_SIGNING_SECRET"),
         database_url=database_url,
+        live_database_url=live_database_url,
         archive_root=archive_root,
         archive_shadow_write_enabled=_truthy(os.getenv("LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED")),
         archive_primary_write_enabled=_truthy(os.getenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED")),

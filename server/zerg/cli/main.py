@@ -158,6 +158,11 @@ def db_doctor(
         "--database-url",
         help="SQLite DATABASE_URL override (defaults to env).",
     ),
+    live_database_url: str | None = typer.Option(
+        None,
+        "--live-database-url",
+        help="Optional Live Store SQLite URL override (defaults to LONGHOUSE_LIVE_* env).",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
     deep: bool = typer.Option(
         False,
@@ -190,10 +195,15 @@ def db_doctor(
     from zerg.services.db_diagnostics import collect_sqlite_db_stats
     from zerg.services.db_diagnostics import collect_sqlite_deep_counts
     from zerg.services.db_diagnostics import collect_sqlite_schema_stats
+    from zerg.services.db_diagnostics import collect_sqlite_store_stats
     from zerg.services.db_diagnostics import collect_sqlite_table_bytes
     from zerg.services.db_diagnostics import load_sqlite_table_bytes_cache
 
     engine, resolved_database_url = _resolve_db_engine(database_url)
+    if live_database_url is None:
+        from zerg.config import get_settings_unchecked
+
+        live_database_url = get_settings_unchecked().live_database_url
     with engine.connect() as conn:
         payload = collect_sqlite_db_stats(resolved_database_url, db=conn)
         if payload is None:
@@ -217,6 +227,10 @@ def db_doctor(
             max_age_seconds=table_bytes_cache_max_age_seconds,
             current_stats=payload,
             include_table_bytes=table_bytes_cache,
+        )
+        payload["live_store"] = collect_sqlite_store_stats(
+            live_database_url,
+            archive_database_url=resolved_database_url,
         )
 
     if json_output:
@@ -251,6 +265,13 @@ def db_doctor(
     else:
         suggestion = f", run {cache['suggested_command']}" if cache.get("suggested_command") else ""
         typer.echo(f"  table_bytes_cache: {cache['status']}{suggestion}")
+    live_store = payload["live_store"]
+    typer.echo(f"  live_store: {live_store['status']}")
+    if live_store.get("db_path"):
+        typer.echo(f"    path: {live_store['db_path']}")
+        typer.echo(f"    db_bytes: {live_store.get('db_bytes')}")
+    if live_store.get("warnings"):
+        typer.echo(f"    warnings: {', '.join(live_store['warnings'])}")
 
 
 @db_app.command(name="sample-table-bytes")

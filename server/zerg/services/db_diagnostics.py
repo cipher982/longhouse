@@ -749,3 +749,70 @@ def collect_sqlite_db_stats(
         }
     )
     return payload
+
+
+def collect_sqlite_store_stats(
+    database_url: str | None,
+    *,
+    archive_database_url: str | None = None,
+    db: Session | Connection | None = None,
+) -> dict[str, Any]:
+    """Return cheap file diagnostics for a configured SQLite store.
+
+    This is used for the optional Live Store before route adoption. It must not
+    connect to or create the live DB unless the caller supplies an open
+    connection; path/free-space visibility is enough for Phase 0.
+    """
+
+    if not database_url:
+        return {
+            "configured": False,
+            "status": "disabled",
+            "database_url": None,
+            "db_path": None,
+            "warnings": [],
+        }
+
+    payload = collect_sqlite_db_stats(database_url, db=db)
+    if payload is None:
+        return {
+            "configured": True,
+            "status": "unsupported",
+            "database_url": database_url,
+            "db_path": None,
+            "warnings": ["not_file_backed_sqlite"],
+        }
+
+    warnings: list[str] = []
+    paths = sqlite_db_paths(database_url)
+    archive_paths = sqlite_db_paths(archive_database_url or "") if archive_database_url else None
+    same_db_path = False
+    same_directory = False
+    if paths is not None:
+        db_path, _wal_path = paths
+        expanded_db_path = db_path.expanduser()
+        try:
+            resolved_db_path = expanded_db_path.resolve()
+        except OSError:
+            resolved_db_path = expanded_db_path.absolute()
+        if str(expanded_db_path).startswith("/tmp/") or str(resolved_db_path).startswith(("/tmp/", "/private/tmp/")):
+            warnings.append("tmp_path")
+        if archive_paths is not None:
+            archive_db_path, _archive_wal_path = archive_paths
+            try:
+                resolved_archive_path = archive_db_path.expanduser().resolve()
+            except OSError:
+                resolved_archive_path = archive_db_path.expanduser().absolute()
+            same_db_path = resolved_db_path == resolved_archive_path
+            same_directory = resolved_db_path.parent == resolved_archive_path.parent
+            if same_db_path:
+                warnings.append("same_as_archive_db")
+            elif same_directory:
+                warnings.append("same_directory_as_archive_db")
+
+    payload["configured"] = True
+    payload["status"] = "ok" if payload.get("db_exists") else "missing"
+    payload["warnings"] = warnings
+    payload["same_db_path_as_archive"] = same_db_path
+    payload["same_directory_as_archive"] = same_directory
+    return payload

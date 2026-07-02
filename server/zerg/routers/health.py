@@ -393,6 +393,26 @@ def health_check(request: Request):
         health_status["status"] = "unhealthy"
         critical_failure = True
 
+    # 2a. Optional Live Store topology. Disabled is healthy in the current
+    # compatibility mode; configured-but-risky paths are warnings until hot
+    # routes actually depend on the live store.
+    try:
+        from zerg.services.db_diagnostics import collect_sqlite_store_stats
+
+        live_store = collect_sqlite_store_stats(
+            _settings.live_database_url,
+            archive_database_url=_settings.database_url,
+        )
+        live_status = live_store.get("status")
+        live_warnings = live_store.get("warnings") or []
+        checks["live_store"] = {
+            **live_store,
+            "status": "warn" if live_status == "unsupported" or live_warnings else "pass",
+            "store_status": live_status,
+        }
+    except Exception as e:
+        checks["live_store"] = {"status": "warn", "error": str(e)}
+
     # 2b. Request DB pool pressure. This is intentionally passive telemetry:
     # it reads SQLAlchemy pool counters without checking out another connection.
     try:
