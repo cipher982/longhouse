@@ -89,6 +89,94 @@ async def test_live_archive_drain_uses_archive_writer_lane(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("max_batches", "expected_processed", "expected_pending"),
+    [
+        (3, 5, 0),
+        (2, 4, 1),
+    ],
+)
+async def test_live_archive_drain_catches_up_multiple_batches_per_tick(
+    tmp_path,
+    monkeypatch,
+    max_batches,
+    expected_processed,
+    expected_pending,
+):
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    now = datetime.now(timezone.utc)
+    heartbeat = {
+        "device_id": "maintenance-catchup",
+        "received_at": now,
+        "version": "0.5.0",
+        "spool_pending": 4,
+        "spool_dead": 0,
+        "parse_errors_1h": 0,
+        "consecutive_failures": 0,
+        "ship_attempts_1h": 1,
+        "ship_successes_1h": 1,
+        "ship_rate_limited_1h": 0,
+        "ship_server_errors_1h": 0,
+        "ship_payload_rejections_1h": 0,
+        "ship_payload_too_large_1h": 0,
+        "ship_retryable_client_errors_1h": 0,
+        "ship_connect_errors_1h": 0,
+        "disk_free_bytes": 1,
+        "is_offline": 0,
+        "raw_json": "{}",
+    }
+    with LiveSession() as live_db:
+        for index in range(5):
+            enqueue_heartbeat_stamp_outbox(
+                live_db,
+                {
+                    **heartbeat,
+                    "received_at": now + timedelta(milliseconds=index),
+                    "sessions_sequence": index,
+                },
+            )
+        live_db.commit()
+
+    calls = []
+
+    class FakeSerializer:
+        async def execute(self, fn, *, auto_commit, label):
+            calls.append((label, auto_commit))
+            with ArchiveSession() as archive_db:
+                return fn(archive_db)
+
+    monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
+    monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: FakeSerializer())
+    monkeypatch.setattr("zerg.services.maintenance.LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE", 2)
+    monkeypatch.setattr("zerg.services.maintenance.LIVE_ARCHIVE_OUTBOX_DRAIN_MAX_BATCHES_PER_TICK", max_batches)
+
+    try:
+        result = await _drain_live_archive_outbox_once()
+
+        assert result == {"processed": expected_processed, "drained": expected_processed, "failed": 0, "cleaned": 0}
+        assert calls == [("live-archive-drain", False)]
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "maintenance-catchup").count() == expected_processed
+        with LiveSession() as live_db:
+            rows = live_db.query(LiveArchiveOutbox).all()
+            assert len(rows) == 5
+            drained_count = sum(1 for row in rows if row.drained_at is not None)
+            assert drained_count == expected_processed
+            assert len(rows) - drained_count == expected_pending
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_live_archive_drain_cleans_old_drained_rows_without_archive_writer(tmp_path, monkeypatch):
     live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
     initialize_live_database(live_engine)

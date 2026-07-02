@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 RUNNER_HEALTH_RECONCILE_INTERVAL = 120
 LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_INTERVAL_SECONDS", "10"))
 LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_BATCH_SIZE", "100"))
+LIVE_ARCHIVE_OUTBOX_DRAIN_MAX_BATCHES_PER_TICK = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_MAX_BATCHES_PER_TICK", "3"))
 LIVE_ARCHIVE_OUTBOX_CLEANUP_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_OUTBOX_CLEANUP_BATCH_SIZE", "1000"))
 LIVE_ARCHIVE_OUTBOX_RETENTION_DAYS = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_OUTBOX_RETENTION_DAYS", "7"))
 
@@ -82,13 +83,21 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
         return {"processed": 0, "drained": 0, "failed": 0, "cleaned": cleaned}
 
     def _drain(archive_db):
-        with live_session_factory() as live_db:
-            result = drain_live_archive_outbox(
-                live_db,
-                archive_db,
-                limit=LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE,
-            )
-        return result.as_dict()
+        totals = {"processed": 0, "drained": 0, "failed": 0}
+        max_batches = max(1, LIVE_ARCHIVE_OUTBOX_DRAIN_MAX_BATCHES_PER_TICK)
+        for _batch_index in range(max_batches):
+            with live_session_factory() as live_db:
+                result = drain_live_archive_outbox(
+                    live_db,
+                    archive_db,
+                    limit=LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE,
+                )
+            batch = result.as_dict()
+            for key in totals:
+                totals[key] += batch[key]
+            if batch["processed"] < LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE:
+                break
+        return totals
 
     result = await get_write_serializer().execute(
         _drain,
