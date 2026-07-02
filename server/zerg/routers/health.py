@@ -28,11 +28,11 @@ def _write_serializer_stale_queue_depth() -> int:
     return int(os.getenv("LONGHOUSE_WRITE_SERIALIZER_STALE_QUEUE_DEPTH", "5"))
 
 
-def _write_serializer_stall_check() -> tuple[bool, dict]:
+def _serializer_metrics_check(serializer_getter_name: str) -> tuple[bool, dict]:
     try:
-        from zerg.services.write_serializer import get_write_serializer
+        import zerg.services.write_serializer as write_serializer
 
-        ws = get_write_serializer()
+        ws = getattr(write_serializer, serializer_getter_name)()
         if not ws.is_configured:
             return False, {"status": "skip", "reason": "not configured"}
         metrics = ws.get_metrics()
@@ -44,6 +44,14 @@ def _write_serializer_stall_check() -> tuple[bool, dict]:
         return writer_stale, {"status": "fail" if writer_stale else "pass", **metrics}
     except Exception as e:
         return False, {"status": "warn", "error": str(e)}
+
+
+def _write_serializer_stall_check() -> tuple[bool, dict]:
+    return _serializer_metrics_check("get_write_serializer")
+
+
+def _live_write_serializer_check() -> tuple[bool, dict]:
+    return _serializer_metrics_check("get_live_write_serializer")
 
 
 def _session_projection_lag_check(session_factory=None) -> dict:
@@ -276,6 +284,16 @@ def readyz_check():
                 "write_serializer": writer_metrics,
             },
         )
+    live_writer_stale, live_writer_metrics = _live_write_serializer_check()
+    if live_writer_stale:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "reason": "live_write_serializer_stalled",
+                "live_write_serializer": live_writer_metrics,
+            },
+        )
 
     return {"status": "ok"}
 
@@ -489,6 +507,12 @@ def health_check(request: Request):
     if writer_stale:
         health_status["status"] = "unhealthy"
         health_status["message"] = "Write serializer is stalled"
+        critical_failure = True
+    _live_writer_stale, live_writer_metrics = _live_write_serializer_check()
+    checks["live_write_serializer"] = live_writer_metrics
+    if _live_writer_stale:
+        health_status["status"] = "unhealthy"
+        health_status["message"] = "Live write serializer is stalled"
         critical_failure = True
 
     # 8. Projection catch-up lag. Archive ingest may skip expensive derived

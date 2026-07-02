@@ -31,6 +31,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import agents_heartbeat_payload_bytes
 from zerg.metrics import agents_heartbeat_requests_total
@@ -42,6 +43,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
+from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
@@ -55,6 +57,7 @@ from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.write_backpressure import raise_hot_write_backpressure
 from zerg.services.write_serializer import WriteQueueTimeoutError
 from zerg.services.write_serializer import execute_post_write
+from zerg.services.write_serializer import get_live_write_serializer
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
@@ -421,6 +424,19 @@ def _latest_heartbeat_sessions_digest(db: Session, device_id: str) -> str | None
         db.query(AgentHeartbeat.sessions_digest)
         .filter(AgentHeartbeat.device_id == device_id)
         .order_by(AgentHeartbeat.received_at.desc(), AgentHeartbeat.id.desc())
+        .first()
+    )
+    if row is None:
+        return None
+    digest = str(row.sessions_digest or "").strip()
+    return digest or None
+
+
+def _latest_live_heartbeat_sessions_digest(db: Session, device_id: str) -> str | None:
+    row = (
+        db.query(LiveHeartbeatStamp.sessions_digest)
+        .filter(LiveHeartbeatStamp.device_id == device_id)
+        .order_by(LiveHeartbeatStamp.received_at.desc(), LiveHeartbeatStamp.id.desc())
         .first()
     )
     if row is None:
@@ -847,41 +863,58 @@ async def ingest_heartbeat(
 
             incoming_sessions_digest = str(payload.sessions_digest or "").strip() or None
 
+            heartbeat_stamp_kwargs = {
+                "device_id": _device_id,
+                "received_at": _now,
+                "version": _version,
+                "last_ship_at": _last_ship,
+                "last_ship_attempt_at": _last_ship_attempt,
+                "last_ship_result": _last_ship_result,
+                "last_ship_latency_ms": _last_ship_latency_ms,
+                "last_ship_http_status": _last_ship_http_status,
+                "spool_pending": _spool,
+                "spool_dead": _spool_dead,
+                "parse_errors_1h": _parse_err,
+                "consecutive_failures": _consec,
+                "ship_attempts_1h": _ship_attempts,
+                "ship_successes_1h": _ship_successes,
+                "ship_rate_limited_1h": _ship_rate_limited,
+                "ship_server_errors_1h": _ship_server_errors,
+                "ship_payload_rejections_1h": _ship_payload_rejections,
+                "ship_payload_too_large_1h": _ship_payload_too_large,
+                "ship_retryable_client_errors_1h": _ship_retryable_client_errors,
+                "ship_connect_errors_1h": _ship_connect_errors,
+                "ship_latency_p50_ms_1h": _ship_latency_p50,
+                "ship_latency_p95_ms_1h": _ship_latency_p95,
+                "disk_free_bytes": _disk,
+                "is_offline": _offline,
+                "raw_json": _payload_json,
+                "sessions_digest": incoming_sessions_digest,
+                "sessions_sequence": payload.sessions_sequence,
+            }
+
             def _insert_heartbeat_stamp(write_db: Session) -> str | None:
                 previous_sessions_digest = (
                     _latest_heartbeat_sessions_digest(write_db, _device_id)
                     if _managed_leases_present and incoming_sessions_digest is not None
                     else None
                 )
-                hb = AgentHeartbeat(
-                    device_id=_device_id,
-                    received_at=_now,
-                    version=_version,
-                    last_ship_at=_last_ship,
-                    last_ship_attempt_at=_last_ship_attempt,
-                    last_ship_result=_last_ship_result,
-                    last_ship_latency_ms=_last_ship_latency_ms,
-                    last_ship_http_status=_last_ship_http_status,
-                    spool_pending=_spool,
-                    spool_dead=_spool_dead,
-                    parse_errors_1h=_parse_err,
-                    consecutive_failures=_consec,
-                    ship_attempts_1h=_ship_attempts,
-                    ship_successes_1h=_ship_successes,
-                    ship_rate_limited_1h=_ship_rate_limited,
-                    ship_server_errors_1h=_ship_server_errors,
-                    ship_payload_rejections_1h=_ship_payload_rejections,
-                    ship_payload_too_large_1h=_ship_payload_too_large,
-                    ship_retryable_client_errors_1h=_ship_retryable_client_errors,
-                    ship_connect_errors_1h=_ship_connect_errors,
-                    ship_latency_p50_ms_1h=_ship_latency_p50,
-                    ship_latency_p95_ms_1h=_ship_latency_p95,
-                    disk_free_bytes=_disk,
-                    is_offline=_offline,
-                    raw_json=_payload_json,
-                    sessions_digest=incoming_sessions_digest,
-                    sessions_sequence=payload.sessions_sequence,
+                hb = AgentHeartbeat(**heartbeat_stamp_kwargs)
+                write_db.add(hb)
+                return previous_sessions_digest
+
+            def _insert_live_heartbeat_stamp(write_db: Session) -> str | None:
+                previous_sessions_digest = (
+                    _latest_live_heartbeat_sessions_digest(write_db, _device_id)
+                    if _managed_leases_present and incoming_sessions_digest is not None
+                    else None
                 )
+                cutoff = _now - timedelta(days=30)
+                write_db.query(LiveHeartbeatStamp).filter(
+                    LiveHeartbeatStamp.device_id == _device_id,
+                    LiveHeartbeatStamp.received_at < cutoff,
+                ).delete()
+                hb = LiveHeartbeatStamp(**heartbeat_stamp_kwargs)
                 write_db.add(hb)
                 return previous_sessions_digest
 
@@ -1020,18 +1053,33 @@ async def ingest_heartbeat(
                 return publish_sessions
 
             ws = get_write_serializer()
+            live_ws = get_live_write_serializer() if live_store_configured() else None
             with tracer.start_as_current_span("longhouse.heartbeat.write") as write_span:
                 write_started = time.monotonic()
                 try:
-                    previous_sessions_digest = await ws.execute_after_closing_request_session(
-                        _insert_heartbeat_stamp,
-                        db,
-                        label="heartbeat-stamp",
-                        queue_timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
-                    )
+                    if live_ws is not None:
+                        if not live_ws.is_configured:
+                            raise HTTPException(
+                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail="Live Store write serializer is not configured",
+                            )
+                        if os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV:
+                            db.close()
+                        previous_sessions_digest = await live_ws.execute(
+                            _insert_live_heartbeat_stamp,
+                            label="heartbeat-stamp",
+                            queue_timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
+                        )
+                    else:
+                        previous_sessions_digest = await ws.execute_after_closing_request_session(
+                            _insert_heartbeat_stamp,
+                            db,
+                            label="heartbeat-stamp",
+                            queue_timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
+                        )
                 except WriteQueueTimeoutError:
                     request_status_label = "write_backpressure"
-                    raise_hot_write_backpressure(ws, admission_state="heartbeat_queue_timeout")
+                    raise_hot_write_backpressure(live_ws or ws, admission_state="heartbeat_queue_timeout")
                 write_ms = round((time.monotonic() - write_started) * 1000, 1)
                 agents_heartbeat_write_seconds.observe(write_ms / 1000.0)
                 set_span_attributes(

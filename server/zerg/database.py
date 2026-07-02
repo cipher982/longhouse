@@ -156,8 +156,10 @@ def _get_or_create_live_commis_session_factories(commis_id: str) -> tuple[sessio
             return existing, existing_write
 
         db_url = _live_commis_db_url(safe_id)
-        factory = make_sessionmaker(make_live_engine(db_url))
+        engine = make_live_engine(db_url)
+        factory = make_sessionmaker(engine)
         write_factory = make_sessionmaker(make_live_write_engine(db_url))
+        initialize_live_database(engine)
         _live_commis_session_factories[safe_id] = factory
         _live_commis_write_session_factories[safe_id] = write_factory
         return factory, write_factory
@@ -450,7 +452,7 @@ else:
 
 
 def configure_write_serializer() -> None:
-    """Configure the WriteSerializer with the dedicated write engine.
+    """Configure the archive WriteSerializer with the dedicated write engine.
 
     Call once at startup (from lifespan) after database_url is set.
     No-op if write engine is not available (tests).
@@ -460,6 +462,18 @@ def configure_write_serializer() -> None:
     ws = get_write_serializer()
     if not ws.is_configured:
         ws.configure_resolver(_resolve_write_session_factory)
+
+
+def configure_live_write_serializer() -> None:
+    """Configure the independent Live Store write serializer if enabled."""
+    if not live_store_configured():
+        return
+
+    from zerg.services.write_serializer import get_live_write_serializer
+
+    ws = get_live_write_serializer()
+    if not ws.is_configured:
+        ws.configure_resolver(_resolve_live_write_session_factory)
 
 
 def get_write_session_factory() -> sessionmaker | None:
@@ -516,6 +530,13 @@ def get_live_write_session_factory() -> sessionmaker | None:
             _factory, write_factory = _get_or_create_live_commis_session_factories(commis_id)
             return write_factory
     return live_write_session_factory
+
+
+def _resolve_live_write_session_factory() -> sessionmaker:
+    session_factory = get_live_write_session_factory()
+    if session_factory is None:
+        raise RuntimeError("Live Store write session factory unavailable")
+    return session_factory
 
 
 def live_store_configured() -> bool:
@@ -835,6 +856,27 @@ def initialize_database(engine: Engine = None) -> None:
 
     elapsed_ms = (time.monotonic() - init_started) * 1000
     logger.info("Database initialization complete elapsed_ms=%.1f", elapsed_ms)
+
+
+def initialize_live_database(engine: Engine | None = None) -> None:
+    """Initialize only the Live Store schema on the hot SQLite lane."""
+    from zerg.models.live_store import LiveBase
+
+    target_engine = engine or live_engine
+    if target_engine is None:
+        if live_store_configured():
+            raise ValueError("Live Store is configured but live_engine is None")
+        return
+
+    with _timed_database_step("live_sqlite_version_check"):
+        is_compatible, version_str = check_sqlite_version(target_engine)
+        if not is_compatible:
+            min_ver = ".".join(str(x) for x in SQLITE_MIN_VERSION)
+            raise RuntimeError(f"SQLite version {version_str} is below minimum {min_ver}. Upgrade SQLite to use Live Store.")
+        logger.debug("Live Store SQLite version %s meets requirements", version_str)
+
+    with _timed_database_step("live_metadata_create_all"):
+        LiveBase.metadata.create_all(bind=target_engine)
 
 
 def _migrate_agents_columns(engine: Engine) -> None:

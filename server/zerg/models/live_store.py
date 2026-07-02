@@ -1,0 +1,113 @@
+"""Live Store models for the hot SQLite lane.
+
+These tables use an independent declarative base on purpose. Importing the
+archive ``Base`` here would make ``initialize_live_database`` create the full
+archive schema inside the hot DB, which would turn the split into ceremony.
+"""
+
+from sqlalchemy import BigInteger
+from sqlalchemy import Column
+from sqlalchemy import DateTime
+from sqlalchemy import Index
+from sqlalchemy import Integer
+from sqlalchemy import String
+from sqlalchemy import Text
+from sqlalchemy import UniqueConstraint
+from sqlalchemy.orm import declarative_base
+from sqlalchemy.sql import func
+
+LiveBase = declarative_base()
+
+
+class LiveSession(LiveBase):
+    __tablename__ = "live_sessions"
+
+    session_id = Column(String(36), primary_key=True)
+    owner_id = Column(String(36), nullable=True, index=True)
+    provider = Column(String(50), nullable=False, index=True)
+    device_id = Column(String(255), nullable=True, index=True)
+    machine_id = Column(String(255), nullable=True)
+    state = Column(String(32), nullable=False, server_default="unknown")
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class LiveRuntimeState(LiveBase):
+    __tablename__ = "live_runtime_state"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    runtime_key = Column(String(512), nullable=False, unique=True)
+    session_id = Column(String(36), nullable=True, index=True)
+    provider = Column(String(50), nullable=True, index=True)
+    device_id = Column(String(255), nullable=True, index=True)
+    phase = Column(String(64), nullable=False)
+    source = Column(String(128), nullable=False)
+    observed_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    payload_json = Column(Text, nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+
+class LiveControlLease(LiveBase):
+    __tablename__ = "live_control_leases"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(36), nullable=False)
+    provider = Column(String(50), nullable=False, index=True)
+    device_id = Column(String(255), nullable=False, index=True)
+    machine_id = Column(String(255), nullable=True)
+    state = Column(String(32), nullable=False)
+    sequence = Column(Integer, nullable=True)
+    heartbeat_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    payload_json = Column(Text, nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (UniqueConstraint("session_id", "provider", "device_id", name="uq_live_control_lease"),)
+
+
+class LiveArchiveOutbox(LiveBase):
+    __tablename__ = "live_archive_outbox"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    idempotency_key = Column(String(255), nullable=False, unique=True)
+    kind = Column(String(64), nullable=False, index=True)
+    payload_json = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    drained_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    attempts = Column(Integer, nullable=False, server_default="0")
+    last_error = Column(Text, nullable=True)
+
+
+class LiveHeartbeatStamp(LiveBase):
+    __tablename__ = "live_heartbeat_stamps"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    device_id = Column(String(255), nullable=False, index=True)
+    received_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    version = Column(String(50), nullable=True)
+    last_ship_at = Column(DateTime(timezone=True), nullable=True)
+    last_ship_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    last_ship_result = Column(String(64), nullable=True)
+    last_ship_latency_ms = Column(Integer, nullable=True)
+    last_ship_http_status = Column(Integer, nullable=True)
+    spool_pending = Column(Integer, nullable=False, server_default="0")
+    spool_dead = Column(Integer, nullable=False, server_default="0")
+    parse_errors_1h = Column(Integer, nullable=False, server_default="0")
+    consecutive_failures = Column(Integer, nullable=False, server_default="0")
+    ship_attempts_1h = Column(Integer, nullable=False, server_default="0")
+    ship_successes_1h = Column(Integer, nullable=False, server_default="0")
+    ship_rate_limited_1h = Column(Integer, nullable=False, server_default="0")
+    ship_server_errors_1h = Column(Integer, nullable=False, server_default="0")
+    ship_payload_rejections_1h = Column(Integer, nullable=False, server_default="0")
+    ship_payload_too_large_1h = Column(Integer, nullable=False, server_default="0")
+    ship_retryable_client_errors_1h = Column(Integer, nullable=False, server_default="0")
+    ship_connect_errors_1h = Column(Integer, nullable=False, server_default="0")
+    ship_latency_p50_ms_1h = Column(Integer, nullable=True)
+    ship_latency_p95_ms_1h = Column(Integer, nullable=True)
+    disk_free_bytes = Column(BigInteger, nullable=False, server_default="0")
+    is_offline = Column(Integer, nullable=False, server_default="0")
+    raw_json = Column(Text, nullable=True)
+    sessions_digest = Column(String(128), nullable=True)
+    sessions_sequence = Column(Integer, nullable=True)
+
+    __table_args__ = (Index("ix_live_heartbeats_device_received", "device_id", "received_at"),)

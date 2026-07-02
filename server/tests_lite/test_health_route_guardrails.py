@@ -151,3 +151,89 @@ def test_readyz_fails_stale_active_writer_with_queued_work(tmp_path, monkeypatch
 
     assert response.status_code == 503
     assert b"write_serializer_stalled" in response.body
+
+
+def test_health_fails_stale_live_writer_with_queued_work(tmp_path, monkeypatch):
+    engine = make_engine(f"sqlite:///{tmp_path}/health_stale_live_writer.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
+
+    class ArchiveWriter:
+        is_configured = True
+
+        def get_metrics(self):
+            return {
+                "queue_depth": 0,
+                "writer_active": False,
+                "active_label": None,
+                "active_age_ms": 0.0,
+            }
+
+    class StaleLiveWriter:
+        is_configured = True
+
+        def get_metrics(self):
+            return {
+                "queue_depth": 12,
+                "writer_active": True,
+                "active_label": "heartbeat-stamp",
+                "active_age_ms": health_router._write_serializer_stale_active_ms() + 1,
+            }
+
+    import zerg.database as database_module
+
+    monkeypatch.setattr(database_module, "default_engine", engine)
+    monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: ArchiveWriter())
+    monkeypatch.setattr("zerg.services.write_serializer.get_live_write_serializer", lambda: StaleLiveWriter())
+    monkeypatch.setattr(health_router, "_session_projection_lag_check", lambda: {"status": "pass", "pending_sessions": 0})
+    monkeypatch.setattr(health_router, "_session_enrichment_lag_check", lambda: {"status": "pass", "pending_sessions": 0})
+
+    response = health_router.health_check(
+        SimpleNamespace(
+            client=SimpleNamespace(host="testclient"),
+            headers={},
+        )
+    )
+
+    assert response.status_code == 503
+    assert b"Live write serializer is stalled" in response.body
+
+
+def test_readyz_fails_stale_live_writer_with_queued_work(tmp_path, monkeypatch):
+    engine = make_engine(f"sqlite:///{tmp_path}/readyz_stale_live_writer.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
+
+    class ArchiveWriter:
+        is_configured = True
+
+        def get_metrics(self):
+            return {
+                "queue_depth": 0,
+                "writer_active": False,
+                "active_label": None,
+                "active_age_ms": 0.0,
+            }
+
+    class StaleLiveWriter:
+        is_configured = True
+
+        def get_metrics(self):
+            return {
+                "queue_depth": 12,
+                "writer_active": True,
+                "active_label": "heartbeat-stamp",
+                "active_age_ms": health_router._write_serializer_stale_active_ms() + 1,
+            }
+
+    import zerg.database as database_module
+
+    monkeypatch.setattr(database_module, "default_engine", engine)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: ArchiveWriter())
+    monkeypatch.setattr("zerg.services.write_serializer.get_live_write_serializer", lambda: StaleLiveWriter())
+
+    response = health_router.readyz_check()
+
+    assert response.status_code == 503
+    assert b"live_write_serializer_stalled" in response.body

@@ -804,9 +804,15 @@ class WriteSerializer:
         }
 
 
-# Process singleton
+# Process singletons. The live serializer is intentionally separate from the
+# archive serializer so hot writes do not queue behind archive work.
 _serializer = WriteSerializer()
+_live_serializer = WriteSerializer()
 
 
 def get_write_serializer() -> WriteSerializer:
     return _serializer
+
+
+def get_live_write_serializer() -> WriteSerializer:
+    return _live_serializer

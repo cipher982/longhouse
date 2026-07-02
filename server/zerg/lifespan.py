@@ -14,6 +14,8 @@ from fastapi import FastAPI
 
 from zerg.config import get_settings
 from zerg.database import initialize_database
+from zerg.database import initialize_live_database
+from zerg.database import live_store_configured
 from zerg.observability import configure_observability
 from zerg.observability import shutdown_observability
 from zerg.services.ops_events import ops_events_bridge
@@ -144,11 +146,17 @@ async def lifespan(app: FastAPI):
             configure_observability()
         with _timed_startup_step("initialize_database"):
             initialize_database()
+        if live_store_configured():
+            with _timed_startup_step("initialize_live_database"):
+                initialize_live_database()
 
+        from zerg.database import configure_live_write_serializer
         from zerg.database import configure_write_serializer
 
         with _timed_startup_step("configure_write_serializer"):
             configure_write_serializer()
+        with _timed_startup_step("configure_live_write_serializer"):
+            configure_live_write_serializer()
 
         try:
             from zerg.database import default_engine
