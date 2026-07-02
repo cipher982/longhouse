@@ -130,22 +130,30 @@ def config_show() -> None:
 
 
 def _resolve_db_engine(database_url: str | None):
-    from zerg.database import default_engine
+    from zerg.config import get_settings_unchecked
+    from zerg.database import configure_database
+    from zerg.database import get_default_engine
     from zerg.database import make_engine
 
     if database_url:
         engine = make_engine(database_url)
         return engine, database_url
+    configure_database(get_settings_unchecked())
+    default_engine = get_default_engine()
     if default_engine is None:
         raise typer.Exit(code=2)
     return default_engine, str(default_engine.url)
 
 
 def _resolve_db_url(database_url: str | None) -> str:
-    from zerg.database import default_engine
+    from zerg.config import get_settings_unchecked
+    from zerg.database import configure_database
+    from zerg.database import get_default_engine
 
     if database_url:
         return database_url
+    configure_database(get_settings_unchecked())
+    default_engine = get_default_engine()
     if default_engine is None:
         raise typer.Exit(code=2)
     return str(default_engine.url)
@@ -586,9 +594,9 @@ def migrate(
     target_engine = engine
 
     if target_engine is None:
-        from zerg.database import default_engine
+        from zerg.database import get_default_engine
 
-        target_engine = default_engine
+        target_engine = get_default_engine()
     if target_engine is None:
         raise typer.Exit(code=2)
 
@@ -656,7 +664,7 @@ def rebuild_session(
     """Rebuild one session's projections; reducer errors are reported after committing partial output."""
     from uuid import UUID
 
-    from zerg import database as database_module
+    from zerg.database import get_session_factory
     from zerg.database import initialize_database
     from zerg.database import make_engine
     from zerg.database import make_sessionmaker
@@ -674,7 +682,7 @@ def rebuild_session(
         session_factory = make_sessionmaker(engine)
     else:
         initialize_database()
-        session_factory = database_module.default_session_factory
+        session_factory = get_session_factory()
     if session_factory is None:
         raise typer.Exit(code=2)
 

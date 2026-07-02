@@ -544,6 +544,11 @@ def get_write_engine() -> Engine | None:
     return _write_engine
 
 
+def get_default_engine() -> Engine | None:
+    """Return the configured archive/read engine, if database runtime exists."""
+    return default_engine
+
+
 def get_live_engine() -> Engine | None:
     """Return the optional Live Store read engine."""
     return live_engine

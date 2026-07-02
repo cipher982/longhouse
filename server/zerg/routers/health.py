@@ -181,13 +181,16 @@ def health_db(request: Request):
     the verified table list) is operator-only; untrusted callers get a bare
     status so this isn't a public schema-disclosure surface.
     """
-    from zerg.database import default_engine
+    from zerg.database import get_default_engine
 
     trusted = _request_is_trusted(request)
     required_tables = ["users", "fiches", "threads", "runs", "commis_tasks", "sessions", "events", "events_fts"]
 
     try:
-        with default_engine.connect() as conn:
+        archive_engine = get_default_engine()
+        if archive_engine is None:
+            raise RuntimeError("database engine not initialized")
+        with archive_engine.connect() as conn:
             for table in required_tables:
                 result = conn.execute(text(f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"))
                 if not result.fetchone():
@@ -227,7 +230,7 @@ def readyz_check():
 
     _settings = get_settings()
 
-    from zerg.database import default_engine
+    from zerg.database import get_default_engine
 
     single_tenant_violation = getattr(_health_app_ref, "single_tenant_violation", None)
     if single_tenant_violation:
@@ -236,13 +239,14 @@ def readyz_check():
             content={"status": "unhealthy", "reason": single_tenant_violation},
         )
 
-    if default_engine is None:
+    archive_engine = get_default_engine()
+    if archive_engine is None:
         return JSONResponse(
             status_code=503,
             content={"status": "unhealthy", "reason": "database engine not initialized"},
         )
 
-    db_url = str(default_engine.url)
+    db_url = str(archive_engine.url)
     if db_url.startswith("sqlite"):
         db_path = db_url.replace("sqlite:///", "").replace("sqlite://", "")
         if not db_path or db_path == ":memory:":
@@ -266,7 +270,7 @@ def readyz_check():
             )
     else:
         try:
-            with default_engine.connect() as conn:
+            with archive_engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
         except Exception:
             return JSONResponse(
@@ -389,9 +393,12 @@ def health_check(request: Request):
 
     # 2. Database connectivity
     try:
-        from zerg.database import default_engine
+        from zerg.database import get_default_engine
 
-        with default_engine.connect() as conn:
+        archive_engine = get_default_engine()
+        if archive_engine is None:
+            raise RuntimeError("database engine not initialized")
+        with archive_engine.connect() as conn:
             result = conn.execute(text("SELECT 1"))
             row = result.fetchone()
             db_check = {
@@ -401,9 +408,9 @@ def health_check(request: Request):
             # The DB URL exposes the on-disk path / host; operator-only.
             if trusted:
                 db_check["url"] = (
-                    str(default_engine.url).replace(default_engine.url.password or "", "***")
-                    if default_engine.url.password
-                    else str(default_engine.url)
+                    str(archive_engine.url).replace(archive_engine.url.password or "", "***")
+                    if archive_engine.url.password
+                    else str(archive_engine.url)
                 )
             checks["database"] = db_check
     except Exception as e:
@@ -449,10 +456,11 @@ def health_check(request: Request):
 
     # 3. SQLite FTS5 readiness
     try:
-        from zerg.database import default_engine
+        from zerg.database import get_default_engine
 
-        if default_engine is not None and default_engine.dialect.name == "sqlite":
-            with default_engine.connect() as conn:
+        archive_engine = get_default_engine()
+        if archive_engine is not None and archive_engine.dialect.name == "sqlite":
+            with archive_engine.connect() as conn:
                 fts_row = conn.execute(text(EVENTS_FTS_EXISTS_SQL)).fetchone()
                 if not fts_row:
                     raise RuntimeError("events_fts table is missing (FTS5 required).")

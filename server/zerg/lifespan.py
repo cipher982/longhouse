@@ -14,6 +14,7 @@ from fastapi import FastAPI
 
 from zerg.config import get_settings
 from zerg.database import configure_database
+from zerg.database import get_default_engine
 from zerg.database import initialize_database
 from zerg.database import initialize_live_database
 from zerg.database import live_store_configured
@@ -162,9 +163,8 @@ async def lifespan(app: FastAPI):
             configure_live_write_serializer()
 
         try:
-            from zerg.database import default_engine
-
-            if not _settings.testing and default_engine is not None and default_engine.dialect.name == "sqlite":
+            archive_engine = get_default_engine()
+            if not _settings.testing and archive_engine is not None and archive_engine.dialect.name == "sqlite":
                 logger.info(
                     "SQLite mode: single-writer serializer active. "
                     "See VISION.md (Architecture Constraints / SQLite-only core) for details."
@@ -180,13 +180,14 @@ async def lifespan(app: FastAPI):
         if not _settings.testing and _session_input_queue_recovery_enabled():
             try:
                 with _timed_startup_step("session_input_reconciliation"):
-                    from zerg.database import default_engine
                     from zerg.services.session_input_queue import recover_session_input_queues
+
+                    archive_engine = get_default_engine()
 
                     async def _boot_recover_session_inputs() -> None:
                         try:
                             result = await recover_session_input_queues(
-                                db_bind=default_engine,
+                                db_bind=archive_engine,
                                 reason="startup_reconciliation",
                             )
                             if result.session_ids:
@@ -203,7 +204,8 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.warning(f"SessionInput reconciliation failed (non-fatal): {exc}")
         try:
-            url = default_engine.url
+            archive_engine = get_default_engine()
+            url = archive_engine.url
             masked = str(url).replace(url.password or "", "***") if url.password else str(url)
             logger.info("Database bound to: %s", masked)
         except Exception:
@@ -213,10 +215,9 @@ async def lifespan(app: FastAPI):
             try:
                 from sqlalchemy import text
 
-                from zerg.database import default_engine
-
-                if default_engine is not None and default_engine.dialect.name == "sqlite":
-                    with default_engine.connect() as conn:
+                archive_engine = get_default_engine()
+                if archive_engine is not None and archive_engine.dialect.name == "sqlite":
+                    with archive_engine.connect() as conn:
                         fts_row = conn.execute(
                             text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")
                         ).fetchone()
@@ -316,10 +317,9 @@ async def lifespan(app: FastAPI):
             # until its DB writes use the hosted SQLite write serializer.
             if _session_input_queue_recovery_enabled():
                 try:
-                    from zerg.database import default_engine as _default_engine_input_queue
                     from zerg.services.session_input_queue import run_session_input_queue_recovery_loop
 
-                    asyncio.create_task(run_session_input_queue_recovery_loop(db_bind=_default_engine_input_queue))
+                    asyncio.create_task(run_session_input_queue_recovery_loop(db_bind=get_default_engine()))
                     started.append("session_input_queue_recovery")
                 except Exception as e:  # noqa: BLE001
                     failed.append(f"session_input_queue_recovery ({e})")
@@ -434,10 +434,9 @@ async def lifespan(app: FastAPI):
                                 try:
                                     from sqlalchemy import text as _sa_text
 
-                                    from zerg.database import default_engine as _def_eng
-
-                                    if _def_eng is not None:
-                                        with _def_eng.connect() as _conn:
+                                    archive_engine = get_default_engine()
+                                    if archive_engine is not None:
+                                        with archive_engine.connect() as _conn:
                                             row = _conn.execute(
                                                 _sa_text(
                                                     "SELECT 1 FROM session_observations "
