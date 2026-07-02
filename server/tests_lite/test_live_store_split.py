@@ -27,9 +27,13 @@ from zerg.database import make_live_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveRuntimeState
+from zerg.services.live_archive_outbox import HEARTBEAT_STAMP_KIND
+from zerg.services.live_archive_outbox import drain_live_archive_outbox
+from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import upsert_live_control_leases
@@ -77,6 +81,193 @@ def test_archive_and_live_runtime_state_columns_stay_in_sync():
     live_columns = {column.name for column in LiveRuntimeState.__table__.columns}
 
     assert live_columns == archive_columns
+
+
+def test_live_archive_outbox_drains_heartbeat_to_archive_idempotently(tmp_path):
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    heartbeat = {
+        "device_id": "live-drain",
+        "received_at": now,
+        "version": "0.5.0",
+        "last_ship_at": None,
+        "last_ship_attempt_at": now,
+        "last_ship_result": "ok",
+        "last_ship_latency_ms": 123,
+        "last_ship_http_status": 204,
+        "spool_pending": 2,
+        "spool_dead": 0,
+        "parse_errors_1h": 0,
+        "consecutive_failures": 0,
+        "ship_attempts_1h": 3,
+        "ship_successes_1h": 3,
+        "ship_rate_limited_1h": 0,
+        "ship_server_errors_1h": 0,
+        "ship_payload_rejections_1h": 0,
+        "ship_payload_too_large_1h": 0,
+        "ship_retryable_client_errors_1h": 0,
+        "ship_connect_errors_1h": 0,
+        "ship_latency_p50_ms_1h": 100,
+        "ship_latency_p95_ms_1h": 200,
+        "disk_free_bytes": 123_456,
+        "is_offline": 0,
+        "raw_json": "{\"ok\":true}",
+        "sessions_digest": "digest-live-drain",
+        "sessions_sequence": 9,
+    }
+
+    try:
+        with LiveSession() as live_db:
+            assert enqueue_heartbeat_stamp_outbox(live_db, heartbeat) is True
+            assert enqueue_heartbeat_stamp_outbox(live_db, heartbeat) is False
+            live_db.commit()
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            result = drain_live_archive_outbox(live_db, archive_db, limit=10, now=now + timedelta(seconds=1))
+
+        assert result.processed == 1
+        assert result.drained == 1
+        assert result.failed == 0
+
+        with ArchiveSession() as archive_db:
+            rows = archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "live-drain").all()
+            assert len(rows) == 1
+            assert rows[0].version == "0.5.0"
+            assert rows[0].spool_pending == 2
+            assert rows[0].disk_free_bytes == 123_456
+            assert rows[0].raw_json == "{\"ok\":true}"
+            assert rows[0].sessions_digest == "digest-live-drain"
+
+        with LiveSession() as live_db:
+            row = live_db.query(LiveArchiveOutbox).one()
+            assert row.kind == HEARTBEAT_STAMP_KIND
+            assert row.drained_at is not None
+            assert row.last_error is None
+            assert row.attempts == 1
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+
+        assert result.processed == 0
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "live-drain").count() == 1
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_live_archive_outbox_retries_after_live_mark_drained_commit_failure(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    heartbeat = {
+        "device_id": "live-drain-retry",
+        "received_at": now,
+        "version": "0.5.0",
+        "spool_pending": 1,
+        "spool_dead": 0,
+        "parse_errors_1h": 0,
+        "consecutive_failures": 0,
+        "ship_attempts_1h": 1,
+        "ship_successes_1h": 1,
+        "ship_rate_limited_1h": 0,
+        "ship_server_errors_1h": 0,
+        "ship_payload_rejections_1h": 0,
+        "ship_payload_too_large_1h": 0,
+        "ship_retryable_client_errors_1h": 0,
+        "ship_connect_errors_1h": 0,
+        "disk_free_bytes": 1,
+        "is_offline": 0,
+        "raw_json": "{}",
+    }
+
+    try:
+        with LiveSession() as live_db:
+            enqueue_heartbeat_stamp_outbox(live_db, heartbeat)
+            live_db.commit()
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            real_commit = live_db.commit
+
+            def fail_mark_drained_commit_once():
+                raise RuntimeError("live commit failed")
+
+            monkeypatch.setattr(live_db, "commit", fail_mark_drained_commit_once)
+            result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+            monkeypatch.setattr(live_db, "commit", real_commit)
+
+        assert result.processed == 1
+        assert result.drained == 0
+        assert result.failed == 1
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "live-drain-retry").count() == 1
+        with LiveSession() as live_db:
+            row = live_db.query(LiveArchiveOutbox).one()
+            assert row.drained_at is None
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+
+        assert result.processed == 1
+        assert result.drained == 1
+        assert result.failed == 0
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "live-drain-retry").count() == 1
+        with LiveSession() as live_db:
+            row = live_db.query(LiveArchiveOutbox).one()
+            assert row.drained_at is not None
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_live_archive_outbox_failure_stays_retryable(tmp_path):
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    try:
+        with LiveSession() as live_db:
+            live_db.add(
+                LiveArchiveOutbox(
+                    idempotency_key="unsupported:1",
+                    kind="unsupported.v1",
+                    payload_json="{}",
+                )
+            )
+            live_db.commit()
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+
+        assert result.processed == 1
+        assert result.drained == 0
+        assert result.failed == 1
+        with LiveSession() as live_db:
+            row = live_db.query(LiveArchiveOutbox).one()
+            assert row.drained_at is None
+            assert row.attempts == 1
+            assert "Unsupported live archive outbox kind" in (row.last_error or "")
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
 
 
 def test_live_runtime_state_feeds_existing_runtime_overlay(tmp_path, monkeypatch):
@@ -446,6 +637,9 @@ async def test_heartbeat_live_stamp_returns_while_archive_bookkeeping_waits(tmp_
             assert control.provider == "codex"
             assert control.state == "attached"
             assert control.sequence == 7
+            outbox = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == HEARTBEAT_STAMP_KIND).one()
+            assert outbox.drained_at is None
+            assert "live-split" in outbox.idempotency_key
 
         with ArchiveSession() as archive_db:
             assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "live-split").count() == 0

@@ -47,6 +47,7 @@ from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import mark_missing_managed_control_leases
 from zerg.services.managed_control_state import refresh_managed_control_lease_health
@@ -918,6 +919,7 @@ async def ingest_heartbeat(
                 ).delete()
                 hb = LiveHeartbeatStamp(**heartbeat_stamp_kwargs)
                 write_db.add(hb)
+                enqueue_heartbeat_stamp_outbox(write_db, heartbeat_stamp_kwargs)
                 if _managed_leases:
                     upsert_live_control_leases(
                         write_db,

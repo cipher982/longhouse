@@ -91,13 +91,15 @@ class LiveArchiveOutbox(LiveBase):
     __tablename__ = "live_archive_outbox"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    idempotency_key = Column(String(255), nullable=False, unique=True)
+    idempotency_key = Column(String(512), nullable=False, unique=True)
     kind = Column(String(64), nullable=False, index=True)
     payload_json = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
     drained_at = Column(DateTime(timezone=True), nullable=True, index=True)
     attempts = Column(Integer, nullable=False, server_default="0")
     last_error = Column(Text, nullable=True)
+
+    __table_args__ = (Index("ix_live_archive_outbox_drain", "drained_at", "created_at"),)
 
 
 class LiveHeartbeatStamp(LiveBase):

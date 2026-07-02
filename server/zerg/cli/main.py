@@ -325,6 +325,69 @@ def db_sample_table_bytes(
         raise typer.Exit(code=1)
 
 
+@db_app.command(name="drain-live-archive-outbox")
+def db_drain_live_archive_outbox(
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="SQLite archive DATABASE_URL override (defaults to env).",
+    ),
+    live_database_url: str | None = typer.Option(
+        None,
+        "--live-database-url",
+        help="Live Store SQLite URL override (defaults to LONGHOUSE_LIVE_* env).",
+    ),
+    limit: int = typer.Option(100, "--limit", min=1, help="Maximum undrained outbox rows to process."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Drain Live Store outbox rows into the archive SQLite database."""
+
+    from zerg.database import make_live_engine
+    from zerg.database import make_sessionmaker
+    from zerg.services.live_archive_outbox import drain_live_archive_outbox
+
+    archive_engine, resolved_database_url = _resolve_db_engine(database_url)
+    if live_database_url is None:
+        from zerg.config import get_settings_unchecked
+
+        live_database_url = get_settings_unchecked().live_database_url
+    if not live_database_url:
+        payload = {
+            "status": "disabled",
+            "database_url": resolved_database_url,
+            "live_database_url": None,
+            "processed": 0,
+            "drained": 0,
+            "failed": 0,
+        }
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+            return
+        typer.echo("Live Store is not configured.", err=True)
+        raise typer.Exit(code=2)
+
+    live_engine = make_live_engine(live_database_url)
+    ArchiveSession = make_sessionmaker(archive_engine)
+    LiveSession = make_sessionmaker(live_engine)
+    with LiveSession() as live_db, ArchiveSession() as archive_db:
+        result = drain_live_archive_outbox(live_db, archive_db, limit=limit)
+
+    payload = {
+        "status": "ok" if result.failed == 0 else "partial",
+        "database_url": resolved_database_url,
+        "live_database_url": live_database_url,
+        **result.as_dict(),
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    typer.echo(
+        "Live archive outbox drain " f"{payload['status']} processed={result.processed} drained={result.drained} failed={result.failed}"
+    )
+    if result.failed:
+        raise typer.Exit(code=1)
+
+
 @db_app.command(name="optimize")
 def db_optimize(
     database_url: str | None = typer.Option(
