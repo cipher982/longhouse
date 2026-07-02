@@ -415,19 +415,61 @@ def health_check(request: Request):
     # compatibility mode; configured-but-risky paths are warnings until hot
     # routes actually depend on the live store.
     try:
+        from zerg.database import get_live_session_factory
+        from zerg.database import live_store_configured
         from zerg.services.db_diagnostics import collect_sqlite_store_stats
 
-        live_store = collect_sqlite_store_stats(
-            _settings.live_database_url,
-            archive_database_url=_settings.database_url,
-        )
+        live_db = None
+        if live_store_configured():
+            live_session_factory = get_live_session_factory()
+            if live_session_factory is not None:
+                live_db = live_session_factory()
+        try:
+            live_store = collect_sqlite_store_stats(
+                _settings.live_database_url,
+                archive_database_url=_settings.database_url,
+                db=live_db,
+            )
+        finally:
+            if live_db is not None:
+                live_db.close()
+
         live_status = live_store.get("status")
         live_warnings = live_store.get("warnings") or []
+        live_db_was_derived = not os.getenv("LONGHOUSE_LIVE_DATABASE_URL") and not os.getenv("LONGHOUSE_LIVE_DB_PATH")
+        if live_db_was_derived and "same_directory_as_archive_db" in live_warnings:
+            live_warnings = [w for w in live_warnings if w != "same_directory_as_archive_db"]
+        outbox = live_store.get("live_archive_outbox") or {}
+        outbox_warn = False
+        outbox_reason = None
+        if outbox.get("checked") and outbox.get("table_exists"):
+            failed_count = outbox.get("failed_count") or 0
+            oldest_pending = outbox.get("oldest_pending_created_at")
+            if failed_count > 0:
+                outbox_warn = True
+                outbox_reason = "live_archive_outbox_failures"
+            elif oldest_pending is not None:
+                try:
+                    from datetime import datetime as _dt
+                    from datetime import timedelta as _td
+                    from datetime import timezone as _tz
+
+                    oldest = _dt.fromisoformat(oldest_pending)
+                    if oldest.tzinfo is None:
+                        oldest = oldest.replace(tzinfo=_tz.utc)
+                    if (_dt.now(_tz.utc) - oldest) > _td(minutes=10):
+                        outbox_warn = True
+                        outbox_reason = "live_archive_outbox_lagging"
+                except (ValueError, TypeError):
+                    pass
+        live_is_warn = live_status == "unsupported" or live_warnings or outbox_warn
         checks["live_store"] = {
             **live_store,
-            "status": "warn" if live_status == "unsupported" or live_warnings else "pass",
+            "status": "warn" if live_is_warn else "pass",
             "store_status": live_status,
         }
+        if outbox_warn and outbox_reason:
+            checks["live_store"]["outbox_warn_reason"] = outbox_reason
     except Exception as e:
         checks["live_store"] = {"status": "warn", "error": str(e)}
 
