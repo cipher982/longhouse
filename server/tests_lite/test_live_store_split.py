@@ -42,6 +42,7 @@ from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
 from zerg.services.live_archive_outbox import drain_live_archive_outbox
 from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
+from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.live_session_state import mark_missing_live_sessions
 from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
 from zerg.services.live_launch_readiness import get_live_launch_readiness_by_client_request
@@ -55,6 +56,7 @@ from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import upsert_live_control_leases
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_live_runtime_events
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_runtime import runtime_key_for_session
@@ -1318,3 +1320,151 @@ async def test_heartbeat_live_store_requires_configured_live_serializer(tmp_path
 
     assert exc.value.status_code == 503
     assert "Live Store write serializer is not configured" in str(exc.value.detail)
+
+
+def test_runtime_events_touch_live_session_candidates(tmp_path):
+    """Runtime signals must feed the active-session candidate index.
+
+    Unmanaged/Shadow sessions never hold a managed lease; without this,
+    configuring the Live Store silently drops them from the active list.
+    """
+    now = datetime.now(timezone.utc)
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    session_id = uuid4()
+
+    event = RuntimeEventIngest(
+        runtime_key=runtime_key_for_session("claude", str(session_id)),
+        session_id=session_id,
+        provider="claude",
+        device_id="cinder",
+        source="e2e",
+        kind="phase_signal",
+        phase="running",
+        tool_name="bash",
+        occurred_at=now,
+        freshness_ms=600_000,
+        dedupe_key="touch-live-1",
+        payload={},
+    )
+
+    try:
+        with LiveSession() as live_db:
+            ingest_live_runtime_events(live_db, [event])
+            live_db.commit()
+
+        with LiveSession() as live_db:
+            row = live_db.get(LiveSessionRow, str(session_id))
+            assert row is not None
+            assert row.state == "observed"
+            assert row.provider == "claude"
+            assert row.device_id == "cinder"
+
+            active_ids = list_active_live_session_ids(live_db, limit=10, days_back=7, now=now)
+            assert session_id in active_ids
+
+        # Terminal signals keep the session in the candidate set — a
+        # completed run is not a gone session.
+        terminal = RuntimeEventIngest(
+            runtime_key=runtime_key_for_session("claude", str(session_id)),
+            session_id=session_id,
+            provider="claude",
+            device_id="cinder",
+            source="e2e",
+            kind="terminal_signal",
+            phase="completed",
+            occurred_at=now + timedelta(seconds=5),
+            dedupe_key="touch-live-2",
+            payload={},
+        )
+        with LiveSession() as live_db:
+            ingest_live_runtime_events(live_db, [terminal])
+            live_db.commit()
+
+        with LiveSession() as live_db:
+            active_ids = list_active_live_session_ids(live_db, limit=10, days_back=7, now=now)
+            assert session_id in active_ids
+    finally:
+        live_engine.dispose()
+
+
+def test_live_running_phase_beats_archive_progress_idle_written_same_instant(tmp_path):
+    """Cross-lane merge must compare signal clocks, not write clocks.
+
+    Transcript ingest stamps archive rows (progress-derived idle) at write
+    time; a fresher live phase_signal written in the same instant must still
+    win the merged runtime view.
+    """
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    monkeypatch_target = database_module
+    original_configured = monkeypatch_target.live_store_configured
+    original_factory = monkeypatch_target.get_live_session_factory
+    monkeypatch_target.live_store_configured = lambda: True
+    monkeypatch_target.get_live_session_factory = lambda: LiveSession
+
+    session_id = uuid4()
+    runtime_key = runtime_key_for_session("claude", str(session_id))
+    try:
+        # Archive lane: transcript-ingest progress signal anchored at an old
+        # message timestamp (occurred 60s ago, written now).
+        with ArchiveSession() as archive_db:
+            ingest_runtime_events(
+                archive_db,
+                [
+                    RuntimeEventIngest(
+                        runtime_key=runtime_key,
+                        session_id=session_id,
+                        provider="claude",
+                        device_id="cinder",
+                        source="agents_ingest",
+                        kind="progress_signal",
+                        occurred_at=now - timedelta(seconds=60),
+                        dedupe_key="merge-progress-1",
+                        payload={"progress_kind": "transcript_append"},
+                    )
+                ],
+            )
+            archive_db.commit()
+
+        # Live lane: fresh running phase_signal (occurred 5s ago).
+        with LiveSession() as live_db:
+            ingest_live_runtime_events(
+                live_db,
+                [
+                    RuntimeEventIngest(
+                        runtime_key=runtime_key,
+                        session_id=session_id,
+                        provider="claude",
+                        device_id="cinder",
+                        source="e2e",
+                        kind="phase_signal",
+                        phase="running",
+                        tool_name="bash",
+                        occurred_at=now - timedelta(seconds=5),
+                        freshness_ms=600_000,
+                        dedupe_key="merge-running-1",
+                        payload={},
+                    )
+                ],
+            )
+            live_db.commit()
+
+        with ArchiveSession() as archive_db:
+            merged = load_runtime_state_map(archive_db, [session_id])
+            state = merged[str(session_id)]
+            assert isinstance(state, LiveRuntimeState)
+            assert state.phase == "running"
+    finally:
+        monkeypatch_target.live_store_configured = original_configured
+        monkeypatch_target.get_live_session_factory = original_factory
+        archive_engine.dispose()
+        live_engine.dispose()

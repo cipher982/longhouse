@@ -494,8 +494,25 @@ def current_presence_state_for_session(
 
 
 def _runtime_state_newer_than(candidate: Any, existing: Any | None) -> bool:
+    """Pick the runtime row whose latest signal OCCURRED most recently.
+
+    The live and archive lanes run independent reducers, so `updated_at` is
+    write-clock, not signal-clock: transcript ingest can stamp an archive row
+    (progress-derived idle) in the same instant a fresher live phase_signal
+    lands, and a write-clock comparison would let the stale phase win. Compare
+    last_runtime_signal_at first; fall back to write clock only when neither
+    row has an applied signal.
+    """
     if existing is None:
         return True
+    candidate_signal_at = normalize_utc(getattr(candidate, "last_runtime_signal_at", None))
+    existing_signal_at = normalize_utc(getattr(existing, "last_runtime_signal_at", None))
+    if candidate_signal_at != existing_signal_at:
+        if candidate_signal_at is None:
+            return False
+        if existing_signal_at is None:
+            return True
+        return candidate_signal_at > existing_signal_at
     candidate_updated_at = normalize_utc(getattr(candidate, "updated_at", None))
     existing_updated_at = normalize_utc(getattr(existing, "updated_at", None))
     if candidate_updated_at != existing_updated_at:
@@ -723,6 +740,8 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
     catches up.
     """
 
+    from zerg.services.live_session_state import touch_live_sessions_from_runtime_events
+
     updated_runtime_keys: list[str] = []
     for event in events:
         outcome = _apply_runtime_event(
@@ -734,6 +753,11 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
         _record_managed_codex_runtime_observation(event, f"live_{outcome}")
         if outcome == "applied" and event.runtime_key not in updated_runtime_keys:
             updated_runtime_keys.append(event.runtime_key)
+
+    # Runtime signals are liveness evidence for the active-session candidate
+    # index; without this, unmanaged/Shadow sessions that never hold a managed
+    # lease vanish from the active list when the Live Store is configured.
+    touch_live_sessions_from_runtime_events(db, events)
 
     return RuntimeEventBatchResult(
         accepted=len(events),

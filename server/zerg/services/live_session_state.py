@@ -72,6 +72,51 @@ def upsert_live_sessions_from_managed_leases(
     return touched
 
 
+def touch_live_sessions_from_runtime_events(
+    db: Session,
+    events: list[Any],
+    *,
+    received_at: datetime | None = None,
+) -> set[UUID]:
+    """Project runtime signals into the Live Store session index.
+
+    Runtime events are liveness evidence for unmanaged/Shadow sessions that
+    never acquire a managed lease. Terminal signals still touch last_seen_at
+    but never mark the session ended — a completed run is not a gone session;
+    lifecycle close stays with leases and archive truth.
+    """
+
+    touched: set[UUID] = set()
+    seen_at = normalize_utc(received_at) or _utc_now()
+    for event in events:
+        session_id = _session_uuid(getattr(event, "session_id", None))
+        if session_id is None:
+            continue
+        occurred_at = normalize_utc(getattr(event, "occurred_at", None)) or seen_at
+        provider = _normalized(getattr(event, "provider", None)).lower() or "unknown"
+        device_id = _normalized(getattr(event, "device_id", None)) or None
+        row = db.get(LiveSession, str(session_id))
+        if row is None:
+            row = LiveSession(
+                session_id=str(session_id),
+                provider=provider,
+                device_id=device_id,
+                state="observed",
+                started_at=occurred_at,
+            )
+            db.add(row)
+        elif row.state in ("missing", "ended", "unknown"):
+            row.state = "observed"
+        if device_id is not None and not row.device_id:
+            row.device_id = device_id
+        last_seen = normalize_utc(row.last_seen_at)
+        if last_seen is None or occurred_at > last_seen:
+            row.last_seen_at = occurred_at
+        row.updated_at = seen_at
+        touched.add(session_id)
+    return touched
+
+
 def list_active_live_session_ids(
     db: Session,
     *,
