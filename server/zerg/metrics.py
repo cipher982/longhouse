@@ -350,6 +350,74 @@ try:
         "Current SQLite WAL file size in bytes",
     )
 
+    live_write_serializer_queue_depth = Gauge(
+        "longhouse_live_write_serializer_queue_depth",
+        "Live Store WriteSerializer pending queue depth at scrape time",
+    )
+
+    live_write_serializer_writer_active = Gauge(
+        "longhouse_live_write_serializer_writer_active",
+        "Whether the Live Store WriteSerializer writer currently holds the slot (1/0)",
+    )
+
+    live_write_serializer_active_age_ms = Gauge(
+        "longhouse_live_write_serializer_active_age_ms",
+        "Age of the currently active Live Store WriteSerializer write in milliseconds",
+    )
+
+    live_write_serializer_idle_queue_stalled = Gauge(
+        "longhouse_live_write_serializer_idle_queue_stalled",
+        "Whether the Live Store WriteSerializer queue is nonempty but no writer is active (1/0)",
+    )
+
+    live_write_serializer_queue_wait_ms = Gauge(
+        "longhouse_live_write_serializer_queue_wait_ms",
+        "Rolling Live Store WriteSerializer queue-wait latency per label and quantile (ms)",
+        labelnames=("label", "quantile"),
+    )
+
+    live_write_serializer_exec_ms = Gauge(
+        "longhouse_live_write_serializer_exec_ms",
+        "Rolling Live Store WriteSerializer exec latency per label and quantile (ms)",
+        labelnames=("label", "quantile"),
+    )
+
+    live_sqlite_wal_bytes = Gauge(
+        "longhouse_live_sqlite_wal_bytes",
+        "Current Live Store SQLite WAL file size in bytes",
+    )
+
+    live_archive_outbox_pending = Gauge(
+        "longhouse_live_archive_outbox_pending",
+        "Live Store archive outbox rows not yet drained",
+    )
+
+    live_archive_outbox_failed = Gauge(
+        "longhouse_live_archive_outbox_failed",
+        "Live Store archive outbox pending rows with a recorded drain error",
+    )
+
+    live_archive_outbox_oldest_pending_age_seconds = Gauge(
+        "longhouse_live_archive_outbox_oldest_pending_age_seconds",
+        "Age of the oldest pending Live Store archive outbox row in seconds",
+    )
+
+    live_archive_outbox_last_drained_age_seconds = Gauge(
+        "longhouse_live_archive_outbox_last_drained_age_seconds",
+        "Age of the most recently drained Live Store archive outbox row in seconds",
+    )
+
+    live_archive_outbox_max_attempts = Gauge(
+        "longhouse_live_archive_outbox_max_attempts",
+        "Maximum drain attempt count across retained Live Store archive outbox rows",
+    )
+
+    live_store_table_bytes = Gauge(
+        "longhouse_live_store_table_bytes",
+        "Approximate Live Store SQLite bytes by table from dbstat",
+        labelnames=("table",),
+    )
+
     # Per-device shipping state from the latest heartbeat per device. Device
     # cardinality is low (a handful of user-owned machines). Age/offline are
     # derived in PromQL from the last-heartbeat timestamp to avoid emitting
@@ -507,6 +575,19 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     write_serializer_queue_wait_ms = _NoopGauge()  # type: ignore[assignment]
     write_serializer_exec_ms = _NoopGauge()  # type: ignore[assignment]
     sqlite_wal_bytes = _NoopGauge()  # type: ignore[assignment]
+    live_write_serializer_queue_depth = _NoopGauge()  # type: ignore[assignment]
+    live_write_serializer_writer_active = _NoopGauge()  # type: ignore[assignment]
+    live_write_serializer_active_age_ms = _NoopGauge()  # type: ignore[assignment]
+    live_write_serializer_idle_queue_stalled = _NoopGauge()  # type: ignore[assignment]
+    live_write_serializer_queue_wait_ms = _NoopGauge()  # type: ignore[assignment]
+    live_write_serializer_exec_ms = _NoopGauge()  # type: ignore[assignment]
+    live_sqlite_wal_bytes = _NoopGauge()  # type: ignore[assignment]
+    live_archive_outbox_pending = _NoopGauge()  # type: ignore[assignment]
+    live_archive_outbox_failed = _NoopGauge()  # type: ignore[assignment]
+    live_archive_outbox_oldest_pending_age_seconds = _NoopGauge()  # type: ignore[assignment]
+    live_archive_outbox_last_drained_age_seconds = _NoopGauge()  # type: ignore[assignment]
+    live_archive_outbox_max_attempts = _NoopGauge()  # type: ignore[assignment]
+    live_store_table_bytes = _NoopGauge()  # type: ignore[assignment]
     device_last_heartbeat_timestamp_seconds = _NoopGauge()  # type: ignore[assignment]
     device_ship_latency_ms = _NoopGauge()  # type: ignore[assignment]
     device_spool_pending = _NoopGauge()  # type: ignore[assignment]
