@@ -2,19 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.live_store import LiveArchiveOutbox
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.utils.time import normalize_utc
 
 HEARTBEAT_STAMP_KIND = "heartbeat_stamp.v1"
+RUNTIME_EVENT_KIND = "runtime_event.v1"
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,48 @@ def enqueue_heartbeat_stamp_outbox(
         )
     )
     return True
+
+
+def runtime_event_idempotency_key(event: RuntimeEventIngest) -> str:
+    occurred_at = normalize_utc(event.occurred_at) or event.occurred_at
+    raw_key = f"{RUNTIME_EVENT_KIND}:{event.source}:{event.dedupe_key}:" f"{event.runtime_key}:{event.kind}:{occurred_at.isoformat()}"
+    if len(raw_key) <= 512:
+        return raw_key
+    digest = hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    return f"{RUNTIME_EVENT_KIND}:sha256:{digest}"
+
+
+def enqueue_runtime_event_outbox(
+    db: Session,
+    event: RuntimeEventIngest,
+    *,
+    idempotency_key: str | None = None,
+) -> bool:
+    """Queue a runtime event for archive durability in the live transaction."""
+
+    key = idempotency_key or runtime_event_idempotency_key(event)
+    existing = db.query(LiveArchiveOutbox.id).filter(LiveArchiveOutbox.idempotency_key == key).first()
+    if existing is not None:
+        return False
+    db.add(
+        LiveArchiveOutbox(
+            idempotency_key=key,
+            kind=RUNTIME_EVENT_KIND,
+            payload_json=json.dumps(
+                {"event": _jsonable(event.model_dump())},
+                sort_keys=True,
+            ),
+        )
+    )
+    return True
+
+
+def enqueue_runtime_events_outbox(db: Session, events: list[RuntimeEventIngest]) -> int:
+    queued = 0
+    for event in events:
+        if enqueue_runtime_event_outbox(db, event):
+            queued += 1
+    return queued
 
 
 def drain_live_archive_outbox(
@@ -126,6 +173,9 @@ def _drain_row(row: LiveArchiveOutbox, archive_db: Session) -> None:
     if row.kind == HEARTBEAT_STAMP_KIND:
         _drain_heartbeat_stamp(row, archive_db)
         return
+    if row.kind == RUNTIME_EVENT_KIND:
+        _drain_runtime_event(row, archive_db)
+        return
     raise ValueError(f"Unsupported live archive outbox kind: {row.kind}")
 
 
@@ -151,10 +201,19 @@ def _drain_heartbeat_stamp(row: LiveArchiveOutbox, archive_db: Session) -> None:
     archive_db.add(AgentHeartbeat(**archive_payload))
 
 
+def _drain_runtime_event(row: LiveArchiveOutbox, archive_db: Session) -> None:
+    payload = json.loads(row.payload_json or "{}")
+    event_payload = _restore_jsonable(payload.get("event") or {})
+    event = RuntimeEventIngest.model_validate(event_payload)
+    ingest_runtime_events(archive_db, [event])
+
+
 def _jsonable(value: Any) -> Any:
     if isinstance(value, datetime):
         normalized = normalize_utc(value) or value
         return {"__longhouse_datetime__": normalized.isoformat()}
+    if isinstance(value, UUID):
+        return str(value)
     if isinstance(value, dict):
         return {str(key): _jsonable(item) for key, item in value.items()}
     if isinstance(value, list):

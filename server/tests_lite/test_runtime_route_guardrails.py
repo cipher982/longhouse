@@ -24,7 +24,9 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveRuntimeState
+from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 
 
@@ -95,7 +97,7 @@ def test_runtime_batch_releases_request_db_before_serialized_write(tmp_path, mon
     assert observations == {"before_close": 1, "after_close": 0}
 
 
-def test_runtime_batch_uses_live_store_before_archive_observations(tmp_path, monkeypatch):
+def test_runtime_batch_uses_live_store_and_outbox_without_archive_observations(tmp_path, monkeypatch):
     import zerg.routers.runtime as runtime_router
 
     async def run_test():
@@ -106,9 +108,6 @@ def test_runtime_batch_uses_live_store_before_archive_observations(tmp_path, mon
         live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
         initialize_live_database(live_engine)
         LiveSession = sessionmaker(bind=live_engine)
-
-        archive_started = asyncio.Event()
-        release_archive = asyncio.Event()
 
         class LiveSerializer:
             is_configured = True
@@ -123,17 +122,14 @@ def test_runtime_batch_uses_live_store_before_archive_observations(tmp_path, mon
         class ArchiveSerializer:
             is_configured = True
 
-            async def execute(self, fn, **kwargs):
-                assert kwargs["label"] == "runtime-observations-archive"
-                archive_started.set()
-                await release_archive.wait()
-                with ArchiveSession() as archive_db:
-                    result = fn(archive_db)
-                    archive_db.commit()
-                    return result
+            async def execute(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+                raise AssertionError("live-configured runtime ingest must not archive observations inline")
 
             async def execute_after_closing_request_session(self, *_args, **_kwargs):  # pragma: no cover - regression guard
                 raise AssertionError("live-configured runtime ingest must not wait on archive serializer")
+
+            async def execute_or_direct(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+                raise AssertionError("live transcript runtime ingest should not need archive followups")
 
         monkeypatch.setattr(runtime_router, "live_store_configured", lambda: True)
         monkeypatch.setattr(runtime_router, "get_live_write_serializer", lambda: LiveSerializer())
@@ -171,21 +167,98 @@ def test_runtime_batch_uses_live_store_before_archive_observations(tmp_path, mon
             )
             assert result.accepted == 1
             assert result.updated_runtime_keys == ["codex:runtime-live-route"]
-            await asyncio.wait_for(archive_started.wait(), timeout=0.5)
 
             with LiveSession() as live_db:
                 live_state = live_db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == "codex:runtime-live-route").one()
                 assert live_state.phase == "running"
                 assert live_state.active_tool == "Shell"
+                outbox = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == RUNTIME_EVENT_KIND).one()
+                assert outbox.drained_at is None
+                assert "runtime-live-route-1" in outbox.idempotency_key
             with ArchiveSession() as archive_db:
                 assert archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == "codex:runtime-live-route").count() == 0
-
-            release_archive.set()
-            await asyncio.sleep(0)
-            with ArchiveSession() as archive_db:
-                assert archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == "codex:runtime-live-route").count() == 1
         finally:
-            release_archive.set()
+            request_db.close()
+            archive_engine.dispose()
+            live_engine.dispose()
+
+    asyncio.run(run_test())
+
+
+def test_runtime_batch_skips_bridge_live_transcript_delta_outbox(tmp_path, monkeypatch):
+    import zerg.routers.runtime as runtime_router
+
+    async def run_test():
+        archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+        Base.metadata.create_all(bind=archive_engine)
+        ArchiveSession = sessionmaker(bind=archive_engine)
+
+        live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+        initialize_live_database(live_engine)
+        LiveSession = sessionmaker(bind=live_engine)
+
+        class LiveSerializer:
+            is_configured = True
+
+            async def execute(self, fn, **kwargs):
+                assert kwargs["label"] == "runtime-live-state"
+                with LiveSession() as live_db:
+                    result = fn(live_db)
+                    live_db.commit()
+                    return result
+
+        class ArchiveSerializer:
+            is_configured = True
+
+            async def execute(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+                raise AssertionError("live transcript deltas must not archive observations inline")
+
+            async def execute_after_closing_request_session(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+                raise AssertionError("live transcript deltas must not wait on archive serializer")
+
+            async def execute_or_direct(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+                raise AssertionError("live transcript deltas should not need archive followups")
+
+        monkeypatch.setattr(runtime_router, "live_store_configured", lambda: True)
+        monkeypatch.setattr(runtime_router, "get_live_write_serializer", lambda: LiveSerializer())
+        monkeypatch.setattr(runtime_router, "get_write_serializer", lambda: ArchiveSerializer())
+
+        payload = RuntimeEventBatchIngest(
+            events=[
+                {
+                    "runtime_key": "codex:runtime-live-transcript",
+                    "provider": "codex",
+                    "device_id": "cinder",
+                    "source": "codex_bridge_live",
+                    "kind": "progress_signal",
+                    "occurred_at": "2026-01-01T00:00:00Z",
+                    "freshness_ms": 60000,
+                    "dedupe_key": "runtime-live-transcript-1",
+                    "payload": {"progress_kind": "bridge_live_transcript_delta"},
+                }
+            ]
+        )
+
+        request_db = ArchiveSession()
+        try:
+            result = await asyncio.wait_for(
+                runtime_router.ingest_runtime_observation_batch(
+                    payload,
+                    Response(),
+                    request_db,
+                    SimpleNamespace(device_id="cinder", id="token-1", owner_id=1),
+                    None,
+                ),
+                timeout=0.5,
+            )
+            assert result.accepted == 1
+            assert result.updated_runtime_keys == ["codex:runtime-live-transcript"]
+
+            with LiveSession() as live_db:
+                live_state = live_db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == "codex:runtime-live-transcript").one()
+                assert live_state.last_progress_at is not None
+                assert live_db.query(LiveArchiveOutbox).count() == 0
+        finally:
             request_db.close()
             archive_engine.dispose()
             live_engine.dispose()

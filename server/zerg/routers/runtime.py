@@ -31,6 +31,7 @@ from zerg.services.apns_sender import prepare_session_live_activity_pushes
 from zerg.services.apns_sender import prepare_session_needs_answer_push
 from zerg.services.apns_sender import prepare_widget_timeline_push
 from zerg.services.apns_sender import send_presence_pushes
+from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
@@ -105,16 +106,19 @@ async def ingest_runtime_observation_batch(
 
         def _do_runtime_state(wdb: Session):
             ingest_result = ingest_runtime_events(wdb, events)
+            push_contexts = _push_contexts_for_result(ingest_result)
+            return ingest_result, push_contexts
 
+        def _push_contexts_for_result(ingest_result: RuntimeEventBatchResult) -> list[dict]:
             # Bridge live transcript deltas are already a user-visible overlay
             # with per-session SSE fanout. They must not pay the APNs/widget/
             # queued-message cost reserved for phase and attention changes.
             if live_transcript_only:
-                return ingest_result, []
+                return []
 
             updated_runtime_keys = set(ingest_result.updated_runtime_keys)
             if not updated_runtime_keys:
-                return ingest_result, []
+                return []
 
             updated_session_set = set()
             for ev in events:
@@ -122,7 +126,7 @@ async def ingest_runtime_observation_batch(
                     updated_session_set.add(ev.session_id)
             updated_session_ids = sorted(updated_session_set, key=str)
             if not updated_session_ids:
-                return ingest_result, []
+                return []
 
             push_contexts = [
                 {
@@ -131,7 +135,7 @@ async def ingest_runtime_observation_batch(
                 }
                 for sid in updated_session_ids
             ]
-            return ingest_result, push_contexts
+            return push_contexts
 
         def _publish_runtime_updates(result: RuntimeEventBatchResult) -> None:
             updated_runtime_keys = set(result.updated_runtime_keys)
@@ -365,7 +369,12 @@ async def ingest_runtime_observation_batch(
                 )
 
             def _do_live_runtime_state(live_db: Session):
-                return ingest_live_runtime_events(live_db, events)
+                result = ingest_live_runtime_events(live_db, events)
+                # Bridge live transcript deltas are high-frequency provisional
+                # preview facts; final transcript ingest owns durable history.
+                archive_events = [event for event in events if not _is_bridge_live_transcript_event(event)]
+                enqueue_runtime_events_outbox(live_db, archive_events)
+                return result
 
             try:
                 db.close()
@@ -386,18 +395,18 @@ async def ingest_runtime_observation_batch(
 
             _publish_runtime_updates(result)
 
-            async def _run_archive_runtime_observations() -> None:
-                try:
-                    _archive_result, push_contexts = await ws.execute(
-                        _do_runtime_state,
-                        label="runtime-observations-archive",
-                    )
-                    await _run_runtime_followups(push_contexts, None)
-                except Exception:
-                    logging.getLogger(__name__).exception("Failed to archive live runtime observations")
+            push_contexts = _push_contexts_for_result(result)
+            if push_contexts:
 
-            task = asyncio.create_task(_run_archive_runtime_observations())
-            task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+                async def _run_live_runtime_followups() -> None:
+                    try:
+                        await _run_runtime_followups(push_contexts, None)
+                    except Exception:
+                        logging.getLogger(__name__).exception("Failed to run live runtime followups")
+
+                task = asyncio.create_task(_run_live_runtime_followups())
+                task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+
             return result
 
         try:

@@ -26,14 +26,17 @@ from zerg.database import make_engine
 from zerg.database import make_live_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveRuntimeState
 from zerg.services.live_archive_outbox import HEARTBEAT_STAMP_KIND
+from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
 from zerg.services.live_archive_outbox import drain_live_archive_outbox
 from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
+from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import upsert_live_control_leases
@@ -335,6 +338,181 @@ def test_live_runtime_state_feeds_existing_runtime_overlay(tmp_path, monkeypatch
         assert overlay.presence_tool == "Shell"
         assert overlay.runtime_phase == "running"
         assert overlay.runtime_source == "codex_bridge"
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_live_archive_outbox_drains_runtime_event_to_archive(tmp_path):
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    try:
+        with ArchiveSession() as archive_db:
+            session = AgentSession(
+                provider="codex",
+                environment="test",
+                project="runtime-outbox",
+                device_id="cinder",
+                started_at=now,
+                last_activity_at=now,
+            )
+            archive_db.add(session)
+            archive_db.commit()
+            session_id = session.id
+
+        event = RuntimeEventIngest(
+            runtime_key=runtime_key_for_session("codex", str(session_id)),
+            session_id=session_id,
+            provider="codex",
+            device_id="cinder",
+            source="codex_bridge",
+            kind="phase_signal",
+            phase="running",
+            tool_name="Shell",
+            occurred_at=now,
+            freshness_ms=60_000,
+            dedupe_key="runtime-outbox-1",
+            payload={},
+        )
+        with LiveSession() as live_db:
+            result = ingest_live_runtime_events(live_db, [event])
+            assert enqueue_runtime_events_outbox(live_db, [event]) == 1
+            assert enqueue_runtime_events_outbox(live_db, [event]) == 0
+            live_db.commit()
+
+        assert result.accepted == 1
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(SessionRuntimeState).count() == 0
+            assert archive_db.query(SessionObservation).count() == 0
+
+        with LiveSession() as live_db:
+            row = live_db.query(LiveArchiveOutbox).one()
+            assert row.kind == RUNTIME_EVENT_KIND
+            assert row.drained_at is None
+            assert "runtime-outbox-1" in row.idempotency_key
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            drain_result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+
+        assert drain_result.processed == 1
+        assert drain_result.drained == 1
+        assert drain_result.failed == 0
+
+        with ArchiveSession() as archive_db:
+            state = archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).one()
+            assert state.phase == "running"
+            assert state.active_tool == "Shell"
+            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 1
+
+        with LiveSession() as live_db:
+            row = live_db.query(LiveArchiveOutbox).one()
+            assert row.drained_at is not None
+            assert row.last_error is None
+            assert row.attempts == 1
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            drain_result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+
+        assert drain_result.processed == 0
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 1
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_live_archive_outbox_runtime_event_retry_is_idempotent(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    try:
+        with ArchiveSession() as archive_db:
+            session = AgentSession(
+                provider="codex",
+                environment="test",
+                project="runtime-outbox-retry",
+                device_id="cinder",
+                started_at=now,
+                last_activity_at=now,
+            )
+            archive_db.add(session)
+            archive_db.commit()
+            session_id = session.id
+
+        event = RuntimeEventIngest(
+            runtime_key=runtime_key_for_session("codex", str(session_id)),
+            session_id=session_id,
+            provider="codex",
+            device_id="cinder",
+            source="codex_bridge",
+            kind="phase_signal",
+            phase="running",
+            tool_name="Shell",
+            occurred_at=now,
+            freshness_ms=60_000,
+            dedupe_key="runtime-outbox-retry-1",
+            payload={},
+        )
+        with LiveSession() as live_db:
+            ingest_live_runtime_events(live_db, [event])
+            enqueue_runtime_events_outbox(live_db, [event])
+            live_db.commit()
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            real_commit = archive_db.commit
+
+            def fail_archive_commit_once():
+                raise RuntimeError("archive commit failed")
+
+            monkeypatch.setattr(archive_db, "commit", fail_archive_commit_once)
+            drain_result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+            monkeypatch.setattr(archive_db, "commit", real_commit)
+
+        assert drain_result.processed == 1
+        assert drain_result.drained == 0
+        assert drain_result.failed == 1
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).count() == 0
+            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 0
+        with LiveSession() as live_db:
+            row = live_db.query(LiveArchiveOutbox).one()
+            assert row.drained_at is None
+            assert row.attempts == 1
+            assert "archive commit failed" in (row.last_error or "")
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            drain_result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+
+        assert drain_result.processed == 1
+        assert drain_result.drained == 1
+        assert drain_result.failed == 0
+
+        with LiveSession() as live_db:
+            row = live_db.query(LiveArchiveOutbox).one()
+            row.drained_at = None
+            live_db.commit()
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            drain_result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+
+        assert drain_result.processed == 1
+        assert drain_result.drained == 1
+        assert drain_result.failed == 0
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).count() == 1
+            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 1
     finally:
         archive_engine.dispose()
         live_engine.dispose()
