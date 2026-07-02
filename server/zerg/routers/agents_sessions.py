@@ -21,6 +21,8 @@ from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
+from zerg.database import get_live_session_factory
+from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
@@ -29,6 +31,7 @@ from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
+from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_archive import SessionArchiveBundleResponse
@@ -108,6 +111,8 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
+_ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER = 5
+_ACTIVE_LIVE_SESSION_CANDIDATE_MAX = 1000
 
 
 def _no_viewer_owner_id() -> int | None:
@@ -118,6 +123,25 @@ def _owner_id_from_agents_auth(db: Session, auth: object) -> int | None:
     if not isinstance(auth, DeviceToken):
         return None
     return _resolve_agents_owner_id(db, auth)
+
+
+def _active_live_session_candidates(*, limit: int, days_back: int, now: datetime) -> list[UUID] | None:
+    if not live_store_configured():
+        return None
+    LiveSessionFactory = get_live_session_factory()
+    if LiveSessionFactory is None:
+        return None
+    candidate_limit = min(
+        _ACTIVE_LIVE_SESSION_CANDIDATE_MAX,
+        max(limit, limit * _ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER),
+    )
+    with LiveSessionFactory() as live_db:
+        return list_active_live_session_ids(
+            live_db,
+            limit=candidate_limit,
+            days_back=days_back,
+            now=now,
+        )
 
 
 def _parse_message_session_header(request: Request) -> UUID | None:
@@ -638,27 +662,44 @@ def list_active_sessions(
     """Return active/recent session summaries for the live sessions surface."""
     try:
         store = AgentsStore(db)
-        since = datetime.now(timezone.utc) - timedelta(days=days_back)
+        now = datetime.now(timezone.utc)
+        live_candidate_ids: list[UUID] | None
+        try:
+            live_candidate_ids = _active_live_session_candidates(limit=limit, days_back=days_back, now=now)
+        except Exception:
+            logger.warning("Failed to query live active-session candidates; falling back to archive", exc_info=True)
+            live_candidate_ids = None
 
-        sessions, _total = store.list_sessions(
-            project=project,
-            provider=None,
-            environment=None,
-            include_test=False,
-            device_id=None,
-            since=since,
-            query=None,
-            limit=limit,
-            offset=0,
-            exclude_user_states=["archived", "snoozed"],
-            anchor_on_activity=True,
-        )
+        if live_candidate_ids is None:
+            since = now - timedelta(days=days_back)
+            sessions, _total = store.list_sessions(
+                project=project,
+                provider=None,
+                environment=None,
+                include_test=False,
+                device_id=None,
+                since=since,
+                query=None,
+                limit=limit,
+                offset=0,
+                exclude_user_states=["archived", "snoozed"],
+                anchor_on_activity=True,
+            )
+        else:
+            sessions = []
+            for session in store.get_sessions_ordered(live_candidate_ids):
+                if (session.user_state or "active") in {"archived", "snoozed"}:
+                    continue
+                if project and session.project != project:
+                    continue
+                sessions.append(session)
+                if len(sessions) >= limit:
+                    break
 
         session_ids = [s.id for s in sessions]
         last_activity = store.get_last_activity_map(session_ids)
         last_user = store.get_last_message_map(session_ids, role="user", max_len=300)
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
-        now = datetime.now(timezone.utc)
         runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
         pause_request_map = load_active_pause_request_map(db, session_ids)
         control_state_map = load_managed_control_state_map(db, [session.id for session in sessions])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from uuid import UUID
@@ -69,6 +70,33 @@ def upsert_live_sessions_from_managed_leases(
         row.updated_at = seen_at
         touched.add(session_id)
     return touched
+
+
+def list_active_live_session_ids(
+    db: Session,
+    *,
+    limit: int,
+    days_back: int,
+    now: datetime | None = None,
+) -> list[UUID]:
+    """Return recently observed live session IDs from the hot lane."""
+
+    normalized_now = normalize_utc(now) or _utc_now()
+    cutoff = normalized_now - timedelta(days=days_back)
+    rows = (
+        db.query(LiveSession.session_id)
+        .filter(LiveSession.state.notin_(("missing", "ended")))
+        .filter(LiveSession.last_seen_at >= cutoff)
+        .order_by(LiveSession.last_seen_at.desc(), LiveSession.updated_at.desc(), LiveSession.session_id.desc())
+        .limit(limit)
+        .all()
+    )
+    session_ids: list[UUID] = []
+    for (session_id,) in rows:
+        parsed = _session_uuid(session_id)
+        if parsed is not None:
+            session_ids.append(parsed)
+    return session_ids
 
 
 def mark_missing_live_sessions(

@@ -19,9 +19,11 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.database import Base, get_db, make_engine, make_sessionmaker
+from zerg.database import Base, get_db, initialize_live_database, make_engine, make_live_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession, SessionRuntimeState
+from zerg.models.live_store import LiveSession as LiveSessionRow
+from zerg.routers import agents_sessions as agents_sessions_router
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 
@@ -32,13 +34,15 @@ def _make_db(tmp_path, name="forum.db"):
     return make_sessionmaker(engine)
 
 
-def _seed(factory, user_state="active", provider_session_id=None):
+def _seed(factory, user_state="active", provider_session_id=None, *, started_at=None, project=None):
     db = factory()
+    session_started_at = started_at or datetime.now(timezone.utc)
     s = AgentSession(
         provider="claude",
         environment="production",
-        started_at=datetime.now(timezone.utc),
+        started_at=session_started_at,
         ended_at=None,
+        project=project,
         user_messages=2,
         assistant_messages=2,
         tool_calls=0,
@@ -70,6 +74,12 @@ def _client(factory):
     api_app.dependency_overrides[get_db] = override
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     return TestClient(api_app)
+
+
+def _make_live_db(tmp_path, name="live.db"):
+    engine = make_live_engine(f"sqlite:///{tmp_path / name}")
+    initialize_live_database(engine)
+    return engine, make_sessionmaker(engine)
 
 
 def _get_user_state(factory, session_id):
@@ -203,6 +213,86 @@ def test_archived_filter_before_limit(tmp_path):
     finally:
         from zerg.main import api_app
         api_app.dependency_overrides.clear()
+
+
+def test_active_sessions_uses_live_store_candidates_when_configured(tmp_path, monkeypatch):
+    """Fresh live_sessions rows are the candidate source for /sessions/active."""
+    factory = _make_db(tmp_path, "live_candidate_archive.db")
+    live_engine, live_factory = _make_live_db(tmp_path, "live_candidate_hot.db")
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=30)
+    newest_live_id = _seed(factory, user_state="active", started_at=old, project="zerg")
+    older_live_id = _seed(factory, user_state="active", started_at=old, project="zerg")
+    _seed(factory, user_state="active", started_at=old, project="zerg")
+    archived_live_id = _seed(factory, user_state="archived", started_at=old, project="zerg")
+    wrong_project_live_id = _seed(factory, user_state="active", started_at=old, project="other")
+    missing_live_id = _seed(factory, user_state="active", started_at=old, project="zerg")
+
+    with live_factory() as live_db:
+        live_db.add_all(
+            [
+                LiveSessionRow(
+                    session_id=newest_live_id,
+                    provider="claude",
+                    device_id="cinder",
+                    state="attached",
+                    started_at=old,
+                    last_seen_at=now,
+                    updated_at=now,
+                ),
+                LiveSessionRow(
+                    session_id=older_live_id,
+                    provider="claude",
+                    device_id="cinder",
+                    state="attached",
+                    started_at=old,
+                    last_seen_at=now - timedelta(seconds=1),
+                    updated_at=now - timedelta(seconds=1),
+                ),
+                LiveSessionRow(
+                    session_id=archived_live_id,
+                    provider="claude",
+                    device_id="cinder",
+                    state="attached",
+                    started_at=old,
+                    last_seen_at=now - timedelta(seconds=2),
+                    updated_at=now - timedelta(seconds=2),
+                ),
+                LiveSessionRow(
+                    session_id=wrong_project_live_id,
+                    provider="claude",
+                    device_id="cinder",
+                    state="attached",
+                    started_at=old,
+                    last_seen_at=now - timedelta(seconds=3),
+                    updated_at=now - timedelta(seconds=3),
+                ),
+                LiveSessionRow(
+                    session_id=missing_live_id,
+                    provider="claude",
+                    device_id="cinder",
+                    state="missing",
+                    started_at=old,
+                    last_seen_at=now,
+                    updated_at=now,
+                ),
+            ]
+        )
+        live_db.commit()
+
+    monkeypatch.setattr(agents_sessions_router, "live_store_configured", lambda: True)
+    monkeypatch.setattr(agents_sessions_router, "get_live_session_factory", lambda: live_factory)
+    client = _client(factory)
+    try:
+        resp = client.get("/agents/sessions/active?days_back=14&limit=10&project=zerg", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200
+        ids = [s["id"] for s in resp.json()["sessions"]]
+        assert ids == [newest_live_id, older_live_id]
+    finally:
+        from zerg.main import api_app
+
+        api_app.dependency_overrides.clear()
+        live_engine.dispose()
 
 
 # ---------------------------------------------------------------------------
