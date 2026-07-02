@@ -19,6 +19,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 import zerg.database as database_module
+import zerg.services.session_views as session_views_module
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import Base
 from zerg.database import initialize_live_database
@@ -26,6 +27,7 @@ from zerg.database import make_engine
 from zerg.database import make_live_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.live_store import LiveArchiveOutbox
@@ -33,12 +35,15 @@ from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
+from zerg.services.agents import AgentsStore
 from zerg.services.live_archive_outbox import HEARTBEAT_STAMP_KIND
 from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
 from zerg.services.live_archive_outbox import drain_live_archive_outbox
 from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
 from zerg.services.live_launch_readiness import get_live_launch_readiness_by_client_request
+from zerg.services.live_launch_readiness import get_live_launch_readiness_by_session_id
+from zerg.services.live_launch_readiness import latest_live_launch_readiness_map
 from zerg.services.live_launch_readiness import reap_expired_live_launch_readiness
 from zerg.services.live_launch_readiness import update_live_launch_readiness_state
 from zerg.services.live_launch_readiness import upsert_live_launch_readiness
@@ -51,6 +56,8 @@ from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.session_runtime import session_is_closed_for_input
+from zerg.services.session_views import build_session_response
+from zerg.services.session_views import latest_live_launch_readiness
 from zerg.services.write_serializer import get_live_write_serializer
 from zerg.services.write_serializer import get_write_serializer
 
@@ -630,6 +637,163 @@ def test_live_launch_readiness_projects_and_reaps(tmp_path):
             assert row.expires_at is None
             assert live_db.get(LiveLaunchReadiness, str(expired_session_id)) is None
     finally:
+        live_engine.dispose()
+
+
+def test_live_launch_readiness_session_map_ignores_expired_rows(tmp_path):
+    now = datetime.now(timezone.utc)
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    session_id = uuid4()
+    expired_session_id = uuid4()
+
+    try:
+        with LiveSession() as live_db:
+            upsert_live_launch_readiness(
+                live_db,
+                session_id=session_id,
+                owner_id=77,
+                device_id="cinder",
+                provider="codex",
+                execution_lifetime="one_shot",
+                state="pending",
+                command_id=f"launch-{session_id}",
+                client_request_id="launch-session-map",
+                machine_id="cinder",
+                project="repo",
+                expires_at=now + timedelta(minutes=2),
+                now=now,
+            )
+            upsert_live_launch_readiness(
+                live_db,
+                session_id=expired_session_id,
+                owner_id=77,
+                device_id="cinder",
+                provider="codex",
+                execution_lifetime="one_shot",
+                state="pending",
+                command_id=f"launch-{expired_session_id}",
+                client_request_id="launch-session-map-expired",
+                machine_id="cinder",
+                project="repo",
+                expires_at=now - timedelta(seconds=1),
+                now=now - timedelta(minutes=5),
+            )
+            live_db.commit()
+
+        with LiveSession() as live_db:
+            readiness = get_live_launch_readiness_by_session_id(live_db, session_id=session_id, now=now)
+            assert readiness is not None
+            assert readiness.session_id == session_id
+            assert readiness.execution_lifetime == "one_shot"
+            assert readiness.launch_state == "launching"
+
+            assert get_live_launch_readiness_by_session_id(live_db, session_id=expired_session_id, now=now) is None
+            readiness_map = latest_live_launch_readiness_map(live_db, [session_id, expired_session_id], now=now)
+
+        assert set(readiness_map) == {session_id}
+    finally:
+        live_engine.dispose()
+
+
+def test_fresh_live_launch_readiness_feeds_session_response_before_archive(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: LiveSession)
+
+    try:
+        with ArchiveSession() as archive_db:
+            session = AgentSession(
+                provider="codex",
+                environment="test",
+                project="launch-readiness",
+                device_id="cinder",
+                started_at=now,
+                last_activity_at=now,
+            )
+            archive_db.add(session)
+            archive_db.flush()
+            cold_attempt = SessionLaunchAttempt(
+                session_id=session.id,
+                provider="codex",
+                host_id="cinder",
+                owner_id=77,
+                execution_lifetime="one_shot",
+                client_request_id="launch-hot-wins",
+                command_id=f"launch-{session.id}",
+                state="failed",
+                error_code="provider_launch_failed",
+                error_message="archive saw a stale failure",
+                expires_at=None,
+            )
+            archive_db.add(cold_attempt)
+            archive_db.commit()
+            session_id = session.id
+
+        with LiveSession() as live_db:
+            upsert_live_launch_readiness(
+                live_db,
+                session_id=session_id,
+                owner_id=77,
+                device_id="cinder",
+                provider="codex",
+                execution_lifetime="one_shot",
+                state="pending",
+                command_id=f"launch-{session_id}",
+                client_request_id="launch-hot-wins",
+                machine_id="cinder",
+                project="repo",
+                expires_at=now + timedelta(minutes=2),
+                now=now,
+            )
+            live_db.commit()
+
+        with ArchiveSession() as archive_db:
+            session = archive_db.get(AgentSession, session_id)
+            cold_attempt = (
+                archive_db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.session_id == session_id).one()
+            )
+            live_map = latest_live_launch_readiness([session_id], now=now)
+            monkeypatch.setattr(
+                session_views_module,
+                "_latest_launch_attempt",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("hot launch readiness hit archive")),
+            )
+            response = build_session_response(
+                AgentsStore(archive_db),
+                session,
+                last_activity_at=session.started_at,
+                launch_readiness=live_map[session_id],
+            )
+
+            assert response.launch_state == "launching"
+            assert response.execution_lifetime == "one_shot"
+            assert response.launch_error_code is None
+            assert response.launch_error_message is None
+
+            expired_live_map = latest_live_launch_readiness([session_id], now=now + timedelta(minutes=5))
+            fallback = build_session_response(
+                AgentsStore(archive_db),
+                session,
+                last_activity_at=session.started_at,
+                launch_attempt=cold_attempt,
+                launch_readiness=expired_live_map.get(session_id),
+            )
+
+            assert fallback.launch_state == "launch_failed"
+            assert fallback.launch_error_code == "provider_launch_failed"
+            assert "archive saw a stale failure" in (fallback.launch_error_message or "")
+    finally:
+        archive_engine.dispose()
         live_engine.dispose()
 
 

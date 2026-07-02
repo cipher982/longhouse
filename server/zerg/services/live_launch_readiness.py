@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -85,6 +86,45 @@ def get_live_launch_readiness_by_client_request(
     if row is None:
         return None
     return _project_live_launch_state(row)
+
+
+def get_live_launch_readiness_by_session_id(
+    db: Session,
+    *,
+    session_id: UUID,
+    now: datetime | None = None,
+) -> LiveLaunchReadinessView | None:
+    row = db.get(LiveLaunchReadiness, str(session_id))
+    if row is None or _live_launch_readiness_expired(row, now=now):
+        return None
+    return _project_live_launch_state(row)
+
+
+def latest_live_launch_readiness_map(
+    db: Session,
+    session_ids: Iterable[UUID],
+    *,
+    now: datetime | None = None,
+) -> dict[UUID, LiveLaunchReadinessView]:
+    session_id_strings = [str(session_id) for session_id in session_ids]
+    if not session_id_strings:
+        return {}
+    rows = db.query(LiveLaunchReadiness).filter(LiveLaunchReadiness.session_id.in_(session_id_strings)).all()
+    result: dict[UUID, LiveLaunchReadinessView] = {}
+    for row in rows:
+        if _live_launch_readiness_expired(row, now=now):
+            continue
+        session_id = UUID(str(row.session_id))
+        result[session_id] = _project_live_launch_state(row)
+    return result
+
+
+def _live_launch_readiness_expired(row: LiveLaunchReadiness, *, now: datetime | None = None) -> bool:
+    expires_at = normalize_utc(row.expires_at)
+    if expires_at is None:
+        return False
+    cutoff = normalize_utc(now) or _now()
+    return expires_at <= cutoff
 
 
 def upsert_live_launch_readiness(

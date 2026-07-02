@@ -17,6 +17,7 @@ from typing import Dict
 from typing import List
 from typing import Literal
 from typing import Optional
+from uuid import UUID
 
 from pydantic import BaseModel
 from pydantic import Field
@@ -33,6 +34,8 @@ from zerg.models.agents import SessionTurn
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
+from zerg.services.live_launch_readiness import LiveLaunchReadinessView
+from zerg.services.live_launch_readiness import latest_live_launch_readiness_map as query_live_launch_readiness_map
 from zerg.services.managed_control_state import CONTROL_SOURCE_RUNNER_CONNECTION
 from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
@@ -1427,6 +1430,7 @@ def build_session_response(
     has_pending_response_turn: bool = False,
     pause_request: dict[str, Any] | None = None,
     launch_attempt: SessionLaunchAttempt | None | object = _LAUNCH_ATTEMPT_MISSING,
+    launch_readiness: LiveLaunchReadinessView | None = None,
     sharer: SessionSharerResponse | None = None,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
@@ -1510,8 +1514,22 @@ def build_session_response(
     )
     # The kernel ``capability_flags`` is already the truth.
     effective_capability_flags = capability_flags
-    effective_launch_attempt = _latest_launch_attempt(store.db, session.id) if launch_attempt is _LAUNCH_ATTEMPT_MISSING else launch_attempt
-    launch_lifecycle = project_remote_launch_lifecycle(effective_launch_attempt)
+    if launch_readiness is not None:
+        effective_launch_attempt = None
+    elif launch_attempt is _LAUNCH_ATTEMPT_MISSING:
+        effective_launch_attempt = _latest_launch_attempt(store.db, session.id)
+    else:
+        effective_launch_attempt = launch_attempt
+    archive_launch_lifecycle = None if launch_readiness is not None else project_remote_launch_lifecycle(effective_launch_attempt)
+    launch_state = launch_readiness.launch_state if launch_readiness is not None else None
+    execution_lifetime = launch_readiness.execution_lifetime if launch_readiness is not None else None
+    launch_error_code = launch_readiness.launch_error_code if launch_readiness is not None else None
+    launch_error_message = launch_readiness.launch_error_message if launch_readiness is not None else None
+    if archive_launch_lifecycle is not None:
+        launch_state = archive_launch_lifecycle.state
+        execution_lifetime = archive_launch_lifecycle.execution_lifetime
+        launch_error_code = archive_launch_lifecycle.error_code
+        launch_error_message = archive_launch_lifecycle.error_message
     continue_target = _native_continue_target(store.db, session)
     continue_targets = [continue_target] if continue_target is not None else []
     lineage_projection = kernel_projection.lineage
@@ -1595,10 +1613,10 @@ def build_session_response(
         ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
-        launch_state=launch_lifecycle.state if launch_lifecycle is not None else None,
-        execution_lifetime=launch_lifecycle.execution_lifetime if launch_lifecycle is not None else None,
-        launch_error_code=launch_lifecycle.error_code if launch_lifecycle is not None else None,
-        launch_error_message=launch_lifecycle.error_message if launch_lifecycle is not None else None,
+        launch_state=launch_state,
+        execution_lifetime=execution_lifetime,
+        launch_error_code=launch_error_code,
+        launch_error_message=launch_error_message,
         sharer=sharer,
     )
 
@@ -1668,6 +1686,18 @@ def latest_launch_attempts(db, session_ids) -> dict:
     for attempt in rows:
         result.setdefault(attempt.session_id, attempt)
     return result
+
+
+def latest_live_launch_readiness(session_ids, *, now: datetime | None = None) -> dict[UUID, LiveLaunchReadinessView]:
+    from zerg import database as database_module
+
+    if not session_ids or not database_module.live_store_configured():
+        return {}
+    live_session_factory = database_module.get_live_session_factory()
+    if live_session_factory is None:
+        return {}
+    with live_session_factory() as live_db:
+        return query_live_launch_readiness_map(live_db, session_ids, now=now)
 
 
 def build_active_session_response(
