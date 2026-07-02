@@ -21,6 +21,10 @@ def _run_make(args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _combined_output(result: subprocess.CompletedProcess[str]) -> str:
+    return "\n".join(part for part in (result.stdout, result.stderr) if part)
+
+
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -177,7 +181,7 @@ def test_provider_release_proof_maturity_make_emits_rollup() -> None:
             ]
         )
 
-        assert result.returncode == 0, result.stderr
+        assert result.returncode == 0, _combined_output(result)
         payload = _read_json(artifact)
         assert payload["artifact_kind"] == "provider_release_proof_maturity_rollup"
         assert payload["overall"]["weighted_percent"] == 75.0
@@ -202,7 +206,7 @@ def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact
             ]
         )
 
-        assert result.returncode == 0, result.stderr
+        assert result.returncode == 0, _combined_output(result)
         payload = _read_json(artifact)
         assert payload["artifact_kind"] == "provider_release_proof_universal_smoke"
         assert payload["verdict"] == "yellow"

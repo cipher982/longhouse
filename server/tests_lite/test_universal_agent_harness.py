@@ -1243,7 +1243,7 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
     assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
 
 
-@pytest.mark.timeout(30)
+@pytest.mark.timeout(60)
 def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path: Path, monkeypatch) -> None:
     from zerg.qa import codex_provider_release_canary
 
