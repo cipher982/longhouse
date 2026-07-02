@@ -9,6 +9,7 @@ import os
 import time
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -25,6 +26,7 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from zerg.config import Settings
 from zerg.config import get_settings_unchecked
 from zerg.session_execution_home import SessionExecutionHome
 
@@ -388,6 +390,89 @@ def make_live_write_engine(db_url: str) -> Engine:
     return make_live_engine(db_url, pool_size=1, max_overflow=0)
 
 
+@dataclass(frozen=True)
+class DatabaseRuntime:
+    settings: Settings
+    default_engine: Engine | None
+    default_session_factory: sessionmaker | None
+    write_engine: Engine | None
+    write_session_factory: sessionmaker | None
+    live_engine: Engine | None
+    live_session_factory: sessionmaker | None
+    live_write_engine: Engine | None
+    live_write_session_factory: sessionmaker | None
+
+
+_database_runtime: DatabaseRuntime | None = None
+default_engine: Engine | None = None
+default_session_factory: sessionmaker | None = None
+_write_engine: Engine | None = None
+_write_session_factory: sessionmaker | None = None
+live_engine: Engine | None = None
+live_session_factory: sessionmaker | None = None
+live_write_engine: Engine | None = None
+live_write_session_factory: sessionmaker | None = None
+
+
+def _runtime_key(settings: Settings) -> tuple[str, str, bool]:
+    return (settings.database_url, settings.live_database_url, settings.testing)
+
+
+def configure_database(settings: Settings | None = None) -> DatabaseRuntime:
+    """Configure process-wide database engines at an explicit startup boundary."""
+    global _database_runtime
+    global _settings
+    global default_engine
+    global default_session_factory
+    global _write_engine
+    global _write_session_factory
+    global live_engine
+    global live_session_factory
+    global live_write_engine
+    global live_write_session_factory
+
+    resolved_settings = settings or get_settings_unchecked()
+    if _database_runtime is not None and _runtime_key(_database_runtime.settings) == _runtime_key(resolved_settings):
+        return _database_runtime
+
+    archive_engine = make_engine(resolved_settings.database_url) if resolved_settings.database_url else None
+    archive_session_factory = make_sessionmaker(archive_engine) if archive_engine is not None else None
+    write_engine = make_write_engine(resolved_settings.database_url) if resolved_settings.database_url else None
+    write_session_factory = make_sessionmaker(write_engine) if write_engine is not None else None
+
+    configured_live_engine = make_live_engine(resolved_settings.live_database_url) if resolved_settings.live_database_url else None
+    configured_live_session_factory = make_sessionmaker(configured_live_engine) if configured_live_engine is not None else None
+    configured_live_write_engine = (
+        make_live_write_engine(resolved_settings.live_database_url) if resolved_settings.live_database_url else None
+    )
+    configured_live_write_session_factory = (
+        make_sessionmaker(configured_live_write_engine) if configured_live_write_engine is not None else None
+    )
+
+    runtime = DatabaseRuntime(
+        settings=resolved_settings,
+        default_engine=archive_engine,
+        default_session_factory=archive_session_factory,
+        write_engine=write_engine,
+        write_session_factory=write_session_factory,
+        live_engine=configured_live_engine,
+        live_session_factory=configured_live_session_factory,
+        live_write_engine=configured_live_write_engine,
+        live_write_session_factory=configured_live_write_session_factory,
+    )
+    _settings = resolved_settings
+    _database_runtime = runtime
+    default_engine = runtime.default_engine
+    default_session_factory = runtime.default_session_factory
+    _write_engine = runtime.write_engine
+    _write_session_factory = runtime.write_session_factory
+    live_engine = runtime.live_engine
+    live_session_factory = runtime.live_session_factory
+    live_write_engine = runtime.live_write_engine
+    live_write_session_factory = runtime.live_write_session_factory
+    return runtime
+
+
 def get_session_factory() -> sessionmaker:
     """Get the default session factory for the application.
 
@@ -406,35 +491,6 @@ def get_session_factory() -> sessionmaker:
         return default_session_factory
 
     raise RuntimeError("Database is not configured; call configure_database() at the process startup boundary")
-
-
-# Default engine and sessionmaker instances for app usage
-if _settings.database_url:
-    default_engine = make_engine(_settings.database_url)
-    default_session_factory = make_sessionmaker(default_engine)
-
-    # Dedicated write engine: a single checked-out connection for file-backed
-    # SQLite, or StaticPool for in-memory SQLite.
-    _write_engine = make_write_engine(_settings.database_url)
-    _write_session_factory = make_sessionmaker(_write_engine)
-else:
-    # Unit tests will override these in conftest.py before any actual usage
-    logger.debug("DATABASE_URL not set; database runtime is unconfigured")
-    default_engine = None  # type: ignore[assignment]
-    default_session_factory = None  # type: ignore[assignment]
-    _write_engine = None
-    _write_session_factory = None
-
-if _settings.live_database_url:
-    live_engine = make_live_engine(_settings.live_database_url)
-    live_session_factory = make_sessionmaker(live_engine)
-    live_write_engine = make_live_write_engine(_settings.live_database_url)
-    live_write_session_factory = make_sessionmaker(live_write_engine)
-else:
-    live_engine = None
-    live_session_factory = None
-    live_write_engine = None
-    live_write_session_factory = None
 
 
 def configure_write_serializer() -> None:
@@ -776,6 +832,8 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.session_share import SessionShareEvent  # noqa: F401
     from zerg.models.work import Insight  # noqa: F401
 
+    if engine is None and default_engine is None:
+        configure_database(get_settings_unchecked())
     target_engine = engine or default_engine
 
     if target_engine is None:
@@ -848,6 +906,8 @@ def initialize_live_database(engine: Engine | None = None) -> None:
     """Initialize only the Live Store schema on the hot SQLite lane."""
     from zerg.models.live_store import LiveBase
 
+    if engine is None and live_engine is None and get_settings_unchecked().live_database_url:
+        configure_database(get_settings_unchecked())
     target_engine = engine or live_engine
     if target_engine is None:
         if live_store_configured():

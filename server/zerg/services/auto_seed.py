@@ -15,7 +15,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from zerg.database import default_session_factory
+from zerg.database import get_session_factory
 from zerg.models.models import User
 
 logger = logging.getLogger(__name__)
@@ -74,7 +74,7 @@ def _seed_runners() -> bool:
         logger.debug("No runners defined in config - skipping")
         return True
 
-    db = default_session_factory()
+    db = get_session_factory()()
     try:
         # Find first admin user (runners have single owner, but should be admin not dev@local)
         user = db.query(User).filter(User.role == "ADMIN").order_by(User.id).first()
@@ -151,7 +151,7 @@ def run_auto_seed() -> dict:
         if settings.auth_disabled and not settings.testing and node_env != "test":
             from zerg import crud
 
-            db = default_session_factory()
+            db = get_session_factory()()
             try:
                 result = db.execute(select(User).order_by(User.id).limit(1))
                 user = result.scalar_one_or_none()

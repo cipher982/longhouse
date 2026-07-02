@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from fastapi import FastAPI
 
 from zerg.config import get_settings
+from zerg.database import configure_database
 from zerg.database import initialize_database
 from zerg.database import initialize_live_database
 from zerg.database import live_store_configured
@@ -144,6 +145,8 @@ async def lifespan(app: FastAPI):
     try:
         with _timed_startup_step("configure_observability"):
             configure_observability()
+        with _timed_startup_step("configure_database"):
+            configure_database(_settings)
         with _timed_startup_step("initialize_database"):
             initialize_database()
         if live_store_configured():

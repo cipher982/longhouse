@@ -17,7 +17,6 @@ from apscheduler.triggers.cron import CronTrigger
 from zerg.crud import get_fiche
 from zerg.crud import update_fiche
 from zerg.database import db_session
-from zerg.database import default_session_factory
 
 # EventBus remains for UI notifications
 from zerg.events import EventType
@@ -37,7 +36,7 @@ class SchedulerService:
         """Initialize the scheduler service."""
         self.scheduler = AsyncIOScheduler()
         self._initialized = False
-        self.session_factory = session_factory or default_session_factory
+        self.session_factory = session_factory
 
     async def start(self):
         """Start the scheduler if not already running."""

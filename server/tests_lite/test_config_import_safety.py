@@ -172,3 +172,49 @@ def test_get_session_factory_without_config_fails_clearly():
     )
     assert result.returncode == 0, result.stderr
     assert "Database is not configured" in result.stdout
+
+
+def test_database_import_does_not_configure_engine_even_when_env_has_database_url(tmp_path):
+    db_path = tmp_path / "import_safe.db"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import zerg.database as db\n"
+            "print('DEFAULT_ENGINE', db.default_engine)\n"
+            "print('DEFAULT_FACTORY', db.default_session_factory)\n",
+        ],
+        cwd=str(Path(__file__).resolve().parents[2] / "server"),
+        env={**os.environ, "DATABASE_URL": f"sqlite:///{db_path}", "FERNET_SECRET": "x" * 44},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "DEFAULT_ENGINE None" in result.stdout
+    assert "DEFAULT_FACTORY None" in result.stdout
+
+
+def test_configure_database_builds_runtime_once(tmp_path):
+    db_path = tmp_path / "configured.db"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import zerg.database as db\n"
+            "first = db.configure_database()\n"
+            "second = db.configure_database()\n"
+            "print('SAME_RUNTIME', first is second)\n"
+            "print('HAS_ENGINE', db.default_engine is not None)\n"
+            "print('HAS_FACTORY', db.get_session_factory() is not None)\n",
+        ],
+        cwd=str(Path(__file__).resolve().parents[2] / "server"),
+        env={**os.environ, "DATABASE_URL": f"sqlite:///{db_path}", "FERNET_SECRET": "x" * 44},
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "SAME_RUNTIME True" in result.stdout
+    assert "HAS_ENGINE True" in result.stdout
+    assert "HAS_FACTORY True" in result.stdout
