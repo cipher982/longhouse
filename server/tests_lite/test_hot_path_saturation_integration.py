@@ -21,11 +21,15 @@ os.environ.setdefault("GOOGLE_CLIENT_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import Base
 from zerg.database import get_pool_status
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
+from zerg.database import make_live_engine
+from zerg.database import make_live_write_engine
 from zerg.database import make_sessionmaker
 from zerg.models import User
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
+from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.routers import agents_sessions as agents_sessions_router
 from zerg.routers import health as health_router
 from zerg.routers import heartbeat as heartbeat_router
@@ -135,16 +139,24 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
     write_engine = make_engine(db_url, pool_size=1, max_overflow=0)
     request_factory = make_sessionmaker(request_engine)
     write_factory = make_sessionmaker(write_engine)
+    live_url = f"sqlite:///{tmp_path / 'hot_path_live.db'}"
+    live_engine = make_live_engine(live_url, pool_size=1, max_overflow=0)
+    live_write_engine = make_live_write_engine(live_url)
+    live_factory = make_sessionmaker(live_engine)
+    live_write_factory = make_sessionmaker(live_write_engine)
     Base.metadata.create_all(bind=request_engine)
+    initialize_live_database(live_engine)
     with request_engine.begin() as conn:
         conn.execute(text("CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(content_text)"))
     _seed_hot_path_rows(request_factory)
 
     serializer = WriteSerializer()
     serializer.configure(write_factory)
+    live_serializer = WriteSerializer()
+    live_serializer.configure(live_write_factory)
 
-    import zerg.database as database_module
     import zerg.data_plane as data_plane_module
+    import zerg.database as database_module
     import zerg.services.write_serializer as write_serializer_module
 
     def _cold_store_unavailable(*_args, **_kwargs):
@@ -155,8 +167,11 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
     monkeypatch.setattr(database_module, "default_session_factory", request_factory)
     monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
     monkeypatch.setattr(data_plane_module, "create_archive_store", _cold_store_unavailable)
+    monkeypatch.setattr(heartbeat_router, "live_store_configured", lambda: True)
     monkeypatch.setattr(heartbeat_router, "get_write_serializer", lambda: serializer)
+    monkeypatch.setattr(heartbeat_router, "get_live_write_serializer", lambda: live_serializer)
     monkeypatch.setattr(write_serializer_module, "get_write_serializer", lambda: serializer)
+    monkeypatch.setattr(write_serializer_module, "get_live_write_serializer", lambda: live_serializer)
 
     writer_entered = Event()
     release_writer = Event()
@@ -189,9 +204,12 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
                 SimpleNamespace(device_id="cinder", id="token-1", owner_id=OWNER_ID),
             )
         )
-        await _wait_until(lambda: serializer.queue_depth == 1)
+        heartbeat_response = await asyncio.wait_for(heartbeat_task, timeout=ROUTE_TIMEOUT_SECONDS)
+        assert heartbeat_response.status_code == 204
         assert get_pool_status(request_engine)["checked_out"] == 0
         assert get_pool_status(write_engine)["checked_out"] == 1
+        with live_factory() as live_db:
+            assert live_db.query(LiveHeartbeatStamp).filter(LiveHeartbeatStamp.device_id == "cinder").count() == 1
 
         health = await asyncio.wait_for(
             asyncio.to_thread(
@@ -202,6 +220,8 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
         )
         assert health["checks"]["write_serializer"]["writer_active"] is True
         assert health["checks"]["write_serializer"]["queue_depth"] == 1
+        assert health["checks"]["write_serializer"]["queued_labels"] == ["heartbeat-bookkeeping"]
+        assert health["checks"]["live_write_serializer"]["status"] == "pass"
         assert health["checks"]["db_pool"]["checked_out"] == 0
 
         with request_factory() as list_db:
@@ -248,9 +268,8 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
         assert len(registry.sent) == 1
 
         release_writer.set()
-        heartbeat_response = await asyncio.wait_for(heartbeat_task, timeout=ROUTE_TIMEOUT_SECONDS)
         await asyncio.wait_for(blocker, timeout=ROUTE_TIMEOUT_SECONDS)
-        assert heartbeat_response.status_code == 204
+        await _wait_until(lambda: serializer.queue_depth == 0 and not serializer.writer_active)
     finally:
         release_writer.set()
         if heartbeat_task is not None and not heartbeat_task.done():
