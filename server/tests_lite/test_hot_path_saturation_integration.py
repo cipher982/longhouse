@@ -30,9 +30,11 @@ from zerg.models import User
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
+from zerg.models.live_store import LiveLaunchReadiness
 from zerg.routers import agents_sessions as agents_sessions_router
 from zerg.routers import health as health_router
 from zerg.routers import heartbeat as heartbeat_router
+import zerg.services.remote_session_launch as remote_session_launch_module
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.remote_session_launch import RemoteLaunchParams
@@ -167,9 +169,11 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
     monkeypatch.setattr(database_module, "default_session_factory", request_factory)
     monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
     monkeypatch.setattr(data_plane_module, "create_archive_store", _cold_store_unavailable)
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(heartbeat_router, "live_store_configured", lambda: True)
     monkeypatch.setattr(heartbeat_router, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(heartbeat_router, "get_live_write_serializer", lambda: live_serializer)
+    monkeypatch.setattr(remote_session_launch_module, "get_live_write_serializer", lambda: live_serializer)
     monkeypatch.setattr(write_serializer_module, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(write_serializer_module, "get_live_write_serializer", lambda: live_serializer)
 
@@ -263,9 +267,18 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
                     registry=registry,
                 ),
                 timeout=ROUTE_TIMEOUT_SECONDS,
-            )
+        )
         assert launch.launch_state == "live"
         assert len(registry.sent) == 1
+        with live_factory() as live_db:
+            readiness = (
+                live_db.query(LiveLaunchReadiness)
+                .filter(LiveLaunchReadiness.session_id == str(launch.session_id))
+                .one()
+            )
+            assert readiness.state == "adopted"
+            assert readiness.device_id == "cinder"
+            assert readiness.provider == "codex"
 
         release_writer.set()
         await asyncio.wait_for(blocker, timeout=ROUTE_TIMEOUT_SECONDS)
