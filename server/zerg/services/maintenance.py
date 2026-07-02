@@ -14,6 +14,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,8 @@ logger = logging.getLogger(__name__)
 RUNNER_HEALTH_RECONCILE_INTERVAL = 120
 LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_INTERVAL_SECONDS", "10"))
 LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_BATCH_SIZE", "100"))
+LIVE_ARCHIVE_OUTBOX_CLEANUP_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_OUTBOX_CLEANUP_BATCH_SIZE", "1000"))
+LIVE_ARCHIVE_OUTBOX_RETENTION_DAYS = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_OUTBOX_RETENTION_DAYS", "7"))
 
 _maintenance_task: asyncio.Task | None = None
 _live_archive_drain_task: asyncio.Task | None = None
@@ -44,14 +49,26 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
     from zerg.database import get_live_session_factory
     from zerg.database import live_store_configured
     from zerg.models.live_store import LiveArchiveOutbox
+    from zerg.services.live_archive_outbox import cleanup_drained_live_archive_outbox
     from zerg.services.live_archive_outbox import drain_live_archive_outbox
     from zerg.services.write_serializer import get_write_serializer
 
     if not live_store_configured():
-        return {"processed": 0, "drained": 0, "failed": 0}
+        return {"processed": 0, "drained": 0, "failed": 0, "cleaned": 0}
     live_session_factory = get_live_session_factory()
     if live_session_factory is None:
-        return {"processed": 0, "drained": 0, "failed": 0}
+        return {"processed": 0, "drained": 0, "failed": 0, "cleaned": 0}
+
+    def _cleanup_drained() -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=LIVE_ARCHIVE_OUTBOX_RETENTION_DAYS)
+        with live_session_factory() as live_db:
+            cleaned = cleanup_drained_live_archive_outbox(
+                live_db,
+                older_than=cutoff,
+                limit=LIVE_ARCHIVE_OUTBOX_CLEANUP_BATCH_SIZE,
+            )
+            live_db.commit()
+            return cleaned
 
     with live_session_factory() as live_db:
         pending = (
@@ -61,7 +78,8 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
             .first()
         )
     if pending is None:
-        return {"processed": 0, "drained": 0, "failed": 0}
+        cleaned = _cleanup_drained()
+        return {"processed": 0, "drained": 0, "failed": 0, "cleaned": cleaned}
 
     def _drain(archive_db):
         with live_session_factory() as live_db:
@@ -72,11 +90,13 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
             )
         return result.as_dict()
 
-    return await get_write_serializer().execute(
+    result = await get_write_serializer().execute(
         _drain,
         auto_commit=False,
         label="live-archive-drain",
     )
+    result["cleaned"] = _cleanup_drained()
+    return result
 
 
 async def _loop() -> None:
@@ -95,12 +115,13 @@ async def _live_archive_drain_loop() -> None:
         try:
             await asyncio.sleep(LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL)
             result = await _drain_live_archive_outbox_once()
-            if result["processed"]:
+            if result["processed"] or result["cleaned"]:
                 logger.info(
-                    "Live archive outbox drain processed=%d drained=%d failed=%d",
+                    "Live archive outbox drain processed=%d drained=%d failed=%d cleaned=%d",
                     result["processed"],
                     result["drained"],
                     result["failed"],
+                    result["cleaned"],
                 )
         except asyncio.CancelledError:
             return

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 
 import pytest
@@ -74,7 +75,7 @@ async def test_live_archive_drain_uses_archive_writer_lane(tmp_path, monkeypatch
     try:
         result = await _drain_live_archive_outbox_once()
 
-        assert result == {"processed": 1, "drained": 1, "failed": 0}
+        assert result == {"processed": 1, "drained": 1, "failed": 0, "cleaned": 0}
         assert calls == [("live-archive-drain", False)]
         with ArchiveSession() as archive_db:
             row = archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "maintenance-drain").one()
@@ -84,4 +85,49 @@ async def test_live_archive_drain_uses_archive_writer_lane(tmp_path, monkeypatch
             assert outbox.drained_at is not None
     finally:
         archive_engine.dispose()
+        live_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_archive_drain_cleans_old_drained_rows_without_archive_writer(tmp_path, monkeypatch):
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    now = datetime.now(timezone.utc)
+    with LiveSession() as live_db:
+        live_db.add(
+            LiveArchiveOutbox(
+                idempotency_key="old-drained",
+                kind="heartbeat_stamp.v1",
+                payload_json="{}",
+                drained_at=now - timedelta(days=8),
+            )
+        )
+        live_db.add(
+            LiveArchiveOutbox(
+                idempotency_key="recent-drained",
+                kind="heartbeat_stamp.v1",
+                payload_json="{}",
+                drained_at=now - timedelta(days=1),
+            )
+        )
+        live_db.commit()
+
+    class FakeSerializer:
+        async def execute(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+            raise AssertionError("cleanup-only tick must not use archive writer")
+
+    monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
+    monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: FakeSerializer())
+
+    try:
+        result = await _drain_live_archive_outbox_once()
+
+        assert result == {"processed": 0, "drained": 0, "failed": 0, "cleaned": 1}
+        with LiveSession() as live_db:
+            rows = {row.idempotency_key for row in live_db.query(LiveArchiveOutbox).all()}
+            assert rows == {"recent-drained"}
+    finally:
         live_engine.dispose()

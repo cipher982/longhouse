@@ -115,6 +115,33 @@ def enqueue_runtime_events_outbox(db: Session, events: list[RuntimeEventIngest])
     return queued
 
 
+def cleanup_drained_live_archive_outbox(
+    db: Session,
+    *,
+    older_than: datetime,
+    limit: int = 1000,
+) -> int:
+    """Delete drained outbox rows older than the retention cutoff."""
+
+    if limit <= 0:
+        return 0
+    cutoff = normalize_utc(older_than) or older_than
+    ids = [
+        row.id
+        for row in (
+            db.query(LiveArchiveOutbox.id)
+            .filter(LiveArchiveOutbox.drained_at.isnot(None))
+            .filter(LiveArchiveOutbox.drained_at < cutoff)
+            .order_by(LiveArchiveOutbox.drained_at.asc(), LiveArchiveOutbox.id.asc())
+            .limit(limit)
+            .all()
+        )
+    ]
+    if not ids:
+        return 0
+    return db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.id.in_(ids)).delete(synchronize_session=False)
+
+
 def drain_live_archive_outbox(
     live_db: Session,
     archive_db: Session,
