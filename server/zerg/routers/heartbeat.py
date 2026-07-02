@@ -47,8 +47,10 @@ from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import mark_missing_managed_control_leases
 from zerg.services.managed_control_state import refresh_managed_control_lease_health
+from zerg.services.managed_control_state import upsert_live_control_leases
 from zerg.services.managed_control_state import upsert_managed_control_leases
 from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
@@ -916,6 +918,20 @@ async def ingest_heartbeat(
                 ).delete()
                 hb = LiveHeartbeatStamp(**heartbeat_stamp_kwargs)
                 write_db.add(hb)
+                if _managed_leases:
+                    upsert_live_control_leases(
+                        write_db,
+                        _managed_leases,
+                        device_id=_device_id,
+                        received_at=_now,
+                    )
+                if _managed_leases_present:
+                    mark_missing_live_control_leases(
+                        write_db,
+                        _managed_leases,
+                        device_id=_device_id,
+                        received_at=_now,
+                    )
                 return previous_sessions_digest
 
             def _do_heartbeat_bookkeeping(

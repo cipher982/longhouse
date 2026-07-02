@@ -6,6 +6,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
@@ -18,6 +19,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 import zerg.database as database_module
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import Base
 from zerg.database import initialize_live_database
 from zerg.database import make_engine
@@ -25,8 +27,12 @@ from zerg.database import make_live_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveRuntimeState
+from zerg.services.managed_control_state import load_managed_control_state_map
+from zerg.services.managed_control_state import mark_missing_live_control_leases
+from zerg.services.managed_control_state import upsert_live_control_leases
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_live_runtime_events
 from zerg.services.session_runtime import load_runtime_state_map
@@ -143,6 +149,128 @@ def test_live_runtime_state_feeds_existing_runtime_overlay(tmp_path, monkeypatch
         live_engine.dispose()
 
 
+def test_live_control_lease_feeds_managed_control_overlay(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: LiveSession)
+
+    try:
+        with ArchiveSession() as archive_db:
+            session = AgentSession(
+                provider="codex",
+                environment="test",
+                project="live-control",
+                device_id="cinder",
+                started_at=now,
+                last_activity_at=now,
+            )
+            archive_db.add(session)
+            archive_db.commit()
+            session_id = session.id
+
+        lease = SimpleNamespace(
+            session_id=session_id,
+            provider="codex",
+            machine_id="cinder",
+            state="attached",
+            sequence=42,
+            bridge_status="ready",
+            thread_subscription_status="active",
+            observed_at=now,
+            lease_ttl_ms=60_000,
+        )
+        with LiveSession() as live_db:
+            touched = upsert_live_control_leases(live_db, [lease], device_id="cinder", received_at=now)
+            live_db.commit()
+
+        assert touched == {session_id}
+
+        with ArchiveSession() as archive_db:
+            overlay = load_managed_control_state_map(archive_db, [session_id])[session_id]
+
+        assert overlay.control_state == "online"
+        assert overlay.lease_state == "attached"
+        assert overlay.device_id == "cinder"
+        assert overlay.machine_id == "cinder"
+        assert overlay.sequence == 42
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_fresh_live_control_missing_beats_stale_archive_online(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(minutes=5)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: LiveSession)
+
+    try:
+        with ArchiveSession() as archive_db:
+            session = AgentSession(
+                provider="codex",
+                environment="test",
+                project="live-control-missing",
+                device_id="cinder",
+                started_at=old,
+                last_activity_at=old,
+            )
+            archive_db.add(session)
+            archive_db.flush()
+            _thread, _run, conn = seed_managed_kernel_rows(
+                archive_db,
+                session,
+                control_plane="codex_bridge",
+                state="attached",
+            )
+            conn.device_id = "cinder"
+            conn.last_health_at = old
+            archive_db.commit()
+            session_id = session.id
+
+        lease = SimpleNamespace(
+            session_id=session_id,
+            provider="codex",
+            machine_id="cinder",
+            state="attached",
+            sequence=1,
+            bridge_status="ready",
+            thread_subscription_status="active",
+            observed_at=old,
+            lease_ttl_ms=60_000,
+        )
+        with LiveSession() as live_db:
+            upsert_live_control_leases(live_db, [lease], device_id="cinder", received_at=old)
+            mark_missing_live_control_leases(live_db, [], device_id="cinder", received_at=now)
+            live_db.commit()
+
+        with ArchiveSession() as archive_db:
+            overlay = load_managed_control_state_map(archive_db, [session_id])[session_id]
+
+        assert overlay.control_state == "offline"
+        assert overlay.lease_state == "missing"
+        assert overlay.reason == "missing_from_snapshot"
+        assert overlay.last_control_seen_at == now
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
 def test_live_terminal_runtime_state_closes_session_for_input(tmp_path, monkeypatch):
     now = datetime.now(timezone.utc)
     archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
@@ -212,6 +340,7 @@ async def test_heartbeat_live_stamp_returns_while_archive_bookkeeping_waits(tmp_
     live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
     initialize_live_database(live_engine)
     LiveSession = sessionmaker(bind=live_engine)
+    session_id = uuid4()
     old_stamp_at = datetime.now(timezone.utc) - timedelta(days=31)
     with LiveSession() as live_db:
         live_db.add(
@@ -274,7 +403,19 @@ async def test_heartbeat_live_stamp_returns_while_archive_bookkeeping_waits(tmp_
         is_offline=False,
         sessions_digest="digest-1",
         sessions_sequence=7,
-        sessions=[],
+        managed_sessions=[
+            heartbeat_router.ManagedSessionLeaseIn(
+                session_id=session_id,
+                provider="codex",
+                machine_id="live-split",
+                state="attached",
+                phase="idle",
+                bridge_status="ready",
+                thread_subscription_status="active",
+                lease_ttl_ms=60_000,
+                sequence=7,
+            )
+        ],
     )
 
     request_db = ArchiveSession()
@@ -300,6 +441,11 @@ async def test_heartbeat_live_stamp_returns_while_archive_bookkeeping_waits(tmp_
             assert row.sessions_digest == "digest-1"
             assert row.sessions_sequence == 7
             assert row.version == "0.5.0"
+            control = live_db.query(LiveControlLease).filter(LiveControlLease.session_id == str(session_id)).one()
+            assert control.device_id == "live-split"
+            assert control.provider == "codex"
+            assert control.state == "attached"
+            assert control.sequence == 7
 
         with ArchiveSession() as archive_db:
             assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "live-split").count() == 0

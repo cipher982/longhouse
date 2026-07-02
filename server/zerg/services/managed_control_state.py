@@ -7,6 +7,7 @@ views.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -17,10 +18,12 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+import zerg.database as database_module
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
+from zerg.models.live_store import LiveControlLease
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import provider_for_control_plane
@@ -249,6 +252,153 @@ def _overlay_from_connection(
     )
 
 
+def _payload_for_live_lease(lease: Any, *, control_state: str, reason: str | None, ttl_ms: int) -> dict[str, Any]:
+    observed_at = normalize_utc(getattr(lease, "observed_at", None))
+    return {
+        "bridge_status": _normalized(getattr(lease, "bridge_status", None)) or None,
+        "control_state": control_state,
+        "lease_ttl_ms": ttl_ms,
+        "observed_at": observed_at.isoformat() if observed_at is not None else None,
+        "reason": reason,
+        "thread_subscription_status": _normalized(getattr(lease, "thread_subscription_status", None)) or None,
+    }
+
+
+def _live_lease_payload(row: LiveControlLease) -> dict[str, Any]:
+    try:
+        payload = json.loads(row.payload_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _overlay_from_live_lease(row: LiveControlLease) -> ManagedControlOverlay | None:
+    try:
+        session_id = UUID(str(row.session_id))
+    except (TypeError, ValueError):
+        return None
+    payload = _live_lease_payload(row)
+    heartbeat_at = normalize_utc(row.heartbeat_at) or _utc_now()
+    ttl_ms = int(payload.get("lease_ttl_ms") or DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS)
+    control_state, default_reason = _lease_control_state(
+        lease_state=_normalized(row.state).lower() or "unknown",
+        bridge_status=_normalized(payload.get("bridge_status")) or None,
+        thread_subscription_status=_normalized(payload.get("thread_subscription_status")) or None,
+    )
+    return ManagedControlOverlay(
+        session_id=session_id,
+        provider=_normalized(row.provider).lower() or "unknown",
+        device_id=_normalized(row.device_id) or None,
+        machine_id=_normalized(row.machine_id) or None,
+        transport=None,
+        lease_state=_normalized(row.state).lower() or "unknown",
+        control_state=_normalized(payload.get("control_state")).lower() or control_state,
+        reason=_normalized(payload.get("reason")) or default_reason,
+        source=CONTROL_SOURCE_HEARTBEAT,
+        sequence=row.sequence,
+        last_control_seen_at=heartbeat_at,
+        lease_observed_at=heartbeat_at,
+        lease_ttl_ms=ttl_ms,
+        control_expires_at=heartbeat_at + timedelta(milliseconds=ttl_ms),
+    )
+
+
+def upsert_live_control_leases(
+    db: Session,
+    leases: list[Any],
+    *,
+    device_id: str,
+    received_at: datetime,
+) -> set[UUID]:
+    """Materialize managed lease snapshots into the Live Store hot lane."""
+
+    touched: set[UUID] = set()
+    seen_at = normalize_utc(received_at) or _utc_now()
+    normalized_device_id = _normalized(device_id) or device_id
+    for lease in leases:
+        session_id = getattr(lease, "session_id", None)
+        if session_id is None:
+            continue
+        provider = _normalized(getattr(lease, "provider", None)).lower() or "unknown"
+        lease_state = _normalized(getattr(lease, "state", None)).lower() or "unknown"
+        bridge_status = _normalized(getattr(lease, "bridge_status", None)) or None
+        thread_subscription_status = _normalized(getattr(lease, "thread_subscription_status", None)) or None
+        control_state, reason = _lease_control_state(
+            lease_state=lease_state,
+            bridge_status=bridge_status,
+            thread_subscription_status=thread_subscription_status,
+        )
+        ttl_ms = int(getattr(lease, "lease_ttl_ms", None) or DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS)
+        row = (
+            db.query(LiveControlLease)
+            .filter(
+                LiveControlLease.session_id == str(session_id),
+                LiveControlLease.provider == provider,
+                LiveControlLease.device_id == normalized_device_id,
+            )
+            .first()
+        )
+        if row is None:
+            row = LiveControlLease(
+                session_id=str(session_id),
+                provider=provider,
+                device_id=normalized_device_id,
+            )
+            db.add(row)
+        row.machine_id = _normalized(getattr(lease, "machine_id", None)) or None
+        row.state = lease_state
+        row.sequence = getattr(lease, "sequence", None)
+        row.heartbeat_at = seen_at
+        row.payload_json = json.dumps(
+            _payload_for_live_lease(lease, control_state=control_state, reason=reason, ttl_ms=ttl_ms),
+            sort_keys=True,
+        )
+        touched.add(session_id)
+    return touched
+
+
+def mark_missing_live_control_leases(
+    db: Session,
+    leases: list[Any],
+    *,
+    device_id: str,
+    received_at: datetime,
+) -> set[UUID]:
+    """Mark live control leases from this device offline when omitted from the snapshot."""
+
+    if os.environ.get(DISABLE_MISSING_MANAGED_LEASE_DETACH_ENV) in {"1", "true", "TRUE", "yes", "on"}:
+        return set()
+
+    seen_session_ids = {str(getattr(lease, "session_id", "")) for lease in leases if getattr(lease, "session_id", None) is not None}
+    normalized_device_id = _normalized(device_id)
+    if not normalized_device_id:
+        return set()
+    seen_at = normalize_utc(received_at) or _utc_now()
+    query = db.query(LiveControlLease).filter(
+        LiveControlLease.device_id == normalized_device_id,
+        LiveControlLease.state.in_(("attached", "degraded")),
+    )
+    if seen_session_ids:
+        query = query.filter(LiveControlLease.session_id.notin_(seen_session_ids))
+
+    touched: set[UUID] = set()
+    for row in query.all():
+        last_seen = normalize_utc(row.heartbeat_at)
+        if last_seen is not None and last_seen >= seen_at:
+            continue
+        row.state = "missing"
+        row.heartbeat_at = seen_at
+        payload = _live_lease_payload(row)
+        payload["control_state"] = "offline"
+        payload["reason"] = "missing_from_snapshot"
+        row.payload_json = json.dumps(payload, sort_keys=True)
+        try:
+            touched.add(UUID(str(row.session_id)))
+        except (TypeError, ValueError):
+            continue
+    return touched
+
+
 def live_transport_control_overlay(
     session: AgentSession,
     *,
@@ -472,7 +622,39 @@ def load_managed_control_state_map(
         current = _connection_priority(existing)
         if prefer > current:
             best[session_id] = conn
-    return {sid: _overlay_from_connection(session_id=sid, conn=conn) for sid, conn in best.items()}
+    overlays = {sid: _overlay_from_connection(session_id=sid, conn=conn) for sid, conn in best.items()}
+    for session_id, overlay in _load_live_managed_control_state_map(session_ids).items():
+        existing = overlays.get(session_id)
+        if existing is None or _overlay_priority(overlay) >= _overlay_priority(existing):
+            overlays[session_id] = overlay
+    return overlays
+
+
+def _load_live_managed_control_state_map(session_ids: list[UUID]) -> dict[UUID, ManagedControlOverlay]:
+    if not session_ids or not database_module.live_store_configured():
+        return {}
+    live_session_factory = database_module.get_live_session_factory()
+    if live_session_factory is None:
+        return {}
+    session_id_strings = [str(session_id) for session_id in session_ids]
+    with live_session_factory() as live_db:
+        rows = live_db.query(LiveControlLease).filter(LiveControlLease.session_id.in_(session_id_strings)).all()
+    best: dict[UUID, ManagedControlOverlay] = {}
+    for row in rows:
+        overlay = _overlay_from_live_lease(row)
+        if overlay is None:
+            continue
+        existing = best.get(overlay.session_id)
+        if existing is None or _overlay_priority(overlay) > _overlay_priority(existing):
+            best[overlay.session_id] = overlay
+    return best
+
+
+def _overlay_priority(overlay: ManagedControlOverlay) -> tuple:
+    control_state = _normalized(overlay.control_state).lower()
+    state_rank = {"online": 5, "degraded": 4, "offline": 3, "unknown": 0}.get(control_state, 0)
+    last_seen = normalize_utc(overlay.last_control_seen_at) or datetime.min.replace(tzinfo=timezone.utc)
+    return (last_seen, state_rank, overlay.sequence or 0, overlay.source)
 
 
 def _connection_priority(conn: SessionConnection) -> tuple:
