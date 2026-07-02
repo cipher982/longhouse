@@ -167,6 +167,8 @@ def drain_live_archive_outbox(
         .limit(limit)
         .all()
     )
+    if not rows:
+        return LiveArchiveDrainResult()
 
     processed = 0
     drained = 0
@@ -180,18 +182,18 @@ def drain_live_archive_outbox(
         except Exception as exc:
             archive_db.rollback()
             row.last_error = f"{type(exc).__name__}: {exc}"
-            live_db.commit()
             failed += 1
             continue
 
-        try:
-            row.drained_at = drained_at
-            row.last_error = None
-            live_db.commit()
-            drained += 1
-        except Exception:
-            live_db.rollback()
-            failed += 1
+        row.drained_at = drained_at
+        row.last_error = None
+        drained += 1
+
+    try:
+        live_db.commit()
+    except Exception:
+        live_db.rollback()
+        return LiveArchiveDrainResult(processed=processed, drained=0, failed=processed)
 
     return LiveArchiveDrainResult(processed=processed, drained=drained, failed=failed)
 

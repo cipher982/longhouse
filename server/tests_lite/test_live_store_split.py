@@ -258,6 +258,77 @@ def test_live_archive_outbox_drains_heartbeat_to_archive_idempotently(tmp_path):
         live_engine.dispose()
 
 
+def test_live_archive_outbox_batches_live_mark_drained_commit(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    heartbeat = {
+        "device_id": "live-drain-batch",
+        "received_at": now,
+        "version": "0.5.0",
+        "spool_pending": 1,
+        "spool_dead": 0,
+        "parse_errors_1h": 0,
+        "consecutive_failures": 0,
+        "ship_attempts_1h": 1,
+        "ship_successes_1h": 1,
+        "ship_rate_limited_1h": 0,
+        "ship_server_errors_1h": 0,
+        "ship_payload_rejections_1h": 0,
+        "ship_payload_too_large_1h": 0,
+        "ship_retryable_client_errors_1h": 0,
+        "ship_connect_errors_1h": 0,
+        "disk_free_bytes": 1,
+        "is_offline": 0,
+        "raw_json": "{}",
+    }
+
+    try:
+        with LiveSession() as live_db:
+            for index in range(5):
+                row = {
+                    **heartbeat,
+                    "received_at": now + timedelta(milliseconds=index),
+                    "sessions_sequence": index,
+                }
+                assert enqueue_heartbeat_stamp_outbox(live_db, row) is True
+            live_db.commit()
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            live_commit_count = 0
+            real_live_commit = live_db.commit
+
+            def counted_live_commit():
+                nonlocal live_commit_count
+                live_commit_count += 1
+                return real_live_commit()
+
+            monkeypatch.setattr(live_db, "commit", counted_live_commit)
+            result = drain_live_archive_outbox(live_db, archive_db, limit=10, now=now + timedelta(seconds=1))
+
+        assert result.processed == 5
+        assert result.drained == 5
+        assert result.failed == 0
+        assert live_commit_count == 1
+
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "live-drain-batch").count() == 5
+        with LiveSession() as live_db:
+            rows = live_db.query(LiveArchiveOutbox).all()
+            assert len(rows) == 5
+            assert all(row.drained_at is not None for row in rows)
+            assert all(row.attempts == 1 for row in rows)
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
 def test_live_archive_outbox_retries_after_live_mark_drained_commit_failure(tmp_path, monkeypatch):
     now = datetime.now(timezone.utc)
     archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
