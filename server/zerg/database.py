@@ -14,7 +14,6 @@ from threading import Lock
 from typing import Any
 from typing import Iterator
 
-import dotenv
 from sqlalchemy import Engine
 from sqlalchemy import MetaData
 from sqlalchemy import create_engine
@@ -163,12 +162,6 @@ def _get_or_create_live_commis_session_factories(commis_id: str) -> tuple[sessio
         _live_commis_session_factories[safe_id] = factory
         _live_commis_write_session_factories[safe_id] = write_factory
         return factory, write_factory
-
-
-# Use override=True to ensure proper quote stripping even if vars are inherited from parent process.
-# In test/E2E mode, do not override explicit env vars like ENVIRONMENT.
-_override_env = os.getenv("TESTING", "").strip().lower() not in {"1", "true", "yes", "on"}
-dotenv.load_dotenv(override=_override_env)
 
 
 # SQLite-only: no schema support
@@ -412,14 +405,7 @@ def get_session_factory() -> sessionmaker:
     if default_session_factory is not None:
         return default_session_factory
 
-    # Fallback for edge cases where module loaded before DATABASE_URL set
-    db_url = _settings.database_url
-    if not db_url:
-        raise ValueError("DATABASE_URL not set in environment")
-
-    logger.warning("get_session_factory() creating engine on-demand (default_session_factory was None)")
-    engine = make_engine(db_url)
-    return make_sessionmaker(engine)
+    raise RuntimeError("Database is not configured; call configure_database() at the process startup boundary")
 
 
 # Default engine and sessionmaker instances for app usage
@@ -433,7 +419,7 @@ if _settings.database_url:
     _write_session_factory = make_sessionmaker(_write_engine)
 else:
     # Unit tests will override these in conftest.py before any actual usage
-    logger.warning("DATABASE_URL not set - using placeholder (will be overridden by tests)")
+    logger.debug("DATABASE_URL not set; database runtime is unconfigured")
     default_engine = None  # type: ignore[assignment]
     default_session_factory = None  # type: ignore[assignment]
     _write_engine = None

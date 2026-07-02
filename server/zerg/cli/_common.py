@@ -12,7 +12,6 @@ from uuid import UUID
 
 import typer
 
-from zerg.services.local_health import collect_launch_readiness
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
@@ -64,6 +63,8 @@ def ensure_managed_launch_preflight(
     exit_code: int = 1,
 ) -> None:
     """Fail fast when the local machine contract disagrees with managed launch."""
+
+    from zerg.services.local_health import collect_launch_readiness
 
     state_root = resolve_longhouse_home_from_provider_home(config_dir) if config_dir_is_provider_home and config_dir else config_dir
     readiness = collect_launch_readiness(

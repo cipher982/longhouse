@@ -21,6 +21,19 @@ from unittest.mock import MagicMock
 import zerg.config as config_mod
 
 
+def _run_without_runtime_config(script: str) -> subprocess.CompletedProcess[str]:
+    repo_root = Path(__file__).resolve().parents[2]
+    env = {k: v for k, v in os.environ.items() if k not in {"DATABASE_URL", "FERNET_SECRET"}}
+    return subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=str(repo_root / "server"),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
 def test_get_settings_unchecked_does_not_call_validate(monkeypatch):
     """get_settings_unchecked() must NOT call _validate_required — it is the
     import-time-safe raw accessor."""
@@ -100,18 +113,62 @@ def test_zerg_database_imports_without_database_url():
     that default_engine is None in all environments. The routing tests above
     plus the source-level guards are the hermetic proof of the split.
     """
-    repo_root = Path(__file__).resolve().parents[2]
-    env = {k: v for k, v in os.environ.items() if k not in {"DATABASE_URL", "FERNET_SECRET"}}
-    result = subprocess.run(
-        [sys.executable, "-c", "import zerg.database; print('DATABASE_IMPORT_OK')"],
-        cwd=str(repo_root / "server"),
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+    result = _run_without_runtime_config("import zerg.database; print('DATABASE_IMPORT_OK')")
     assert result.returncode == 0, (
         f"zerg.database import crashed without DATABASE_URL in os.environ — the "
         f"cursor Helm ingest path would be broken again:\n{result.stderr}"
     )
     assert "DATABASE_IMPORT_OK" in result.stdout
+
+
+def test_managed_launcher_imports_do_not_require_database_url():
+    """Managed provider launchers must stay import-safe on remote-only machines."""
+    for module_name, marker in (
+        ("zerg.cli.codex", "CODEX_IMPORT_OK"),
+        ("zerg.cli.claude", "CLAUDE_IMPORT_OK"),
+    ):
+        result = _run_without_runtime_config(f"import {module_name}; print('{marker}')")
+        assert result.returncode == 0, (
+            f"{module_name} import failed without DATABASE_URL — managed launches should not need a local DB:\n"
+            f"{result.stderr}"
+        )
+        assert marker in result.stdout
+        combined = f"{result.stdout}\n{result.stderr}"
+        assert "DATABASE_URL not set" not in combined
+
+
+def test_top_level_cli_import_does_not_require_database_url():
+    result = _run_without_runtime_config("import zerg.cli.main; print('CLI_IMPORT_OK')")
+    assert result.returncode == 0, (
+        "Top-level CLI import failed without DATABASE_URL; remote-only CLI surfaces should stay lightweight:\n"
+        f"{result.stderr}"
+    )
+    assert "CLI_IMPORT_OK" in result.stdout
+
+
+def test_longhouse_version_path_does_not_fail_on_missing_database_url():
+    result = _run_without_runtime_config(
+        "from typer.testing import CliRunner\n"
+        "from zerg.cli.main import app\n"
+        "result = CliRunner().invoke(app, ['--version'])\n"
+        "print('EXIT', result.exit_code)\n"
+        "print(result.output)\n"
+        "raise SystemExit(0 if result.exit_code in {0, 2} else result.exit_code)\n"
+    )
+    assert result.returncode == 0, result.stderr
+    combined = f"{result.stdout}\n{result.stderr}"
+    assert "DATABASE_URL" not in combined
+
+
+def test_get_session_factory_without_config_fails_clearly():
+    result = _run_without_runtime_config(
+        "import zerg.database as db\n"
+        "try:\n"
+        "    db.get_session_factory()\n"
+        "except RuntimeError as exc:\n"
+        "    print(str(exc))\n"
+        "else:\n"
+        "    raise SystemExit('get_session_factory unexpectedly succeeded')\n"
+    )
+    assert result.returncode == 0, result.stderr
+    assert "Database is not configured" in result.stdout
