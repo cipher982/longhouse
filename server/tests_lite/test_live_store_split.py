@@ -31,12 +31,17 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
+from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
 from zerg.services.live_archive_outbox import HEARTBEAT_STAMP_KIND
 from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
 from zerg.services.live_archive_outbox import drain_live_archive_outbox
 from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
+from zerg.services.live_launch_readiness import get_live_launch_readiness_by_client_request
+from zerg.services.live_launch_readiness import reap_expired_live_launch_readiness
+from zerg.services.live_launch_readiness import update_live_launch_readiness_state
+from zerg.services.live_launch_readiness import upsert_live_launch_readiness
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import upsert_live_control_leases
@@ -64,6 +69,7 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "live_archive_outbox",
         "live_control_leases",
         "live_heartbeat_stamps",
+        "live_launch_readiness",
         "live_runtime_state",
         "live_sessions",
     }
@@ -406,10 +412,19 @@ def test_live_archive_outbox_drains_runtime_event_to_archive(tmp_path):
         assert drain_result.failed == 0
 
         with ArchiveSession() as archive_db:
-            state = archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).one()
+            state = (
+                archive_db.query(SessionRuntimeState)
+                .filter(SessionRuntimeState.runtime_key == event.runtime_key)
+                .one()
+            )
             assert state.phase == "running"
             assert state.active_tool == "Shell"
-            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 1
+            assert (
+                archive_db.query(SessionObservation)
+                .filter(SessionObservation.runtime_key == event.runtime_key)
+                .count()
+                == 1
+            )
 
         with LiveSession() as live_db:
             row = live_db.query(LiveArchiveOutbox).one()
@@ -422,7 +437,12 @@ def test_live_archive_outbox_drains_runtime_event_to_archive(tmp_path):
 
         assert drain_result.processed == 0
         with ArchiveSession() as archive_db:
-            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 1
+            assert (
+                archive_db.query(SessionObservation)
+                .filter(SessionObservation.runtime_key == event.runtime_key)
+                .count()
+                == 1
+            )
     finally:
         archive_engine.dispose()
         live_engine.dispose()
@@ -485,8 +505,18 @@ def test_live_archive_outbox_runtime_event_retry_is_idempotent(tmp_path, monkeyp
         assert drain_result.drained == 0
         assert drain_result.failed == 1
         with ArchiveSession() as archive_db:
-            assert archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).count() == 0
-            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 0
+            assert (
+                archive_db.query(SessionRuntimeState)
+                .filter(SessionRuntimeState.runtime_key == event.runtime_key)
+                .count()
+                == 0
+            )
+            assert (
+                archive_db.query(SessionObservation)
+                .filter(SessionObservation.runtime_key == event.runtime_key)
+                .count()
+                == 0
+            )
         with LiveSession() as live_db:
             row = live_db.query(LiveArchiveOutbox).one()
             assert row.drained_at is None
@@ -511,10 +541,95 @@ def test_live_archive_outbox_runtime_event_retry_is_idempotent(tmp_path, monkeyp
         assert drain_result.drained == 1
         assert drain_result.failed == 0
         with ArchiveSession() as archive_db:
-            assert archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).count() == 1
-            assert archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count() == 1
+            assert (
+                archive_db.query(SessionRuntimeState)
+                .filter(SessionRuntimeState.runtime_key == event.runtime_key)
+                .count()
+                == 1
+            )
+            assert (
+                archive_db.query(SessionObservation)
+                .filter(SessionObservation.runtime_key == event.runtime_key)
+                .count()
+                == 1
+            )
     finally:
         archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_live_launch_readiness_projects_and_reaps(tmp_path):
+    now = datetime.now(timezone.utc)
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    session_id = uuid4()
+    expired_session_id = uuid4()
+
+    try:
+        with LiveSession() as live_db:
+            upsert_live_launch_readiness(
+                live_db,
+                session_id=session_id,
+                owner_id=77,
+                device_id="cinder",
+                provider="codex",
+                execution_lifetime="live_control",
+                state="pending",
+                command_id=f"launch-{session_id}",
+                client_request_id="launch-live-1",
+                machine_id="cinder",
+                project="repo",
+                expires_at=now + timedelta(minutes=2),
+                now=now,
+            )
+            upsert_live_launch_readiness(
+                live_db,
+                session_id=expired_session_id,
+                owner_id=77,
+                device_id="cinder",
+                provider="codex",
+                execution_lifetime="live_control",
+                state="pending",
+                command_id=f"launch-{expired_session_id}",
+                client_request_id="launch-live-expired",
+                machine_id="cinder",
+                project="repo",
+                expires_at=now - timedelta(seconds=1),
+                now=now - timedelta(minutes=5),
+            )
+            live_db.commit()
+
+        with LiveSession() as live_db:
+            readiness = get_live_launch_readiness_by_client_request(
+                live_db,
+                owner_id=77,
+                device_id="cinder",
+                provider="codex",
+                client_request_id="launch-live-1",
+            )
+            assert readiness is not None
+            assert readiness.session_id == session_id
+            assert readiness.launch_state == "launching"
+
+            assert update_live_launch_readiness_state(
+                live_db,
+                session_id=session_id,
+                state="adopted",
+                clear_expires=True,
+                now=now + timedelta(seconds=1),
+            )
+            removed = reap_expired_live_launch_readiness(live_db, now=now, limit=10)
+            live_db.commit()
+
+        assert removed == 1
+        with LiveSession() as live_db:
+            row = live_db.get(LiveLaunchReadiness, str(session_id))
+            assert row is not None
+            assert row.state == "adopted"
+            assert row.expires_at is None
+            assert live_db.get(LiveLaunchReadiness, str(expired_session_id)) is None
+    finally:
         live_engine.dispose()
 
 

@@ -26,6 +26,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+import zerg.database as database_module
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionLaunchAttempt
@@ -40,6 +41,8 @@ from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import update_launch_attempt
 from zerg.services.agents.kernel_writes import upsert_connection_for_run
+from zerg.services.live_launch_readiness import update_live_launch_readiness_state
+from zerg.services.live_launch_readiness import upsert_live_launch_readiness
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
@@ -57,6 +60,7 @@ from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_launch_lifecycle import normalize_remote_execution_lifetime
 from zerg.services.session_launch_lifecycle import normalize_remote_launch_error_code
 from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
+from zerg.services.write_serializer import get_live_write_serializer
 from zerg.session_loop_mode import SessionLoopMode
 
 logger = logging.getLogger(__name__)
@@ -163,6 +167,19 @@ def _launch_result_for_attempt(attempt: SessionLaunchAttempt) -> RemoteLaunchRes
         launch_error_code=lifecycle.error_code,
         launch_error_message=lifecycle.error_message,
     )
+
+
+async def _write_live_launch_readiness(write_fn) -> None:
+    if not database_module.live_store_configured():
+        return
+    live_ws = get_live_write_serializer()
+    if not live_ws.is_configured:
+        logger.warning("Live Store configured but live write serializer is unavailable for launch readiness")
+        return
+    try:
+        await live_ws.execute(write_fn, label="launch-readiness")
+    except Exception:
+        logger.warning("Failed to write live launch readiness", exc_info=True)
 
 
 def _control_plane_for_provider(provider: str | None) -> str:
@@ -528,6 +545,24 @@ async def launch_remote_session(
     now = datetime.now(timezone.utc)
     lease_until = now + timedelta(seconds=LAUNCH_LEASE_SECS)
 
+    await _write_live_launch_readiness(
+        lambda live_db: upsert_live_launch_readiness(
+            live_db,
+            session_id=session_uuid,
+            owner_id=params.owner_id,
+            device_id=device_id,
+            provider=provider,
+            execution_lifetime=execution_lifetime,
+            state="pending",
+            command_id=command_id,
+            client_request_id=client_request_id,
+            machine_id=info.machine_name or device_id,
+            project=project,
+            expires_at=lease_until,
+            now=now,
+        )
+    )
+
     session = AgentSession(
         id=session_uuid,
         provider=provider,
@@ -611,6 +646,14 @@ async def launch_remote_session(
             state="dispatched",
             error_message=error_message,
         )
+        await _write_live_launch_readiness(
+            lambda live_db: update_live_launch_readiness_state(
+                live_db,
+                session_id=session_uuid,
+                state="dispatched",
+                error_message=error_message,
+            )
+        )
         db.commit()
         db.refresh(session)
         return _launch_result_for_attempt(launch_attempt)
@@ -638,6 +681,14 @@ async def launch_remote_session(
                 cwd=cwd,
             )
         db.commit()
+        await _write_live_launch_readiness(
+            lambda live_db: update_live_launch_readiness_state(
+                live_db,
+                session_id=session_uuid,
+                state="adopted",
+                clear_expires=True,
+            )
+        )
         db.refresh(session)
         elapsed_ms = int((datetime.now(timezone.utc) - now).total_seconds() * 1000)
         logger.info(
@@ -663,6 +714,16 @@ async def launch_remote_session(
         error_code=code,
         error_message=err_msg,
         clear_expires=True,
+    )
+    await _write_live_launch_readiness(
+        lambda live_db: update_live_launch_readiness_state(
+            live_db,
+            session_id=session_uuid,
+            state="failed",
+            error_code=code,
+            error_message=err_msg,
+            clear_expires=True,
+        )
     )
     db.commit()
     db.refresh(session)

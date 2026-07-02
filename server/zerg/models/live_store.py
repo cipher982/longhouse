@@ -87,6 +87,37 @@ class LiveControlLease(LiveBase):
     __table_args__ = (UniqueConstraint("session_id", "provider", "device_id", name="uq_live_control_lease"),)
 
 
+class LiveLaunchReadiness(LiveBase):
+    __tablename__ = "live_launch_readiness"
+
+    session_id = Column(String(36), primary_key=True)
+    owner_id = Column(String(36), nullable=True, index=True)
+    client_request_id = Column(String(255), nullable=True)
+    provider = Column(String(64), nullable=False, index=True)
+    device_id = Column(String(255), nullable=False, index=True)
+    machine_id = Column(String(255), nullable=True)
+    project = Column(String(255), nullable=True)
+    execution_lifetime = Column(String(32), nullable=False)
+    state = Column(String(32), nullable=False, server_default="pending", index=True)
+    command_id = Column(String(96), nullable=True, index=True)
+    error_code = Column(String(64), nullable=True)
+    error_message = Column(Text, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "device_id",
+            "provider",
+            "client_request_id",
+            name="uq_live_launch_readiness_client_request",
+        ),
+        Index("ix_live_launch_readiness_state_expires", "state", "expires_at"),
+    )
+
+
 class LiveArchiveOutbox(LiveBase):
     __tablename__ = "live_archive_outbox"
 

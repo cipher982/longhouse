@@ -61,6 +61,7 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "device-token-create": 0,
     "device-token-revoke": 0,
     "managed-launch": 0,
+    "launch-readiness": 0,
     # Managed runtime events are the live UI truth lane and should cut ahead of
     # hook presence chatter when the machine is busy.
     "runtime-events": 5,
