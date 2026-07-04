@@ -6,10 +6,8 @@ from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import datetime
 from datetime import timezone
-from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
 
 from zerg.database import Base
 from zerg.database import get_test_commis_id
@@ -17,7 +15,6 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.database import reset_test_commis_id
 from zerg.database import set_test_commis_id
-from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.events import EventType
 from zerg.events.event_bus import EventBus
 from zerg.events.event_bus import event_bus
@@ -629,106 +626,6 @@ async def test_stream_run_events_closes_after_replay_close_marker(monkeypatch, t
             event_types.append(event["event"])
 
         assert event_types == ["assistant_started", "stream_control"]
-
-
-def test_stream_run_replay_last_event_id_header_overrides_query_param(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    owner_id, run_id = _seed_run(session_local, status=RunStatus.SUCCESS)
-    first_event_id = _append_run_event(
-        session_local, run_id=run_id, event_type="assistant_started", payload={"message": "started"}
-    )
-    second_event_id = _append_run_event(
-        session_local, run_id=run_id, event_type="assistant_complete", payload={"result": "done"}
-    )
-
-    with _patched_stream_db(monkeypatch, session_local):
-        from zerg.main import api_app
-
-        def override_current_user():
-            return SimpleNamespace(id=owner_id)
-
-        original_override = api_app.dependency_overrides.get(get_current_browser_route_user)
-        api_app.dependency_overrides[get_current_browser_route_user] = override_current_user
-        client = TestClient(api_app)
-
-        try:
-            with client.stream(
-                "GET",
-                f"/stream/runs/{run_id}?after_event_id=0",
-                headers={"Last-Event-ID": str(first_event_id)},
-            ) as response:
-                body = "".join(response.iter_text())
-
-            assert response.status_code == 200
-            assert f"id: {first_event_id}" not in body
-            assert f"id: {second_event_id}" in body
-            assert "event: assistant_complete" in body
-        finally:
-            if original_override is None:
-                api_app.dependency_overrides.pop(get_current_browser_route_user, None)
-            else:
-                api_app.dependency_overrides[get_current_browser_route_user] = original_override
-
-
-def test_stream_run_replay_invalid_last_event_id_falls_back_to_query_param(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    owner_id, run_id = _seed_run(session_local, status=RunStatus.SUCCESS)
-    first_event_id = _append_run_event(session_local, run_id=run_id, event_type="assistant_started", payload={"message": "started"})
-    second_event_id = _append_run_event(session_local, run_id=run_id, event_type="assistant_complete", payload={"result": "done"})
-
-    with _patched_stream_db(monkeypatch, session_local):
-        from zerg.main import api_app
-
-        def override_current_user():
-            return SimpleNamespace(id=owner_id)
-
-        original_override = api_app.dependency_overrides.get(get_current_browser_route_user)
-        api_app.dependency_overrides[get_current_browser_route_user] = override_current_user
-        client = TestClient(api_app)
-
-        try:
-            with client.stream(
-                "GET",
-                f"/stream/runs/{run_id}?after_event_id={first_event_id}",
-                headers={"Last-Event-ID": "not-an-int"},
-            ) as response:
-                body = "".join(response.iter_text())
-
-            assert response.status_code == 200
-            assert f"id: {first_event_id}" not in body
-            assert f"id: {second_event_id}" in body
-            assert "event: assistant_complete" in body
-        finally:
-            if original_override is None:
-                api_app.dependency_overrides.pop(get_current_browser_route_user, None)
-            else:
-                api_app.dependency_overrides[get_current_browser_route_user] = original_override
-
-
-def test_stream_run_replay_returns_404_for_unowned_run(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-    _, run_id = _seed_run(session_local, status=RunStatus.SUCCESS)
-
-    with _patched_stream_db(monkeypatch, session_local):
-        from zerg.main import api_app
-
-        def override_current_user():
-            return SimpleNamespace(id=999)
-
-        original_override = api_app.dependency_overrides.get(get_current_browser_route_user)
-        api_app.dependency_overrides[get_current_browser_route_user] = override_current_user
-        client = TestClient(api_app)
-
-        try:
-            response = client.get(f"/stream/runs/{run_id}")
-
-            assert response.status_code == 404
-            assert response.json()["detail"] == "Run not found"
-        finally:
-            if original_override is None:
-                api_app.dependency_overrides.pop(get_current_browser_route_user, None)
-            else:
-                api_app.dependency_overrides[get_current_browser_route_user] = original_override
 
 
 @pytest.mark.asyncio

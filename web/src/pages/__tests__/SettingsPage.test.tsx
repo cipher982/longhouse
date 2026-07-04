@@ -1,19 +1,19 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { describe, expect, it } from "vitest";
 import SettingsPage from "../SettingsPage";
 
-vi.mock("../../components/EmailConfigCard", () => ({
-  default: () => <div>Email Config</div>,
-}));
-
 describe("SettingsPage", () => {
-  it("renders only the active settings cards", () => {
-    render(<SettingsPage />);
+  it("redirects to the active device settings surface", () => {
+    render(
+      <MemoryRouter initialEntries={["/settings"]}>
+        <Routes>
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/settings/devices" element={<div>Device Settings</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
 
-    expect(screen.getByText("Settings")).toBeTruthy();
-    expect(screen.getByText("Email Config")).toBeTruthy();
-    expect(screen.queryByText("Basic Information")).toBeNull();
-    expect(screen.queryByText("Chat Tools")).toBeNull();
-    expect(screen.queryByText("Custom Instructions")).toBeNull();
+    expect(screen.getByText("Device Settings")).toBeTruthy();
   });
 });

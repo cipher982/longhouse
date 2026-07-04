@@ -11,7 +11,6 @@ from fastapi import HTTPException
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.routers import auth as auth_router
 from zerg.routers import auth_browser
-from zerg.routers import auth_gmail
 from zerg.routers import auth_sso
 from zerg.routers import timeline as timeline_router
 
@@ -20,21 +19,20 @@ def _route_paths(router) -> set[str]:
     return {route.path for route in router.routes}
 
 
-def test_auth_router_aggregates_browser_sso_and_gmail_routes():
+def test_auth_router_aggregates_browser_and_sso_routes():
     aggregate_paths = _route_paths(auth_router.router)
 
     assert _route_paths(auth_browser.router) <= aggregate_paths
     assert _route_paths(auth_sso.router) <= aggregate_paths
-    assert _route_paths(auth_gmail.router) <= aggregate_paths
     assert {
         "/auth/status",
         "/auth/verify",
         "/auth/password",
         "/auth/accept-handoff",
         "/auth/accept-native-handoff",
-        "/auth/google/gmail/start",
-        "/auth/google/gmail",
     } <= aggregate_paths
+    assert "/auth/google/gmail/start" not in aggregate_paths
+    assert "/auth/google/gmail" not in aggregate_paths
 
 
 def test_timeline_router_exposes_browser_archive_routes():

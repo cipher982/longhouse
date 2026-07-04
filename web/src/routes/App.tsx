@@ -16,7 +16,6 @@ import PrivacyPage from "../pages/PrivacyPage";
 import SecurityPage from "../pages/SecurityPage";
 import ProfilePage from "../pages/ProfilePage";
 import SettingsPage from "../pages/SettingsPage";
-import IntegrationsPage from "../pages/IntegrationsPage";
 import DevicesPage from "../pages/DevicesPage";
 import AdminPage from "../pages/AdminPage";
 import ObservabilityPage from "../pages/ObservabilityPage";
@@ -227,14 +226,6 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
                 element: (
                   <ErrorBoundary>
                     <SettingsPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/settings/integrations",
-                element: (
-                  <ErrorBoundary>
-                    <IntegrationsPage />
                   </ErrorBoundary>
                 ),
               },

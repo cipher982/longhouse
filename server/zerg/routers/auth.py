@@ -8,13 +8,11 @@ from zerg.auth.session_tokens import JWT_SECRET
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
 from zerg.auth.session_tokens import _encode_jwt
 from zerg.routers import auth_browser
-from zerg.routers import auth_gmail
 from zerg.routers import auth_sso
 
 router = APIRouter()
 router.include_router(auth_browser.router)
 router.include_router(auth_sso.router)
-router.include_router(auth_gmail.router)
 
 __all__ = [
     "JWT_SECRET",

@@ -262,13 +262,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Demo mode auto-seed failed (non-fatal): {e}")
 
-        # Fiche state recovery
-        if not _settings.testing:
-            from zerg.services.fiche_state_recovery import initialize_fiche_state_system
-
-            with _timed_startup_step("fiche_state_recovery"):
-                await initialize_fiche_state_system()
-
         with _timed_startup_step("models_config_validation"):
             _validate_models_config_startup()
 
@@ -297,16 +290,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:  # noqa: BLE001
                 failed.append(f"ops_events_bridge ({e})")
                 logger.exception("Failed to start ops_events_bridge")
-
-            try:
-                from zerg.services.watch_renewal_service import watch_renewal_service
-
-                with _timed_startup_step("watch_renewal_start"):
-                    await watch_renewal_service.start()
-                started.append("watch_renewal")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"watch_renewal ({e})")
-                logger.exception("Failed to start watch_renewal_service")
 
             # Managed session input queue recovery: safety net for process
             # restarts and missed local terminal/idle wakes. This is opt-in
@@ -513,31 +496,6 @@ async def lifespan(app: FastAPI):
             else:
                 logger.info("Background services started: %s", started)
 
-        # Email config status
-        if not _settings.testing:
-            try:
-                from zerg.shared.email import resolve_email_config
-
-                email_cfg = resolve_email_config()
-                email_configured = all(
-                    (
-                        email_cfg.get("AWS_SES_ACCESS_KEY_ID"),
-                        email_cfg.get("AWS_SES_SECRET_ACCESS_KEY"),
-                        email_cfg.get("FROM_EMAIL"),
-                        email_cfg.get("NOTIFY_EMAIL"),
-                    )
-                )
-                if email_configured:
-                    logger.info(
-                        "Email configured (from=%s to=%s)",
-                        email_cfg.get("FROM_EMAIL"),
-                        email_cfg.get("NOTIFY_EMAIL"),
-                    )
-                else:
-                    logger.warning("Email not configured — job notifications disabled")
-            except Exception:
-                logger.warning("Email not configured — job notifications disabled")
-
         # Telegram channel
         if not _settings.testing and _settings.telegram_bot_token:
             try:
@@ -614,13 +572,6 @@ async def lifespan(app: FastAPI):
                 logger.exception("Failed to stop Telegram channel")
 
             try:
-                from zerg.services.watch_renewal_service import watch_renewal_service
-
-                await watch_renewal_service.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop watch_renewal_service")
-
-            try:
                 from zerg.database import stop_wal_checkpoint_loop
 
                 await stop_wal_checkpoint_loop()
@@ -648,13 +599,6 @@ async def lifespan(app: FastAPI):
         from zerg.websocket.manager import topic_manager
 
         await topic_manager.shutdown()
-
-        try:
-            from zerg.services.llm_audit import audit_logger
-
-            await audit_logger.shutdown()
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to stop audit_logger")
 
         shutdown_observability()
         logger.info("Background services stopped")
