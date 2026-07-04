@@ -9,117 +9,64 @@ info:
 
 defaultContentType: application/json
 
-# ---------------------------------------------------------------------------
-# Tool Registry Schema Components
-# ---------------------------------------------------------------------------
-
 components:
   schemas:
     ToolName:
       type: string
       description: Built-in tool names available in the registry
       enum:
-        - contact_user
-        - container_exec
-        - datetime_diff
-        - generate_uuid
-        - get_current_location
         - get_current_time
-        - get_commis_evidence
-        - get_tool_output
-        - get_commis_metadata
-        - github_add_comment
-        - github_create_issue
-        - github_get_issue
-        - github_get_pull_request
-        - github_list_issues
-        - github_list_pull_requests
-        - github_list_repositories
-        - grep_commiss
+        - datetime_diff
         - http_request
-        - jira_add_comment
-        - jira_create_issue
-        - jira_get_issue
-        - jira_list_issues
-        - jira_transition_issue
-        - jira_update_issue
-        - knowledge_search
-        - linear_add_comment
-        - linear_create_issue
-        - linear_get_issue
-        - linear_list_issues
-        - linear_list_teams
-        - linear_update_issue
-        - list_imessage_messages
-        - list_commiss
-        - math_eval
-        - memory_delete
-        - memory_ls
-        - memory_read
-        - memory_search
         - memory_write
-        - notion_append_blocks
+        - memory_read
+        - memory_ls
+        - memory_search
+        - memory_delete
         - notion_create_page
         - notion_get_page
-        - notion_query_database
-        - notion_search
         - notion_update_page
-        - read_commis_file
-        - read_commis_result
-        - peek_commis_output
-        - refresh_connector_status
-        - request_session_selection
-        - runner_create_enroll_token
+        - notion_search
+        - notion_query_database
+        - notion_append_blocks
         - runner_exec
         - runner_list
-        - send_discord_webhook
-        - send_email
-        - send_imessage
+        - runner_create_enroll_token
+        - runner_doctor
         - send_slack_webhook
-        - send_sms
-        - cancel_commis
-        - check_commis_status
-        - spawn_commis
-        - wait_for_commis
-        - task_create
-        - task_delete
-        - task_list
-        - task_update
-        - list_tools
-        - search_tools
+        - peers
+        - get_session_events
+        - session_tail
+        - message_session
+        - check_messages
+        - ack_message
+        - search_sessions
+        - grep_sessions
+        - filter_sessions
+        - get_session_detail
+        - send_telegram
         - web_fetch
         - web_search
+        - list_tools
+        - search_tools
 
     ServerName:
       type: string
       description: Server/module names for tools
       enum:
-        - connector
-        - contact_user
-        - container
         - datetime
-        - discord
-        - email
-        - github
         - http
-        - imessage
-        - jira
-        - knowledge
-        - linear
-        - math
         - memory
         - notion
-        - personal
         - runner
         - runner_setup
         - slack
-        - sms
         - coordination
-        - task
-        - tool_discovery
-        - uuid
+        - session
+        - telegram
         - web_fetch
         - web_search
+        - tool_discovery
 
     ToolDefinition:
       type: object
@@ -149,7 +96,6 @@ components:
         - Internal
         - OptionalExternal
 
-    # Tool-to-server mapping for validation
     ToolRegistry:
       type: object
       description: Registry mapping tools to their servers
@@ -162,212 +108,109 @@ components:
           type: object
           description: Tool name to server mapping
           properties:
-            contact_user:
-              const: contact_user
-            container_exec:
-              const: container
-            datetime_diff:
-              const: datetime
-            generate_uuid:
-              const: uuid
-            get_current_location:
-              const: personal
             get_current_time:
               const: datetime
-            get_commis_evidence:
-              const: coordination
-            get_tool_output:
-              const: coordination
-            get_commis_metadata:
-              const: coordination
-            github_add_comment:
-              const: github
-            github_create_issue:
-              const: github
-            github_get_issue:
-              const: github
-            github_get_pull_request:
-              const: github
-            github_list_issues:
-              const: github
-            github_list_pull_requests:
-              const: github
-            github_list_repositories:
-              const: github
-            grep_commiss:
-              const: coordination
+            datetime_diff:
+              const: datetime
             http_request:
               const: http
-            jira_add_comment:
-              const: jira
-            jira_create_issue:
-              const: jira
-            jira_get_issue:
-              const: jira
-            jira_list_issues:
-              const: jira
-            jira_transition_issue:
-              const: jira
-            jira_update_issue:
-              const: jira
-            knowledge_search:
-              const: knowledge
-            linear_add_comment:
-              const: linear
-            linear_create_issue:
-              const: linear
-            linear_get_issue:
-              const: linear
-            linear_list_issues:
-              const: linear
-            linear_list_teams:
-              const: linear
-            linear_update_issue:
-              const: linear
-            list_imessage_messages:
-              const: imessage
-            list_commiss:
-              const: coordination
-            math_eval:
-              const: math
-            memory_delete:
-              const: memory
-            memory_ls:
+            memory_write:
               const: memory
             memory_read:
               const: memory
+            memory_ls:
+              const: memory
             memory_search:
               const: memory
-            memory_write:
+            memory_delete:
               const: memory
-            notion_append_blocks:
-              const: notion
             notion_create_page:
               const: notion
             notion_get_page:
               const: notion
-            notion_query_database:
+            notion_update_page:
               const: notion
             notion_search:
               const: notion
-            notion_update_page:
+            notion_query_database:
               const: notion
-            read_commis_file:
-              const: coordination
-            read_commis_result:
-              const: coordination
-            peek_commis_output:
-              const: coordination
-            refresh_connector_status:
-              const: connector
-            request_session_selection:
-              const: coordination
-            runner_create_enroll_token:
-              const: runner_setup
+            notion_append_blocks:
+              const: notion
             runner_exec:
               const: runner
             runner_list:
               const: runner_setup
-            send_discord_webhook:
-              const: discord
-            send_email:
-              const: email
-            send_imessage:
-              const: imessage
+            runner_create_enroll_token:
+              const: runner_setup
+            runner_doctor:
+              const: runner_setup
             send_slack_webhook:
               const: slack
-            send_sms:
-              const: sms
-            cancel_commis:
+            peers:
               const: coordination
-            check_commis_status:
+            get_session_events:
               const: coordination
-            spawn_commis:
+            session_tail:
               const: coordination
-            wait_for_commis:
+            message_session:
               const: coordination
-            task_create:
-              const: task
-            task_delete:
-              const: task
-            task_list:
-              const: task
-            task_update:
-              const: task
-            list_tools:
-              const: tool_discovery
-            search_tools:
-              const: tool_discovery
+            check_messages:
+              const: coordination
+            ack_message:
+              const: coordination
+            search_sessions:
+              const: session
+            grep_sessions:
+              const: session
+            filter_sessions:
+              const: session
+            get_session_detail:
+              const: session
+            send_telegram:
+              const: telegram
             web_fetch:
               const: web_fetch
             web_search:
               const: web_search
+            list_tools:
+              const: tool_discovery
+            search_tools:
+              const: tool_discovery
           required:
-            - contact_user
-            - container_exec
-            - datetime_diff
-            - generate_uuid
-            - get_current_location
             - get_current_time
-            - get_commis_evidence
-            - get_tool_output
-            - get_commis_metadata
-            - github_add_comment
-            - github_create_issue
-            - github_get_issue
-            - github_get_pull_request
-            - github_list_issues
-            - github_list_pull_requests
-            - github_list_repositories
-            - grep_commiss
+            - datetime_diff
             - http_request
-            - jira_add_comment
-            - jira_create_issue
-            - jira_get_issue
-            - jira_list_issues
-            - jira_transition_issue
-            - jira_update_issue
-            - knowledge_search
-            - linear_add_comment
-            - linear_create_issue
-            - linear_get_issue
-            - linear_list_issues
-            - linear_list_teams
-            - linear_update_issue
-            - list_imessage_messages
-            - list_commiss
-            - math_eval
-            - notion_append_blocks
+            - memory_write
+            - memory_read
+            - memory_ls
+            - memory_search
+            - memory_delete
             - notion_create_page
             - notion_get_page
-            - notion_query_database
-            - notion_search
             - notion_update_page
-            - read_commis_file
-            - read_commis_result
-            - peek_commis_output
-            - refresh_connector_status
-            - runner_create_enroll_token
+            - notion_search
+            - notion_query_database
+            - notion_append_blocks
             - runner_exec
             - runner_list
-            - send_discord_webhook
-            - send_email
-            - send_imessage
+            - runner_create_enroll_token
+            - runner_doctor
             - send_slack_webhook
-            - send_sms
-            - spawn_commis
-            - task_create
-            - task_delete
-            - task_list
-            - task_update
-            - list_tools
-            - search_tools
+            - peers
+            - get_session_events
+            - session_tail
+            - message_session
+            - check_messages
+            - ack_message
+            - search_sessions
+            - grep_sessions
+            - filter_sessions
+            - get_session_detail
+            - send_telegram
             - web_fetch
             - web_search
-
-# ---------------------------------------------------------------------------
-# Contract Validation Messages
-# ---------------------------------------------------------------------------
+            - list_tools
+            - search_tools
 
   messages:
     ToolAvailabilityContract:

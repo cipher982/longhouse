@@ -26,9 +26,6 @@ def test_commis_core_tools_no_coordinator_only_tools():
         "message_session",
         "peers",
         "runner_create_enroll_token",
-        "task_create",
-        "task_delete",
-        "task_update",
     }
     overlap = sorted(COMMIS_CORE_TOOLS & coordinator_only)
     assert not overlap, f"COMMIS_CORE_TOOLS includes coordinator-only tools: {overlap}"
@@ -41,13 +38,13 @@ def test_memory_files_not_in_default_core_tool_sets():
 
 
 def test_commis_has_essential_execution_tools():
-    """Commis must include essential execution tools."""
+    """Execution agents must include essential tools."""
     essential = {
-        "contact_user",
         "web_fetch",
         "http_request",
         "get_current_time",
-        "knowledge_search",
+        "search_sessions",
+        "get_session_detail",
     }
     missing = sorted(essential - COMMIS_CORE_TOOLS)
     assert not missing, f"COMMIS_CORE_TOOLS missing essential execution tools: {missing}"

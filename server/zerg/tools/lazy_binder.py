@@ -3,7 +3,7 @@
 This module provides the LazyToolBinder class which manages tool loading
 for runtime ReAct loops. It:
 
-1. Pre-loads core tools (spawn_commis, contact_user, etc.)
+1. Pre-loads core runtime/session tools.
 2. Lazy-loads other tools on first use
 3. Tracks which tools have been loaded for rebinding
 
@@ -43,13 +43,11 @@ logger = logging.getLogger(__name__)
 # dynamically and loaded on demand via the lazy loading mechanism.
 CORE_TOOLS: frozenset[str] = frozenset(
     [
-        "contact_user",
         "datetime_diff",
         "get_current_time",
         "get_session_detail",
         "get_session_events",
         "http_request",
-        "knowledge_search",
         "message_session",
         "peers",
         "runner_doctor",
@@ -57,25 +55,20 @@ CORE_TOOLS: frozenset[str] = frozenset(
         "runner_list",
         "search_sessions",
         "session_tail",
-        "task_create",
-        "task_list",
         "web_fetch",
         "web_search",
     ]
 )
 
-# Core tools for Commis - execution-focused tools, pre-loaded.
-# Commis agents should not get coordinator-only tools that spawn or steer peers.
+# Core tools for execution-focused agents.
 COMMIS_CORE_TOOLS: frozenset[str] = frozenset(
     [
-        "contact_user",
         "datetime_diff",
         "get_current_time",
         "get_session_detail",
         "get_session_events",
         "grep_sessions",
         "http_request",
-        "knowledge_search",
         "runner_doctor",
         "runner_exec",
         "runner_list",

@@ -89,9 +89,8 @@ class TestSkillLoader:
         loader = SkillLoader()
         skills = loader.load_bundled_skills()
 
-        # Should have the bundled skills we created
+        # Should have the bundled skills we ship.
         names = [s.name for s in skills]
-        assert "github" in names
         assert "web-search" in names
         assert "slack" in names
 

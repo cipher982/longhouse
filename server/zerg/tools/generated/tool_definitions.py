@@ -2,215 +2,125 @@
 
 from enum import Enum
 from typing import Dict
-from typing import List
 from typing import Optional
 
 
 class ToolName(str, Enum):
     """Built-in tool names available in the registry."""
 
-    CONTACT_USER = "contact_user"
-    CONTAINER_EXEC = "container_exec"
-    DATETIME_DIFF = "datetime_diff"
-    GENERATE_UUID = "generate_uuid"
-    GET_CURRENT_LOCATION = "get_current_location"
     GET_CURRENT_TIME = "get_current_time"
-    GET_COMMIS_EVIDENCE = "get_commis_evidence"
-    GET_TOOL_OUTPUT = "get_tool_output"
-    GET_COMMIS_METADATA = "get_commis_metadata"
-    GITHUB_ADD_COMMENT = "github_add_comment"
-    GITHUB_CREATE_ISSUE = "github_create_issue"
-    GITHUB_GET_ISSUE = "github_get_issue"
-    GITHUB_GET_PULL_REQUEST = "github_get_pull_request"
-    GITHUB_LIST_ISSUES = "github_list_issues"
-    GITHUB_LIST_PULL_REQUESTS = "github_list_pull_requests"
-    GITHUB_LIST_REPOSITORIES = "github_list_repositories"
-    GREP_COMMISS = "grep_commiss"
+    DATETIME_DIFF = "datetime_diff"
     HTTP_REQUEST = "http_request"
-    JIRA_ADD_COMMENT = "jira_add_comment"
-    JIRA_CREATE_ISSUE = "jira_create_issue"
-    JIRA_GET_ISSUE = "jira_get_issue"
-    JIRA_LIST_ISSUES = "jira_list_issues"
-    JIRA_TRANSITION_ISSUE = "jira_transition_issue"
-    JIRA_UPDATE_ISSUE = "jira_update_issue"
-    KNOWLEDGE_SEARCH = "knowledge_search"
-    LINEAR_ADD_COMMENT = "linear_add_comment"
-    LINEAR_CREATE_ISSUE = "linear_create_issue"
-    LINEAR_GET_ISSUE = "linear_get_issue"
-    LINEAR_LIST_ISSUES = "linear_list_issues"
-    LINEAR_LIST_TEAMS = "linear_list_teams"
-    LINEAR_UPDATE_ISSUE = "linear_update_issue"
-    LIST_IMESSAGE_MESSAGES = "list_imessage_messages"
-    LIST_COMMISS = "list_commiss"
-    MATH_EVAL = "math_eval"
-    MEMORY_DELETE = "memory_delete"
-    MEMORY_LS = "memory_ls"
-    MEMORY_READ = "memory_read"
-    MEMORY_SEARCH = "memory_search"
     MEMORY_WRITE = "memory_write"
-    NOTION_APPEND_BLOCKS = "notion_append_blocks"
+    MEMORY_READ = "memory_read"
+    MEMORY_LS = "memory_ls"
+    MEMORY_SEARCH = "memory_search"
+    MEMORY_DELETE = "memory_delete"
     NOTION_CREATE_PAGE = "notion_create_page"
     NOTION_GET_PAGE = "notion_get_page"
-    NOTION_QUERY_DATABASE = "notion_query_database"
-    NOTION_SEARCH = "notion_search"
     NOTION_UPDATE_PAGE = "notion_update_page"
-    READ_COMMIS_FILE = "read_commis_file"
-    READ_COMMIS_RESULT = "read_commis_result"
-    PEEK_COMMIS_OUTPUT = "peek_commis_output"
-    REFRESH_CONNECTOR_STATUS = "refresh_connector_status"
-    REQUEST_SESSION_SELECTION = "request_session_selection"
-    RUNNER_CREATE_ENROLL_TOKEN = "runner_create_enroll_token"
+    NOTION_SEARCH = "notion_search"
+    NOTION_QUERY_DATABASE = "notion_query_database"
+    NOTION_APPEND_BLOCKS = "notion_append_blocks"
     RUNNER_EXEC = "runner_exec"
     RUNNER_LIST = "runner_list"
-    SEND_DISCORD_WEBHOOK = "send_discord_webhook"
-    SEND_EMAIL = "send_email"
-    SEND_IMESSAGE = "send_imessage"
+    RUNNER_CREATE_ENROLL_TOKEN = "runner_create_enroll_token"
+    RUNNER_DOCTOR = "runner_doctor"
     SEND_SLACK_WEBHOOK = "send_slack_webhook"
-    SEND_SMS = "send_sms"
-    CANCEL_COMMIS = "cancel_commis"
-    CHECK_COMMIS_STATUS = "check_commis_status"
-    SPAWN_COMMIS = "spawn_commis"
-    WAIT_FOR_COMMIS = "wait_for_commis"
-    TASK_CREATE = "task_create"
-    TASK_DELETE = "task_delete"
-    TASK_LIST = "task_list"
-    TASK_UPDATE = "task_update"
-    LIST_TOOLS = "list_tools"
-    SEARCH_TOOLS = "search_tools"
+    PEERS = "peers"
+    GET_SESSION_EVENTS = "get_session_events"
+    SESSION_TAIL = "session_tail"
+    MESSAGE_SESSION = "message_session"
+    CHECK_MESSAGES = "check_messages"
+    ACK_MESSAGE = "ack_message"
+    SEARCH_SESSIONS = "search_sessions"
+    GREP_SESSIONS = "grep_sessions"
+    FILTER_SESSIONS = "filter_sessions"
+    GET_SESSION_DETAIL = "get_session_detail"
+    SEND_TELEGRAM = "send_telegram"
     WEB_FETCH = "web_fetch"
     WEB_SEARCH = "web_search"
+    LIST_TOOLS = "list_tools"
+    SEARCH_TOOLS = "search_tools"
 
 
 class ServerName(str, Enum):
     """Server/module names for tools."""
 
-    CONNECTOR = "connector"
-    CONTACT_USER = "contact_user"
-    CONTAINER = "container"
     DATETIME = "datetime"
-    DISCORD = "discord"
-    EMAIL = "email"
-    GITHUB = "github"
     HTTP = "http"
-    IMESSAGE = "imessage"
-    JIRA = "jira"
-    KNOWLEDGE = "knowledge"
-    LINEAR = "linear"
-    MATH = "math"
     MEMORY = "memory"
     NOTION = "notion"
-    PERSONAL = "personal"
     RUNNER = "runner"
     RUNNER_SETUP = "runner_setup"
     SLACK = "slack"
-    SMS = "sms"
     COORDINATION = "coordination"
-    TASK = "task"
-    TOOL_DISCOVERY = "tool_discovery"
-    UUID = "uuid"
+    SESSION = "session"
+    TELEGRAM = "telegram"
     WEB_FETCH = "web_fetch"
     WEB_SEARCH = "web_search"
+    TOOL_DISCOVERY = "tool_discovery"
 
 
 # Tool to server mapping for validation
 TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
-    ToolName.CONTACT_USER: ServerName.CONTACT_USER,
-    ToolName.CONTAINER_EXEC: ServerName.CONTAINER,
-    ToolName.DATETIME_DIFF: ServerName.DATETIME,
-    ToolName.GENERATE_UUID: ServerName.UUID,
-    ToolName.GET_CURRENT_LOCATION: ServerName.PERSONAL,
     ToolName.GET_CURRENT_TIME: ServerName.DATETIME,
-    ToolName.GET_COMMIS_EVIDENCE: ServerName.COORDINATION,
-    ToolName.GET_TOOL_OUTPUT: ServerName.COORDINATION,
-    ToolName.GET_COMMIS_METADATA: ServerName.COORDINATION,
-    ToolName.GITHUB_ADD_COMMENT: ServerName.GITHUB,
-    ToolName.GITHUB_CREATE_ISSUE: ServerName.GITHUB,
-    ToolName.GITHUB_GET_ISSUE: ServerName.GITHUB,
-    ToolName.GITHUB_GET_PULL_REQUEST: ServerName.GITHUB,
-    ToolName.GITHUB_LIST_ISSUES: ServerName.GITHUB,
-    ToolName.GITHUB_LIST_PULL_REQUESTS: ServerName.GITHUB,
-    ToolName.GITHUB_LIST_REPOSITORIES: ServerName.GITHUB,
-    ToolName.GREP_COMMISS: ServerName.COORDINATION,
+    ToolName.DATETIME_DIFF: ServerName.DATETIME,
     ToolName.HTTP_REQUEST: ServerName.HTTP,
-    ToolName.JIRA_ADD_COMMENT: ServerName.JIRA,
-    ToolName.JIRA_CREATE_ISSUE: ServerName.JIRA,
-    ToolName.JIRA_GET_ISSUE: ServerName.JIRA,
-    ToolName.JIRA_LIST_ISSUES: ServerName.JIRA,
-    ToolName.JIRA_TRANSITION_ISSUE: ServerName.JIRA,
-    ToolName.JIRA_UPDATE_ISSUE: ServerName.JIRA,
-    ToolName.KNOWLEDGE_SEARCH: ServerName.KNOWLEDGE,
-    ToolName.LINEAR_ADD_COMMENT: ServerName.LINEAR,
-    ToolName.LINEAR_CREATE_ISSUE: ServerName.LINEAR,
-    ToolName.LINEAR_GET_ISSUE: ServerName.LINEAR,
-    ToolName.LINEAR_LIST_ISSUES: ServerName.LINEAR,
-    ToolName.LINEAR_LIST_TEAMS: ServerName.LINEAR,
-    ToolName.LINEAR_UPDATE_ISSUE: ServerName.LINEAR,
-    ToolName.LIST_IMESSAGE_MESSAGES: ServerName.IMESSAGE,
-    ToolName.LIST_COMMISS: ServerName.COORDINATION,
-    ToolName.MATH_EVAL: ServerName.MATH,
-    ToolName.MEMORY_DELETE: ServerName.MEMORY,
-    ToolName.MEMORY_LS: ServerName.MEMORY,
-    ToolName.MEMORY_READ: ServerName.MEMORY,
-    ToolName.MEMORY_SEARCH: ServerName.MEMORY,
     ToolName.MEMORY_WRITE: ServerName.MEMORY,
-    ToolName.NOTION_APPEND_BLOCKS: ServerName.NOTION,
+    ToolName.MEMORY_READ: ServerName.MEMORY,
+    ToolName.MEMORY_LS: ServerName.MEMORY,
+    ToolName.MEMORY_SEARCH: ServerName.MEMORY,
+    ToolName.MEMORY_DELETE: ServerName.MEMORY,
     ToolName.NOTION_CREATE_PAGE: ServerName.NOTION,
     ToolName.NOTION_GET_PAGE: ServerName.NOTION,
-    ToolName.NOTION_QUERY_DATABASE: ServerName.NOTION,
-    ToolName.NOTION_SEARCH: ServerName.NOTION,
     ToolName.NOTION_UPDATE_PAGE: ServerName.NOTION,
-    ToolName.READ_COMMIS_FILE: ServerName.COORDINATION,
-    ToolName.READ_COMMIS_RESULT: ServerName.COORDINATION,
-    ToolName.PEEK_COMMIS_OUTPUT: ServerName.COORDINATION,
-    ToolName.REFRESH_CONNECTOR_STATUS: ServerName.CONNECTOR,
-    ToolName.REQUEST_SESSION_SELECTION: ServerName.COORDINATION,
-    ToolName.RUNNER_CREATE_ENROLL_TOKEN: ServerName.RUNNER_SETUP,
+    ToolName.NOTION_SEARCH: ServerName.NOTION,
+    ToolName.NOTION_QUERY_DATABASE: ServerName.NOTION,
+    ToolName.NOTION_APPEND_BLOCKS: ServerName.NOTION,
     ToolName.RUNNER_EXEC: ServerName.RUNNER,
     ToolName.RUNNER_LIST: ServerName.RUNNER_SETUP,
-    ToolName.SEND_DISCORD_WEBHOOK: ServerName.DISCORD,
-    ToolName.SEND_EMAIL: ServerName.EMAIL,
-    ToolName.SEND_IMESSAGE: ServerName.IMESSAGE,
+    ToolName.RUNNER_CREATE_ENROLL_TOKEN: ServerName.RUNNER_SETUP,
+    ToolName.RUNNER_DOCTOR: ServerName.RUNNER_SETUP,
     ToolName.SEND_SLACK_WEBHOOK: ServerName.SLACK,
-    ToolName.SEND_SMS: ServerName.SMS,
-    ToolName.CANCEL_COMMIS: ServerName.COORDINATION,
-    ToolName.CHECK_COMMIS_STATUS: ServerName.COORDINATION,
-    ToolName.SPAWN_COMMIS: ServerName.COORDINATION,
-    ToolName.WAIT_FOR_COMMIS: ServerName.COORDINATION,
-    ToolName.TASK_CREATE: ServerName.TASK,
-    ToolName.TASK_DELETE: ServerName.TASK,
-    ToolName.TASK_LIST: ServerName.TASK,
-    ToolName.TASK_UPDATE: ServerName.TASK,
-    ToolName.LIST_TOOLS: ServerName.TOOL_DISCOVERY,
-    ToolName.SEARCH_TOOLS: ServerName.TOOL_DISCOVERY,
+    ToolName.PEERS: ServerName.COORDINATION,
+    ToolName.GET_SESSION_EVENTS: ServerName.COORDINATION,
+    ToolName.SESSION_TAIL: ServerName.COORDINATION,
+    ToolName.MESSAGE_SESSION: ServerName.COORDINATION,
+    ToolName.CHECK_MESSAGES: ServerName.COORDINATION,
+    ToolName.ACK_MESSAGE: ServerName.COORDINATION,
+    ToolName.SEARCH_SESSIONS: ServerName.SESSION,
+    ToolName.GREP_SESSIONS: ServerName.SESSION,
+    ToolName.FILTER_SESSIONS: ServerName.SESSION,
+    ToolName.GET_SESSION_DETAIL: ServerName.SESSION,
+    ToolName.SEND_TELEGRAM: ServerName.TELEGRAM,
     ToolName.WEB_FETCH: ServerName.WEB_FETCH,
     ToolName.WEB_SEARCH: ServerName.WEB_SEARCH,
+    ToolName.LIST_TOOLS: ServerName.TOOL_DISCOVERY,
+    ToolName.SEARCH_TOOLS: ServerName.TOOL_DISCOVERY,
 }
 
 
-def validate_tool_registration(tool_name: str, server_name: str) -> bool:
-    """Validate that tool-server pairing matches schema."""
-    try:
-        tool_enum = ToolName(tool_name)
-        server_enum = ServerName(server_name)
-        return TOOL_SERVER_MAPPING.get(tool_enum) == server_enum
-    except ValueError:
-        return False
+class ToolValidator:
+    """Validate tool names and server mappings."""
 
+    @staticmethod
+    def is_valid_tool(name: str) -> bool:
+        try:
+            ToolName(name)
+            return True
+        except ValueError:
+            return False
 
-def get_expected_server(tool_name: str) -> Optional[str]:
-    """Get expected server name for a tool."""
-    try:
-        tool_enum = ToolName(tool_name)
+    @staticmethod
+    def get_server_for_tool(name: str) -> Optional[str]:
+        try:
+            tool_enum = ToolName(name)
+        except ValueError:
+            return None
         return TOOL_SERVER_MAPPING[tool_enum].value
-    except (ValueError, KeyError):
-        return None
 
-
-def list_all_tools() -> List[str]:
-    """List all valid tool names."""
-    return [tool.value for tool in ToolName]
-
-
-def list_all_servers() -> List[str]:
-    """List all valid server names."""
-    return [server.value for server in ServerName]
+    @staticmethod
+    def validate_tool_server_mapping(tool_name: str, server_name: str) -> bool:
+        expected = ToolValidator.get_server_for_tool(tool_name)
+        return expected == server_name
