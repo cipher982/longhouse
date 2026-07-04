@@ -2,7 +2,7 @@ import { testLog } from './test-logger';
 
 import { Page, expect } from '@playwright/test';
 import { createApiClient, Automation, Thread, CreateAutomationRequest } from './api-client';
-import { resetDatabaseForCommis } from './database-helpers';
+import { resetDatabaseForWorker } from './database-helpers';
 import { createAutomationViaAPI, cleanupAutomations } from './automation-helpers';
 import { logTestStep } from './test-utils';
 
@@ -14,13 +14,13 @@ export interface TestContext {
 /**
  * Setup helper that creates test data and returns a context object
  */
-export async function setupTestData(commisId: string, options: {
+export async function setupTestData(workerId: string, options: {
   automations?: CreateAutomationRequest[];
   threadsPerAutomation?: number;
 } = {}): Promise<TestContext> {
-  logTestStep('Setting up test data', { commisId, options });
+  logTestStep('Setting up test data', { workerId, options });
 
-  const apiClient = createApiClient(commisId);
+  const apiClient = createApiClient(workerId);
   const context: TestContext = {
     automations: [],
     threads: []
@@ -28,7 +28,7 @@ export async function setupTestData(commisId: string, options: {
 
   const automationConfigs = options.automations || [{}];
   for (const automationConfig of automationConfigs) {
-    const automation = await createAutomationViaAPI(commisId, automationConfig);
+    const automation = await createAutomationViaAPI(workerId, automationConfig);
     context.automations.push(automation);
 
     const threadCount = options.threadsPerAutomation || 0;
@@ -48,14 +48,14 @@ export async function setupTestData(commisId: string, options: {
 /**
  * Cleanup helper that removes test data
  */
-export async function cleanupTestData(commisId: string, context: TestContext): Promise<void> {
+export async function cleanupTestData(workerId: string, context: TestContext): Promise<void> {
   if (!context) {
     return;
   }
 
-  logTestStep('Cleaning up test data', { commisId, automationCount: context.automations?.length, threadCount: context.threads?.length });
+  logTestStep('Cleaning up test data', { workerId, automationCount: context.automations?.length, threadCount: context.threads?.length });
 
-  const apiClient = createApiClient(commisId);
+  const apiClient = createApiClient(workerId);
 
   if (context.threads) {
     for (const thread of context.threads) {
@@ -68,7 +68,7 @@ export async function cleanupTestData(commisId: string, context: TestContext): P
   }
 
   if (context.automations) {
-    await cleanupAutomations(commisId, context.automations);
+    await cleanupAutomations(workerId, context.automations);
   }
 
   logTestStep('Test data cleanup complete');
@@ -179,18 +179,18 @@ export async function navigateToChat(page: Page, automationId: string): Promise<
 
 /**
  * Reset the database to a clean state
- * @deprecated Use resetDatabaseForCommis from database-helpers.ts instead
+ * @deprecated Use resetDatabaseForWorker from database-helpers.ts instead
  */
-export async function resetDatabase(commisId: string): Promise<void> {
-  logTestStep('Resetting database (deprecated method)', { commisId });
-  await resetDatabaseForCommis(commisId);
+export async function resetDatabase(workerId: string): Promise<void> {
+  logTestStep('Resetting database (deprecated method)', { workerId });
+  await resetDatabaseForWorker(workerId);
 }
 
 /**
  * Check if the backend is healthy and responding
  */
-export async function checkBackendHealth(commisId: string = '0'): Promise<boolean> {
-  const apiClient = createApiClient(commisId);
+export async function checkBackendHealth(workerId: string = '0'): Promise<boolean> {
+  const apiClient = createApiClient(workerId);
   try {
     const response = await apiClient.healthCheck();
     return response && response.message === 'Longhouse API is running';
@@ -284,8 +284,8 @@ export async function waitForToast(
  * This is a convenience wrapper for tests that have a Page but need to create threads
  */
 export async function createTestThread(page: Page, automationId: string, title: string): Promise<Thread> {
-  const commisId = process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX ?? '0';
-  const apiClient = createApiClient(commisId);
+  const workerId = process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX ?? '0';
+  const apiClient = createApiClient(workerId);
 
   const thread = await apiClient.createThread({
     automation_id: automationId,

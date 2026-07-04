@@ -29,13 +29,13 @@ export interface AutomationBatchOptions {
  * Create a single automation via API with sensible defaults.
  */
 export async function createAutomationViaAPI(
-  commisId: string,
+  workerId: string,
   options: AutomationCreationOptions = {}
 ): Promise<Automation> {
-  const apiClient = createApiClient(commisId);
+  const apiClient = createApiClient(workerId);
 
   const config: CreateAutomationRequest = {
-    name: options.name || `Test Automation ${commisId}`,
+    name: options.name || `Test Automation ${workerId}`,
     model: options.model || 'deepseek/deepseek-v4-flash',
     system_instructions: options.systemInstructions || 'You are a test automation for E2E testing',
     task_instructions: options.taskInstructions || 'Perform test tasks as requested',
@@ -69,14 +69,14 @@ export async function createAutomationViaAPI(
  * Create multiple automations in batch.
  */
 export async function createMultipleAutomations(
-  commisId: string,
+  workerId: string,
   options: AutomationBatchOptions
 ): Promise<Automation[]> {
   const automations: Automation[] = [];
   const namePrefix = options.namePrefix || 'Batch Automation';
 
   for (let i = 0; i < options.count; i++) {
-    const automation = await createAutomationViaAPI(commisId, {
+    const automation = await createAutomationViaAPI(workerId, {
       name: `${namePrefix} ${i + 1}`,
       model: options.model,
       systemInstructions: options.systemInstructions,
@@ -129,8 +129,8 @@ export async function createAutomationViaUI(page: Page): Promise<string> {
 /**
  * Get an automation by ID with retry logic.
  */
-export async function getAutomationById(commisId: string, automationId: string): Promise<Automation | null> {
-  const apiClient = createApiClient(commisId);
+export async function getAutomationById(workerId: string, automationId: string): Promise<Automation | null> {
+  const apiClient = createApiClient(workerId);
 
   try {
     const automations = await apiClient.listAutomations();
@@ -145,11 +145,11 @@ export async function getAutomationById(commisId: string, automationId: string):
  * Verify an automation exists and has expected properties.
  */
 export async function verifyAutomationExists(
-  commisId: string,
+  workerId: string,
   automationId: string,
   expectedName?: string
 ): Promise<boolean> {
-  const automation = await getAutomationById(commisId, automationId);
+  const automation = await getAutomationById(workerId, automationId);
 
   if (!automation) {
     testLog.warn(`Automation ${automationId} not found`);
@@ -174,8 +174,8 @@ export async function waitForAutomationInUI(page: Page, automationId: string, ti
 /**
  * Delete an automation via API.
  */
-export async function deleteAutomationViaAPI(commisId: string, automationId: string): Promise<void> {
-  const apiClient = createApiClient(commisId);
+export async function deleteAutomationViaAPI(workerId: string, automationId: string): Promise<void> {
+  const apiClient = createApiClient(workerId);
 
   try {
     await apiClient.deleteAutomation(automationId);
@@ -189,8 +189,8 @@ export async function deleteAutomationViaAPI(commisId: string, automationId: str
 /**
  * Cleanup multiple automations.
  */
-export async function cleanupAutomations(commisId: string, automations: Automation[] | string[]): Promise<void> {
-  const apiClient = createApiClient(commisId);
+export async function cleanupAutomations(workerId: string, automations: Automation[] | string[]): Promise<void> {
+  const apiClient = createApiClient(workerId);
 
   for (const automation of automations) {
     const automationId = typeof automation === 'string' ? automation : automation.id;
@@ -205,16 +205,16 @@ export async function cleanupAutomations(commisId: string, automations: Automati
 }
 
 /**
- * Get the automation count for a commis.
+ * Get the automation count for a worker.
  */
-export async function getAutomationCount(commisId: string): Promise<number> {
-  const apiClient = createApiClient(commisId);
+export async function getAutomationCount(workerId: string): Promise<number> {
+  const apiClient = createApiClient(workerId);
 
   try {
     const automations = await apiClient.listAutomations();
     return automations.length;
   } catch (error) {
-    testLog.warn(`Failed to get automation count for commis ${commisId}:`, error);
+    testLog.warn(`Failed to get automation count for worker ${workerId}:`, error);
     return 0;
   }
 }
@@ -239,8 +239,8 @@ export async function navigateToAutomationChat(page: Page, automationId: string)
  * This is a convenience wrapper for tests that have a Page but need API-backed automations.
  */
 export async function createTestAutomation(page: Page, name: string): Promise<Automation> {
-  const commisId = process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX ?? '0';
-  const apiClient = createApiClient(commisId);
+  const workerId = process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX ?? '0';
+  const apiClient = createApiClient(workerId);
 
   const config: CreateAutomationRequest = {
     name: name || `Test Automation ${Date.now()}`,

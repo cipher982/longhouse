@@ -3,7 +3,7 @@ import { test, expect } from "../tests/fixtures";
 const testCount = Number.parseInt(process.env.PROBE_TEST_COUNT ?? "64", 10);
 const holdMs = Number.parseInt(process.env.PROBE_HOLD_MS ?? "250", 10);
 
-// Module-scope state is per-Playwright-commis-process.
+// Module-scope state is per Playwright worker process.
 let firstAutomationIdSeen: number | null = null;
 
 test.describe("Backend Parallelism Probe", () => {
@@ -18,7 +18,7 @@ test.describe("Backend Parallelism Probe", () => {
     test(`create automation ${i}`, async ({ request }, testInfo) => {
       const res = await request.post("/api/automations", {
         data: {
-          name: `Probe Automation ${testInfo.commisIndex}-${i}`,
+          name: `Probe Automation ${testInfo.parallelIndex}-${i}`,
           system_instructions: "probe",
           task_instructions: "probe",
           model: "deepseek/deepseek-v4-flash",
@@ -28,7 +28,7 @@ test.describe("Backend Parallelism Probe", () => {
       const created = await res.json();
       if (firstAutomationIdSeen === null) {
         firstAutomationIdSeen = created.id;
-        // With per-commis SQLite isolation, each Playwright commis's first created automation should be ID=1.
+        // With per-worker SQLite isolation, each Playwright worker's first created automation should be ID=1.
         expect(created.id).toBe(1);
       }
       if (holdMs > 0) {

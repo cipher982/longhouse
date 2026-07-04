@@ -50,7 +50,7 @@
 
   "runner_exec": [
     {
-      "$comment": "Disk space check - deterministic output for gpt-scripted commis",
+      "$comment": "Disk space check - deterministic output for scripted worker flow",
       "match": {
         "command_contains": "df -h"
       },

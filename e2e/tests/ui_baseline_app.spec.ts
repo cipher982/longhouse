@@ -73,7 +73,7 @@ test.describe('Console error check', () => {
       const criticalErrors = errors.filter(e =>
         !e.includes('favicon') && // favicon 404 is common
         !e.includes('ResizeObserver') && // React ResizeObserver warnings
-        !e.includes('x-test-commis') && // test header trips CORS on external fonts
+        !e.includes('x-test-worker') && // test header trips CORS on external fonts
         !e.includes('fonts.gstatic.com') &&
         !e.includes('fontshare.com') &&
         !e.includes('Failed to load resource') &&
