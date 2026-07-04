@@ -54,10 +54,21 @@ def with_fakes(
     *,
     latest_runtime_sha: str | None = "latest",
     deploy_status_output: str | None = None,
+    ancestry_path_shas: list[str] | None = None,
 ) -> None:
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
         cmd = args[0] if args else []
         if isinstance(cmd, list) and cmd and cmd[0] == "git":
+            if cmd[:3] == ["git", "rev-list", "--ancestry-path"]:
+                stdout = "\n".join(ancestry_path_shas or [])
+                if stdout:
+                    stdout += "\n"
+                return subprocess.CompletedProcess(
+                    args=args,
+                    returncode=0,
+                    stdout=stdout,
+                    stderr="",
+                )
             return subprocess.run(
                 cmd,
                 cwd=kwargs.get("cwd"),
@@ -125,6 +136,7 @@ def test_runtime_reuse_accepts_intermediate_deploy_sha() -> None:
         },
         latest_runtime_sha="7447df0799c06120fa254f0732a7d13646562390",
         deploy_status_output=deploy_status("f45edcb318", "f45edcb318"),
+        ancestry_path_shas=["f45edcb3180000000000000000000000000000000"],
     )
     runs = [
         run_info(ship_monitor.DEPLOY_AND_VERIFY, 1),
@@ -149,6 +161,7 @@ def test_runtime_reuse_accepts_intermediate_sha_when_deploy_job_is_absent() -> N
         },
         latest_runtime_sha="7447df0799c06120fa254f0732a7d13646562390",
         deploy_status_output=deploy_status("f45edcb318", "f45edcb318"),
+        ancestry_path_shas=["f45edcb3180000000000000000000000000000000"],
     )
     runs = [
         run_info(ship_monitor.DEPLOY_AND_VERIFY, 1),
