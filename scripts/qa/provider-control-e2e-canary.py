@@ -205,6 +205,30 @@ def _queue_process_stdout(process: subprocess.Popen[str]) -> "queue.Queue[str]":
     return lines
 
 
+def _next_json_stdout_line(
+    lines: "queue.Queue[str]", *, timeout_secs: float, context: str
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_secs
+    ignored: list[str] = []
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            ignored_tail = "; ".join(ignored[-5:])
+            raise TimeoutError(
+                f"Timed out waiting for {context} JSON on stdout"
+                + (f" after ignoring: {ignored_tail}" if ignored_tail else "")
+            )
+        line = lines.get(timeout=remaining)
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            ignored.append(line.strip()[:200])
+            continue
+        if isinstance(payload, dict):
+            return payload
+        ignored.append(str(payload)[:200])
+
+
 def _fake_interruptible_process(marker: Path) -> subprocess.Popen[str]:
     fake_claude = marker.parent / "bin" / "claude"
     script = (
@@ -287,7 +311,11 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
             json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n"
         )
         bridge.stdin.flush()
-        initialize = json.loads(stdout_lines.get(timeout=5.0))
+        initialize = _next_json_stdout_line(
+            stdout_lines,
+            timeout_secs=5.0,
+            context="Claude channel initialize response",
+        )
         if initialize.get("id") != 1:
             return _fail(
                 "claude_initialize_failed",
@@ -314,7 +342,11 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 "claude-channel send failed",
                 evidence=_command_evidence(send),
             )
-        send_notification = json.loads(stdout_lines.get(timeout=5.0))
+        send_notification = _next_json_stdout_line(
+            stdout_lines,
+            timeout_secs=5.0,
+            context="Claude channel send notification",
+        )
         send_params = send_notification.get("params", {})
         send_meta = send_params.get("meta")
         expected_send_meta = {
@@ -352,7 +384,11 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 "claude-channel steer send failed",
                 evidence=_command_evidence(steer),
             )
-        steer_notification = json.loads(stdout_lines.get(timeout=5.0))
+        steer_notification = _next_json_stdout_line(
+            stdout_lines,
+            timeout_secs=5.0,
+            context="Claude channel steer notification",
+        )
         steer_params = steer_notification.get("params", {})
         steer_meta = steer_params.get("meta")
         expected_steer_meta = {
