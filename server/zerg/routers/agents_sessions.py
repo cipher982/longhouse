@@ -693,7 +693,13 @@ def list_active_sessions(
             )
         else:
             sessions = []
-            for session in store.get_sessions_ordered(live_candidate_ids):
+            unique_live_candidate_ids = list(dict.fromkeys(live_candidate_ids))
+            hydrated_live_sessions = store.get_sessions_ordered(unique_live_candidate_ids)
+            hydrated_live_ids = {session.id for session in hydrated_live_sessions}
+            missing_live_candidate_count = len(
+                [session_id for session_id in unique_live_candidate_ids if session_id not in hydrated_live_ids]
+            )
+            for session in hydrated_live_sessions:
                 if (session.user_state or "active") in {"archived", "snoozed"}:
                     continue
                 if project and session.project != project:
@@ -701,6 +707,34 @@ def list_active_sessions(
                 sessions.append(session)
                 if len(sessions) >= limit:
                     break
+            if missing_live_candidate_count and len(sessions) < limit:
+                logger.info(
+                    "Active session live candidates included %s archive-missing ids; backfilling page from archive",
+                    missing_live_candidate_count,
+                )
+                since = now - timedelta(days=days_back)
+                backfill_limit = min(_ACTIVE_LIVE_SESSION_CANDIDATE_MAX, limit + len(unique_live_candidate_ids))
+                backfill_sessions, _total = store.list_sessions(
+                    project=project,
+                    provider=None,
+                    environment=None,
+                    include_test=False,
+                    device_id=None,
+                    since=since,
+                    query=None,
+                    limit=backfill_limit,
+                    offset=0,
+                    exclude_user_states=["archived", "snoozed"],
+                    anchor_on_activity=True,
+                )
+                seen_ids = {session.id for session in sessions}
+                for session in backfill_sessions:
+                    if session.id in seen_ids:
+                        continue
+                    sessions.append(session)
+                    seen_ids.add(session.id)
+                    if len(sessions) >= limit:
+                        break
 
         session_ids = [s.id for s in sessions]
         last_activity = store.get_last_activity_map(session_ids)

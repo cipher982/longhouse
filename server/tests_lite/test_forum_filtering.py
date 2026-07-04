@@ -12,6 +12,7 @@ Covers:
 import os
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -300,6 +301,56 @@ def test_active_sessions_uses_live_store_candidates_when_configured(tmp_path, mo
         assert resp.status_code == 200
         ids = [s["id"] for s in resp.json()["sessions"]]
         assert ids == [newest_live_id, older_live_id]
+    finally:
+        from zerg.main import api_app
+
+        api_app.dependency_overrides.clear()
+        live_engine.dispose()
+
+
+def test_active_sessions_backfills_archive_rows_when_live_candidates_are_ghosts(tmp_path, monkeypatch):
+    """Stale live_sessions rows must not make the active page artificially short."""
+    factory = _make_db(tmp_path, "live_candidate_ghost_archive.db")
+    live_engine, live_factory = _make_live_db(tmp_path, "live_candidate_ghost_hot.db")
+    now = datetime.now(timezone.utc)
+    old = now - timedelta(days=30)
+    live_session_id = _seed(factory, user_state="active", started_at=old, project="zerg")
+    archive_backfill_id = _seed(factory, user_state="active", started_at=now - timedelta(seconds=1), project="zerg")
+    ghost_session_id = str(uuid4())
+
+    with live_factory() as live_db:
+        live_db.add_all(
+            [
+                LiveSessionRow(
+                    session_id=ghost_session_id,
+                    provider="claude",
+                    device_id="cinder",
+                    state="attached",
+                    started_at=old,
+                    last_seen_at=now,
+                    updated_at=now,
+                ),
+                LiveSessionRow(
+                    session_id=live_session_id,
+                    provider="claude",
+                    device_id="cinder",
+                    state="attached",
+                    started_at=old,
+                    last_seen_at=now - timedelta(seconds=1),
+                    updated_at=now - timedelta(seconds=1),
+                ),
+            ]
+        )
+        live_db.commit()
+
+    monkeypatch.setattr(agents_sessions_router, "live_store_configured", lambda: True)
+    monkeypatch.setattr(agents_sessions_router, "get_live_session_factory", lambda: live_factory)
+    client = _client(factory)
+    try:
+        resp = client.get("/agents/sessions/active?days_back=14&limit=2&project=zerg", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200
+        ids = [s["id"] for s in resp.json()["sessions"]]
+        assert ids == [live_session_id, archive_backfill_id]
     finally:
         from zerg.main import api_app
 
