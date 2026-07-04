@@ -15,7 +15,7 @@ def test_device_token_roundtrip_sqlite(tmp_path):
     """DeviceToken with GUID primary key works on SQLite."""
     db_path = tmp_path / "device_token.db"
     engine = make_engine(f"sqlite:///{db_path}")
-    # Strip schema for SQLite (models use schema="zerg" for Postgres)
+    # Normalize any schema-qualified metadata to SQLite's main database.
     engine = engine.execution_options(schema_translate_map={"zerg": None, "agents": None})
 
     # Create all tables

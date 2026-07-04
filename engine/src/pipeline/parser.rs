@@ -1,6 +1,5 @@
 //! Session file parser for Claude Code, Codex, Antigravity, and legacy Gemini sessions.
 //!
-//! Mirrors the Python parser at `zerg/services/shipper/parser.py`.
 //! Extracts meaningful events (user messages, assistant text, tool calls,
 //! tool results) plus compaction-adjacent metadata boundaries from session
 //! files and converts them to a normalized format.

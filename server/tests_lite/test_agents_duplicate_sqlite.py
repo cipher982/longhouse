@@ -48,7 +48,7 @@ def test_duplicate_event_sqlite_no_pending_rollback(tmp_path):
     """
     db_path = tmp_path / "duplicate.db"
     engine = make_engine(f"sqlite:///{db_path}")
-    # Strip schema for SQLite (models use schema="agents" for Postgres)
+    # Normalize any schema-qualified metadata to SQLite's main database.
     engine = engine.execution_options(schema_translate_map={"agents": None})
     Base.metadata.create_all(bind=engine)
 

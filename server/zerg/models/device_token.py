@@ -34,8 +34,8 @@ class DeviceToken(Base):
 
     __tablename__ = "device_tokens"
 
-    # Primary key - UUID for uniqueness
-    # GUID TypeDecorator: UUID for Postgres, CHAR(36) for SQLite
+    # Primary key - UUID for uniqueness.
+    # GUID stores UUIDs as CHAR(36) in SQLite.
     id = Column(GUID(), primary_key=True, default=uuid4)
 
     # Owner - the user this token belongs to

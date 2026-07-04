@@ -49,8 +49,8 @@ class AgentSession(AgentsBase):
 
     __tablename__ = "sessions"
 
-    # Primary key - UUID allows federation and prevents collision
-    # GUID TypeDecorator: UUID for Postgres, CHAR(36) for SQLite
+    # Primary key - UUID allows federation and prevents collision.
+    # GUID stores UUIDs as CHAR(36) in SQLite.
     id = Column(GUID(), primary_key=True, default=uuid4)
 
     # Provider identification
@@ -208,9 +208,8 @@ class AgentEvent(AgentsBase):
     # Primary key - INTEGER for SQLite auto-increment
     id = Column(Integer, primary_key=True, autoincrement=True)
 
-    # Foreign key to session - GUID TypeDecorator handles UUID/String conversion
-    # ForeignKey reference is dynamic based on schema (None for SQLite, "agents" for Postgres)
-    _fk_ref = "sessions.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.sessions.id"
+    # Foreign key to session - GUID TypeDecorator handles UUID/String conversion.
+    _fk_ref = "sessions.id"
     session_id = Column(
         GUID(),
         ForeignKey(_fk_ref, ondelete="CASCADE"),

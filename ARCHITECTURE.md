@@ -60,11 +60,6 @@ The project uses some shorthand nouns. The important ones:
 - **Runner** — an optional WebSocket command executor for remote execution on
   a user-owned machine.
 
-> Note: some internal code still uses older nouns from an earlier "agent
-> platform" iteration (e.g. `fiche` for an agent definition, `commis` for a
-> background task runner). Those surfaces are frozen for launch and not part of
-> the product story; see [`VISION.md`](VISION.md) "Frozen or removed for launch".
-
 ## Where to read next
 
 - [`VISION.md`](VISION.md) — product thesis and invariants (start here)

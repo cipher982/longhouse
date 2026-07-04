@@ -601,7 +601,7 @@ class UserSkill(Base):
 
 
 class MemoryFile(Base):
-    """Durable memory file backed by Postgres.
+    """Durable memory file backed by the Runtime Host database.
 
     Acts as a virtual filesystem entry (path + content) scoped per user.
     """
