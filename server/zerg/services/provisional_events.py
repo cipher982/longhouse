@@ -73,11 +73,31 @@ def build_provisional_cursor(*, key: str, seq: int | None) -> str:
 
 
 def load_active_provisional_preview_map(db: Session, session_ids: list[UUID]) -> dict[str, TranscriptPreview]:
+    previews: dict[str, TranscriptPreview] = {}
+    missing_session_ids = session_ids
+    try:
+        from zerg import database as database_module
+        from zerg.services.session_live_previews import load_live_session_live_preview_map
+
+        if database_module.live_store_configured():
+            live_session_factory = database_module.get_live_session_factory()
+            if live_session_factory is not None:
+                with live_session_factory() as live_db:
+                    previews = load_live_session_live_preview_map(live_db, session_ids)
+                missing_session_ids = [session_id for session_id in session_ids if str(session_id) not in previews]
+    except Exception:
+        logger.warning("Failed to load live-store provisional previews; falling back to archive", exc_info=True)
+        previews = {}
+        missing_session_ids = session_ids
+    if not missing_session_ids:
+        return previews
     if not _live_preview_projection_disabled():
         from zerg.services.session_live_previews import load_session_live_preview_map
 
-        return load_session_live_preview_map(db, session_ids)
-    return _load_active_provisional_preview_map_from_observations(db, session_ids)
+        previews.update(load_session_live_preview_map(db, missing_session_ids))
+        return previews
+    previews.update(_load_active_provisional_preview_map_from_observations(db, missing_session_ids))
+    return previews
 
 
 def _load_active_provisional_preview_map_from_observations(

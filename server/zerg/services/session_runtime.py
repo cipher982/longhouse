@@ -29,6 +29,7 @@ from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.live_store import LiveRuntimeState
 from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
+from zerg.services.session_live_previews import upsert_live_session_live_preview
 from zerg.services.session_live_previews import upsert_session_live_preview
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_observations import decode_observation_payload_json
@@ -764,6 +765,12 @@ def ingest_live_runtime_events(db: Session, events: list[RuntimeEventIngest]) ->
 
     updated_runtime_keys: list[str] = []
     for event in events:
+        preview_candidate = live_preview_candidate_from_runtime_event(
+            event,
+            observation_id=f"live:{event.source}:{event.dedupe_key}",
+        )
+        if preview_candidate is not None:
+            upsert_live_session_live_preview(db, preview_candidate)
         outcome = _apply_runtime_event(
             db,
             event,

@@ -28,14 +28,17 @@ from zerg.database import make_live_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionLaunchAttempt
+from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveLaunchReadiness
+from zerg.models.live_store import LiveSessionLivePreview
 from zerg.models.live_store import LiveSession as LiveSessionRow
 from zerg.models.live_store import LiveRuntimeState
+from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.agents import AgentsStore
 from zerg.services.live_archive_outbox import HEARTBEAT_STAMP_KIND
 from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
@@ -84,6 +87,7 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "live_heartbeat_stamps",
         "live_launch_readiness",
         "live_runtime_state",
+        "live_session_live_previews",
         "live_sessions",
     }
     assert "sessions" not in tables
@@ -503,6 +507,85 @@ def test_live_runtime_state_feeds_existing_runtime_overlay(tmp_path, monkeypatch
         assert overlay.presence_tool == "Shell"
         assert overlay.runtime_phase == "running"
         assert overlay.runtime_source == "codex_bridge"
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_live_runtime_events_materialize_hot_transcript_preview(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: LiveSession)
+
+    try:
+        with ArchiveSession() as archive_db:
+            session = AgentSession(
+                provider="codex",
+                environment="test",
+                project="live-preview",
+                device_id="cinder",
+                started_at=now,
+                last_activity_at=now,
+            )
+            archive_db.add(session)
+            archive_db.commit()
+            session_id = session.id
+            archive_db.add(
+                SessionLivePreview(
+                    session_id=session_id,
+                    thread_id="thread-1",
+                    turn_key=f"codex_bridge_live:{session_id}:thread-1:turn-1",
+                    seq=1,
+                    preview_text="archive stale preview",
+                    provisional_cursor=f"codex_bridge_live:{session_id}:thread-1:turn-1:1",
+                    provisional_complete=0,
+                    event_origin="live_provisional",
+                    preview_observed_at=now - timedelta(seconds=5),
+                    source="codex_bridge_live",
+                    last_observation_id="archive:preview:1",
+                )
+            )
+            archive_db.commit()
+
+        event = RuntimeEventIngest(
+            runtime_key=runtime_key_for_session("codex", str(session_id)),
+            session_id=session_id,
+            provider="codex",
+            device_id="cinder",
+            source="codex_bridge_live",
+            kind="progress_signal",
+            occurred_at=now,
+            dedupe_key="live-preview-1",
+            payload={
+                "progress_kind": "bridge_live_transcript_delta",
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "seq": 2,
+                "live_text": "hot live preview",
+            },
+        )
+        with LiveSession() as live_db:
+            ingest_live_runtime_events(live_db, [event])
+            live_db.commit()
+
+        with LiveSession() as live_db:
+            row = live_db.get(LiveSessionLivePreview, str(session_id))
+            assert row is not None
+            assert row.preview_text == "hot live preview"
+            assert row.seq == 2
+
+        with ArchiveSession() as archive_db:
+            preview = load_active_provisional_preview_map(archive_db, [session_id])[str(session_id)]
+            assert preview.text == "hot live preview"
+            assert preview.provisional_cursor == f"codex_bridge_live:{session_id}:thread-1:turn-1:2"
     finally:
         archive_engine.dispose()
         live_engine.dispose()

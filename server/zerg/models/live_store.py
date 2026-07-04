@@ -118,6 +118,33 @@ class LiveLaunchReadiness(LiveBase):
     )
 
 
+class LiveSessionLivePreview(LiveBase):
+    """Compact live-lane preview for in-flight transcript rendering."""
+
+    __tablename__ = "live_session_live_previews"
+
+    session_id = Column(String(36), primary_key=True)
+    thread_id = Column(String(255), nullable=True)
+    turn_key = Column(String(512), nullable=False)
+    seq = Column(Integer, nullable=True)
+    preview_text = Column(Text, nullable=False)
+    provisional_cursor = Column(String(512), nullable=True)
+    provisional_complete = Column(Integer, nullable=False, server_default=text("0"))
+    event_origin = Column(String(32), nullable=False, server_default=text("'live_provisional'"))
+    preview_observed_at = Column(DateTime(timezone=True), nullable=False)
+    preview_updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    source = Column(String(128), nullable=False)
+    last_observation_id = Column(String(512), nullable=False)
+    superseded_at = Column(DateTime(timezone=True), nullable=True)
+    superseded_by_event_id = Column(Integer, nullable=True)
+    superseded_reason = Column(String(64), nullable=True)
+
+    __table_args__ = (
+        Index("ix_live_session_live_previews_updated", "preview_updated_at"),
+        Index("ix_live_session_live_previews_observation", "last_observation_id"),
+    )
+
+
 class LiveArchiveOutbox(LiveBase):
     __tablename__ = "live_archive_outbox"
 

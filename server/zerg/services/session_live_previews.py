@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import SessionLivePreview
+from zerg.models.live_store import LiveSessionLivePreview
 from zerg.services.provisional_events import EVENT_ORIGIN_LIVE_PROVISIONAL
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.provisional_events import build_provisional_cursor
@@ -82,6 +83,22 @@ def live_preview_candidate_from_runtime_event(
 
 def upsert_session_live_preview(db: Session, candidate: LivePreviewCandidate) -> bool:
     existing = db.get(SessionLivePreview, candidate.session_id)
+    return _upsert_live_preview_row(db, candidate, existing, SessionLivePreview, session_id=candidate.session_id)
+
+
+def upsert_live_session_live_preview(db: Session, candidate: LivePreviewCandidate) -> bool:
+    existing = db.get(LiveSessionLivePreview, str(candidate.session_id))
+    return _upsert_live_preview_row(db, candidate, existing, LiveSessionLivePreview, session_id=str(candidate.session_id))
+
+
+def _upsert_live_preview_row(
+    db: Session,
+    candidate: LivePreviewCandidate,
+    existing: Any,
+    model,
+    *,
+    session_id: UUID | str,
+) -> bool:
     now = datetime.now(timezone.utc)
     if existing is not None and existing.last_observation_id == candidate.last_observation_id:
         return False
@@ -95,8 +112,8 @@ def upsert_session_live_preview(db: Session, candidate: LivePreviewCandidate) ->
 
     if existing is None:
         db.add(
-            SessionLivePreview(
-                session_id=candidate.session_id,
+            model(
+                session_id=session_id,
                 thread_id=candidate.thread_id,
                 turn_key=candidate.turn_key,
                 seq=candidate.seq,
@@ -162,6 +179,23 @@ def load_session_live_preview_map(db: Session, session_ids: list[UUID]) -> dict[
         .filter(SessionLivePreview.superseded_at.is_(None))
         .all()
     )
+    return _preview_map_from_rows(rows)
+
+
+def load_live_session_live_preview_map(db: Session, session_ids: list[UUID]) -> dict[str, TranscriptPreview]:
+    if not session_ids:
+        return {}
+    session_id_strings = [str(session_id) for session_id in session_ids]
+    rows = (
+        db.query(LiveSessionLivePreview)
+        .filter(LiveSessionLivePreview.session_id.in_(session_id_strings))
+        .filter(LiveSessionLivePreview.superseded_at.is_(None))
+        .all()
+    )
+    return _preview_map_from_rows(rows)
+
+
+def _preview_map_from_rows(rows) -> dict[str, TranscriptPreview]:
     previews: dict[str, TranscriptPreview] = {}
     for row in rows:
         text = str(row.preview_text or "").strip()
