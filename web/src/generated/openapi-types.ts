@@ -67,26 +67,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/admin/seed-scenario": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Seed Scenario Data
-         * @description Seed deterministic scenario data for demos and E2E tests.
-         */
-        post: operations["seed_scenario_data_admin_seed_scenario_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/admin/migration-log": {
         parameters: {
             query?: never;
@@ -7375,29 +7355,6 @@ export interface components {
             };
         };
         /**
-         * ScenarioSeedRequest
-         * @description Request model for seeding deterministic scenario data.
-         */
-        ScenarioSeedRequest: {
-            /** Name */
-            name: string;
-            /**
-             * Target
-             * @default dev
-             */
-            target: string;
-            /**
-             * Namespace
-             * @default test
-             */
-            namespace: string;
-            /**
-             * Clean
-             * @default false
-             */
-            clean: boolean;
-        };
-        /**
          * SemanticSearchResponse
          * @description Response for semantic search.
          */
@@ -10183,39 +10140,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["DatabaseResetRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    seed_scenario_data_admin_seed_scenario_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ScenarioSeedRequest"];
             };
         };
         responses: {

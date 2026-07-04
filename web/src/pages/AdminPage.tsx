@@ -146,20 +146,6 @@ async function createDemoUser(request: DemoUserCreateRequest): Promise<DemoUserR
   return response.json();
 }
 
-async function seedScenarioForUser(request: { name: string; owner_email: string; clean: boolean }): Promise<void> {
-  const response = await fetch(`${config.apiBaseUrl}/admin/seed-scenario`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(request),
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail || "Failed to seed scenario");
-  }
-}
-
 interface DemoResetResponse {
   user_id: number;
   email: string;
@@ -581,16 +567,6 @@ function AdminPage() {
     },
   });
 
-  const seedScenarioMutation = useMutation({
-    mutationFn: seedScenarioForUser,
-    onSuccess: () => {
-      toast.success("Demo scenario seeded");
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || "Failed to seed scenario");
-    },
-  });
-
   const impersonateMutation = useMutation({
     mutationFn: impersonateUser,
     onSuccess: () => {
@@ -637,7 +613,6 @@ function AdminPage() {
     });
   };
 
-  // One-click: seed sample data then impersonate
   const handleStartDemo = async (userId: number) => {
     const demoUser = demoUsers.find((item) => item.id === userId);
     if (!demoUser) {
@@ -646,14 +621,6 @@ function AdminPage() {
     }
 
     try {
-      // First seed the scenario
-      await seedScenarioForUser({
-        name: "swarm-mvp",
-        owner_email: demoUser.email,
-        clean: true,
-      });
-
-      // Then impersonate
       await impersonateUser({ user_id: userId });
       toast.success("Demo ready!");
       window.location.assign("/timeline");
@@ -866,7 +833,7 @@ function AdminPage() {
             </Card.Header>
             <Card.Body>
               <p className="section-description admin-section-description">
-                One-click demo with sample data. Perfect for showing off Longhouse.
+                Create and enter a demo account for Longhouse walkthroughs.
               </p>
 
               {demoUsers.length === 0 ? (
@@ -898,9 +865,9 @@ function AdminPage() {
                           <Button
                             variant="primary"
                             onClick={() => handleStartDemo(demoUser.id)}
-                            disabled={seedScenarioMutation.isPending || impersonateMutation.isPending}
+                            disabled={impersonateMutation.isPending}
                           >
-                            {(seedScenarioMutation.isPending || impersonateMutation.isPending)
+                            {impersonateMutation.isPending
                               ? "Starting..."
                               : "▶ Start Demo"}
                           </Button>
@@ -1038,7 +1005,7 @@ function AdminPage() {
         title="Reset demo account"
         message={
           demoResetState.target
-            ? `This will erase all data for ${demoResetState.target.email}. You can re-seed the baseline scenario afterwards.`
+            ? `This will erase all data for ${demoResetState.target.email}.`
             : "This will erase all data for the selected demo account."
         }
         confirmText={resetDemoMutation.isPending ? "Resetting..." : "Reset demo"}
