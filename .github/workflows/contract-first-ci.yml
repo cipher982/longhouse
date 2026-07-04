@@ -352,11 +352,11 @@ jobs:
     - name: Verify CLI wheel packaging
       run: make test-wheel-package
 
-  e2e:
+  e2e-core:
     needs: changes
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: cube
-    name: "End-to-end tests"
+    name: "Core E2E tests"
     env:
       # E2E tests use per-backend SQLite databases (no Postgres needed)
       FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
@@ -415,14 +415,89 @@ jobs:
     - name: Pre-install backend deps
       run: cd server && uv sync
 
-    - name: Run E2E Tests (core + a11y)
-      run: make test-e2e
+    - name: Run Core E2E Tests
+      run: make test-e2e-core
 
     - name: Upload E2E artifacts (on failure)
       if: failure()
       uses: actions/upload-artifact@v7
       with:
-        name: e2e-artifacts
+        name: core-e2e-artifacts
+        path: |
+          e2e/test-results
+          e2e/playwright-report
+
+  e2e-a11y:
+    needs: changes
+    if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: cube
+    name: "Accessibility E2E tests"
+    env:
+      # E2E tests use per-backend SQLite databases (no Postgres needed)
+      FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
+      # Isolate E2E DBs per run/job to avoid cross-run contamination on shared runners
+      E2E_DB_DIR: /tmp/zerg_e2e_dbs/${{ github.run_id }}-${{ github.run_attempt }}-a11y
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
+
+    - name: Restore Bun download cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          longhouse-bun-${{ runner.os }}-
+
+    - name: Restore Playwright browser cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+        key: longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+        restore-keys: |
+          longhouse-playwright-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Setup Node
+      uses: actions/setup-node@v6
+      with:
+        node-version: '20'
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: '1.2.20'
+
+    - name: Install dependencies
+      run: bun install --frozen-lockfile
+
+    - name: Ensure make available
+      run: ./scripts/ci/ensure-make.sh
+
+    - name: Install Playwright browsers + deps
+      run: ./scripts/ci/install-playwright.sh chromium
+
+    - name: Pre-install backend deps
+      run: cd server && uv sync
+
+    - name: Run Accessibility E2E Tests
+      run: make test-e2e-a11y
+
+    - name: Upload E2E artifacts (on failure)
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: accessibility-e2e-artifacts
         path: |
           e2e/test-results
           e2e/playwright-report

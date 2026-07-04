@@ -11,6 +11,7 @@ import crypto from 'crypto';
 import { spawn } from 'child_process';
 import { join } from 'path';
 import fs from 'fs';
+import net from 'net';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
@@ -84,6 +85,28 @@ const BACKEND_PORT = getBackendPort();
 const port = workerId ? BACKEND_PORT + parseInt(workerId) : BACKEND_PORT;
 const backendBaseUrl = `http://127.0.0.1:${port}`;
 
+async function isPortOpen(portToCheck) {
+    return new Promise((resolve) => {
+        const socket = net.createConnection({ host: '127.0.0.1', port: portToCheck }, () => {
+            socket.destroy();
+            resolve(true);
+        });
+        socket.once('error', () => {
+            socket.destroy();
+            resolve(false);
+        });
+        socket.setTimeout(1000, () => {
+            socket.destroy();
+            resolve(false);
+        });
+    });
+}
+
+if (await isPortOpen(port)) {
+    console.error(`[spawn-backend] Refusing to reuse backend on port ${port}; stop the stale server or choose another BACKEND_PORT.`);
+    process.exit(1);
+}
+
 // E2E tests now use SQLite per-backend-instance for isolation
 // No need for multiple uvicorn workers since SQLite is single-writer
 const uvicornWorkers = 1;
@@ -96,6 +119,14 @@ if (!fs.existsSync(e2eDbDir)) {
 const dbPath = path.join(e2eDbDir, `e2e_${port}.db`);
 const databaseUrl = `sqlite:///${dbPath}`;
 const toolStubsPath = join(__dirname, 'fixtures', 'tool-stubs.json');
+
+for (const entry of fs.readdirSync(e2eDbDir)) {
+    // Also match `e2e_<port>-`: the backend derives its live-store DB as
+    // `e2e_<port>-live.db`, and a stale hot-lane file breaks hermeticity.
+    if (entry.startsWith(`e2e_${port}.db`) || entry.startsWith(`e2e_${port}-`) || entry.startsWith(`e2e_${port}_`)) {
+        fs.rmSync(path.join(e2eDbDir, entry), { force: true, recursive: true });
+    }
+}
 
 console.log(`[spawn-backend] Starting E2E backend on port ${port} with SQLite: ${dbPath}`);
 
@@ -149,6 +180,8 @@ const backend = spawn('uv', [
     stdio: 'inherit'
 });
 
+let backendClosed = false;
+
 // Handle backend process events
 backend.on('error', (error) => {
     console.error(`[spawn-backend] Worker ${workerId} backend error:`, error);
@@ -156,20 +189,24 @@ backend.on('error', (error) => {
 });
 
 backend.on('close', (code) => {
+    backendClosed = true;
     console.log(`[spawn-backend] Worker ${workerId} backend exited with code ${code}`);
     process.exit(code);
 });
 
-// Forward signals to backend process
-process.on('SIGTERM', () => {
-    console.log(`[spawn-backend] Worker ${workerId} received SIGTERM, shutting down backend`);
-    backend.kill('SIGTERM');
-});
+function shutdown(signal) {
+    console.log(`[spawn-backend] Worker ${workerId} received ${signal}, shutting down backend`);
+    backend.kill(signal);
+    setTimeout(() => {
+        if (!backendClosed) {
+            backend.kill('SIGKILL');
+        }
+    }, 5000).unref();
+}
 
-process.on('SIGINT', () => {
-    console.log(`[spawn-backend] Worker ${workerId} received SIGINT, shutting down backend`);
-    backend.kill('SIGINT');
-});
+// Forward signals to backend process
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 // Keep the spawner running
 process.stdin.resume();

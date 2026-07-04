@@ -23,3 +23,8 @@ make test-e2e-verbose    # full output for debugging
 1) `make test-e2e-errors`
 2) `make test-e2e-single TEST=tests/<spec>.ts`
 3) `make test-e2e-verbose`
+
+## Flake Policy
+- Keep core E2E at retries=0. If a CI failure passes on rerun with no code
+  diff, quarantine or move that test out of the blocking lane the same day and
+  leave a tracking issue; do not normalize red-but-ignored CI.

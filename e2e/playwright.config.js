@@ -216,7 +216,7 @@ const config = {
       command: `node spawn-test-backend.js`,
       url: `http://127.0.0.1:${BACKEND_PORT}/api/health/db`,
       cwd: __dirname,
-      reuseExistingServer: !process.env.CI, // Allow reusing in development
+      reuseExistingServer: false,
       timeout: 120_000, // Backend needs time for schema setup
       env: {
         ...process.env,

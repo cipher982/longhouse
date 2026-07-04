@@ -37,4 +37,26 @@ if [ -z "${FERNET_SECRET:-}" ]; then
     export FERNET_SECRET="$(python3 -c 'import base64, os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
 fi
 
-uv run --extra dev pytest tests_lite/ -p no:warnings --tb=short "$@"
+pytest_args=(tests_lite/ -p no:warnings --tb=short)
+
+has_xdist_arg=0
+for arg in "$@"; do
+    case "$arg" in
+        -n|--numprocesses|--numprocesses=*)
+            has_xdist_arg=1
+            ;;
+    esac
+done
+
+if [ "$has_xdist_arg" -eq 0 ]; then
+    xdist_commis="${PYTEST_XDIST_COMMIS:-auto}"
+    case "$xdist_commis" in
+        ""|0|false|False|FALSE|off|Off|OFF|no|No|NO)
+            ;;
+        *)
+            pytest_args+=(-n "$xdist_commis" --dist=loadfile)
+            ;;
+    esac
+fi
+
+uv run --extra dev pytest "${pytest_args[@]}" "$@"

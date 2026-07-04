@@ -104,14 +104,23 @@ jobs:
             echo "::notice::No runtime image changes detected; reusing ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$IMAGE_TAG for deploy/QA."
           fi
 
-      - name: Wait for full CI gate (optional)
-        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI != 'false' }}
+      - name: Wait for core E2E gate
+        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI != 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.head_sha }}
           head_branch: ${{ steps.meta.outputs.head_branch }}
           github_token: ${{ github.token }}
-          required_jobs: Backend tests,Engine tests,End-to-end tests,CLI wheel packaging
+          required_jobs: Core E2E tests
+
+      - name: Wait for full CI gate (temporary opt-in)
+        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI == 'true' }}
+        uses: ./.github/actions/wait-for-ci
+        with:
+          head_sha: ${{ steps.meta.outputs.head_sha }}
+          head_branch: ${{ steps.meta.outputs.head_branch }}
+          github_token: ${{ github.token }}
+          required_jobs: Backend tests,Engine tests,Core E2E tests,Accessibility E2E tests,CLI wheel packaging
           ignored_failure_jobs: OSS onboarding smoke
 
   deploy_demo:

@@ -436,7 +436,7 @@ def describe_deploy_run_blocker(repo: str, sha: str, runs: list[RunInfo], deploy
         status = field(step, "status") or "unknown"
         started_at = field(step, "started_at", "startedAt")
 
-        if step_name == "Wait for full CI gate":
+        if step_name in {"Wait for core E2E gate", "Wait for full CI gate"}:
             blocker = describe_blocking_workflow(repo, CI_WORKFLOW, sha, runs)
             return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / gate -> {blocker}"
 

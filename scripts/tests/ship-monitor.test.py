@@ -237,6 +237,44 @@ def test_gate_heartbeat_names_blocking_ci_job_and_step() -> None:
     assert "Deploy and Verify #1 / gate -> CI #2 / iOS tests / Run iOS tests: in_progress" in summary
 
 
+def test_core_e2e_gate_heartbeat_names_blocking_ci_job_and_step() -> None:
+    def fake_fetch_run_jobs(repo: str, run_id: int) -> list[dict[str, object]]:
+        if run_id == 1:
+            return [
+                {
+                    "name": ship_monitor.DEPLOY_GATE_JOB,
+                    "status": "in_progress",
+                    "steps": [
+                        {"name": "Wait for core E2E gate", "status": "in_progress"},
+                    ],
+                }
+            ]
+        if run_id == 2:
+            return [
+                {
+                    "name": "Core E2E tests",
+                    "status": "in_progress",
+                    "steps": [
+                        {"name": "Run Core E2E Tests", "status": "in_progress"},
+                    ],
+                }
+            ]
+        return []
+
+    ship_monitor.fetch_run_jobs = fake_fetch_run_jobs
+    runs = [
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1, status="in_progress", conclusion=None),
+        run_info(ship_monitor.CI_WORKFLOW, 2, status="in_progress", conclusion=None),
+    ]
+
+    summary = ship_monitor.summarize_incomplete_runs("cipher982/longhouse", "abc123", runs)
+
+    assert (
+        "Deploy and Verify #1 / gate -> CI #2 / Core E2E tests / "
+        "Run Core E2E Tests: in_progress"
+    ) in summary
+
+
 def test_deploy_heartbeat_names_active_deploy_step() -> None:
     def fake_fetch_run_jobs(repo: str, run_id: int) -> list[dict[str, object]]:
         return [
@@ -294,6 +332,7 @@ if __name__ == "__main__":
     test_runtime_publish_requires_exact_live_sha()
     test_skipped_tip_still_requires_latest_runtime_affecting_sha()
     test_gate_heartbeat_names_blocking_ci_job_and_step()
+    test_core_e2e_gate_heartbeat_names_blocking_ci_job_and_step()
     test_deploy_heartbeat_names_active_deploy_step()
     test_manual_deploy_recovery_supersedes_failed_push_deploy()
     test_runtime_image_paths_include_docker_context_rules()

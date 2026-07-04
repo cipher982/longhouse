@@ -21,12 +21,19 @@ from zerg.services import shipper as shipper_service
 from zerg.services.shipper.service import Platform as ServicePlatform
 
 
-def test_doctor_reports_install_metadata(monkeypatch):
-    runner = CliRunner()
+def _stub_doctor_runtime_checks(monkeypatch):
     monkeypatch.setattr(doctor_cli, "_check_environment", lambda: [])
     monkeypatch.setattr(doctor_cli, "_check_server", lambda: [])
     monkeypatch.setattr(doctor_cli, "_check_shipper", lambda: [])
     monkeypatch.setattr(doctor_cli, "_check_config", lambda: [])
+    monkeypatch.setattr(doctor_cli, "_check_provider_support", lambda: [])
+    monkeypatch.setattr(doctor_cli, "_check_provider_live_route_e2e", lambda: [])
+    monkeypatch.setattr(doctor_cli, "_check_provider_binding", lambda: [])
+
+
+def test_doctor_reports_install_metadata(monkeypatch):
+    runner = CliRunner()
+    _stub_doctor_runtime_checks(monkeypatch)
     monkeypatch.setattr(doctor_cli, "current_installed_version", lambda: "0.1.5")
     monkeypatch.setattr(
         doctor_cli,
@@ -52,10 +59,7 @@ def test_doctor_reports_install_metadata(monkeypatch):
 
 def test_doctor_check_updates_surfaces_upgrade_command(monkeypatch):
     runner = CliRunner()
-    monkeypatch.setattr(doctor_cli, "_check_environment", lambda: [])
-    monkeypatch.setattr(doctor_cli, "_check_server", lambda: [])
-    monkeypatch.setattr(doctor_cli, "_check_shipper", lambda: [])
-    monkeypatch.setattr(doctor_cli, "_check_config", lambda: [])
+    _stub_doctor_runtime_checks(monkeypatch)
     monkeypatch.setattr(doctor_cli, "current_installed_version", lambda: "0.1.5")
     monkeypatch.setattr(
         doctor_cli,

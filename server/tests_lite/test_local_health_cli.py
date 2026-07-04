@@ -4806,6 +4806,17 @@ def test_local_health_command_surfaces_managed_phase_contract_from_raw_hook_even
     runner = CliRunner()
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [tmp_path / "missing-runner.env"])
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "collect_provider_release_status",
+        lambda provider_clis, *, fast: {
+            "schema_version": 1,
+            "enabled": True,
+            "blocking_count": 0,
+            "warning_count": 0,
+            "statuses": {},
+        },
+    )
     _write_engine_status(tmp_path / ".longhouse", age_seconds=2)
     now = datetime.now(timezone.utc)
     observed_at = now.isoformat().replace("+00:00", "Z")

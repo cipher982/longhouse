@@ -5808,6 +5808,7 @@ def ingest_canonical_events_into_longhouse_db(
     os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
 
     from zerg.database import initialize_database
+    from zerg.database import initialize_live_database
     from zerg.database import make_engine
     from zerg.database import make_sessionmaker
     from zerg.services.agents import AgentsStore
@@ -5831,6 +5832,7 @@ def ingest_canonical_events_into_longhouse_db(
     db_path.parent.mkdir(parents=True, exist_ok=True)
     engine = make_engine(f"sqlite:///{db_path}")
     initialize_database(engine)
+    initialize_live_database()
     session_factory = make_sessionmaker(engine)
     session_id = uuid5(NAMESPACE_URL, f"longhouse-universal-db-ingest:{provider}:{package.root}")
     resolved_provider_session_id = provider_session_id or f"universal-db-ingest-{provider}"

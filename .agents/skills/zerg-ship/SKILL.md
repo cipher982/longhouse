@@ -118,6 +118,12 @@ temporary conservative gate is needed. Workflow/script-only deploy verification
 reuses the current `latest` image. Manual dispatch stays isolated for recovery
 use.
 
+Before pushing runtime/UI work, run the cheapest load-bearing local tier you can:
+usually `make test-e2e-core` for launch-surface changes plus the matching unit
+tier. After pushing, do not foreground-babysit branch-latest CI; use the
+exact-SHA ship/watch commands and consume their completion signal while moving
+on to the next useful task.
+
 If `make ship` returns non-zero for the target SHA, ship failed. You may explain why you think it failed, including suspected pre-existing drift, but do not relabel that outcome as success.
 
 Manual fallback:
