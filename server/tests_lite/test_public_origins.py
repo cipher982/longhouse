@@ -47,7 +47,6 @@ def _make_settings(**overrides):
         runner_docker_image="test",
         runner_binary_tag="runner-v0.1.3",
         pubsub_audience=None,
-        gmail_pubsub_topic=None,
         pubsub_sa_email=None,
         max_users=10,
         admin_emails="",

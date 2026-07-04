@@ -1,4 +1,4 @@
-"""Prometheus metrics for trigger subsystem and Gmail integration.
+"""Prometheus metrics for Longhouse runtime surfaces.
 
 The module bundles all counters in one place so importing side-effects
 (metric registration) happen exactly once per process.  Routers and
@@ -15,32 +15,6 @@ from __future__ import annotations
 try:
     from prometheus_client import Counter  # type: ignore
 
-    trigger_fired_total = Counter(
-        "trigger_fired_total",
-        "Total number of triggers that fired (all types)",
-    )
-
-    gmail_watch_renew_total = Counter(
-        "gmail_watch_renew_total",
-        "Total number of Gmail watch renewals performed",
-    )
-
-    gmail_api_error_total = Counter(
-        "gmail_api_error_total",
-        "Number of errors when interacting with the Gmail API",
-    )
-
-    gmail_webhook_error_total = Counter(
-        "gmail_webhook_error_total",
-        "Number of errors in Gmail webhook background processing",
-    )
-
-    external_api_retry_total = Counter(
-        "external_api_retry_total",
-        "Total retries executed against external providers",
-        labelnames=("provider", "function"),
-    )
-
     database_migrations_failed_total = Counter(
         "database_migrations_failed_total",
         "Total startup SQLite migrations that failed. Label is the migration name.",
@@ -53,40 +27,10 @@ try:
 
     from prometheus_client import Gauge  # type: ignore  # noqa: WPS433
 
-    gmail_connector_history_id = Gauge(
-        "gmail_connector_history_id",
-        "Current history_id for each Gmail connector",
-        labelnames=("connector_id", "owner_id"),
-    )
-
-    gmail_connector_watch_expiry = Gauge(
-        "gmail_connector_watch_expiry_seconds",
-        "Unix timestamp when Gmail watch expires",
-        labelnames=("connector_id", "owner_id"),
-    )
-
-    pubsub_webhook_processing = Gauge(
-        "pubsub_webhook_processing_total",
-        "Number of Pub/Sub webhooks currently being processed",
-    )
-
     # ------------------------------------------------------------------
     # Histograms (latency) ---------------------------------------------
     # ------------------------------------------------------------------
-
     from prometheus_client import Histogram  # type: ignore  # noqa: WPS433
-
-    gmail_http_latency_seconds = Histogram(
-        "gmail_http_latency_seconds",
-        "Latency of Gmail HTTP requests (seconds)",
-        buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0),
-    )
-
-    trigger_processing_seconds = Histogram(
-        "trigger_processing_seconds",
-        "End-to-end processing time of a single trigger (seconds)",
-        buckets=(0.005, 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
-    )
 
     dashboard_snapshot_requests_total = Counter(
         "dashboard_snapshot_requests_total",
@@ -494,11 +438,6 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
         def labels(self, *args, **kwargs):  # type: ignore
             return self
 
-    trigger_fired_total = _NoopCounter()  # type: ignore[assignment]
-    gmail_watch_renew_total = _NoopCounter()  # type: ignore[assignment]
-    gmail_api_error_total = _NoopCounter()  # type: ignore[assignment]
-    gmail_webhook_error_total = _NoopCounter()  # type: ignore[assignment]
-    external_api_retry_total = _NoopCounter()  # type: ignore[assignment]
     database_migrations_failed_total = _NoopCounter()  # type: ignore[assignment]
     dashboard_snapshot_requests_total = _NoopCounter()  # type: ignore[assignment]
     websocket_run_updates_total = _NoopCounter()  # type: ignore[assignment]
@@ -530,9 +469,6 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
         def labels(self, *args, **kwargs):  # type: ignore
             return self
 
-    gmail_connector_history_id = _NoopGauge()  # type: ignore[assignment]
-    gmail_connector_watch_expiry = _NoopGauge()  # type: ignore[assignment]
-    pubsub_webhook_processing = _NoopGauge()  # type: ignore[assignment]
     managed_codex_liveness_invariant_sessions = _NoopGauge()  # type: ignore[assignment]
 
     # Provide *noop* Histogram so code can call ``observe`` without importing
@@ -545,8 +481,6 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
         def labels(self, *args, **kwargs):  # type: ignore
             return self
 
-    gmail_http_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
-    trigger_processing_seconds = _NoopHistogram()  # type: ignore[assignment]
     dashboard_snapshot_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     dashboard_snapshot_fiches_returned = _NoopHistogram()  # type: ignore[assignment]
     dashboard_snapshot_runs_returned = _NoopHistogram()  # type: ignore[assignment]

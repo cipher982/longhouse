@@ -213,7 +213,6 @@ class Settings:  # noqa: D401 – simple data container
     runner_binary_tag: str  # GitHub release tag for runner binaries
     # Pub/Sub OIDC audience --------------------------------------------
     pubsub_audience: str | None
-    gmail_pubsub_topic: str | None
     pubsub_sa_email: str | None
     # User/account limits ----------------------------------------------
     max_users: int
@@ -590,7 +589,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         runner_docker_image=os.getenv("RUNNER_DOCKER_IMAGE", "ghcr.io/cipher982/longhouse-runner:latest"),
         runner_binary_tag=os.getenv("RUNNER_BINARY_TAG", "runner-v0.1.7"),
         pubsub_audience=os.getenv("PUBSUB_AUDIENCE"),
-        gmail_pubsub_topic=os.getenv("GMAIL_PUBSUB_TOPIC"),
         pubsub_sa_email=os.getenv("PUBSUB_SA_EMAIL"),
         max_users=int(os.getenv("MAX_USERS", "20")),
         admin_emails=os.getenv("ADMIN_EMAILS", os.getenv("ADMIN_EMAIL", "")),
@@ -697,9 +695,6 @@ def _validate_required(settings: Settings) -> None:  # noqa: D401 – helper
     # Encryption requirements
     if not settings.fernet_secret:
         missing_vars.append("FERNET_SECRET")
-
-    if settings.gmail_pubsub_topic and not settings.pubsub_audience:
-        missing_vars.append("PUBSUB_AUDIENCE (required when GMAIL_PUBSUB_TOPIC is set)")
 
     # Authentication requirements
     if not settings.auth_disabled:

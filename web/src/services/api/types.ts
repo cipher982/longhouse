@@ -29,24 +29,6 @@ export type ProductHealthCheckSummaryResponse = Schemas["ProductHealthCheckSumma
 export type SlowTurnItemResponse = Schemas["SlowTurnItemResponse"];
 export type SlowTurnsListResponse = Schemas["SlowTurnsListResponse"];
 
-export type EmailKeyStatus = Schemas["EmailKeyStatus"];
-export type EmailStatusResponse = Schemas["EmailStatusResponse"];
-
-export interface GmailWatchState {
-  status: "active" | "failed" | "not_configured";
-  method?: "pubsub" | "legacy" | null;
-  history_id?: number | null;
-  watch_expiry?: number | null;
-  error?: string | null;
-}
-
-export interface GmailConnectResponse {
-  status: "connected";
-  connector_id: number;
-  mailbox_email: string | null;
-  watch: GmailWatchState;
-}
-
 export interface ContainerPolicy {
   enabled: boolean;
   default_image: string | null;
@@ -62,10 +44,6 @@ export interface AvailableToolsResponse {
   builtin: string[];
   mcp: Record<string, string[]>;
 }
-
-export type McpServerAddRequest = components["schemas"]["MCPServerAddRequest"];
-export type McpServerResponse = components["schemas"]["MCPServerResponse"];
-export type McpTestConnectionResponse = components["schemas"]["MCPTestConnectionResponse"];
 
 export interface ModelConfig {
   id: string;

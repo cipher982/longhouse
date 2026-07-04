@@ -107,7 +107,6 @@ def update_user(
     display_name: Optional[str] = None,
     avatar_url: Optional[str] = None,
     prefs: Optional[Dict[str, Any]] = None,
-    gmail_refresh_token: Optional[str] = None,
 ) -> Optional[User]:
     """Partial update for the *User* table.
 
@@ -125,10 +124,6 @@ def update_user(
         user.avatar_url = avatar_url
     if prefs is not None:
         user.prefs = prefs
-    if gmail_refresh_token is not None:
-        from zerg.utils import crypto  # local import to avoid top-level dependency in non-auth paths
-
-        user.gmail_refresh_token = crypto.encrypt(gmail_refresh_token)
 
     db.commit()
     db.refresh(user)

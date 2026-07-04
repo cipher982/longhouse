@@ -78,10 +78,7 @@ NOISY_MODULES = (
     "zerg.websocket.manager",
     "zerg.events.event_bus",
     "zerg.services.ops_events",
-    "zerg.services.fiche_state_recovery",
     "zerg.services.auto_seed",
-    "zerg.services.watch_renewal_service",
-    "zerg.services.scheduler_service",
     # Third-party libraries
     "openai",
     "openai._base_client",

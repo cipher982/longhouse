@@ -117,7 +117,6 @@ from zerg.routers.agents_sessions import router as agents_sessions_router
 from zerg.routers.agents_source_lines import router as agents_source_lines_router
 from zerg.routers.agents_turns import router as agents_turns_router
 from zerg.routers.auth import router as auth_router
-from zerg.routers.auth_internal import router as auth_internal_router
 from zerg.routers.device_tokens import router as device_tokens_router
 from zerg.routers.health import router as health_router
 from zerg.routers.health import set_health_app_ref
@@ -240,7 +239,6 @@ api_app.include_router(admin_router)
 api_app.include_router(admin_bootstrap_router)
 api_app.include_router(runners_router)
 api_app.include_router(auth_router)
-api_app.include_router(auth_internal_router)
 api_app.include_router(users_router)
 api_app.include_router(system_router)
 api_app.include_router(ops_router)

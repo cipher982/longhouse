@@ -58,26 +58,8 @@ class User(Base):
     # Login tracking
     last_login = Column(DateTime, nullable=True)
 
-    # -------------------------------------------------------------------
-    # Google Mail integration (Phase-2 Email Triggers)
-    # -------------------------------------------------------------------
-    # When a user connects their Gmail account with *offline_access* scope we
-    # receive a **refresh token** that allows the backend to fetch short-lived
-    # access-tokens without further user interaction.  Persist the token
-    # encrypted-at-rest in a future iteration – for now we store the raw value
-    # because unit-tests run against an ephemeral in-memory SQLite database.
-
+    # Legacy column kept for non-destructive schema compatibility.
     gmail_refresh_token = Column(String, nullable=True)
-
-    # -------------------------------------------------------------------
-    # Convenience property used by the API layer / Pydantic models.
-    # -------------------------------------------------------------------
-
-    @property
-    def gmail_connected(self) -> bool:  # noqa: D401 – simple boolean accessor
-        """Return *True* if the user granted offline Gmail access (refresh token stored)."""
-
-        return self.gmail_refresh_token is not None
 
     # Timestamps -------------------------------------------------------------
     created_at = Column(DateTime, server_default=func.now())

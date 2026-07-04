@@ -19,7 +19,6 @@ from zerg.database import live_store_configured
 from zerg.observability import configure_observability
 from zerg.observability import shutdown_observability
 from zerg.services.ops_events import ops_events_bridge
-from zerg.services.scheduler_service import scheduler_service
 
 _settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -274,14 +273,6 @@ async def lifespan(app: FastAPI):
         if not _settings.testing:
             started: list[str] = []
             failed: list[str] = []
-
-            try:
-                with _timed_startup_step("scheduler_service_start"):
-                    await scheduler_service.start()
-                started.append("scheduler")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"scheduler ({e})")
-                logger.exception("Failed to start scheduler_service")
 
             try:
                 with _timed_startup_step("ops_events_bridge_start"):
@@ -555,11 +546,6 @@ async def lifespan(app: FastAPI):
     # Shutdown
     try:
         if not _settings.testing:
-            try:
-                await scheduler_service.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop scheduler_service")
-
             try:
                 ops_events_bridge.stop()
             except Exception:  # noqa: BLE001

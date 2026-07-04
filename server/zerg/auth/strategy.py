@@ -145,7 +145,6 @@ class DevAuthStrategy(AuthStrategy):
             mock_user.avatar_url = None
             mock_user.prefs = {}
             mock_user.last_login = None
-            mock_user.gmail_refresh_token = None
             mock_user.created_at = utc_now_naive()
             mock_user.updated_at = utc_now_naive()
             return mock_user

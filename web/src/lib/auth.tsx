@@ -19,11 +19,6 @@ interface User {
   last_login?: string | null;
   prefs?: Record<string, unknown> | null;
   role?: string; // ADMIN or USER
-  gmail_connected?: boolean;
-  gmail_mailbox_email?: string | null;
-  gmail_watch_status?: "active" | "failed" | "not_configured" | null;
-  gmail_watch_error?: string | null;
-  gmail_watch_expiry?: number | null;
 }
 
 interface TokenData {
@@ -271,8 +266,6 @@ export interface AuthMethods {
   sso: boolean;
   sso_url: string | null;
   sso_login_url?: string | null;
-  gmail_ready?: boolean;
-  gmail_setup_message?: string | null;
 }
 
 export function useAuthMethods() {
@@ -295,8 +288,6 @@ async function getAuthMethods(): Promise<AuthMethods> {
         sso: false,
         sso_url: null,
         sso_login_url: null,
-        gmail_ready: true,
-        gmail_setup_message: null,
       };
     }
     return response.json();
@@ -308,8 +299,6 @@ async function getAuthMethods(): Promise<AuthMethods> {
       sso: false,
       sso_url: null,
       sso_login_url: null,
-      gmail_ready: true,
-      gmail_setup_message: null,
     };
   }
 }

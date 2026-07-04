@@ -1,24 +1,4 @@
-"""Context variables for connector credential resolution.
-
-This module provides a thread-safe way to pass the credential resolver
-to connector tools during runtime execution using Python's contextvars.
-
-The pattern mirrors the token streaming context (token_stream.py) where
-the RuntimeRunner sets the context before invocation and tools read from it.
-
-Usage in RuntimeRunner:
-    from zerg.connectors.context import set_credential_resolver
-    resolver = CredentialResolver(fiche_id=fiche.id, db=db)
-    set_credential_resolver(resolver)
-    # ... invoke fiche ...
-    set_credential_resolver(None)  # cleanup
-
-Usage in Tools:
-    from zerg.connectors.context import get_credential_resolver
-    resolver = get_credential_resolver()
-    if resolver:
-        creds = resolver.get(ConnectorType.SLACK)
-"""
+"""Context variables for connector credential resolution."""
 
 from __future__ import annotations
 
@@ -30,14 +10,13 @@ if TYPE_CHECKING:
     from zerg.connectors.resolver import CredentialResolver
 
 # Context variable holding the current credential resolver
-# Set by RuntimeRunner before invoking the runtime, read by connector tools
-_credential_resolver_var: contextvars.ContextVar[Optional["CredentialResolver"]] = contextvars.ContextVar(
+_credential_resolver_var: contextvars.ContextVar[Optional[CredentialResolver]] = contextvars.ContextVar(
     "_credential_resolver_var",
     default=None,
 )
 
 
-def get_credential_resolver() -> Optional["CredentialResolver"]:
+def get_credential_resolver() -> Optional[CredentialResolver]:
     """Get the current credential resolver from context.
 
     Returns:
@@ -48,10 +27,10 @@ def get_credential_resolver() -> Optional["CredentialResolver"]:
     return _credential_resolver_var.get()
 
 
-def set_credential_resolver(resolver: Optional["CredentialResolver"]) -> contextvars.Token:
+def set_credential_resolver(resolver: Optional[CredentialResolver]) -> contextvars.Token:
     """Set the credential resolver for the current context.
 
-    Should be called by RuntimeRunner before invoking the runtime.
+    Should be called by the tool execution path before invoking connector-backed tools.
     Returns a token that can be used to reset the context.
 
     Args:

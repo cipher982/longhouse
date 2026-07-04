@@ -37,14 +37,11 @@ from zerg.auth.session_tokens import _set_session_cookie
 from zerg.config import get_settings
 from zerg.crud import count_users
 from zerg.crud import create_user
-from zerg.crud import get_connectors
 from zerg.crud import get_user_by_email
 from zerg.crud import update_user
 from zerg.database import get_db
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_auth import get_optional_browser_user
-from zerg.routers.auth_gmail import _gmail_setup_state
-from zerg.routers.auth_gmail import _normalize_email_address
 from zerg.schemas.schemas import TokenOut
 from zerg.services.write_serializer import get_write_serializer
 
@@ -365,19 +362,6 @@ def auth_status(request: Request, db: Session = Depends(get_db)):
     if not user:
         return {"authenticated": False, "user": None}
 
-    gmail_connectors = get_connectors(db, owner_id=user.id, type="email", provider="gmail")
-    gmail_connector = gmail_connectors[0] if gmail_connectors else None
-    gmail_config = dict(gmail_connector.config or {}) if gmail_connector else {}
-    gmail_connector_connected = bool(gmail_config.get("refresh_token"))
-    gmail_connected = bool(gmail_connector_connected or getattr(user, "gmail_connected", False))
-
-    gmail_watch_status = gmail_config.get("watch_status")
-    gmail_watch_error = gmail_config.get("watch_error")
-
-    if gmail_connector_connected and gmail_watch_status not in {"active", "failed", "not_configured"}:
-        gmail_watch_status = "failed"
-        gmail_watch_error = gmail_watch_error or "Reconnect Gmail to finish email sync."
-
     return {
         "authenticated": True,
         "user": {
@@ -391,11 +375,6 @@ def auth_status(request: Request, db: Session = Depends(get_db)):
             "last_login": getattr(user, "last_login", None),
             "prefs": getattr(user, "prefs", None),
             "role": getattr(user, "role", "USER"),
-            "gmail_connected": gmail_connected,
-            "gmail_mailbox_email": _normalize_email_address(gmail_config.get("emailAddress")),
-            "gmail_watch_status": gmail_watch_status,
-            "gmail_watch_error": gmail_watch_error,
-            "gmail_watch_expiry": gmail_config.get("watch_expiry"),
         },
     }
 
@@ -468,7 +447,6 @@ async def refresh_session(request: Request, response: Response, db: Session = De
 @router.get("/methods")
 def get_auth_methods():
     settings = get_settings()
-    gmail_ready, gmail_setup_message = _gmail_setup_state(settings)
     control_plane_url = _control_plane_url(settings)
     sso_base = control_plane_url.rstrip("/") if control_plane_url else None
     return {
@@ -480,8 +458,6 @@ def get_auth_methods():
         # tenant-aware login page. Self-host tenants still have their own
         # login surface and ignore this URL.
         "sso_login_url": f"{sso_base}/auth/start" if sso_base else None,
-        "gmail_ready": gmail_ready,
-        "gmail_setup_message": gmail_setup_message,
     }
 
 
