@@ -67,7 +67,7 @@ Some code is generated — **do not edit it by hand**:
 - `server/zerg/generated/`, `server/zerg/tools/generated/`, `web/src/generated/`
 
 To change tool contracts, edit `schemas/tools.yml` and run
-`scripts/generate_tool_types.py`.
+`make generate-tools`.
 
 ## CI
 
