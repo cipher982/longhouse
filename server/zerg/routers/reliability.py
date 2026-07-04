@@ -23,7 +23,7 @@ from zerg.models.models import Runner
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_health import assess_runner_health
 
-# Secret patterns to redact (same as trace_debugger)
+# Secret patterns to redact from diagnostic payloads.
 SECRET_PATTERNS = [
     r"(api[_-]?key[\"']?\s*[:=]\s*[\"']?)([^\"'\s,}]+)",
     r"(password[\"']?\s*[:=]\s*[\"']?)([^\"'\s,}]+)",
