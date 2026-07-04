@@ -338,7 +338,7 @@ def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
                 timeout_secs=1,
                 command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
                 payload={"text": "continue"},
-                commis_id="req-123",
+                request_id="req-123",
             )
             await completer
 
@@ -387,7 +387,7 @@ def test_dispatch_managed_control_command_routes_opencode_send_over_engine_chann
                 timeout_secs=1,
                 command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
                 payload={"text": "hello from browser"},
-                commis_id="req-opencode-send",
+                request_id="req-opencode-send",
             )
             await completer
 
@@ -447,7 +447,7 @@ def test_dispatch_managed_control_command_routes_opencode_interrupt_over_engine_
                 session=session,
                 timeout_secs=1,
                 command_type=MANAGED_CONTROL_COMMAND_INTERRUPT,
-                commis_id="req-opencode-interrupt",
+                request_id="req-opencode-interrupt",
             )
             await completer
 
@@ -505,7 +505,7 @@ def test_dispatch_managed_control_command_routes_opencode_terminate_over_engine_
                 session=session,
                 timeout_secs=1,
                 command_type=MANAGED_CONTROL_COMMAND_TERMINATE,
-                commis_id="req-opencode-terminate",
+                request_id="req-opencode-terminate",
             )
             await completer
 
@@ -557,7 +557,7 @@ def test_dispatch_managed_control_command_sends_antigravity_provider_to_engine_c
                 timeout_secs=1,
                 command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
                 payload={"text": "continue"},
-                commis_id="req-agy",
+                request_id="req-agy",
             )
             await completer
 

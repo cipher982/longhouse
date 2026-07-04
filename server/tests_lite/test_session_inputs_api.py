@@ -174,13 +174,13 @@ def _stub_dispatch(monkeypatch, *, emit_verified_user_event: bool = False):
         owner_id,
         session,
         text,
-        commis_id=None,
+        request_id=None,
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
         attachments=None,
     ):
-        calls.append({"session_id": str(session.id), "text": text, "commis_id": commis_id})
+        calls.append({"session_id": str(session.id), "text": text, "request_id": request_id})
         verified_user_event_id = None
         if emit_verified_user_event:
             event = AgentEvent(
@@ -2279,7 +2279,7 @@ def test_intent_steer_success_returns_sent_for_claude_channel(monkeypatch, tmp_p
         session = db.query(AgentSession).filter_by(id=session_id).one()
         _seed_live_runtime_state(db, session, phase="running")
 
-    async def fake_steer(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+    async def fake_steer(*, db, owner_id, session, text, request_id=None, timeout_secs=15):
         from zerg.services.managed_local_control import ManagedLocalSendResult
 
         assert session.provider == "claude"
@@ -2381,7 +2381,7 @@ def test_intent_steer_failure_returns_structured_502_for_claude_channel(monkeypa
         session = db.query(AgentSession).filter_by(id=session_id).one()
         _seed_live_runtime_state(db, session, phase="running")
 
-    async def fake_steer(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+    async def fake_steer(*, db, owner_id, session, text, request_id=None, timeout_secs=15):
         from zerg.services.managed_local_control import ManagedLocalSendResult
 
         return ManagedLocalSendResult(ok=False, exit_code=1, error="Claude channel bridge is unavailable")
@@ -2412,7 +2412,7 @@ def test_intent_steer_success_returns_sent_for_codex_bridge(monkeypatch, tmp_pat
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_codex_session(session_local)
 
-    async def fake_steer(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+    async def fake_steer(*, db, owner_id, session, text, request_id=None, timeout_secs=15):
         from zerg.services.managed_local_control import ManagedLocalSendResult
 
         return ManagedLocalSendResult(ok=True, exit_code=0)
@@ -2491,7 +2491,7 @@ def test_intent_steer_turn_ended_returns_structured_409(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_codex_session(session_local)
 
-    async def fake_steer(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+    async def fake_steer(*, db, owner_id, session, text, request_id=None, timeout_secs=15):
         from zerg.services.managed_local_control import MANAGED_LOCAL_STEER_TURN_ENDED
         from zerg.services.managed_local_control import ManagedLocalSendResult
 

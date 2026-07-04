@@ -146,7 +146,7 @@ async def deliver_next_queued_session_message(
         owner_id=owner_id,
         session=target_session,
         text=injected_text,
-        commis_id=f"session-message-{message.id}",
+        request_id=f"session-message-{message.id}",
         timeout_secs=15,
         verify_turn_started=True,
         verification_timeout_secs=15.0,

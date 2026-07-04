@@ -2878,7 +2878,7 @@ class UniversalProviderAdapter:
                                 "timeout_secs": kwargs.get("timeout_secs"),
                                 "command_type": kwargs.get("command_type"),
                                 "payload": kwargs.get("payload"),
-                                "commis_id": kwargs.get("commis_id"),
+                                "request_id": kwargs.get("request_id"),
                                 "run_id": kwargs.get("run_id"),
                                 "provider": getattr(kwargs.get("session"), "provider", None),
                                 "managed_transport": _project_managed_transport(
@@ -2917,7 +2917,7 @@ class UniversalProviderAdapter:
                                 decision="answer",
                                 answers={"approach": "Small adapter path"},
                                 message="Use the small adapter path.",
-                                commis_id=f"universal-{self.config.provider}-answer-pause",
+                                request_id=f"universal-{self.config.provider}-answer-pause",
                             )
                         )
                     finally:
@@ -3661,7 +3661,7 @@ class UniversalProviderAdapter:
                     "timeout_secs": kwargs.get("timeout_secs"),
                     "command_type": kwargs.get("command_type"),
                     "payload": kwargs.get("payload"),
-                    "commis_id": kwargs.get("commis_id"),
+                    "request_id": kwargs.get("request_id"),
                     "run_id": kwargs.get("run_id"),
                     "provider": getattr(kwargs.get("session"), "provider", None),
                     "managed_transport": _project_managed_transport(kwargs.get("db"), kwargs.get("session")),
@@ -3702,7 +3702,7 @@ class UniversalProviderAdapter:
                         owner_id=1,
                         session=session,
                         text=steer_text,
-                        commis_id="universal-codex-steer",
+                        request_id="universal-codex-steer",
                         attachments=attachments,
                     )
                 )
@@ -4095,7 +4095,7 @@ class UniversalProviderAdapter:
                     "timeout_secs": kwargs.get("timeout_secs"),
                     "command_type": kwargs.get("command_type"),
                     "payload": kwargs.get("payload"),
-                    "commis_id": kwargs.get("commis_id"),
+                    "request_id": kwargs.get("request_id"),
                     "run_id": kwargs.get("run_id"),
                     "provider": getattr(kwargs.get("session"), "provider", None),
                     "managed_transport": _project_managed_transport(kwargs.get("db"), kwargs.get("session")),
@@ -4135,7 +4135,7 @@ class UniversalProviderAdapter:
                         db=db,
                         owner_id=1,
                         session=session,
-                        commis_id="universal-codex-interrupt",
+                        request_id="universal-codex-interrupt",
                     )
                 )
         finally:

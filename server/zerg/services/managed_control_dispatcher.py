@@ -90,10 +90,10 @@ def _engine_command_id(
     *,
     session: AgentSession,
     command_type: str | None,
-    commis_id: str | None,
+    request_id: str | None,
     run_id: str | None,
 ) -> str | None:
-    seed = str(commis_id or run_id or "").strip()
+    seed = str(request_id or run_id or "").strip()
     command = str(command_type or "").strip()
     if not seed or not command:
         return None
@@ -108,7 +108,7 @@ async def dispatch_managed_control_command(
     timeout_secs: int,
     command_type: str | None = None,
     payload: Mapping[str, Any] | None = None,
-    commis_id: str | None = None,
+    request_id: str | None = None,
     run_id: str | None = None,
 ) -> ManagedControlDispatchResult:
     """Dispatch one managed-control command through the Machine Agent channel."""
@@ -125,7 +125,7 @@ async def dispatch_managed_control_command(
             command_id=_engine_command_id(
                 session=session,
                 command_type=command_type,
-                commis_id=commis_id,
+                request_id=request_id,
                 run_id=run_id,
             ),
         )

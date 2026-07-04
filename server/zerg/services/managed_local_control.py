@@ -553,7 +553,7 @@ async def interrupt_managed_local_session(
     db: Session,
     owner_id: int,
     session: AgentSession,
-    commis_id: str | None = None,
+    request_id: str | None = None,
     timeout_secs: int = 15,
 ) -> ManagedLocalInterruptResult:
     """Dispatch an interrupt request for the active managed-local turn.
@@ -579,7 +579,7 @@ async def interrupt_managed_local_session(
         timeout_secs=timeout_secs,
         command_type=MANAGED_CONTROL_COMMAND_INTERRUPT,
         payload={},
-        commis_id=commis_id,
+        request_id=request_id,
         run_id=None,
     )
     if not result.ok:
@@ -609,7 +609,7 @@ async def terminate_managed_local_session(
     db: Session,
     owner_id: int,
     session: AgentSession,
-    commis_id: str | None = None,
+    request_id: str | None = None,
     timeout_secs: int = 15,
 ) -> ManagedLocalInterruptResult:
     """Dispatch a terminate request for a managed-local session.
@@ -636,7 +636,7 @@ async def terminate_managed_local_session(
         timeout_secs=timeout_secs,
         command_type=MANAGED_CONTROL_COMMAND_TERMINATE,
         payload={},
-        commis_id=commis_id,
+        request_id=request_id,
         run_id=None,
     )
     if not result.ok:
@@ -667,7 +667,7 @@ async def send_text_to_managed_local_session(
     owner_id: int,
     session: AgentSession,
     text: str,
-    commis_id: str | None = None,
+    request_id: str | None = None,
     timeout_secs: int = 15,
     verify_turn_started: bool = False,
     verification_timeout_secs: float | None = None,
@@ -706,7 +706,7 @@ async def send_text_to_managed_local_session(
         timeout_secs=timeout_secs,
         command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
         payload=payload,
-        commis_id=commis_id,
+        request_id=request_id,
         run_id=None,
     )
 
@@ -787,7 +787,7 @@ async def steer_text_to_managed_local_session(
     owner_id: int,
     session: AgentSession,
     text: str,
-    commis_id: str | None = None,
+    request_id: str | None = None,
     timeout_secs: int = 15,
     attachments: list[dict] | None = None,
 ) -> ManagedLocalSendResult:
@@ -829,7 +829,7 @@ async def steer_text_to_managed_local_session(
         timeout_secs=timeout_secs,
         command_type=MANAGED_CONTROL_COMMAND_STEER_TEXT,
         payload=payload,
-        commis_id=commis_id,
+        request_id=request_id,
         run_id=None,
     )
     if not result.ok:
@@ -874,7 +874,7 @@ async def answer_pause_request_on_managed_local_session(
     answers: Mapping[str, object] | None = None,
     content: object | None = None,
     message: str | None = None,
-    commis_id: str | None = None,
+    request_id: str | None = None,
     timeout_secs: int = 30,
 ) -> ManagedLocalSendResult:
     """Send a provider-native answer for a held structured pause request."""
@@ -908,7 +908,7 @@ async def answer_pause_request_on_managed_local_session(
         timeout_secs=timeout_secs,
         command_type=MANAGED_CONTROL_COMMAND_ANSWER_PAUSE,
         payload=payload,
-        commis_id=commis_id,
+        request_id=request_id,
         run_id=None,
     )
     if not result.ok:

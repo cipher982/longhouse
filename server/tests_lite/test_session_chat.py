@@ -624,13 +624,13 @@ def test_explicit_claude_steer_dispatches_during_active_turn(monkeypatch, tmp_pa
         SimpleNamespace(id=user_id, email="claude-steer-active@test.local", role=UserRole.USER.value),
     )
 
-    async def fake_steer(*, db, owner_id, session, text, commis_id=None):
+    async def fake_steer(*, db, owner_id, session, text, request_id=None):
         calls.append(
             {
                 "owner_id": owner_id,
                 "session_id": str(session.id),
                 "text": text,
-                "commis_id": commis_id,
+                "request_id": request_id,
             }
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
@@ -650,7 +650,7 @@ def test_explicit_claude_steer_dispatches_during_active_turn(monkeypatch, tmp_pa
         assert calls[0]["owner_id"] == user_id
         assert calls[0]["session_id"] == str(source_session_id)
         assert calls[0]["text"] == "correct the active turn"
-        assert calls[0]["commis_id"]
+        assert calls[0]["request_id"]
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -712,7 +712,7 @@ def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(monkeypat
         owner_id,
         session,
         text,
-        commis_id=None,
+        request_id=None,
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
@@ -723,7 +723,7 @@ def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(monkeypat
                 "owner_id": owner_id,
                 "session_id": str(session.id),
                 "text": text,
-                "commis_id": commis_id,
+                "request_id": request_id,
                 "verify_turn_started": verify_turn_started,
                 "verification_timeout_secs": verification_timeout_secs,
             }
@@ -927,12 +927,12 @@ def test_agents_interrupt_live_route_dispatches_and_releases_lock(monkeypatch, t
 
     client, api_app_ref = _make_machine_client(session_local, token)
 
-    async def fake_interrupt(*, db, owner_id, session, commis_id=None, timeout_secs=15):
+    async def fake_interrupt(*, db, owner_id, session, request_id=None, timeout_secs=15):
         calls.append(
             {
                 "owner_id": owner_id,
                 "session_id": str(session.id),
-                "commis_id": commis_id,
+                "request_id": request_id,
                 "timeout_secs": timeout_secs,
             }
         )
@@ -1011,12 +1011,12 @@ def test_browser_interrupt_live_route_dispatches_and_releases_lock(monkeypatch, 
         SimpleNamespace(id=user_id, email="browser-interrupt-live@test.local", role=UserRole.USER.value),
     )
 
-    async def fake_interrupt(*, db, owner_id, session, commis_id=None, timeout_secs=15):
+    async def fake_interrupt(*, db, owner_id, session, request_id=None, timeout_secs=15):
         calls.append(
             {
                 "owner_id": owner_id,
                 "session_id": str(session.id),
-                "commis_id": commis_id,
+                "request_id": request_id,
                 "timeout_secs": timeout_secs,
             }
         )
@@ -1091,7 +1091,7 @@ def test_agents_interrupt_live_route_releases_lock_on_dispatch_failure(monkeypat
 
     client, api_app_ref = _make_machine_client(session_local, token)
 
-    async def fake_interrupt(*, db, owner_id, session, commis_id=None, timeout_secs=15):
+    async def fake_interrupt(*, db, owner_id, session, request_id=None, timeout_secs=15):
         return SimpleNamespace(ok=False, exit_code=7, error="interrupt failed")
 
     monkeypatch.setattr("zerg.services.managed_local_control.interrupt_managed_local_session", fake_interrupt)
@@ -1165,12 +1165,12 @@ def test_browser_terminate_live_route_dispatches_and_releases_lock(monkeypatch, 
         SimpleNamespace(id=user_id, email="browser-terminate-live@test.local", role=UserRole.USER.value),
     )
 
-    async def fake_terminate(*, db, owner_id, session, commis_id=None, timeout_secs=15):
+    async def fake_terminate(*, db, owner_id, session, request_id=None, timeout_secs=15):
         calls.append(
             {
                 "owner_id": owner_id,
                 "session_id": str(session.id),
-                "commis_id": commis_id,
+                "request_id": request_id,
                 "timeout_secs": timeout_secs,
             }
         )
@@ -1244,7 +1244,7 @@ def test_agents_terminate_live_route_releases_lock_on_dispatch_failure(monkeypat
 
     client, api_app_ref = _make_machine_client(session_local, token)
 
-    async def fake_terminate(*, db, owner_id, session, commis_id=None, timeout_secs=15):
+    async def fake_terminate(*, db, owner_id, session, request_id=None, timeout_secs=15):
         return SimpleNamespace(ok=False, exit_code=7, error="terminate failed")
 
     monkeypatch.setattr("zerg.services.managed_local_control.terminate_managed_local_session", fake_terminate)

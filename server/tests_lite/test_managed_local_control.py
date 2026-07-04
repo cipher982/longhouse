@@ -253,14 +253,14 @@ def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude
                 owner_id=user.id,
                 session=session,
                 text="continue",
-                commis_id="managed-local-control-test",
+                request_id="managed-local-control-test",
             )
         )
         assert result.ok is True
         assert result.baseline_event_id == existing_event.id
 
         assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["commis_id"] == "managed-local-control-test"
+        assert dispatcher.calls[0]["request_id"] == "managed-local-control-test"
         assert dispatcher.calls[0]["command_type"] == "session.send_text"
         assert dispatcher.calls[0]["payload"] == {"text": "continue"}
 
@@ -277,14 +277,14 @@ def test_interrupt_managed_local_session_uses_claude_channel_command(monkeypatch
                 db=db,
                 owner_id=user.id,
                 session=session,
-                commis_id="managed-local-interrupt-test",
+                request_id="managed-local-interrupt-test",
             )
         )
 
         assert result.ok is True
         assert result.exit_code == 0
         assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["commis_id"] == "managed-local-interrupt-test"
+        assert dispatcher.calls[0]["request_id"] == "managed-local-interrupt-test"
         assert dispatcher.calls[0]["command_type"] == "session.interrupt"
         assert dispatcher.calls[0]["payload"] == {}
 
@@ -301,7 +301,7 @@ def test_interrupt_managed_local_session_uses_codex_bridge_command(monkeypatch, 
                 db=db,
                 owner_id=user.id,
                 session=session,
-                commis_id="managed-local-interrupt-test",
+                request_id="managed-local-interrupt-test",
             )
         )
 
@@ -325,14 +325,14 @@ def test_steer_text_to_managed_local_session_uses_claude_channel_command(monkeyp
                 owner_id=user.id,
                 session=session,
                 text="redirect",
-                commis_id="managed-local-steer-test",
+                request_id="managed-local-steer-test",
             )
         )
 
         assert result.ok is True
         assert result.exit_code == 0
         assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["commis_id"] == "managed-local-steer-test"
+        assert dispatcher.calls[0]["request_id"] == "managed-local-steer-test"
         assert dispatcher.calls[0]["command_type"] == "session.steer_text"
         assert dispatcher.calls[0]["payload"] == {"text": "redirect", "intent": "steer"}
 
@@ -358,7 +358,7 @@ def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(
                 owner_id=user.id,
                 session=session,
                 text="redirect",
-                commis_id="managed-local-steer-test",
+                request_id="managed-local-steer-test",
                 attachments=refs,
             )
         )
@@ -366,7 +366,7 @@ def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(
         assert result.ok is True
         assert result.exit_code == 0
         assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["commis_id"] == "managed-local-steer-test"
+        assert dispatcher.calls[0]["request_id"] == "managed-local-steer-test"
         assert dispatcher.calls[0]["command_type"] == "session.steer_text"
         assert dispatcher.calls[0]["payload"] == {
             "text": "redirect",
@@ -402,7 +402,7 @@ def test_steer_text_turn_ended_maps_to_turn_ended_sentinel(monkeypatch, tmp_path
                 owner_id=user.id,
                 session=session,
                 text="redirect",
-                commis_id="managed-local-steer-test",
+                request_id="managed-local-steer-test",
             )
         )
 
@@ -578,7 +578,7 @@ def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monke
                 owner_id=user.id,
                 session=session,
                 text="continue alpha",
-                commis_id="managed-local-control-first",
+                request_id="managed-local-control-first",
             )
         )
         second = asyncio.run(
@@ -587,15 +587,15 @@ def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monke
                 owner_id=user.id,
                 session=session,
                 text="status? [ok]",
-                commis_id="managed-local-control-second",
+                request_id="managed-local-control-second",
             )
         )
 
         assert first.ok is True
         assert second.ok is True
         assert len(dispatcher.calls) == 2
-        assert dispatcher.calls[0]["commis_id"] == "managed-local-control-first"
-        assert dispatcher.calls[1]["commis_id"] == "managed-local-control-second"
+        assert dispatcher.calls[0]["request_id"] == "managed-local-control-first"
+        assert dispatcher.calls[1]["request_id"] == "managed-local-control-second"
         assert dispatcher.calls[0]["payload"] == {"text": "continue alpha"}
         assert dispatcher.calls[1]["payload"] == {"text": "status? [ok]"}
 
@@ -748,13 +748,13 @@ def test_send_text_to_managed_local_session_uses_claude_channel_bridge_payload(m
                 owner_id=user.id,
                 session=session,
                 text="continue from loop",
-                commis_id="managed-local-claude-channel",
+                request_id="managed-local-claude-channel",
             )
         )
 
         assert result.ok is True
         assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["commis_id"] == "managed-local-claude-channel"
+        assert dispatcher.calls[0]["request_id"] == "managed-local-claude-channel"
         assert dispatcher.calls[0]["command_type"] == "session.send_text"
         assert dispatcher.calls[0]["payload"] == {"text": "continue from loop"}
 
@@ -803,7 +803,7 @@ def test_send_text_to_managed_local_session_trusts_engine_turn_start_ack(monkeyp
                 owner_id=user.id,
                 session=session,
                 text="continue",
-                commis_id="managed-local-engine-verified",
+                request_id="managed-local-engine-verified",
                 verify_turn_started=True,
                 verification_timeout_secs=15.0,
             )
@@ -908,7 +908,7 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_co
                 owner_id=user.id,
                 session=session,
                 text="continue",
-                commis_id="managed-local-control-verified",
+                request_id="managed-local-control-verified",
                 verify_turn_started=True,
                 verification_timeout_secs=2.5,
             )
@@ -941,7 +941,7 @@ def test_send_text_to_managed_local_session_reports_codex_verification_failure_w
                 owner_id=user.id,
                 session=session,
                 text="continue",
-                commis_id="managed-local-control-verify-fail",
+                request_id="managed-local-control-verify-fail",
                 verify_turn_started=True,
                 verification_timeout_secs=1.0,
             )
@@ -990,7 +990,7 @@ def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(mon
                 owner_id=user.id,
                 session=session,
                 text="continue",
-                commis_id="managed-local-codex-verified",
+                request_id="managed-local-codex-verified",
                 verify_turn_started=True,
                 verification_timeout_secs=2.5,
             )
@@ -1021,7 +1021,7 @@ def test_send_text_to_managed_local_session_reports_codex_hook_verification_fail
                 owner_id=user.id,
                 session=session,
                 text="continue",
-                commis_id="managed-local-codex-verify-fail",
+                request_id="managed-local-codex-verify-fail",
                 verify_turn_started=True,
                 verification_timeout_secs=1.0,
             )
@@ -1257,7 +1257,7 @@ def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_p
                 owner_id=user.id,
                 session=session,
                 text="hello channel",
-                commis_id="channel-test",
+                request_id="channel-test",
                 verify_turn_started=True,
                 verification_timeout_secs=0.1,
             )
@@ -1290,7 +1290,7 @@ def test_send_text_to_managed_local_session_reports_claude_channel_verification_
                 owner_id=user.id,
                 session=session,
                 text="hello channel",
-                commis_id="channel-test",
+                request_id="channel-test",
                 verify_turn_started=True,
                 verification_timeout_secs=0.1,
             )

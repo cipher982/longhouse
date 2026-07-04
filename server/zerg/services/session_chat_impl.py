@@ -1010,7 +1010,7 @@ async def _dispatch_managed_local_text(
                 owner_id=owner_id,
                 session=source_session,
                 text=message,
-                commis_id=request_id,
+                request_id=request_id,
                 timeout_secs=15,
                 verify_turn_started=True,
                 verification_timeout_secs=15.0,
@@ -1284,7 +1284,7 @@ async def _stream_managed_local_output(
         owner_id=owner_id,
         session=source_session,
         text=message,
-        commis_id=request_id,
+        request_id=request_id,
         timeout_secs=15,
     )
 

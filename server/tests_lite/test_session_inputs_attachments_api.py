@@ -250,7 +250,7 @@ def _stub_dispatch(monkeypatch):
         owner_id,
         session,
         text,
-        commis_id=None,
+        request_id=None,
         timeout_secs=15,
         verify_turn_started=False,
         verification_timeout_secs=None,
@@ -260,7 +260,7 @@ def _stub_dispatch(monkeypatch):
             {
                 "session_id": str(session.id),
                 "text": text,
-                "commis_id": commis_id,
+                "request_id": request_id,
                 "attachments": list(attachments or []),
             }
         )

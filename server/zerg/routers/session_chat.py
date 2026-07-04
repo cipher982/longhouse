@@ -349,7 +349,7 @@ async def _interrupt_live_session_response(
             db=db,
             owner_id=owner_id,
             session=source_session,
-            commis_id=request_id,
+            request_id=request_id,
         )
     except Exception as exc:
         released_lock = await session_lock_manager.release(lock_scope_id)
@@ -423,7 +423,7 @@ async def _terminate_live_session_response(
             db=db,
             owner_id=owner_id,
             session=source_session,
-            commis_id=request_id,
+            request_id=request_id,
         )
     except Exception as exc:
         released_lock = await session_lock_manager.release(lock_scope_id)
@@ -713,7 +713,7 @@ async def _respond_to_pause_request(
         answers=body.answers,
         content=body.content,
         message=response_message,
-        commis_id=f"pause-{row.id}",
+        request_id=f"pause-{row.id}",
     )
     if not result.ok:
         raise HTTPException(
@@ -1611,7 +1611,7 @@ async def _dispatch_steer_input(
         owner_id=owner_id,
         session=source_session,
         text=body.text,
-        commis_id=delivery_request_id,
+        request_id=delivery_request_id,
     )
 
     if result.ok:
