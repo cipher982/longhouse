@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/skills", tags=["skills"])
 
-# Default workspace base path (same as workspace_manager.py)
+# Default workspace base path for skill discovery.
 DEFAULT_WORKSPACE_PATH = str(Path.home() / ".longhouse" / "workspaces")
 
 

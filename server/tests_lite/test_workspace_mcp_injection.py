@@ -3,8 +3,8 @@
 import json
 import tomllib
 
-from zerg.services.workspace_manager import inject_codex_mcp_settings
-from zerg.services.workspace_manager import inject_mcp_settings
+from zerg.services.workspace_mcp import inject_codex_mcp_settings
+from zerg.services.workspace_mcp import inject_mcp_settings
 
 
 def test_inject_mcp_settings_writes_workspace_local_claude_config(tmp_path):
