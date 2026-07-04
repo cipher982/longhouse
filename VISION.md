@@ -142,7 +142,7 @@ Longhouse is not:
 
 ### Frozen or removed for launch
 
-- cloud-branch / cloud-takeover (capability gate is off, code remains)
+- cloud-branch / cloud-takeover (removed; explicit branch-from-session can be designed later as a new session, not takeover)
 - loop inbox and turn reviews (removed); email surfaces (hidden from nav)
 - jobs as a user-facing product surface
 - briefings and insights as standalone pages
