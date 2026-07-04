@@ -132,6 +132,20 @@ if [[ -n "$cleanup_json" && "$cleanup_json" != "null" ]]; then
   done < <(run_steps cleanup)
 fi
 
+DIAGNOSTICS_DIR="$WORKDIR/onboarding-diagnostics"
+
+collect_diagnostics() {
+  mkdir -p "$DIAGNOSTICS_DIR" 2>/dev/null || true
+  if [[ -f "$WORKDIR/.qa-home/.longhouse/server.log" ]]; then
+    cp "$WORKDIR/.qa-home/.longhouse/server.log" "$DIAGNOSTICS_DIR/server.log" 2>/dev/null || true
+    echo "🧾 Server log tail:"
+    tail -80 "$WORKDIR/.qa-home/.longhouse/server.log" || true
+  fi
+  if [[ -d "$WORKDIR/.qa-home/.longhouse" ]]; then
+    find "$WORKDIR/.qa-home/.longhouse" -maxdepth 1 -type f -print > "$DIAGNOSTICS_DIR/longhouse-files.txt" 2>/dev/null || true
+  fi
+}
+
 cleanup() {
   if [[ ${#cleanup_cmds[@]} -eq 0 ]]; then
     return
@@ -144,13 +158,52 @@ cleanup() {
   done
 }
 
-trap cleanup EXIT
+on_exit() {
+  status=$?
+  if [[ "$status" -ne 0 ]]; then
+    collect_diagnostics
+  fi
+  cleanup
+  exit "$status"
+}
+
+wait_for_onboarding_health() {
+  python3 - <<'PY'
+import json
+import time
+import urllib.error
+import urllib.request
+
+url = "http://127.0.0.1:8080/api/health"
+last_error = None
+for attempt in range(1, 61):
+    try:
+        with urllib.request.urlopen(url, timeout=5) as response:
+            payload = json.load(response)
+        if payload.get("status") == "healthy":
+            print(f"✓ onboarding runtime is healthy (attempt {attempt})")
+            raise SystemExit(0)
+        last_error = f"status payload was not healthy: {payload!r}"
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        last_error = f"{type(exc).__name__}: {exc}"
+    print(f"  onboarding runtime not ready (attempt {attempt}/60): {last_error}")
+    time.sleep(2)
+
+raise SystemExit(f"onboarding runtime did not become healthy: {last_error}")
+PY
+}
+
+trap on_exit EXIT
 
 echo "🚦 Running onboarding funnel steps..."
 while IFS= read -r cmd; do
   resolved="${cmd//\{\{WORKDIR\}\}/$WORKDIR}"
   echo "→ $resolved"
-  "$RUN_SHELL" -lc "$resolved"
+  if [[ "$resolved" == *"http://127.0.0.1:8080/api/health"* ]]; then
+    wait_for_onboarding_health
+  else
+    "$RUN_SHELL" -lc "$resolved"
+  fi
 done < <(run_steps steps)
 
 echo "✅ Onboarding funnel complete."

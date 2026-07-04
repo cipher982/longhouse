@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -27,6 +28,73 @@ def _combined_output(result: subprocess.CompletedProcess[str]) -> str:
 
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _preserve_universal_smoke_failure(root: Path) -> Path:
+    destination = (
+        REPO_ROOT
+        / ".build"
+        / "canaries"
+        / "provider-release-proof-universal-smoke"
+        / "make-test-failure"
+    )
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(root, destination)
+    return destination
+
+
+def _universal_smoke_failure_details(artifact: Path, evidence_root: Path) -> str:
+    lines: list[str] = []
+    if artifact.is_file():
+        try:
+            payload = _read_json(artifact)
+        except json.JSONDecodeError as exc:
+            lines.append(f"smoke artifact is invalid JSON: {exc}")
+        else:
+            lines.append(f"smoke artifact: {artifact}")
+            lines.append(f"smoke verdict: {payload.get('verdict')}")
+    else:
+        lines.append(f"smoke artifact was not written: {artifact}")
+
+    harness_path = evidence_root / "universal-agent-harness" / "universal-agent-harness.json"
+    if not harness_path.is_file():
+        lines.append(f"harness artifact was not written: {harness_path}")
+        return "\n".join(lines)
+
+    try:
+        harness = _read_json(harness_path)
+    except json.JSONDecodeError as exc:
+        lines.append(f"harness artifact is invalid JSON: {exc}")
+        return "\n".join(lines)
+
+    rows = harness.get("results")
+    if not isinstance(rows, list):
+        lines.append("harness results missing")
+        return "\n".join(lines)
+
+    failed_rows = [
+        row
+        for row in rows
+        if isinstance(row, dict) and row.get("status") == "fail"
+    ]
+    if not failed_rows:
+        lines.append("no status=fail harness rows found")
+        return "\n".join(lines)
+
+    lines.append("failed harness rows:")
+    for row in failed_rows[:20]:
+        parts = [
+            f"{row.get('provider')}/{row.get('scenario')}",
+            str(row.get("failure_code") or "unknown_failure"),
+        ]
+        if row.get("message"):
+            parts.append(str(row["message"]))
+        if row.get("evidence_root"):
+            parts.append(str(row["evidence_root"]))
+        lines.append("  - " + " | ".join(parts))
+    return "\n".join(lines)
 
 
 def test_provider_release_proof_make_requires_provider() -> None:
@@ -206,7 +274,16 @@ def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact
             ]
         )
 
-        assert result.returncode == 0, _combined_output(result)
+        if result.returncode != 0:
+            preserved = _preserve_universal_smoke_failure(root)
+            details = _universal_smoke_failure_details(artifact, evidence_root)
+            assert result.returncode == 0, "\n".join(
+                [
+                    _combined_output(result),
+                    details,
+                    f"preserved failure artifacts: {preserved}",
+                ]
+            )
         payload = _read_json(artifact)
         assert payload["artifact_kind"] == "provider_release_proof_universal_smoke"
         assert payload["verdict"] == "yellow"

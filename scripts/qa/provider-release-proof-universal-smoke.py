@@ -717,6 +717,45 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     return artifact
 
 
+def failure_summary_lines(artifact: dict[str, Any]) -> list[str]:
+    """Return a compact, CI-log-friendly summary of red harness rows."""
+    if artifact.get("verdict") != "red":
+        return []
+    harness_path = artifact.get("universal_harness_artifact")
+    if not isinstance(harness_path, str):
+        return ["red summary unavailable: universal_harness_artifact missing"]
+    try:
+        harness = json.loads(Path(harness_path).read_text(encoding="utf-8"))
+    except OSError as exc:
+        return [f"red summary unavailable: could not read {harness_path}: {exc}"]
+    except json.JSONDecodeError as exc:
+        return [f"red summary unavailable: invalid JSON in {harness_path}: {exc}"]
+
+    rows = harness.get("results")
+    if not isinstance(rows, list):
+        return ["red summary unavailable: harness results missing"]
+
+    lines: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("status") != "fail":
+            continue
+        provider = row.get("provider") or "unknown-provider"
+        scenario = row.get("scenario") or "unknown-scenario"
+        failure_code = row.get("failure_code") or "unknown_failure"
+        message = row.get("message") or ""
+        evidence_root = row.get("evidence_root") or ""
+        line = f"- {provider}/{scenario}: {failure_code}"
+        if message:
+            line += f" - {message}"
+        if evidence_root:
+            line += f" ({evidence_root})"
+        lines.append(line)
+
+    if not lines:
+        return ["red summary unavailable: no status=fail rows found"]
+    return ["red results:"] + lines[:20]
+
+
 def _selected_scenarios(args: argparse.Namespace) -> tuple[str, ...]:
     scenarios = list(args.scenario or DEFAULT_SCENARIOS)
     if args.include_live_token_streaming and LIVE_TOKEN_SCENARIO not in scenarios:
@@ -773,6 +812,8 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(f"verdict: {artifact['verdict']}")
         print(f"artifact: {artifact['artifact_path']}")
+        for line in failure_summary_lines(artifact):
+            print(line)
     return 1 if artifact.get("verdict") == "red" else 0
 
 

@@ -412,14 +412,13 @@ def get_session_factory() -> sessionmaker:
     if default_session_factory is not None:
         return default_session_factory
 
-    # Fallback for edge cases where module loaded before DATABASE_URL set
-    db_url = _settings.database_url
-    if not db_url:
+    # Fallback for edge cases where module loaded before DATABASE_URL set.
+    engine = _ensure_default_engines_from_env()
+    if engine is None or default_session_factory is None:
         raise ValueError("DATABASE_URL not set in environment")
 
-    logger.warning("get_session_factory() creating engine on-demand (default_session_factory was None)")
-    engine = make_engine(db_url)
-    return make_sessionmaker(engine)
+    logger.warning("get_session_factory() recovered deferred default engine from environment")
+    return default_session_factory
 
 
 # Default engine and sessionmaker instances for app usage
@@ -451,6 +450,43 @@ else:
     live_session_factory = None
     live_write_engine = None
     live_write_session_factory = None
+
+
+def _ensure_default_engines_from_env() -> Engine | None:
+    """Recover default engines when env was configured after module import."""
+    global _settings
+    global default_engine
+    global default_session_factory
+    global _write_engine
+    global _write_session_factory
+    global live_engine
+    global live_session_factory
+    global live_write_engine
+    global live_write_session_factory
+
+    if default_engine is not None:
+        return default_engine
+
+    from zerg.config import get_settings_unchecked
+
+    refreshed = get_settings_unchecked()
+    _settings = refreshed
+    if not refreshed.database_url:
+        return None
+
+    logger.warning("DATABASE_URL was configured after zerg.database import; creating default engines now")
+    default_engine = make_engine(refreshed.database_url)
+    default_session_factory = make_sessionmaker(default_engine)
+    _write_engine = make_write_engine(refreshed.database_url)
+    _write_session_factory = make_sessionmaker(_write_engine)
+
+    if refreshed.live_database_url and live_engine is None:
+        live_engine = make_live_engine(refreshed.live_database_url)
+        live_session_factory = make_sessionmaker(live_engine)
+        live_write_engine = make_live_write_engine(refreshed.live_database_url)
+        live_write_session_factory = make_sessionmaker(live_write_engine)
+
+    return default_engine
 
 
 def configure_write_serializer() -> None:
@@ -553,7 +589,7 @@ def get_pool_status(engine: Engine | None = None) -> dict[str, Any] | None:
     connection.
     """
 
-    target_engine = engine or default_engine
+    target_engine = engine or default_engine or _ensure_default_engines_from_env()
     if target_engine is None:
         return None
 
@@ -792,7 +828,7 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.session_share import SessionShareEvent  # noqa: F401
     from zerg.models.work import Insight  # noqa: F401
 
-    target_engine = engine or default_engine
+    target_engine = engine or default_engine or _ensure_default_engines_from_env()
 
     if target_engine is None:
         raise ValueError("No engine provided and default_engine is None")
@@ -864,6 +900,8 @@ def initialize_live_database(engine: Engine | None = None) -> None:
     """Initialize only the Live Store schema on the hot SQLite lane."""
     from zerg.models.live_store import LiveBase
 
+    if engine is None and live_engine is None:
+        _ensure_default_engines_from_env()
     target_engine = engine or live_engine
     if target_engine is None:
         if live_store_configured():
