@@ -292,11 +292,11 @@ edge rows as read paths migrate.
 That is the schema delta for this epic. Six tables, no hash chains, no
 generations, no segments, no leases.
 
-> Naming note: tablenames are `session_*`-prefixed because the unprefixed
-> `threads` and `runs` tables are already taken by the fiche/agent execution
-> system (`server/zerg/models/thread.py`, `server/zerg/models/run.py`). The
-> SQLAlchemy classes are `SessionThread`, `SessionThreadAlias`, `SessionRun`,
-> `SessionConnection`, `SessionLaunchAttempt` for the same reason.
+> Naming note: table names are `session_*`-prefixed to keep the session kernel
+> distinct from older generic table names and to make ownership obvious in the
+> schema. The SQLAlchemy classes are `SessionThread`, `SessionThreadAlias`,
+> `SessionRun`, `SessionConnection`, and `SessionLaunchAttempt` for the same
+> reason.
 
 ## `thread_id` on existing child tables
 

@@ -49,7 +49,7 @@ protecting live latency.
 - No second durable transcript store on the machine beyond provider logs plus
   pointer/cursor metadata.
 - No hidden "make health green by dropping evidence" behavior.
-- No cloud takeover or execution migration.
+- No execution migration or hidden session ownership changes.
 
 ## Lane Model
 

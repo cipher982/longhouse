@@ -116,7 +116,7 @@ The product should never make users understand shell bootstrap, launchd, or help
 Longhouse is not:
 
 - an AI dashboard
-- magical local-to-cloud takeover
+- silently moving a running session between machines
 - a generic remote shell manager
 - a mailbox product before launch
 - a jobs platform before launch
@@ -142,7 +142,7 @@ Longhouse is not:
 
 ### Frozen or removed for launch
 
-- cloud-branch / cloud-takeover (removed; explicit branch-from-session can be designed later as a new session, not takeover)
+- implicit takeover of a running local session (removed; explicit branch-from-session can be designed later as a new session)
 - loop inbox and turn reviews (removed); email surfaces (hidden from nav)
 - jobs as a user-facing product surface
 - briefings and insights as standalone pages
