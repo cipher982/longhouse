@@ -1,6 +1,6 @@
 """Runner setup tools for runtime onboarding.
 
-These tools are meant for the runtime path, not for commis.
+These tools are meant for runtime-driven onboarding.
 They enable a chat-first onboarding flow that can:
 - list existing runners
 - generate a short-lived enrollment token and show install commands
@@ -192,7 +192,7 @@ TOOLS: List[StructuredTool] = [
         name="runner_create_enroll_token",
         description=(
             "Create a one-time enrollment token and show setup commands to install a Runner. "
-            "Use this when the user needs to connect their infrastructure for fiches to run commands."
+            "Use this when the user needs to connect their infrastructure for Longhouse to run commands."
         ),
     ),
     StructuredTool.from_function(

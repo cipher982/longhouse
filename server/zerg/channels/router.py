@@ -1,6 +1,6 @@
 """Channel Router.
 
-Routes messages between the Longhouse fiche system and channel plugins.
+Routes messages between Longhouse runtime surfaces and channel plugins.
 Handles message dispatch, event routing, and conversation state.
 """
 
@@ -56,11 +56,11 @@ OutboundFilter = Callable[[ChannelMessage], ChannelMessage | None]
 
 
 class ChannelRouter:
-    """Routes messages between Longhouse fiches and channel plugins.
+    """Routes messages between Longhouse runtime surfaces and channel plugins.
 
     The router:
-    - Receives incoming messages from channels and dispatches to fiches
-    - Sends outgoing messages from fiches to appropriate channels
+    - Receives incoming messages from channels and dispatches to handlers
+    - Sends outgoing messages to appropriate channels
     - Maintains conversation context for multi-turn interactions
     - Applies message filters and transformations
 

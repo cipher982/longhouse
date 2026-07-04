@@ -219,7 +219,7 @@ def format_catalog_for_prompt(
 
 
 # ---------------------------------------------------------------------------
-# Context for per-fiche tool filtering
+# Context for runtime tool filtering
 # ---------------------------------------------------------------------------
 
 _search_allowed_tools: ContextVar[list[str] | None] = ContextVar("search_allowed_tools", default=None)
@@ -230,7 +230,7 @@ def set_search_context(
     allowed_tools: list[str] | None = None,
     max_results: int = 20,
 ) -> None:
-    """Set the search context for the current fiche."""
+    """Set the search context for the current runtime."""
     _search_allowed_tools.set(allowed_tools)
     _search_max_results.set(max_results)
 
@@ -469,7 +469,7 @@ def delete_embeddings_cache() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Search tools meta-tool (for fiches)
+# Search tools meta-tool
 # ---------------------------------------------------------------------------
 
 
@@ -477,7 +477,7 @@ async def search_tools_for_fiche(
     query: str,
     max_results: int = 5,
 ) -> dict:
-    """Search tools by description - designed for fiche use."""
+    """Search tools by description for runtime use."""
     index = await get_tool_search_index()
 
     context_cap = _search_max_results.get()

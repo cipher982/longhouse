@@ -1,4 +1,4 @@
-"""Memory file tools for long-term fiche memory."""
+"""Memory file tools for long-term session memory."""
 
 from __future__ import annotations
 

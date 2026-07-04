@@ -1,7 +1,7 @@
 """Standardized error envelope for tool responses.
 
 All tools should use these helpers to return consistent error/success responses
-that the fiche can interpret using the <error_handling> protocol.
+that callers can interpret using the <error_handling> protocol.
 """
 
 from enum import Enum
@@ -18,7 +18,7 @@ class ErrorType(str, Enum):
     PERMISSION_DENIED = "permission_denied"
     VALIDATION_ERROR = "validation_error"
     EXECUTION_ERROR = "execution_error"
-    # Runtime/commis specific
+    # Runtime specific
     MISSING_CONTEXT = "missing_context"  # No credential or runtime context
     NOT_FOUND = "not_found"  # Job/file/artifact not found
     INVALID_STATE = "invalid_state"  # Job in wrong state for operation

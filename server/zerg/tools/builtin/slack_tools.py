@@ -29,8 +29,8 @@ def send_slack_webhook(
 ) -> Dict[str, Any]:
     """Send a message to Slack via an incoming webhook.
 
-    This tool allows fiches to send rich, formatted messages to Slack channels.
-    If Slack is configured in Fiche Settings, the webhook URL is used automatically.
+    This tool allows Longhouse runtimes to send rich, formatted messages to Slack channels.
+    If Slack is configured in connector settings, the webhook URL is used automatically.
     Otherwise, you must provide the webhook_url parameter.
 
     Rate Limits:
@@ -40,7 +40,7 @@ def send_slack_webhook(
     Args:
         text: Main message text (also used as fallback for notifications)
         webhook_url: Optional Slack webhook URL. If not provided, uses the
-            webhook configured in Fiche Settings -> Connectors -> Slack.
+            webhook configured in connector settings.
         blocks: Optional list of Block Kit blocks for rich formatting.
             See https://api.slack.com/block-kit for block structure.
         attachments: Optional list of legacy attachments for additional content.
@@ -57,7 +57,7 @@ def send_slack_webhook(
 
     Example:
         # Simple text message (uses configured webhook)
-        >>> send_slack_webhook(text="Hello from Zerg fiche!")
+        >>> send_slack_webhook(text="Hello from Longhouse!")
         {"success": True, "status_code": 200, "response": "ok"}
 
         # Rich message with blocks

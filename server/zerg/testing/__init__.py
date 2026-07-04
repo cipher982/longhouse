@@ -1,1 +1,1 @@
-"""Testing utilities and mocks for the Zerg fiche platform."""
+"""Testing utilities and mocks for Longhouse runtime tests."""
