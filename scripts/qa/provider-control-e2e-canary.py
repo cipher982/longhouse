@@ -259,11 +259,294 @@ def _fake_interruptible_process(marker: Path) -> subprocess.Popen[str]:
     )
 
 
+def _fake_claude_channel_engine(path: Path) -> Path:
+    """Write a tiny native-engine stand-in for the hermetic Claude channel canary."""
+
+    script = r'''#!/usr/bin/env python3
+import http.server
+import json
+import os
+import pathlib
+import queue
+import signal
+import sys
+import threading
+import time
+import urllib.error
+import urllib.request
+import uuid
+from datetime import datetime, timezone
+
+
+def _parse_options(args):
+    parsed = {}
+    index = 0
+    while index < len(args):
+        name = args[index]
+        if not name.startswith("--"):
+            index += 1
+            continue
+        if index + 1 >= len(args) or args[index + 1].startswith("--"):
+            parsed.setdefault(name, []).append("true")
+            index += 1
+            continue
+        parsed.setdefault(name, []).append(args[index + 1])
+        index += 2
+    return parsed
+
+
+def _one(options, name, default=None):
+    values = options.get(name) or []
+    return values[-1] if values else default
+
+
+def _state_path(session_id, state_root):
+    return pathlib.Path(state_root) / "sessions" / f"{uuid.UUID(session_id)}.json"
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _write_state(path, payload):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _read_state(session_id, state_root, wait_secs):
+    path = _state_path(session_id, state_root)
+    deadline = time.monotonic() + float(wait_secs)
+    last_error = None
+    while time.monotonic() < deadline:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            time.sleep(0.05)
+            continue
+        except Exception as exc:
+            last_error = exc
+            time.sleep(0.05)
+            continue
+        if payload.get("ready"):
+            return payload
+        time.sleep(0.05)
+    if last_error:
+        raise RuntimeError(f"state at {path} stayed unreadable: {last_error}")
+    raise RuntimeError(f"state at {path} did not become ready")
+
+
+def _serve(args):
+    options = _parse_options(args)
+    session_id = _one(options, "--session-id") or os.environ.get("LONGHOUSE_CHANNEL_SESSION_ID")
+    if not session_id:
+        raise SystemExit("--session-id is required")
+    provider_session_id = _one(options, "--provider-session-id") or os.environ.get("LONGHOUSE_PROVIDER_SESSION_ID")
+    state_root = _one(options, "--state-root") or str(pathlib.Path.home() / ".claude" / "channels" / "longhouse")
+    claude_pid = _one(options, "--claude-pid") or os.environ.get("LONGHOUSE_CHANNEL_PARENT_PID")
+    cwd = _one(options, "--cwd") or os.environ.get("LONGHOUSE_CHANNEL_CWD")
+    auth_token = os.environ.get("LONGHOUSE_CHANNEL_AUTH_TOKEN") or "fake-channel-token"
+    started_at = _now()
+    outbound = queue.Queue()
+    state_file = _state_path(session_id, state_root)
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            return
+
+        def do_GET(self):
+            if self.path != "/health":
+                self.send_response(404)
+                self.end_headers()
+                return
+            body = json.dumps({"ready": True}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            if self.path != "/inject":
+                self.send_response(404)
+                self.end_headers()
+                return
+            if self.headers.get("X-Longhouse-Channel-Token") != auth_token:
+                self.send_response(403)
+                self.end_headers()
+                return
+            try:
+                length = int(self.headers.get("Content-Length") or "0")
+                payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            except Exception:
+                self.send_response(400)
+                self.end_headers()
+                return
+            outbound.put({
+                "jsonrpc": "2.0",
+                "method": "notifications/claude/channel",
+                "params": {
+                    "content": payload.get("content", ""),
+                    "meta": payload.get("meta"),
+                },
+            })
+            self.send_response(204)
+            self.end_headers()
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", int(_one(options, "--port", "0"))), Handler)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    payload = {
+        "session_id": session_id,
+        "provider_session_id": provider_session_id,
+        "state_root": state_root,
+        "auth_token": auth_token,
+        "port": port,
+        "claude_pid": int(claude_pid) if claude_pid else None,
+        "bridge_pid": os.getpid(),
+        "cwd": cwd,
+        "ready": False,
+        "started_at": started_at,
+        "updated_at": _now(),
+    }
+    _write_state(state_file, payload)
+
+    def _writer():
+        while True:
+            message = outbound.get()
+            if message is None:
+                return
+            print(json.dumps(message), flush=True)
+
+    threading.Thread(target=_writer, daemon=True).start()
+    try:
+        for raw in sys.stdin:
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                print(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}}), flush=True)
+                continue
+            method = message.get("method")
+            if method in {"notifications/initialized", "initialized"}:
+                payload["ready"] = True
+                payload["updated_at"] = _now()
+                _write_state(state_file, payload)
+                continue
+            if "id" not in message:
+                continue
+            ident = message.get("id")
+            if method == "initialize":
+                response = {
+                    "jsonrpc": "2.0",
+                    "id": ident,
+                    "result": {
+                        "protocolVersion": (message.get("params") or {}).get("protocolVersion", "2025-11-25"),
+                        "capabilities": {"experimental": {"claude/channel": {}}},
+                        "serverInfo": {"name": "longhouse-channel", "version": "fake"},
+                    },
+                }
+            else:
+                response = {"jsonrpc": "2.0", "id": ident, "result": {}}
+            print(json.dumps(response), flush=True)
+    finally:
+        server.shutdown()
+        outbound.put(None)
+        try:
+            state_file.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _send(args):
+    options = _parse_options(args)
+    session_id = _one(options, "--session-id")
+    state_root = _one(options, "--state-root")
+    text = _one(options, "--text", "")
+    wait_secs = _one(options, "--wait-secs", "10")
+    state = _read_state(session_id, state_root, wait_secs)
+    meta = {
+        "injected_by": "longhouse",
+        "longhouse_session_id": session_id,
+    }
+    for entry in options.get("--meta") or []:
+        if "=" in entry:
+            key, value = entry.split("=", 1)
+            if key:
+                meta[key] = value
+    body = json.dumps({"content": text, "meta": meta}).encode("utf-8")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{state['port']}/inject",
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-Longhouse-Channel-Token": state["auth_token"],
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            if response.status != 204:
+                raise RuntimeError(f"bridge injection returned HTTP {response.status}")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"bridge injection returned HTTP {exc.code}") from exc
+    print(json.dumps({"ok": True, "provider_session_id": state.get("provider_session_id")}))
+
+
+def _interrupt(args):
+    options = _parse_options(args)
+    session_id = _one(options, "--session-id")
+    state_root = _one(options, "--state-root")
+    wait_secs = _one(options, "--wait-secs", "10")
+    state = _read_state(session_id, state_root, wait_secs)
+    pid = int(state.get("claude_pid") or 0)
+    if pid <= 0:
+        raise RuntimeError("state is missing claude_pid")
+    os.kill(pid, signal.SIGINT)
+    print(json.dumps({"ok": True, "pid": pid}))
+
+
+def main():
+    args = sys.argv[1:]
+    if len(args) < 2 or args[0] != "claude-channel":
+        print("unsupported fake longhouse-engine args: " + json.dumps(args), file=sys.stderr)
+        return 2
+    command = args[1]
+    try:
+        if command == "serve":
+            _serve(args[2:])
+        elif command == "send":
+            _send(args[2:])
+        elif command == "interrupt":
+            _interrupt(args[2:])
+        else:
+            raise RuntimeError(f"unsupported claude-channel command: {command}")
+    except Exception as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+    return _write_executable(path, script)
+
+
 def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     session_id = str(uuid.uuid4())
     state_root = root / "claude-state"
     interrupt_marker = root / "claude-interrupted.txt"
     fake_claude = _fake_interruptible_process(interrupt_marker)
+    fake_engine = _fake_claude_channel_engine(root / "bin" / "longhouse-engine")
+    channel_env = {
+        "LONGHOUSE_CHANNEL_AUTH_TOKEN": "canary-token",
+        "LONGHOUSE_ENGINE_BIN": str(fake_engine),
+    }
     bridge: subprocess.Popen[str] | None = None
     try:
         assert fake_claude.stdout is not None
@@ -289,7 +572,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 str(fake_claude.pid),
             ],
             cwd=str(_server_cwd(args)),
-            env=_runtime_env(args, {"LONGHOUSE_CHANNEL_AUTH_TOKEN": "canary-token"}),
+            env=_runtime_env(args, channel_env),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -343,6 +626,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 "--text",
                 "hello from provider control canary",
             ],
+            env=channel_env,
         )
         if send.returncode != 0:
             return _fail(
@@ -385,6 +669,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 "--meta",
                 "intent=steer",
             ],
+            env=channel_env,
         )
         if steer.returncode != 0:
             return _fail(
@@ -424,6 +709,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 "--state-root",
                 str(state_root),
             ],
+            env=channel_env,
         )
         if interrupt.returncode != 0:
             return _fail(
