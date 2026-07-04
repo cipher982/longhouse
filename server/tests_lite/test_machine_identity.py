@@ -1,4 +1,4 @@
-from zerg.services import session_continuity
+from zerg.services import machine_identity
 
 
 def test_get_machine_name_label_prefers_saved_machine_name(tmp_path, monkeypatch):
@@ -8,11 +8,11 @@ def test_get_machine_name_label_prefers_saved_machine_name(tmp_path, monkeypatch
     machine_dir.mkdir(parents=True)
     (machine_dir / "state.json").write_text('{"machine_name":"work-laptop"}')
 
-    assert session_continuity.get_machine_name_label() == "work-laptop"
+    assert machine_identity.get_machine_name_label() == "work-laptop"
 
 
 def test_get_machine_name_label_falls_back_to_hostname(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / ".claude"))
-    monkeypatch.setattr(session_continuity.platform, "node", lambda: "zerg")
+    monkeypatch.setattr(machine_identity.platform, "node", lambda: "zerg")
 
-    assert session_continuity.get_machine_name_label() == "zerg"
+    assert machine_identity.get_machine_name_label() == "zerg"

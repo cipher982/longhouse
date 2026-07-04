@@ -28,7 +28,6 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
 from zerg.models.user import User
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
-from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_inputs import ACTIVE_DELIVERY_ATTEMPT_STATUSES
 from zerg.services.session_inputs import ATTEMPT_STATUS_ACQUIRED
@@ -47,6 +46,7 @@ from zerg.services.session_inputs import mark_failed
 from zerg.services.session_inputs import requeue_delivering
 from zerg.services.session_inputs import requeue_delivering_without_active_attempt
 from zerg.services.session_kernel_projection import session_lock_scope_id
+from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_runtime import session_is_closed_for_input
 from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE

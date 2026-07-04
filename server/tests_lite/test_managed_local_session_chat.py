@@ -32,7 +32,7 @@ from zerg.services.managed_local_control import ManagedLocalPhaseUpdate
 from zerg.services.managed_local_control import ManagedLocalTerminalResult
 from zerg.services.managed_local_event_polling import managed_local_events_include_expected_turn
 from zerg.services.runner_connection_manager import get_runner_connection_manager
-from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.session_turns import create_session_turn

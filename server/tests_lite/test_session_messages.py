@@ -545,7 +545,7 @@ def test_runtime_safe_transition_delivers_queued_message_without_presence(monkey
 
 
 def test_runtime_safe_transition_drains_queued_session_input(monkeypatch, tmp_path):
-    from zerg.services.session_continuity import session_lock_manager
+    from zerg.services.session_locks import session_lock_manager
     from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
     from zerg.services.session_inputs import INPUT_STATUS_QUEUED
     from zerg.services.session_inputs import create_session_input

@@ -43,7 +43,6 @@ from zerg.routers.session_chat import SessionInputResponse
 from zerg.services.session_chat_impl import _assert_live_session_send_available
 from zerg.services.session_chat_impl import _build_managed_local_chat_response
 from zerg.services.session_chat_impl import _load_session_for_continuation
-from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_input_attachments import ALLOWED_MIME_TYPES
 from zerg.services.session_input_attachments import MAX_ATTACHMENT_BYTES
@@ -59,6 +58,7 @@ from zerg.services.session_inputs import create_session_input
 from zerg.services.session_inputs import mark_delivered
 from zerg.services.session_inputs import mark_failed
 from zerg.services.session_kernel_projection import session_lock_scope_id
+from zerg.services.session_locks import session_lock_manager
 
 logger = logging.getLogger(__name__)
 

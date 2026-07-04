@@ -43,7 +43,7 @@ from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.runner_connection_manager import get_runner_connection_manager
-from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_inputs import INPUT_STATUS_CANCELLED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING

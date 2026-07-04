@@ -57,7 +57,7 @@ from zerg.cli._common import load_api_credentials
 from zerg.cli.cursor_helm_ingest import probe_ingest_path
 from zerg.cli.cursor_helm_ingest import run_helm_ingest_thread
 from zerg.services.longhouse_paths import get_managed_local_dir
-from zerg.services.session_continuity import get_machine_name_label
+from zerg.services.machine_identity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 from zerg.session_loop_mode import SessionLoopMode

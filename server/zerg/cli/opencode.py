@@ -34,11 +34,11 @@ from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_OPENCODE_BIN_FLAG
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.longhouse_paths import get_managed_local_dir
+from zerg.services.machine_identity import get_machine_name_label
 from zerg.services.opencode_bridge_state import generate_server_password
 from zerg.services.opencode_bridge_state import parse_listen_line
 from zerg.services.opencode_bridge_state import remove_opencode_bridge_state
 from zerg.services.opencode_bridge_state import write_opencode_bridge_state
-from zerg.services.session_continuity import get_machine_name_label
 from zerg.session_loop_mode import SessionLoopMode
 
 _OPENCODE_RUNTIME_SOURCE = "opencode_event"

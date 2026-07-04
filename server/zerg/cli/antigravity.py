@@ -40,7 +40,7 @@ from zerg.services.antigravity_hook_inbox import _AntigravityLaunchError
 from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
 from zerg.services.antigravity_hook_inbox import antigravity_inbox_dir
 from zerg.services.antigravity_hook_inbox import antigravity_state_dir
-from zerg.services.session_continuity import get_machine_name_label
+from zerg.services.machine_identity import get_machine_name_label
 from zerg.session_loop_mode import SessionLoopMode
 
 __all__ = [

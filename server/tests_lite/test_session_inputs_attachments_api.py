@@ -49,7 +49,7 @@ from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.runner_connection_manager import get_runner_connection_manager
-from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_input_attachments import cleanup_stale_blobs
 from zerg.services.session_input_attachments import store_attachment_blob
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED

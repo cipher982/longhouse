@@ -37,7 +37,7 @@ from zerg.services.claude_channel_bridge import build_claude_channel_exec_comman
 from zerg.services.claude_channel_bridge import install_claude_channel_mcp_server
 from zerg.services.claude_channel_bridge import wait_for_claude_channel_state
 from zerg.services.longhouse_paths import get_agent_runtime_events_outbox_dir
-from zerg.services.session_continuity import get_machine_name_label
+from zerg.services.machine_identity import get_machine_name_label
 from zerg.services.shipper.hooks import install_hooks
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode

@@ -38,7 +38,7 @@ from zerg.provider_cli_contract import CODEX_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_CODEX_BIN_FLAG
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
-from zerg.services.session_continuity import get_machine_name_label
+from zerg.services.machine_identity import get_machine_name_label
 from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
 

@@ -46,7 +46,7 @@ from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.runner_connection_manager import get_runner_connection_manager
-from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
