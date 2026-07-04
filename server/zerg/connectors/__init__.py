@@ -2,8 +2,6 @@
 
 This package provides:
 - ConnectorType enum and CONNECTOR_REGISTRY for defining connector metadata
-- CredentialResolver for resolving and decrypting credentials at runtime
-- Connector testers for validating credentials before saving
 """
 
 from zerg.connectors.registry import CONNECTOR_REGISTRY
