@@ -259,7 +259,7 @@ def _reset_database_sync(request: DatabaseResetRequest, current_user):
         raise HTTPException(status_code=403, detail="Database reset is only available in development and production environments")
 
     try:
-        # Obtain the *current* engine – respects Playwright commis isolation
+        # Obtain the *current* engine – respects Playwright worker isolation
         session_factory = get_session_factory()
 
         # SQLAlchemy 2.0 removed the ``bind`` attribute from ``sessionmaker``.
@@ -526,14 +526,14 @@ async def debug_db_schema(
     from sqlalchemy import text
 
     from zerg.database import get_session_factory
-    from zerg.database import get_test_commis_id
+    from zerg.database import get_test_worker_id
 
     # Check if fiches table exists and get count
     tables_check = db.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='fiches'")).fetchone()
     fiches_exists = tables_check is not None
     fiches_count = db.execute(text("SELECT COUNT(*) FROM fiches")).scalar() if fiches_exists else None
 
-    # Capture current DB url/path (use session factory bind to reflect commis routing)
+    # Capture current DB url/path (use session factory bind to reflect worker routing)
     db_url = None
     db_path = None
     try:
@@ -550,7 +550,7 @@ async def debug_db_schema(
         "dialect": "sqlite",
         "fiches_exists": fiches_exists,
         "fiches_count": fiches_count,
-        "commis_id": get_test_commis_id(),
+        "worker_id": get_test_worker_id(),
         "db_url": db_url,
         "db_path": db_path,
     }

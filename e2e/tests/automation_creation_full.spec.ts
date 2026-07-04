@@ -4,7 +4,7 @@ import { test, expect } from './fixtures';
  * AUTOMATION CREATION FULL TEST
  *
  * This test validates the complete automation creation flow:
- * 1. Database isolation is working (each commis has its own schema)
+ * 1. Database isolation is working (each worker has its own schema)
  * 2. Automation creation via API works correctly
  * 3. Automation appears in the UI after creation
  * 4. Multiple test runs are isolated from each other
@@ -13,15 +13,15 @@ import { test, expect } from './fixtures';
  * as "New Automation". We use `system_instructions` as the unique marker for isolation testing.
  *
  * IMPORTANT: Always use the `request` fixture for API calls - it has the correct
- * X-Test-Commis header. Never pass commisId separately as that can cause mismatches.
+ * X-Test-Worker header. Never pass workerId separately as that can cause mismatches.
  */
 
 test.describe('Automation Creation Full Workflow', () => {
   test('complete automation creation and isolation test', async ({ page, request }, testInfo) => {
-    const uniqueMarker = `commis_${testInfo.commisIndex}_${Date.now()}`;
+    const uniqueMarker = `worker_${testInfo.workerIndex}_${Date.now()}`;
 
     // Step 0: Reset database to ensure clean state
-    // Use the request fixture which already has the correct X-Test-Commis header
+    // Use the request fixture which already has the correct X-Test-Worker header
     const resetResponse = await request.post('/api/admin/reset-database', {
       data: { reset_type: 'clear_data' }
     });

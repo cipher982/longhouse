@@ -40,14 +40,14 @@ logger = logging.getLogger(__name__)
 _settings = get_settings_unchecked()
 
 # ---------------------------------------------------------------------------
-# Test-only commis DB routing (E2E isolation)
+# Test-only worker DB routing (E2E isolation)
 # ---------------------------------------------------------------------------
 
-_test_commis_id: ContextVar[str | None] = ContextVar("test_commis_id", default=None)
-_commis_session_factories: dict[str, sessionmaker] = {}
-_live_commis_session_factories: dict[str, sessionmaker] = {}
-_live_commis_write_session_factories: dict[str, sessionmaker] = {}
-_commis_factories_lock = Lock()
+_test_worker_id: ContextVar[str | None] = ContextVar("test_worker_id", default=None)
+_worker_session_factories: dict[str, sessionmaker] = {}
+_live_worker_session_factories: dict[str, sessionmaker] = {}
+_live_worker_write_session_factories: dict[str, sessionmaker] = {}
+_worker_factories_lock = Lock()
 
 
 @contextmanager
@@ -61,39 +61,39 @@ def _timed_database_step(name: str) -> Iterator[None]:
         logger.info("Database initialization step complete: %s elapsed_ms=%.1f", name, elapsed_ms)
 
 
-def set_test_commis_id(commis_id: str | None):
-    """Set the current test commis id for DB routing (E2E only)."""
-    return _test_commis_id.set(commis_id)
+def set_test_worker_id(worker_id: str | None):
+    """Set the current test worker id for DB routing (E2E only)."""
+    return _test_worker_id.set(worker_id)
 
 
-def reset_test_commis_id(token) -> None:
-    """Reset the current test commis id to the previous value."""
-    _test_commis_id.reset(token)
+def reset_test_worker_id(token) -> None:
+    """Reset the current test worker id to the previous value."""
+    _test_worker_id.reset(token)
 
 
-def get_test_commis_id() -> str | None:
-    """Return the current test commis id (E2E only)."""
-    return _test_commis_id.get()
+def get_test_worker_id() -> str | None:
+    """Return the current test worker id (E2E only)."""
+    return _test_worker_id.get()
 
 
-def list_test_commis_ids() -> list[str]:
-    """Return known test commis ids for E2E DB routing."""
-    return list(_commis_session_factories.keys())
+def list_test_worker_ids() -> list[str]:
+    """Return known test worker ids for E2E DB routing."""
+    return list(_worker_session_factories.keys())
 
 
-def _safe_commis_id(commis_id: str) -> str:
+def _safe_worker_id(worker_id: str) -> str:
     # Keep filenames stable + safe (allow digits, letters, dash, underscore).
-    return "".join(ch for ch in commis_id if ch.isalnum() or ch in {"-", "_"}).strip() or "0"
+    return "".join(ch for ch in worker_id if ch.isalnum() or ch in {"-", "_"}).strip() or "0"
 
 
-def _commis_db_url(commis_id: str) -> str:
+def _worker_db_url(worker_id: str) -> str:
     base_url = _settings.database_url
     if not base_url:
         raise ValueError("DATABASE_URL not set in environment")
-    return _derived_commis_db_url(base_url, commis_id, "commis")
+    return _derived_worker_db_url(base_url, worker_id, "worker")
 
 
-def _derived_commis_db_url(base_url: str, commis_id: str, label: str) -> str:
+def _derived_worker_db_url(base_url: str, worker_id: str, label: str) -> str:
     parsed = make_url(base_url)
     db_path = parsed.database or ""
     if not db_path:
@@ -108,60 +108,60 @@ def _derived_commis_db_url(base_url: str, commis_id: str, label: str) -> str:
         base_dir = Path(db_path).expanduser().resolve().parent
         base_name = Path(db_path).stem
 
-    safe_id = _safe_commis_id(commis_id)
-    commis_path = base_dir / f"{base_name}_{label}_{safe_id}.db"
-    return f"sqlite:///{commis_path}"
+    safe_id = _safe_worker_id(worker_id)
+    worker_path = base_dir / f"{base_name}_{label}_{safe_id}.db"
+    return f"sqlite:///{worker_path}"
 
 
-def _get_or_create_commis_session_factory(commis_id: str) -> sessionmaker:
-    safe_id = _safe_commis_id(commis_id)
-    existing = _commis_session_factories.get(safe_id)
+def _get_or_create_worker_session_factory(worker_id: str) -> sessionmaker:
+    safe_id = _safe_worker_id(worker_id)
+    existing = _worker_session_factories.get(safe_id)
     if existing is not None:
         return existing
 
-    with _commis_factories_lock:
-        existing = _commis_session_factories.get(safe_id)
+    with _worker_factories_lock:
+        existing = _worker_session_factories.get(safe_id)
         if existing is not None:
             return existing
 
-        db_url = _commis_db_url(safe_id)
+        db_url = _worker_db_url(safe_id)
         engine = make_engine(db_url)
         factory = make_sessionmaker(engine)
 
-        # Initialize schema for this commis DB (SQLite-only)
+        # Initialize schema for this worker DB (SQLite-only)
         initialize_database(engine)
 
-        _commis_session_factories[safe_id] = factory
+        _worker_session_factories[safe_id] = factory
         return factory
 
 
-def _live_commis_db_url(commis_id: str) -> str:
+def _live_worker_db_url(worker_id: str) -> str:
     base_url = _settings.live_database_url
     if not base_url:
         raise ValueError("LONGHOUSE_LIVE_DATABASE_URL not set in environment")
-    return _derived_commis_db_url(base_url, commis_id, "live_commis")
+    return _derived_worker_db_url(base_url, worker_id, "live_worker")
 
 
-def _get_or_create_live_commis_session_factories(commis_id: str) -> tuple[sessionmaker, sessionmaker]:
-    safe_id = _safe_commis_id(commis_id)
-    existing = _live_commis_session_factories.get(safe_id)
-    existing_write = _live_commis_write_session_factories.get(safe_id)
+def _get_or_create_live_worker_session_factories(worker_id: str) -> tuple[sessionmaker, sessionmaker]:
+    safe_id = _safe_worker_id(worker_id)
+    existing = _live_worker_session_factories.get(safe_id)
+    existing_write = _live_worker_write_session_factories.get(safe_id)
     if existing is not None and existing_write is not None:
         return existing, existing_write
 
-    with _commis_factories_lock:
-        existing = _live_commis_session_factories.get(safe_id)
-        existing_write = _live_commis_write_session_factories.get(safe_id)
+    with _worker_factories_lock:
+        existing = _live_worker_session_factories.get(safe_id)
+        existing_write = _live_worker_write_session_factories.get(safe_id)
         if existing is not None and existing_write is not None:
             return existing, existing_write
 
-        db_url = _live_commis_db_url(safe_id)
+        db_url = _live_worker_db_url(safe_id)
         engine = make_live_engine(db_url)
         factory = make_sessionmaker(engine)
         write_factory = make_sessionmaker(make_live_write_engine(db_url))
         initialize_live_database(engine)
-        _live_commis_session_factories[safe_id] = factory
-        _live_commis_write_session_factories[safe_id] = write_factory
+        _live_worker_session_factories[safe_id] = factory
+        _live_worker_write_session_factories[safe_id] = write_factory
         return factory, write_factory
 
 
@@ -403,11 +403,11 @@ def get_session_factory() -> sessionmaker:
     Returns:
         A sessionmaker instance
     """
-    # In E2E, route DB sessions by commis id (X-Test-Commis header / ws param).
+    # In E2E, route DB sessions by worker id (X-Test-Worker header / ws param).
     if _settings.testing:
-        commis_id = get_test_commis_id()
-        if commis_id:
-            return _get_or_create_commis_session_factory(commis_id)
+        worker_id = get_test_worker_id()
+        if worker_id:
+            return _get_or_create_worker_session_factory(worker_id)
 
     if default_session_factory is not None:
         return default_session_factory
@@ -517,14 +517,14 @@ def configure_live_write_serializer() -> None:
 def get_write_session_factory() -> sessionmaker | None:
     """Return the current write session factory.
 
-    In E2E, request handling can route to per-commis SQLite files via
-    ``X-Test-Commis``. Serialized writes must follow that same routing or they
+    In E2E, request handling can route to per-worker SQLite files via
+    ``X-Test-Worker``. Serialized writes must follow that same routing or they
     will write to the wrong database and violate foreign keys.
     """
     if _settings.testing:
-        commis_id = get_test_commis_id()
-        if commis_id:
-            return _get_or_create_commis_session_factory(commis_id)
+        worker_id = get_test_worker_id()
+        if worker_id:
+            return _get_or_create_worker_session_factory(worker_id)
     return _write_session_factory
 
 
@@ -548,9 +548,9 @@ def get_live_engine() -> Engine | None:
 def get_live_session_factory() -> sessionmaker | None:
     """Return the optional Live Store session factory."""
     if _settings.testing:
-        commis_id = get_test_commis_id()
-        if commis_id and _settings.live_database_url:
-            factory, _write_factory = _get_or_create_live_commis_session_factories(commis_id)
+        worker_id = get_test_worker_id()
+        if worker_id and _settings.live_database_url:
+            factory, _write_factory = _get_or_create_live_worker_session_factories(worker_id)
             return factory
     return live_session_factory
 
@@ -563,9 +563,9 @@ def get_live_write_engine() -> Engine | None:
 def get_live_write_session_factory() -> sessionmaker | None:
     """Return the optional Live Store write session factory."""
     if _settings.testing:
-        commis_id = get_test_commis_id()
-        if commis_id and _settings.live_database_url:
-            _factory, write_factory = _get_or_create_live_commis_session_factories(commis_id)
+        worker_id = get_test_worker_id()
+        if worker_id and _settings.live_database_url:
+            _factory, write_factory = _get_or_create_live_worker_session_factories(worker_id)
             return write_factory
     return live_write_session_factory
 

@@ -17,7 +17,7 @@ async function ensureDemoProviders(
   // The timeline no longer auto-seeds demo data outside demo mode (a real
   // instance must not get synthetic sessions). If we land on the hero empty
   // state, explicitly seed demo sessions. Seed via the `request` fixture (not
-  // page.request) — it carries the X-Test-Commis header that routes writes to
+  // page.request) — it carries the X-Test-Worker header that routes writes to
   // this worker's isolated DB schema, which is the same schema the page reads.
   const heroEmpty = page.locator(".sessions-hero-empty");
   if (await heroEmpty.isVisible({ timeout: 2000 }).catch(() => false)) {

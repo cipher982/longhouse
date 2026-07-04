@@ -102,18 +102,18 @@ process.env.FRONTEND_PORT = String(FRONTEND_PORT);
 const frontendBaseUrl = `http://localhost:${FRONTEND_PORT}`;
 process.env.PLAYWRIGHT_FRONTEND_BASE = frontendBaseUrl;
 
-// Define commis count first so we can use it later
+// Define worker count first so we can use it later
 // Pinned defaults for reproducible test runs:
-// - Local: 4 Playwright commis (more stable with remote Postgres + shared runners)
-// - CI: 4 Playwright commis (conservative for shared runners)
-// Higher commis counts cause lock contention during parallel DB resets.
+// - Local: 4 Playwright workers (more stable with remote Postgres + shared runners)
+// - CI: 4 Playwright workers (conservative for shared runners)
+// Higher worker counts cause lock contention during parallel DB resets.
 // Override with PLAYWRIGHT_WORKERS env var if needed.
-const envCommis = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
-const defaultLocalCommis = 4;  // Lower contention for remote Postgres
-const defaultCICommis = 4;
-const commis = Number.isFinite(envCommis) && envCommis > 0
-  ? envCommis
-  : (process.env.CI ? defaultCICommis : defaultLocalCommis);
+const envWorkerCount = Number.parseInt(process.env.PLAYWRIGHT_WORKERS ?? "", 10);
+const defaultLocalWorkerCount = 4;  // Lower contention for remote Postgres
+const defaultCIWorkerCount = 4;
+const workerCount = Number.isFinite(envWorkerCount) && envWorkerCount > 0
+  ? envWorkerCount
+  : (process.env.CI ? defaultCIWorkerCount : defaultLocalWorkerCount);
 
 const frontendServer = {
   // React dev server for Playwright runs
@@ -161,7 +161,7 @@ const config = {
   globalTeardown: './test-teardown.js',
 
   fullyParallel: true,
-  workers: commis,
+  workers: workerCount,
   retries: process.env.CI ? 2 : 1,
 
   // Reporter configuration: minimal by default, verbose with VERBOSE=1
@@ -211,7 +211,7 @@ const config = {
   webServer: [
     frontendServer,
     {
-      // Start a single backend server; DB isolation happens via X-Test-Commis header
+      // Start a single backend server; DB isolation happens via X-Test-Worker header
       // Use url instead of port to wait for /api/health/db (database readiness), not just TCP port
       command: `node spawn-test-backend.js`,
       url: `http://127.0.0.1:${BACKEND_PORT}/api/health/db`,

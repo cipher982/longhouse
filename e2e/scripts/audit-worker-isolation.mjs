@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * Quick static audit for E2E commis isolation footguns.
+ * Quick static audit for E2E worker isolation footguns.
  *
- * - Ensures spec files import `test` from `./fixtures` (so X-Test-Commis is injected).
- * - Flags ad-hoc `playwright.request.newContext(...)` calls that don't mention X-Test-Commis.
+ * - Ensures spec files import `test` from `./fixtures` (so X-Test-Worker is injected).
+ * - Flags ad-hoc `playwright.request.newContext(...)` calls that don't mention X-Test-Worker.
  * - Flags hardcoded backend URLs like http://localhost:8001 which often bypass the shared helpers.
  *
  * Usage:
- *   node e2e/scripts/audit-commis-isolation.mjs
+ *   node e2e/scripts/audit-worker-isolation.mjs
  */
 
 import fs from "fs";
@@ -57,8 +57,8 @@ for (const file of files) {
   }
 
   // Naive but useful: if a file calls playwright.request.newContext(...) and doesn't mention
-  // X-Test-Commis anywhere in the file, it’s very likely creating an un-scoped request context.
-  if (text.includes("playwright.request.newContext(") && !text.includes("X-Test-Commis")) {
+  // X-Test-Worker anywhere in the file, it’s very likely creating an un-scoped request context.
+  if (text.includes("playwright.request.newContext(") && !text.includes("X-Test-Worker")) {
     issues.newContextMissingHeader.push(rel(file));
   }
 
@@ -75,7 +75,7 @@ function printList(title, list) {
 
 console.log(`Scanned ${files.length} files under ${path.relative(repoRoot, testsRoot)}`);
 printList("Spec files not importing ./fixtures", issues.missingFixturesImport);
-printList("Files creating request.newContext() without X-Test-Commis", issues.newContextMissingHeader);
+printList("Files creating request.newContext() without X-Test-Worker", issues.newContextMissingHeader);
 printList("Files containing hardcoded http://localhost:8001", issues.hardcodedBackendUrl);
 
 const totalIssues =

@@ -6,7 +6,7 @@ Each test case:
 2. Captures metrics
 3. Runs all assertions
 4. Reports pass/fail
-5. Saves results to per-commis temp files
+5. Saves results to per-worker temp files
 
 Run with: pytest server/evals/
 Or via Make: make eval
@@ -20,7 +20,7 @@ from evals.asserters import SkipAssertion
 from evals.asserters import run_assertion
 from evals.results_store import AssertionResult
 from evals.results_store import CaseResult
-from evals.results_store import get_commis_id
+from evals.results_store import get_worker_id
 from evals.results_store import save_result_temp
 
 
@@ -190,7 +190,7 @@ async def test_eval_case(eval_case, eval_runner):
     print(f"{'=' * 60}\n")
 
     # Save result to temp file
-    commis_id = get_commis_id()
+    worker_id = get_worker_id()
     case_result = CaseResult(
         id=case.id,
         status="passed" if all_passed else "failed",
@@ -200,7 +200,7 @@ async def test_eval_case(eval_case, eval_runner):
         assertions=assertion_results,
         failure_reason=None if all_passed else "One or more assertions failed",
     )
-    save_result_temp(commis_id, case_result)
+    save_result_temp(worker_id, case_result)
 
     # Fail test if any assertion failed
     assert all_passed, f"Test case {case.id} failed one or more assertions"

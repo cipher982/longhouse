@@ -61,18 +61,18 @@ export interface Thread {
 export class ApiClient {
   private baseUrl: string;
   private headers: Record<string, string>;
-  private commisId: string;
+  private workerId: string;
 
-  constructor(commisId: string = '0', baseUrl?: string) {
-    // Single backend port – per-commis DB isolation is via X-Test-Commis header
+  constructor(workerId: string = '0', baseUrl?: string) {
+    // Single backend port – per-worker DB isolation is via X-Test-Worker header
     const basePort = getBackendPort();
     this.baseUrl = baseUrl || `http://localhost:${basePort}`;
-    this.commisId = commisId;
+    this.workerId = workerId;
     this.headers = {
       'Content-Type': 'application/json',
-      // CRITICAL: X-Test-Commis header routes requests to commis-specific Postgres schema
-      // Without this, requests hit the default schema and can cross-contaminate commis
-      'X-Test-Commis': commisId,
+      // CRITICAL: X-Test-Worker header routes requests to worker-specific Postgres schema
+      // Without this, requests hit the default schema and can cross-contaminate workers
+      'X-Test-Worker': workerId,
     };
   }
 
@@ -190,7 +190,7 @@ export class ApiClient {
   }
 }
 
-// Helper function to create an API client with the correct commis ID
-export function createApiClient(commisId: string): ApiClient {
-  return new ApiClient(commisId);
+// Helper function to create an API client with the correct worker ID
+export function createApiClient(workerId: string): ApiClient {
+  return new ApiClient(workerId);
 }

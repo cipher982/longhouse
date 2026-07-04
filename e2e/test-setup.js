@@ -95,7 +95,7 @@ async function globalSetup(config) {
   if (backendRunning) {
     console.log(`E2E setup: Backend already running on ${backendPort}; skipped DB dir cleanup.`);
 
-    // Reset commis DBs via API to avoid state leakage across runs.
+    // Reset worker DBs via API to avoid state leakage across runs.
     const resetUrl = `http://127.0.0.1:${backendPort}/api/admin/reset-database`;
     for (let i = 0; i < workers; i++) {
       try {
@@ -103,15 +103,15 @@ async function globalSetup(config) {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'X-Test-Commis': String(i),
+            'X-Test-Worker': String(i),
           },
           body: JSON.stringify({ reset_type: 'clear_data' }),
         });
         if (!response.ok) {
-          console.warn(`E2E setup: reset failed for commis ${i} (${response.status})`);
+          console.warn(`E2E setup: reset failed for worker ${i} (${response.status})`);
         }
       } catch (error) {
-        console.warn(`E2E setup: reset failed for commis ${i}:`, error?.message || error);
+        console.warn(`E2E setup: reset failed for worker ${i}:`, error?.message || error);
       }
     }
   } else {

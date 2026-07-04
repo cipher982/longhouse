@@ -18,15 +18,15 @@ test.describe('Error Handling and Edge Cases', () => {
   test('API error handling with invalid data', async ({ page, request }) => {
     console.log('🚀 Starting API error handling test...');
 
-    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
-    console.log('📊 Commis ID:', commisId);
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    console.log('📊 Worker ID:', workerId);
 
     // Test 1: Invalid automation creation - missing required fields.
     console.log('📊 Test 1: Invalid automation creation - missing fields');
     try {
       const response = await request.post('/api/automations', {
         headers: {
-          'X-Test-Commis': commisId,
+          'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
         },
         data: {
@@ -51,7 +51,7 @@ test.describe('Error Handling and Edge Cases', () => {
     try {
       const response = await request.post('/api/automations', {
         headers: {
-          'X-Test-Commis': commisId,
+          'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
         },
         data: 'invalid-json-string'
@@ -70,7 +70,7 @@ test.describe('Error Handling and Edge Cases', () => {
       const largeString = 'x'.repeat(10000); // 10KB string
       const response = await request.post('/api/automations', {
         headers: {
-          'X-Test-Commis': commisId,
+          'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
         },
         data: {
@@ -95,7 +95,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('📊 Test 4: Invalid HTTP methods');
     try {
       const response = await request.patch('/api/automations', {
-        headers: { 'X-Test-Commis': commisId },
+        headers: { 'X-Test-Worker': workerId },
         data: { test: 'data' }
       });
 
@@ -110,7 +110,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('📊 Test 5: Non-existent resource access');
     try {
       const response = await request.get('/api/automations/999999', {
-        headers: { 'X-Test-Commis': commisId }
+        headers: { 'X-Test-Worker': workerId }
       });
 
       console.log('📊 Non-existent resource status:', response.status());
@@ -126,7 +126,7 @@ test.describe('Error Handling and Edge Cases', () => {
   test('Database constraint and data integrity', async ({ page, request }) => {
     console.log('🚀 Starting database constraint test...');
 
-    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Test 1: Create an automation with a duplicate name.
     console.log('📊 Test 1: Duplicate name handling');
@@ -135,7 +135,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Create the first automation.
     const firstResponse = await request.post('/api/automations', {
       headers: {
-        'X-Test-Commis': commisId,
+        'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
       },
       data: {
@@ -153,7 +153,7 @@ test.describe('Error Handling and Edge Cases', () => {
     // Attempt to create duplicate
     const duplicateResponse = await request.post('/api/automations', {
       headers: {
-        'X-Test-Commis': commisId,
+        'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
       },
       data: {
@@ -177,7 +177,7 @@ test.describe('Error Handling and Edge Cases', () => {
 
     const longFieldResponse = await request.post('/api/automations', {
       headers: {
-        'X-Test-Commis': commisId,
+        'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
       },
       data: {
@@ -201,7 +201,7 @@ test.describe('Error Handling and Edge Cases', () => {
   test('Concurrent operations and race conditions', async ({ page, request }) => {
     console.log('🚀 Starting concurrency test...');
 
-    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
     const timestamp = Date.now();
 
     // Test 1: Concurrent automation creation.
@@ -209,7 +209,7 @@ test.describe('Error Handling and Edge Cases', () => {
     const concurrentRequests = Array.from({ length: 5 }, (_, i) =>
       request.post('/api/automations', {
         headers: {
-          'X-Test-Commis': commisId,
+          'X-Test-Worker': workerId,
           'Content-Type': 'application/json',
         },
         data: {
@@ -236,7 +236,7 @@ test.describe('Error Handling and Edge Cases', () => {
     console.log('📊 Test 2: Rapid-fire GET requests');
     const rapidRequests = Array.from({ length: 10 }, () =>
       request.get('/api/automations', {
-        headers: { 'X-Test-Commis': commisId }
+        headers: { 'X-Test-Worker': workerId }
       })
     );
 
@@ -254,7 +254,7 @@ test.describe('Error Handling and Edge Cases', () => {
   test('UI error state handling', async ({ page, request }) => {
     console.log('🚀 Starting UI error state test...');
 
-    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
 
     // Navigate to the live automations surface.
     await page.goto('/automations');

@@ -367,34 +367,34 @@ def test_collect_sqlite_store_stats_warning_branches(tmp_path):
     assert "not_file_backed_sqlite" in unsupported["warnings"]
 
 
-def test_live_store_factories_route_by_test_commis(tmp_path, monkeypatch):
+def test_live_store_factories_route_by_test_worker(tmp_path, monkeypatch):
     from zerg import database as database_module
 
     monkeypatch.setattr(database_module._settings, "testing", True)
     monkeypatch.setattr(database_module._settings, "live_database_url", f"sqlite:///{tmp_path / 'live.db'}")
     monkeypatch.setenv("E2E_DB_DIR", str(tmp_path))
-    database_module._live_commis_session_factories.clear()
-    database_module._live_commis_write_session_factories.clear()
+    database_module._live_worker_session_factories.clear()
+    database_module._live_worker_write_session_factories.clear()
 
-    token = database_module.set_test_commis_id("alpha")
+    token = database_module.set_test_worker_id("alpha")
     try:
         alpha = database_module.get_live_session_factory()
         alpha_write = database_module.get_live_write_session_factory()
     finally:
-        database_module.reset_test_commis_id(token)
+        database_module.reset_test_worker_id(token)
 
-    token = database_module.set_test_commis_id("beta")
+    token = database_module.set_test_worker_id("beta")
     try:
         beta = database_module.get_live_session_factory()
     finally:
-        database_module.reset_test_commis_id(token)
+        database_module.reset_test_worker_id(token)
 
     assert alpha is not None
     assert alpha_write is not None
     assert beta is not None
-    assert alpha.kw["bind"].url.database.endswith("live_live_commis_alpha.db")
-    assert alpha_write.kw["bind"].url.database.endswith("live_live_commis_alpha.db")
-    assert beta.kw["bind"].url.database.endswith("live_live_commis_beta.db")
+    assert alpha.kw["bind"].url.database.endswith("live_live_worker_alpha.db")
+    assert alpha_write.kw["bind"].url.database.endswith("live_live_worker_alpha.db")
+    assert beta.kw["bind"].url.database.endswith("live_live_worker_beta.db")
 
 
 def test_db_doctor_reports_stale_and_corrupt_cache(tmp_path):

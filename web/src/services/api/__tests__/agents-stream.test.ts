@@ -37,11 +37,11 @@ describe("Timeline session stream", () => {
   beforeEach(() => {
     MockEventSource.instances = [];
     vi.stubGlobal("EventSource", MockEventSource as unknown as typeof EventSource);
-    (window as typeof window & { __TEST_COMMIS_ID__?: string }).__TEST_COMMIS_ID__ = "17";
+    (window as typeof window & { __TEST_WORKER_ID__?: string }).__TEST_WORKER_ID__ = "17";
   });
 
   afterEach(() => {
-    delete (window as typeof window & { __TEST_COMMIS_ID__?: string }).__TEST_COMMIS_ID__;
+    delete (window as typeof window & { __TEST_WORKER_ID__?: string }).__TEST_WORKER_ID__;
     vi.unstubAllGlobals();
   });
 
@@ -67,7 +67,7 @@ describe("Timeline session stream", () => {
     expect(MockEventSource.instances[0].url).toContain("limit=50");
     expect(MockEventSource.instances[0].url).toContain("hide_autonomous=false");
     expect(MockEventSource.instances[0].url).toContain("skip_initial_replay=true");
-    expect(MockEventSource.instances[0].url).toContain("commis=17");
+    expect(MockEventSource.instances[0].url).toContain("worker=17");
     expect(MockEventSource.instances[0].options).toEqual({ withCredentials: true });
 
     MockEventSource.instances[0].emit("connected", { message: "ok" });

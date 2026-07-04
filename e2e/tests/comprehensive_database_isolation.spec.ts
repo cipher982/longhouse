@@ -5,16 +5,16 @@ import { waitForPageReady } from './helpers/ready-signals';
  * COMPREHENSIVE DATABASE ISOLATION TEST
  *
  * This test validates that:
- * 1. Commis databases are properly isolated
+ * 1. Worker databases are properly isolated
  * 2. All database tables are created correctly
- * 3. API endpoints work with commis-specific databases
+ * 3. API endpoints work with worker-specific databases
  * 4. Headers are properly transmitted and processed
  */
 
 test.describe('Comprehensive Database Isolation', () => {
   test('Complete database isolation validation', async ({ page, request }) => {
-    const commisId = process.env.TEST_PARALLEL_INDEX || '0';
-    const otherCommisId = commisId === '0' ? '1' : '0';
+    const workerId = process.env.TEST_PARALLEL_INDEX || '0';
+    const otherWorkerId = workerId === '0' ? '1' : '0';
 
     // Navigate to the app - this should trigger database initialization
     await page.goto('/automations');
@@ -26,7 +26,7 @@ test.describe('Comprehensive Database Isolation', () => {
     // Test simple health check first
     const healthResponse = await request.get('/api/health', {
       headers: {
-        'X-Test-Commis': commisId,
+        'X-Test-Worker': workerId,
       }
     });
     expect(healthResponse.ok()).toBe(true);
@@ -34,7 +34,7 @@ test.describe('Comprehensive Database Isolation', () => {
     // Test the automation endpoint.
     const automationResponse = await request.get('/api/automations', {
       headers: {
-        'X-Test-Commis': commisId,
+        'X-Test-Worker': workerId,
       }
     });
     expect(automationResponse.ok()).toBe(true);
@@ -44,7 +44,7 @@ test.describe('Comprehensive Database Isolation', () => {
     // Test automation creation.
     const createResponse = await request.post('/api/automations', {
       headers: {
-        'X-Test-Commis': commisId,
+        'X-Test-Worker': workerId,
         'Content-Type': 'application/json',
       },
       data: {
@@ -59,7 +59,7 @@ test.describe('Comprehensive Database Isolation', () => {
 
     const automationListAfter = await request.get('/api/automations', {
       headers: {
-        'X-Test-Commis': commisId,
+        'X-Test-Worker': workerId,
       }
     });
     expect(automationListAfter.ok()).toBe(true);
@@ -67,10 +67,10 @@ test.describe('Comprehensive Database Isolation', () => {
     const idsAfter = Array.isArray(automationsAfter) ? automationsAfter.map((f: any) => f.id) : [];
     expect(idsAfter).toContain(createdAutomation.id);
 
-    // Verify isolation by querying a different commis DB
+    // Verify isolation by querying a different worker DB
     const otherListResponse = await request.get('/api/automations', {
       headers: {
-        'X-Test-Commis': otherCommisId,
+        'X-Test-Worker': otherWorkerId,
       }
     });
     expect(otherListResponse.ok()).toBe(true);

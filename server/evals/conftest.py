@@ -291,15 +291,15 @@ def live_mode():
 
 
 def pytest_sessionfinish(session, exitstatus):
-    """Merge per-commis temp files after all tests complete.
+    """Merge per-worker temp files after all tests complete.
 
-    This runs in both master and commis processes, so we need to check
+    This runs in both master and worker processes, so we need to check
     if we're the master before merging.
     """
     import os
 
-    # Only merge on master node (not on xdist commis)
-    if os.environ.get("PYTEST_XDIST_COMMIS"):
+    # Only merge on master node (not on xdist workers)
+    if os.environ.get("PYTEST_XDIST_WORKER"):
         return
 
     # Only merge if we have temp files (tests actually ran)

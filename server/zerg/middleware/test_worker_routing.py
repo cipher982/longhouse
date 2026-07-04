@@ -1,7 +1,7 @@
-"""Test-only HTTP routing for per-commis SQLite databases.
+"""Test-only HTTP routing for per-worker SQLite databases.
 
-E2E browser/API requests send ``X-Test-Commis`` so each Playwright worker can
-use an isolated SQLite file. WebSocket routes already pass ``commis=...``
+E2E browser/API requests send ``X-Test-Worker`` so each Playwright worker can
+use an isolated SQLite file. WebSocket routes already pass ``worker=...``
 explicitly; this middleware brings ordinary HTTP requests onto the same
 ContextVar-based routing path.
 """
@@ -12,12 +12,12 @@ from starlette.types import ASGIApp
 from starlette.types import Receive
 from starlette.types import Scope
 from starlette.types import Send
-from zerg.database import reset_test_commis_id
-from zerg.database import set_test_commis_id
+from zerg.database import reset_test_worker_id
+from zerg.database import set_test_worker_id
 
 
-class E2ECommisRoutingMiddleware:
-    """Set the active test commis id for HTTP requests in E2E mode."""
+class E2EWorkerRoutingMiddleware:
+    """Set the active test worker id for HTTP requests in E2E mode."""
 
     def __init__(self, app: ASGIApp, *, enabled: bool = True) -> None:
         self.app = app
@@ -28,25 +28,25 @@ class E2ECommisRoutingMiddleware:
             await self.app(scope, receive, send)
             return
 
-        commis_id = _extract_commis_id(scope)
-        if not commis_id:
+        worker_id = _extract_worker_id(scope)
+        if not worker_id:
             await self.app(scope, receive, send)
             return
 
-        token = set_test_commis_id(commis_id)
+        token = set_test_worker_id(worker_id)
         try:
             await self.app(scope, receive, send)
         finally:
-            reset_test_commis_id(token)
+            reset_test_worker_id(token)
 
 
-def _extract_commis_id(scope: Scope) -> str | None:
+def _extract_worker_id(scope: Scope) -> str | None:
     for key, value in scope.get("headers", []):
-        if key.lower() != b"x-test-commis":
+        if key.lower() != b"x-test-worker":
             continue
         try:
-            commis_id = value.decode("utf-8").strip()
+            worker_id = value.decode("utf-8").strip()
         except UnicodeDecodeError:
             return None
-        return commis_id or None
+        return worker_id or None
     return None

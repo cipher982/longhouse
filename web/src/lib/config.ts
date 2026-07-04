@@ -169,7 +169,7 @@ function loadConfig(): AppConfig {
   }
 
   // When running behind the Vite proxy (e.g., Playwright E2E), force relative API paths
-  // to avoid CORS and ensure X-Test-Commis routing works.
+  // to avoid CORS and ensure X-Test-Worker routing works.
   if (import.meta.env.VITE_PROXY_TARGET && !isProduction) {
     apiBaseUrl = '/api';
   }

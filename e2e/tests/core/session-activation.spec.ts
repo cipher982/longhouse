@@ -49,10 +49,10 @@ async function registerRunner(
 
 async function connectRunner(
   backendUrl: string,
-  commisId: string,
+  workerId: string,
   runner: RegisteredRunner,
 ): Promise<() => Promise<void>> {
-  const websocketUrl = `${backendUrl.replace(/^http/, "ws")}/api/runners/ws?commis=${encodeURIComponent(commisId)}`;
+  const websocketUrl = `${backendUrl.replace(/^http/, "ws")}/api/runners/ws?worker=${encodeURIComponent(workerId)}`;
   const ws = new WebSocket(websocketUrl);
 
   await new Promise<void>((resolve, reject) => {
@@ -192,10 +192,10 @@ test.describe("Session activation surfaces", () => {
     page,
     request,
     backendUrl,
-    commisId,
+    workerId,
   }) => {
     const runner = await registerRunner(request, `solo-${randomUUID().slice(0, 8)}`);
-    const disconnectRunner = await connectRunner(backendUrl, commisId, runner);
+    const disconnectRunner = await connectRunner(backendUrl, workerId, runner);
     await waitForRunnerOnline(request, runner.id);
 
     try {
@@ -217,12 +217,12 @@ test.describe("Session activation surfaces", () => {
     page,
     request,
     backendUrl,
-    commisId,
+    workerId,
   }) => {
     const firstRunner = await registerRunner(request, `alpha-${randomUUID().slice(0, 8)}`);
     const secondRunner = await registerRunner(request, `beta-${randomUUID().slice(0, 8)}`);
-    const disconnectFirst = await connectRunner(backendUrl, commisId, firstRunner);
-    const disconnectSecond = await connectRunner(backendUrl, commisId, secondRunner);
+    const disconnectFirst = await connectRunner(backendUrl, workerId, firstRunner);
+    const disconnectSecond = await connectRunner(backendUrl, workerId, secondRunner);
 
     try {
       await waitForRunnerOnline(request, firstRunner.id);

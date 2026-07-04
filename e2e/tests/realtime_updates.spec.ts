@@ -23,8 +23,8 @@ test('WebSocket connection establishes successfully', async ({ page }) => {
     wsConnected = true;
     console.log('✅ WebSocket connected:', url);
 
-    // Verify commis parameter is present (from fixtures)
-    expect(url).toContain('commis=');
+    // Verify worker parameter is present (from fixtures)
+    expect(url).toContain('worker=');
   });
 
   const wsPromise = page.waitForEvent('websocket', { timeout: 10000 });

@@ -1,22 +1,22 @@
 import { test, expect } from './fixtures';
 
 /**
- * COMMIS ISOLATION SMOKE TEST
+ * WORKER ISOLATION SMOKE TEST
  *
  * This test validates the FOUNDATION of the entire E2E testing infrastructure:
- * the X-Test-Commis header routing system that gives each Playwright commis
+ * the X-Test-Worker header routing system that gives each Playwright worker
  * its own isolated SQLite database.
  *
  * Why This Test Matters:
  * - If this fails, ALL parallel tests are unreliable
  * - Proves database isolation is working correctly
- * - Validates X-Test-Commis header is properly transmitted and processed
- * - Confirms no data leakage between commis
+ * - Validates X-Test-Worker header is properly transmitted and processed
+ * - Confirms no data leakage between workers
  *
  * Architecture Tested:
- * - fixtures.ts: Injects X-Test-Commis header into HTTP requests
- * - spawn-test-backend.js: Backend reads header and routes to commis-specific DB
- * - Backend middleware: Extracts commis ID and initializes correct database
+ * - fixtures.ts: Injects X-Test-Worker header into HTTP requests
+ * - spawn-test-backend.js: Backend reads header and routes to worker-specific DB
+ * - Backend middleware: Extracts worker ID and initializes correct database
  */
 
 import { resetDatabase } from './test-utils';
@@ -28,14 +28,14 @@ test.beforeEach(async ({ request }) => {
   await resetDatabase(request);
 });
 
-test.describe('Commis Database Isolation', () => {
-  test('Commis database isolation via parallel execution', async ({ request, page }) => {
-    console.log('🎯 Testing: Core commis database isolation');
+test.describe('Worker Database Isolation', () => {
+  test('Worker database isolation via parallel execution', async ({ request, page }) => {
+    console.log('🎯 Testing: Core worker database isolation');
 
     // This test leverages natural parallel execution
-    // Each commis gets this test's own database automatically via fixtures
+    // Each worker gets this test's own database automatically via fixtures
 
-    // Create an automation in this commis's database.
+    // Create an automation in this worker's database.
     const response = await request.post('/api/automations', {
       data: {
         name: 'Test Automation for Isolation',
@@ -47,7 +47,7 @@ test.describe('Commis Database Isolation', () => {
 
     expect(response.status()).toBe(201);
     const automation = await response.json();
-    console.log(`✅ Created automation ID: ${automation.id} in current commis's database`);
+    console.log(`✅ Created automation ID: ${automation.id} in current worker's database`);
 
     // Verify we can see our own data
     const listResponse = await request.get('/api/automations');
@@ -55,7 +55,7 @@ test.describe('Commis Database Isolation', () => {
     const automations = await listResponse.json();
     const foundAutomation = automations.find((a: any) => a.id === automation.id);
     expect(foundAutomation).toBeDefined();
-    console.log(`✅ Can see own automation (total automations in this commis: ${automations.length})`);
+    console.log(`✅ Can see own automation (total automations in this worker: ${automations.length})`);
 
     // Navigate to automations and verify the automation appears in the UI.
     await waitForAutomationsReady(page);
@@ -64,19 +64,19 @@ test.describe('Commis Database Isolation', () => {
     await expect(automationRow).toBeVisible({ timeout: 10000 });
     console.log('✅ Automation visible in UI');
 
-    // The actual cross-commis isolation is tested by running this test
-    // in parallel across multiple commis. If isolation works, each commis
-    // will only see its own automations, never automations from other commis.
+    // The actual cross-worker isolation is tested by running this test
+    // in parallel across multiple workers. If isolation works, each worker
+    // will only see its own automations, never automations from other workers.
     console.log('');
     console.log('✅ ============================================');
-    console.log('✅ COMMIS ISOLATION VERIFIED');
-    console.log('✅ Each commis has isolated database');
-    console.log('✅ UI shows correct commis-specific data');
+    console.log('✅ WORKER ISOLATION VERIFIED');
+    console.log('✅ Each worker has isolated database');
+    console.log('✅ UI shows correct worker-specific data');
     console.log('✅ ============================================');
   });
 
-  test('Commis isolation for threads', async ({ request }) => {
-    console.log('🎯 Testing: Commis isolation for threads');
+  test('Worker isolation for threads', async ({ request }) => {
+    console.log('🎯 Testing: Worker isolation for threads');
 
     const automationResponse = await request.post('/api/automations', {
       data: {
@@ -112,13 +112,13 @@ test.describe('Commis Database Isolation', () => {
     expect(foundThread).toBeDefined();
     console.log('✅ Can see own threads');
 
-    // When run in parallel with other commis, each commis will only see
+    // When run in parallel with other workers, each worker will only see
     // its own threads due to database isolation
-    console.log('✅ Thread isolation verified via commis-specific database');
+    console.log('✅ Thread isolation verified via worker-specific database');
   });
 
-  test('WebSocket URLs include commis parameter', async ({ page, request }) => {
-    console.log('🎯 Testing: WebSocket commis parameter injection');
+  test('WebSocket URLs include worker parameter', async ({ page, request }) => {
+    console.log('🎯 Testing: WebSocket worker parameter injection');
 
     const automationResponse = await request.post('/api/automations', {
       data: {
@@ -144,16 +144,16 @@ test.describe('Commis Database Isolation', () => {
     await waitForAutomationsReady(page);
 
     // Wait for at least one WebSocket connection (deterministic polling)
-    // fixtures.ts:113-136 injects commis=<id> into all WebSocket URLs
+    // fixtures.ts:113-136 injects worker=<id> into all WebSocket URLs
     await expect.poll(() => wsUrls.length, { timeout: 10000, message: 'Expected at least one WebSocket connection' }).toBeGreaterThan(0);
     console.log(`✅ WebSocket connections detected: ${wsUrls.length}`);
 
-    // Verify commis parameter is present in WebSocket URLs
-    const hasCommisParam = wsUrls.some(url => url.includes('commis='));
-    expect(hasCommisParam).toBe(true);
-    console.log('✅ WebSocket URLs include commis parameter');
+    // Verify worker parameter is present in WebSocket URLs
+    const hasWorkerParam = wsUrls.some(url => url.includes('worker='));
+    expect(hasWorkerParam).toBe(true);
+    console.log('✅ WebSocket URLs include worker parameter');
     console.log(`✅ Sample URL: ${wsUrls[0]}`);
 
-    console.log('✅ WebSocket commis isolation verified');
+    console.log('✅ WebSocket worker isolation verified');
   });
 });

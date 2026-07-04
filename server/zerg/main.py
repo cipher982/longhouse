@@ -222,9 +222,9 @@ from zerg.middleware.request_timeout import RequestTimeoutMiddleware
 
 app.add_middleware(RequestTimeoutMiddleware)
 
-from zerg.middleware.test_commis_routing import E2ECommisRoutingMiddleware
+from zerg.middleware.test_worker_routing import E2EWorkerRoutingMiddleware
 
-app.add_middleware(E2ECommisRoutingMiddleware, enabled=_settings.testing)
+app.add_middleware(E2EWorkerRoutingMiddleware, enabled=_settings.testing)
 
 from zerg.middleware.safe_error_response import SafeErrorResponseMiddleware
 

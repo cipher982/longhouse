@@ -49,12 +49,12 @@ for arg in "$@"; do
 done
 
 if [ "$has_xdist_arg" -eq 0 ]; then
-    xdist_commis="${PYTEST_XDIST_COMMIS:-auto}"
-    case "$xdist_commis" in
+    xdist_workers="${PYTEST_XDIST_WORKERS:-auto}"
+    case "$xdist_workers" in
         ""|0|false|False|FALSE|off|Off|OFF|no|No|NO)
             ;;
         *)
-            pytest_args+=(-n "$xdist_commis" --dist=loadfile)
+            pytest_args+=(-n "$xdist_workers" --dist=loadfile)
             ;;
     esac
 fi

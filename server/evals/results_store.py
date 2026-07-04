@@ -2,7 +2,7 @@
 
 This module provides:
 - JSON serialization of eval results
-- Per-commis temp file merging (xdist-safe)
+- Per-worker temp file merging (xdist-safe)
 - Result file naming with variant + commit hash
 """
 
@@ -126,7 +126,7 @@ def get_results_dir() -> Path:
 
 
 def get_temp_results_dir() -> Path:
-    """Get the temp results directory for per-commis files.
+    """Get the temp results directory for per-worker files.
 
     Returns:
         Path to temp results directory
@@ -136,30 +136,30 @@ def get_temp_results_dir() -> Path:
     return temp_dir
 
 
-def save_result_temp(commis_id: str, case_result: CaseResult) -> None:
-    """Save a single case result to per-commis temp file.
+def save_result_temp(worker_id: str, case_result: CaseResult) -> None:
+    """Save a single case result to per-worker temp file.
 
     This is called during test execution (potentially in parallel via pytest-xdist).
-    Each commis writes to its own temp file to avoid race conditions.
+    Each worker writes to its own temp file to avoid race conditions.
 
     Args:
-        commis_id: Pytest commis ID (e.g., 'gw0', 'gw1', or 'master')
+        worker_id: Pytest worker ID (e.g., 'gw0', 'gw1', or 'master')
         case_result: Result to save
     """
     temp_dir = get_temp_results_dir()
-    temp_file = temp_dir / f"{commis_id}.jsonl"
+    temp_file = temp_dir / f"{worker_id}.jsonl"
 
-    # Append to commis's temp file (JSONL format - one JSON object per line)
+    # Append to the worker's temp file (JSONL format - one JSON object per line)
     with open(temp_file, "a") as f:
         json.dump(asdict(case_result), f)
         f.write("\n")
 
 
 def merge_results(variant: str, model: str | None = None, commit: str | None = None) -> str:
-    """Merge per-commis temp files into final result JSON.
+    """Merge per-worker temp files into final result JSON.
 
     This should be called ONCE after all tests complete (in pytest_sessionfinish).
-    Only the master node should call this (not xdist commis).
+    Only the master node should call this (not xdist workers).
 
     Args:
         variant: Variant name used for this run
@@ -299,10 +299,10 @@ def load_result(result_file: str) -> EvalRunResult:
     )
 
 
-def get_commis_id() -> str:
-    """Get the current pytest-xdist commis ID.
+def get_worker_id() -> str:
+    """Get the current pytest-xdist worker ID.
 
     Returns:
-        Commis ID (e.g., 'gw0', 'gw1', or 'master' if not using xdist)
+        Worker ID (e.g., 'gw0', 'gw1', or 'master' if not using xdist)
     """
-    return os.environ.get("PYTEST_XDIST_COMMIS", "master")
+    return os.environ.get("PYTEST_XDIST_WORKER", "master")

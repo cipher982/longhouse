@@ -40,14 +40,14 @@ export interface DatabaseResetOptions {
 }
 
 /**
- * Reset database for a specific commis with retry and verification
+ * Reset database for a specific worker with retry and verification
  */
-export async function resetDatabaseForCommis(
-  commisId: string,
+export async function resetDatabaseForWorker(
+  workerId: string,
   options: DatabaseResetOptions = {}
 ): Promise<void> {
   const { retries = 3, timeout = 5000, skipVerification = false } = options;
-  const apiClient = createApiClient(commisId);
+  const apiClient = createApiClient(workerId);
 
   let attempts = 0;
 
@@ -84,13 +84,13 @@ export async function resetDatabaseForCommis(
  */
 export async function resetDatabaseViaRequest(
   page: Page,
-  options: DatabaseResetOptions & { commisId?: string } = {}
+  options: DatabaseResetOptions & { workerId?: string } = {}
 ): Promise<void> {
-  const { retries = 3, commisId } = options;
-  const effectiveCommisId = commisId ?? process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX;
+  const { retries = 3, workerId } = options;
+  const effectiveWorkerId = workerId ?? process.env.TEST_PARALLEL_INDEX ?? process.env.TEST_WORKER_INDEX;
   let attempts = 0;
 
-  // Use single backend port; isolation via X-Test-Commis header
+  // Use single backend port; isolation via X-Test-Worker header
   const basePort = getBackendPort();
   const baseUrl = `http://localhost:${basePort}`;
 
@@ -99,7 +99,7 @@ export async function resetDatabaseViaRequest(
       const response = await page.request.post(`${baseUrl}/api/admin/reset-database`, {
         headers: {
           'Content-Type': 'application/json',
-          ...(effectiveCommisId !== undefined ? { 'X-Test-Commis': effectiveCommisId } : {}),
+          ...(effectiveWorkerId !== undefined ? { 'X-Test-Worker': effectiveWorkerId } : {}),
         },
         data: {
           reset_type: 'clear_data',
@@ -131,14 +131,14 @@ export async function resetDatabaseViaRequest(
 
 /**
  * Ensure database is clean before starting a test
- * Automatically handles commis ID from test context
+ * Automatically handles worker ID from test context
  */
-export async function ensureCleanDatabase(page: Page, commisId: string): Promise<void> {
+export async function ensureCleanDatabase(page: Page, workerId: string): Promise<void> {
   try {
-    await resetDatabaseForCommis(commisId, { retries: 2, skipVerification: false });
-    testLog.info(`✅ Database reset successful for commis ${commisId}`);
+    await resetDatabaseForWorker(workerId, { retries: 2, skipVerification: false });
+    testLog.info(`✅ Database reset successful for worker ${workerId}`);
   } catch (error) {
-    testLog.warn(`⚠️  Database reset failed for commis ${commisId}:`, error);
+    testLog.warn(`⚠️  Database reset failed for worker ${workerId}:`, error);
     // Don't throw - let test proceed in case it's a transient issue
   }
 }
@@ -156,13 +156,13 @@ export function createDatabaseResetHook(options: DatabaseResetOptions = {}) {
 /**
  * Verify database is actually empty (useful for debugging isolation issues)
  */
-export async function verifyDatabaseEmpty(commisId: string): Promise<boolean> {
+export async function verifyDatabaseEmpty(workerId: string): Promise<boolean> {
   try {
-    const apiClient = createApiClient(commisId);
+    const apiClient = createApiClient(workerId);
     const automations = await apiClient.listAutomations();
     return automations.length === 0;
   } catch (error) {
-    testLog.warn(`Failed to verify database state for commis ${commisId}:`, error);
+    testLog.warn(`Failed to verify database state for worker ${workerId}:`, error);
     return false;
   }
 }
@@ -170,17 +170,17 @@ export async function verifyDatabaseEmpty(commisId: string): Promise<boolean> {
 /**
  * Get database statistics for debugging
  */
-export async function getDatabaseStats(commisId: string): Promise<{
+export async function getDatabaseStats(workerId: string): Promise<{
   automationCount: number;
-  commisId: string;
+  workerId: string;
   timestamp: string;
 }> {
-  const apiClient = createApiClient(commisId);
+  const apiClient = createApiClient(workerId);
   const automations = await apiClient.listAutomations();
 
   return {
     automationCount: automations.length,
-    commisId,
+    workerId,
     timestamp: new Date().toISOString()
   };
 }

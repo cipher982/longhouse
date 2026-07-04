@@ -13,7 +13,7 @@ export type SseEvent = {
 
 type PostSseOptions = {
   backendUrl: string;
-  commisId: string;
+  workerId: string;
   path: string;
   payload: unknown;
   timeoutMs?: number;
@@ -53,7 +53,7 @@ function parseSseChunk(chunk: string): SseEvent | null {
 export async function postSseAndCollect(options: PostSseOptions): Promise<SseEvent[]> {
   const {
     backendUrl,
-    commisId,
+    workerId,
     path,
     payload,
     timeoutMs = 30000,
@@ -70,7 +70,7 @@ export async function postSseAndCollect(options: PostSseOptions): Promise<SseEve
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Test-Commis': commisId,
+        'X-Test-Worker': workerId,
         Accept: 'text/event-stream',
       },
       body: JSON.stringify(payload),

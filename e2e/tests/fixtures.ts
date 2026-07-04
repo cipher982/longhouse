@@ -3,8 +3,8 @@ import { test as base, expect, BrowserContext, type Page } from '@playwright/tes
 export type { Page };
 
 // ---------------------------------------------------------------------------
-// Shared Playwright *test* object that injects the `X-Test-Commis` header into
-// local browser requests and appends `commis=<id>` to every WebSocket URL
+// Shared Playwright *test* object that injects the `X-Test-Worker` header into
+// local browser requests and appends `worker=<id>` to every WebSocket URL
 // opened by the front-end. All
 // existing spec files can simply switch their import to:
 //
@@ -27,10 +27,10 @@ type TestFixtures = {
   context: BrowserContext;
   request: import('@playwright/test').APIRequestContext;
   backendUrl: string;
-  commisId: string;
+  workerId: string;
 };
 
-function shouldInjectCommisHeader(requestUrl: string): boolean {
+function shouldInjectWorkerHeader(requestUrl: string): boolean {
   try {
     const { protocol, hostname } = new URL(requestUrl);
     return (protocol === 'http:' || protocol === 'https:') && (hostname === '127.0.0.1' || hostname === 'localhost');
@@ -39,7 +39,7 @@ function shouldInjectCommisHeader(requestUrl: string): boolean {
   }
 }
 
-async function installCommisHeaderRouting(context: BrowserContext, commisId: string): Promise<void> {
+async function installWorkerHeaderRouting(context: BrowserContext, workerId: string): Promise<void> {
   const continueRoute = async (
     route: import("@playwright/test").Route,
     overrides?: { headers?: Record<string, string> },
@@ -61,7 +61,7 @@ async function installCommisHeaderRouting(context: BrowserContext, commisId: str
 
   await context.route('**/*', async route => {
     const request = route.request();
-    if (!shouldInjectCommisHeader(request.url())) {
+    if (!shouldInjectWorkerHeader(request.url())) {
       await continueRoute(route);
       return;
     }
@@ -69,7 +69,7 @@ async function installCommisHeaderRouting(context: BrowserContext, commisId: str
     await continueRoute(route, {
       headers: {
         ...request.headers(),
-        'X-Test-Commis': commisId,
+        'X-Test-Worker': workerId,
       },
     });
   });
@@ -102,29 +102,29 @@ export const test = base.extend<TestFixtures>({
     await use(`http://127.0.0.1:${basePort}`);
   },
 
-  commisId: async ({}, use, testInfo) => {
+  workerId: async ({}, use, testInfo) => {
     await use(String(testInfo.parallelIndex));
   },
 
   request: async ({ playwright, backendUrl }, use, testInfo) => {
-    // Use parallelIndex (0 to commis-1) instead of commisIndex.
-    // commisIndex can exceed the configured commis count when Playwright
-    // restarts commis after test failures/timeouts.
-    const commisId = String(testInfo.parallelIndex);
+    // Use parallelIndex (0 to workers-1) instead of workerIndex.
+    // workerIndex can exceed the configured worker count when Playwright
+    // restarts workers after test failures/timeouts.
+    const workerId = String(testInfo.parallelIndex);
     const bootstrap = await playwright.request.newContext({
       baseURL: backendUrl, // Use dynamic backend URL
       extraHTTPHeaders: {
-        'X-Test-Commis': commisId,
+        'X-Test-Worker': workerId,
       },
       // Increase timeout for API requests - reset-database can be slow under parallel load
       timeout: 30_000,
     });
-    const deviceToken = await mintDeviceToken(bootstrap, `playwright-${commisId}`);
+    const deviceToken = await mintDeviceToken(bootstrap, `playwright-${workerId}`);
 
     const request = await playwright.request.newContext({
       baseURL: backendUrl,
       extraHTTPHeaders: {
-        'X-Test-Commis': commisId,
+        'X-Test-Worker': workerId,
         'X-Agents-Token': deviceToken,
       },
       timeout: 30_000,
@@ -136,15 +136,15 @@ export const test = base.extend<TestFixtures>({
   },
 
   context: async ({ browser }, use, testInfo) => {
-    const commisId = String(testInfo.parallelIndex);
+    const workerId = String(testInfo.parallelIndex);
 
     const context = await browser.newContext();
-    await installCommisHeaderRouting(context, commisId);
+    await installWorkerHeaderRouting(context, workerId);
 
     const reactBaseUrl = process.env.PLAYWRIGHT_FRONTEND_BASE || 'http://localhost:3000';
 
-    await context.addInitScript((config: { baseUrl: string, commisId: string }) => {
-      (window as any).__TEST_COMMIS_ID__ = config.commisId;
+    await context.addInitScript((config: { baseUrl: string, workerId: string }) => {
+      (window as any).__TEST_WORKER_ID__ = config.workerId;
       try {
         const normalized = config.baseUrl.replace(/\/$/, '');
         window.localStorage.setItem('zerg_use_react_dashboard', '1');
@@ -158,23 +158,23 @@ export const test = base.extend<TestFixtures>({
           // If localStorage is unavailable (unlikely), continue without failing tests.
           console.warn('Playwright init: unable to seed React flags', error);
         }
-      }, { baseUrl: reactBaseUrl, commisId });
+      }, { baseUrl: reactBaseUrl, workerId });
 
     // -------------------------------------------------------------------
     // Monkey-patch *browser.newContext* so ad-hoc contexts created **inside**
-    // a spec inherit the commis header automatically (see realtime_updates
+    // a spec inherit the worker header automatically (see realtime_updates
     // tests that open multiple tabs).
     // -------------------------------------------------------------------
     const originalNewContext = browser.newContext.bind(browser);
     // Type-cast via immediate IIFE to keep TypeScript happy.
     browser.newContext = (async (options: any = {}) => {
       const childContext = await originalNewContext(options);
-      await installCommisHeaderRouting(childContext, commisId);
+      await installWorkerHeaderRouting(childContext, workerId);
       return childContext;
     }) as any;
 
     // ---------------------------------------------------------------------
-    // runtime patch – prepend `commis=<id>` to every WebSocket URL so the
+    // runtime patch – prepend `worker=<id>` to every WebSocket URL so the
     // backend can correlate the upgrade request to the correct database.
     // ---------------------------------------------------------------------
     await context.addInitScript((wid: string) => {
@@ -186,7 +186,7 @@ export const test = base.extend<TestFixtures>({
         try {
           const hasQuery = url.includes('?');
           const sep = hasQuery ? '&' : '?';
-          url = `${url}${sep}commis=${wid}`;
+          url = `${url}${sep}worker=${wid}`;
         } catch {
           /* ignore – defensive */
         }
@@ -200,7 +200,7 @@ export const test = base.extend<TestFixtures>({
         (window.WebSocket as any)[key] = (OriginalWebSocket as any)[key];
       }
       (window.WebSocket as any).prototype = OriginalWebSocket.prototype;
-    }, commisId);
+    }, workerId);
 
     await use(context);
 

@@ -105,9 +105,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const testCommisHeader = typeof window !== "undefined" ? window.__TEST_COMMIS_ID__ : undefined;
-  if (testCommisHeader !== undefined) {
-    headers.set("X-Test-Commis", String(testCommisHeader));
+  const testWorkerHeader = typeof window !== "undefined" ? window.__TEST_WORKER_ID__ : undefined;
+  if (testWorkerHeader !== undefined) {
+    headers.set("X-Test-Worker", String(testWorkerHeader));
   }
 
   const response = await fetchWithRefresh(url, {

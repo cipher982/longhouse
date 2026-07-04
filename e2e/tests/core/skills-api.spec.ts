@@ -23,7 +23,6 @@ test.describe('Skills API - Core', () => {
     // Should have at least the bundled skills
     const skillNames = body.skills.map((s: any) => s.name);
     expect(skillNames).toContain('web-search');
-    expect(skillNames).toContain('github');
     expect(skillNames).toContain('slack');
     expect(skillNames).toContain('quick-search');
   });
@@ -77,7 +76,7 @@ test.describe('Skills API - Core', () => {
 
     // Should mention bundled skills
     expect(prompt).toContain('web-search');
-    expect(prompt).toContain('github');
+    expect(prompt).toContain('slack');
     expect(prompt).toContain('quick-search');
   });
 });

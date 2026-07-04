@@ -664,9 +664,9 @@ export function connectTimelineSessionsStream(
   if (options.skipInitialReplay) {
     params.set("skip_initial_replay", "true");
   }
-  const commisId = typeof window !== "undefined" ? window.__TEST_COMMIS_ID__ : undefined;
-  if (commisId !== undefined) {
-    params.set("commis", String(commisId));
+  const workerId = typeof window !== "undefined" ? window.__TEST_WORKER_ID__ : undefined;
+  if (workerId !== undefined) {
+    params.set("worker", String(workerId));
   }
   const queryString = params.toString();
   const url = buildUrl(`${TIMELINE_SESSIONS_PREFIX}/stream${queryString ? `?${queryString}` : ""}`);
