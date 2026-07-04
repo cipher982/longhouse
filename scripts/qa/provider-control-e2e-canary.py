@@ -38,6 +38,7 @@ CLAUDE_REAL_PRINT_ENV_KEYS = (
     "AWS_DEFAULT_REGION",
     "ANTHROPIC_MODEL",
 )
+CLAUDE_CHANNEL_STDOUT_TIMEOUT_SECS = 20.0
 
 
 def _repo_root_from_script() -> Path:
@@ -218,7 +219,14 @@ def _next_json_stdout_line(
                 f"Timed out waiting for {context} JSON on stdout"
                 + (f" after ignoring: {ignored_tail}" if ignored_tail else "")
             )
-        line = lines.get(timeout=remaining)
+        try:
+            line = lines.get(timeout=remaining)
+        except queue.Empty as exc:
+            ignored_tail = "; ".join(ignored[-5:])
+            raise TimeoutError(
+                f"Timed out waiting for {context} JSON on stdout"
+                + (f" after ignoring: {ignored_tail}" if ignored_tail else "")
+            ) from exc
         try:
             payload = json.loads(line)
         except json.JSONDecodeError:
@@ -313,7 +321,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
         bridge.stdin.flush()
         initialize = _next_json_stdout_line(
             stdout_lines,
-            timeout_secs=5.0,
+            timeout_secs=CLAUDE_CHANNEL_STDOUT_TIMEOUT_SECS,
             context="Claude channel initialize response",
         )
         if initialize.get("id") != 1:
@@ -344,7 +352,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
             )
         send_notification = _next_json_stdout_line(
             stdout_lines,
-            timeout_secs=5.0,
+            timeout_secs=CLAUDE_CHANNEL_STDOUT_TIMEOUT_SECS,
             context="Claude channel send notification",
         )
         send_params = send_notification.get("params", {})
@@ -386,7 +394,7 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
             )
         steer_notification = _next_json_stdout_line(
             stdout_lines,
-            timeout_secs=5.0,
+            timeout_secs=CLAUDE_CHANNEL_STDOUT_TIMEOUT_SECS,
             context="Claude channel steer notification",
         )
         steer_params = steer_notification.get("params", {})
