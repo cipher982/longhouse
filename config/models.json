@@ -77,8 +77,7 @@
 
   "defaults": {
     "text": {
-      "fiche": "TIER_1",
-      "commis": "TIER_1",
+      "primary": "TIER_1",
       "test": "TIER_3"
     },
     "realtime": {

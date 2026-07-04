@@ -31,7 +31,7 @@ def _write_test_config(tmp_path, *, with_embedding=True, with_summary_update=Tru
             "realtime": {},
         },
         "defaults": {
-            "text": {"fiche": "TIER_1", "test": "TIER_2"},
+            "text": {"primary": "TIER_1", "test": "TIER_2"},
             "realtime": {},
         },
     }

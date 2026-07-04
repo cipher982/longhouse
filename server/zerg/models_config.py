@@ -208,14 +208,11 @@ def build_openai_compatible_client_kwargs(
 TIER_1: str = _TIERS["TIER_1"]  # Best reasoning / interactive automation lane
 TIER_2: str = _TIERS["TIER_2"]  # Cheaper background summarization lane
 TIER_3: str = _TIERS["TIER_3"]  # Cheapest lane, currently same model as TIER_2
-# Note: Test models (gpt-mock, gpt-scripted) are defined in zerg.testing.test_models
-
-
 # =============================================================================
 # MODEL CACHE - Built at import time
 # =============================================================================
 
-DEFAULT_MODEL_ID: str = _resolve_model_reference(_DEFAULTS["fiche"], source="defaults.text.fiche")
+DEFAULT_MODEL_ID: str = _resolve_model_reference(_DEFAULTS["primary"], source="defaults.text.primary")
 TEST_MODEL_ID: str = _resolve_model_reference(_DEFAULTS["test"], source="defaults.text.test")
 
 AVAILABLE_MODELS: List[ModelConfig] = []
