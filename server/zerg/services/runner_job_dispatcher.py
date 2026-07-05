@@ -5,7 +5,7 @@ Manages concurrency control to ensure runners don't get overloaded.
 
 IMPORTANT: The dispatcher uses thread-safe primitives (threading.Event)
 instead of asyncio.Future because dispatch_job may be called from a
-commis thread (via _run_coro_sync) while complete_job is called from
+tool thread (via _run_coro_sync) while complete_job is called from
 the main event loop's WebSocket handler. Using asyncio.Future would
 cause the completion signal to be lost across event loop boundaries.
 """
@@ -173,7 +173,7 @@ class RunnerJobDispatcher:
             runner_id: ID of the runner to execute on
             command: Shell command to execute
             timeout_secs: Maximum execution time in seconds
-            commis_id: Optional commis ID for correlation
+            commis_id: Optional legacy correlation ID
             run_id: Optional run ID for correlation
 
         Returns:
@@ -221,7 +221,7 @@ class RunnerJobDispatcher:
         self.mark_job_active(runner_id, job.id)
 
         # Create thread-safe pending job for tracking completion
-        # This allows cross-event-loop signaling between commis thread and main loop
+        # This allows cross-event-loop signaling between tool threads and the main loop
         pending = PendingJob(event=threading.Event())
         with self._pending_lock:
             self._pending_jobs[job.id] = pending

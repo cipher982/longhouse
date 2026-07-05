@@ -75,7 +75,7 @@
    * ============================================================================ */
 
   /* Enhance featured cards */
-  body.marketing-mode .fiche-card {
+  body.marketing-mode .automation-card {
     background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%) !important;
     border: 2px solid #9e7c5a !important;
     box-shadow: 0 8px 24px rgba(139, 92, 246, 0.4) !important;

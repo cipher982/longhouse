@@ -105,7 +105,7 @@ def validate_mcp_configs(configs: List[Dict[str, Any]]) -> List[MCPConfig]:
     return validated
 
 
-# Example usage in fiche configuration:
+# Example usage in tool configuration:
 EXAMPLE_MCP_CONFIG = {
     "mcp_servers": [
         # Preset configuration

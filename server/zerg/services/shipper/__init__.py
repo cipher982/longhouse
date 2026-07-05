@@ -2,7 +2,7 @@
 
 The session shipping daemon is the Rust engine (longhouse-engine).
 This module provides the supporting Python infrastructure:
-- parser.py: JSONL parsing (used by commis session ingestion)
+- parser.py: JSONL parsing (used by local session ingestion)
 - hooks.py: Claude Code hook installation + shared workspace MCP helpers
 - token.py: device token / URL persistence
 - service.py: launchd/systemd service management for longhouse-engine

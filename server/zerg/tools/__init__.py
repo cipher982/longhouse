@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 class ImmutableToolRegistry:
     """Thread-safe, immutable tool registry.
 
-    Built once at startup, passed to fiches via dependency injection.
+    Built once at startup and passed into runtime execution via dependency injection.
     No global state, no mutations, no surprises.
     """
 

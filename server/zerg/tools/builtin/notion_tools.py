@@ -1,10 +1,10 @@
 """Notion API tools for interacting with Notion workspaces.
 
-These tools allow fiches to create pages, query databases, append blocks, and search
+These tools allow Longhouse tools to create pages, query databases, append blocks, and search
 within a Notion workspace. Authentication is handled via Notion Integration Tokens.
 
 Configuration:
-- Configure Notion credentials in Fiche Settings -> Connectors, OR
+- Configure Notion credentials in account connector settings, OR
 - Pass api_key parameter directly to each tool function
 - Create integration at notion.so/my-integrations
 - The integration must be shared with target pages/databases

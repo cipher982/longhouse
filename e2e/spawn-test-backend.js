@@ -163,7 +163,7 @@ const backend = spawn('uv', [
         LONGHOUSE_WORKSPACE_PATH: process.env.LONGHOUSE_WORKSPACE_PATH || os.tmpdir() + '/zerg-e2e-workspaces',
         // Claude config dir for session files (use temp dir in E2E)
         CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR || os.tmpdir() + '/zerg-e2e-claude',
-        // Mock hatch CLI for workspace agents in E2E (can't run real Claude Code fiches)
+        // Mock hatch CLI for workspace agents in E2E (can't run real Claude Code agents)
         E2E_HATCH_PATH: join(__dirname, 'bin', 'hatch'),
         // Deterministic tool stubs for E2E (runner_exec/ssh_exec/web_search)
         LONGHOUSE_TOOL_STUBS_PATH: toolStubsPath,

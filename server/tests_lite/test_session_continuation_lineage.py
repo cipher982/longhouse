@@ -152,7 +152,7 @@ def test_stale_local_ingest_creates_local_child_and_reuses_it(tmp_path):
             continuation_kind="cloud",
             origin_label="Cloud",
             environment="Cloud",
-            device_id="zerg-commis-cloud",
+            device_id="zerg-automation-cloud",
             started_at=cloud_started,
             branched_from_event_id=store.get_latest_event_id(root_id),
         )
@@ -220,7 +220,7 @@ def test_explicit_child_ingest_becomes_new_head(tmp_path):
                 provider="claude",
                 environment="Cloud",
                 project="zerg",
-                device_id="zerg-commis-cloud",
+                device_id="zerg-automation-cloud",
                 cwd="/tmp/zerg",
                 git_repo="git@github.com:cipher982/longhouse.git",
                 git_branch="main",

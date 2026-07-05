@@ -1,6 +1,6 @@
-"""Regression test: commis sessions are filterable by environment.
+"""Regression test: automation sessions are filterable by environment.
 
-Verifies that sessions ingested with environment=commis metadata are
+Verifies that sessions ingested with environment=automation metadata are
 correctly returned (or excluded) by the AgentsStore.list_sessions filter.
 """
 
@@ -16,8 +16,8 @@ from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 
 
-def test_environment_filter_returns_commis_sessions(tmp_path):
-    """Ingest a commis session and verify the environment filter works."""
+def test_environment_filter_returns_automation_sessions(tmp_path):
+    """Ingest an automation session and verify the environment filter works."""
     db_path = tmp_path / "env_filter.db"
     engine = make_engine(f"sqlite:///{db_path}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
@@ -27,11 +27,11 @@ def test_environment_filter_returns_commis_sessions(tmp_path):
     with Session() as db:
         store = AgentsStore(db)
 
-        # Ingest a session with environment=commis
+        # Ingest a session with environment=automation
         store.ingest_session(
             SessionIngest(
                 provider="claude",
-                environment="commis",
+                environment="automation",
                 project="zerg",
                 device_id="dev-machine",
                 cwd="/tmp",
@@ -41,7 +41,7 @@ def test_environment_filter_returns_commis_sessions(tmp_path):
                 events=[
                     EventIngest(
                         role="assistant",
-                        content_text="commis completed task",
+                        content_text="automation completed task",
                         timestamp=datetime(2026, 2, 1, tzinfo=timezone.utc),
                         source_path="/tmp/session.jsonl",
                         source_offset=0,
@@ -50,10 +50,10 @@ def test_environment_filter_returns_commis_sessions(tmp_path):
             )
         )
 
-        # Filter by environment=commis should return the session
-        sessions, total = store.list_sessions(environment="commis", hide_autonomous=False)
+        # Filter by environment=automation should return the session
+        sessions, total = store.list_sessions(environment="automation", hide_autonomous=False)
         assert total == 1
-        assert sessions[0].environment == "commis"
+        assert sessions[0].environment == "automation"
 
         # Filter by environment=production should NOT return it
         sessions, total = store.list_sessions(environment="production", hide_autonomous=False)

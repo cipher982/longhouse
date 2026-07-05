@@ -186,7 +186,7 @@ export interface paths {
          *     Returns:
          *     - User info with usage summary for all periods
          *     - Daily breakdown for the specified period
-         *     - Top fiches by cost for the specified period
+         *     - Top automations by cost for the specified period
          *
          *     Admin-only endpoint.
          */
@@ -8184,7 +8184,7 @@ export interface components {
             device_id?: string | null;
             /**
              * Environment
-             * @description Environment (production, development, test, e2e, commis)
+             * @description Environment (production, development, test, e2e, automation)
              */
             environment?: string | null;
             /**

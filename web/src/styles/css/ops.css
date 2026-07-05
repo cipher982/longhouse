@@ -271,8 +271,8 @@
   font-size: 12px;
 }
 
-/* Top fiches table */
-.ops-dashboard .top-fiches-table table {
+/* Top automations table */
+.ops-dashboard .top-automations-table table {
   width: 100%;
   border-collapse: collapse;
   background: var(--bg-dark);
@@ -281,8 +281,8 @@
   overflow: hidden;
 }
 
-.ops-dashboard .top-fiches-table table th,
-.ops-dashboard .top-fiches-table table td {
+.ops-dashboard .top-automations-table table th,
+.ops-dashboard .top-automations-table table td {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-color);
   text-align: left;
@@ -290,7 +290,7 @@
   color: var(--text);
 }
 
-.ops-dashboard .top-fiches-table table th {
+.ops-dashboard .top-automations-table table th {
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-color);
   text-align: left;
@@ -300,11 +300,11 @@
   background: var(--dark-lighter);
 }
 
-.ops-dashboard .top-fiches-table table tbody tr:last-child td {
+.ops-dashboard .top-automations-table table tbody tr:last-child td {
   border-bottom: none;
 }
 
-.ops-dashboard .top-fiches-table table tbody tr:hover {
+.ops-dashboard .top-automations-table table tbody tr:hover {
   background: #1C1610;
 }
 

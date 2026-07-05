@@ -46,7 +46,7 @@ try:
 
     dashboard_snapshot_runs_returned = Histogram(
         "dashboard_snapshot_runs_returned",
-        "Number of runs included across all fiches in dashboard snapshots",
+        "Number of runs included across all automations in dashboard snapshots",
         buckets=(0, 5, 10, 25, 50, 100, 200, 500, 1000, 2000),
     )
 

@@ -117,7 +117,7 @@ async def send_user_signup_alert(user_email: str, user_count: Optional[int] = No
 async def send_qa_alert(issue: dict, dashboard_url: str = "https://longhouse.ai/reliability") -> None:
     """Send a QA chronic issue alert to Discord.
 
-    Called when the QA fiche detects a new chronic issue that needs attention.
+    Called when QA detects a new chronic issue that needs attention.
 
     Parameters
     ----------
@@ -181,7 +181,7 @@ async def send_run_completion_notification(
 ) -> None:
     """Send a run completion notification to Discord or Slack.
 
-    This is used for cloud fiche execution notifications, allowing users
+    This is used for remote execution notifications, allowing users
     to close their laptop and get notified when work completes.
 
     Parameters

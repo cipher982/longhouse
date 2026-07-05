@@ -340,7 +340,7 @@ def get_top_automations(db: Session, window: str = "today", limit: int = 5) -> L
     cost_rows = base_cost_q.group_by(RunModel.fiche_id).all()
     cost_map = {fiche_id: float(total) for fiche_id, total in cost_rows}
 
-    # p95 duration for successful runs per fiche (compute in Python)
+    # p95 duration for successful runs per automation (compute in Python)
     base_dur_q = db.query(RunModel.fiche_id, RunModel.duration_ms).filter(
         RunModel.duration_ms.isnot(None),
         RunModel.started_at.isnot(None),
@@ -357,7 +357,7 @@ def get_top_automations(db: Session, window: str = "today", limit: int = 5) -> L
             durations_by_automation[int(fiche_id)].append(int(d))
     p95_map = {fid: (_percentile(vals, 95) or 0) for fid, vals in durations_by_automation.items()}
 
-    # Join with fiche + owner info
+    # Join with automation + owner info
     fiches_info_rows = (
         db.query(FicheModel.id, FicheModel.name, UserModel.email)
         .join(UserModel, UserModel.id == FicheModel.owner_id)

@@ -17,7 +17,7 @@ from zerg.database import Base
 class RunEvent(Base):
     """Represents a single event in a run's lifecycle.
 
-    This table provides durable storage for all assistant/commis events,
+    This table provides durable storage for all assistant/runtime events,
     enabling SSE streams to reconnect and replay missed events. All events
     that were previously only published to the EventBus are now also persisted
     here for full audit trail and resumable streaming.
@@ -38,7 +38,7 @@ class RunEvent(Base):
     run_id = Column(Integer, ForeignKey("runs.id", ondelete="CASCADE"), nullable=False)
 
     # Event metadata -----------------------------------------------------
-    event_type = Column(String(50), nullable=False, index=True)  # assistant_started, commis_complete, etc.
+    event_type = Column(String(50), nullable=False, index=True)  # assistant_started, tool_completed, etc.
 
     # Event payload ------------------------------------------------------
     payload = Column(JSON(), nullable=False)  # Full event data (JSON-serializable)

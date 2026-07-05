@@ -317,7 +317,7 @@ def get_user_usage_detail(
         period: Time period for breakdown - "today", "7d", or "30d"
 
     Returns:
-        Dict with user info, period summary, daily breakdown, top fiches
+        Dict with user info, period summary, daily breakdown, top automations
     """
     from zerg.models.models import User as UserModel
 

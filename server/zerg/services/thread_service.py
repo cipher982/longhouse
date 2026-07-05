@@ -52,7 +52,7 @@ def _db_to_langchain(msg_row: ThreadMessageModel) -> BaseMessage:  # pragma: no 
     instances that include the *tool_calls* attribute.
 
     Messages are timestamped using the sent_at field to enable temporal
-    awareness as specified in the connector-aware fiches PRD (P1.2).
+    awareness for connector-aware automation threads.
     """
 
     role = msg_row.role
@@ -193,10 +193,10 @@ class ThreadService:
         thread_type: str = "chat",
         active: Optional[bool] = None,
     ) -> ThreadModel:
-        """Create a thread for a fiche.
+        """Create a thread for an automation.
 
         NOTE: System messages are NO LONGER stored in thread_messages.
-        They are injected fresh at runtime from fiche.system_instructions.
+        They are injected fresh at runtime from the automation's system instructions.
         This prevents drift when prompts are updated.
 
         The function name remains stable for internal callers.
@@ -233,7 +233,7 @@ class ThreadService:
             raise ValueError("Thread not found")
 
         if thread.fiche_id != fiche_id:
-            raise ValueError("Thread does not belong to fiche")
+            raise ValueError("Thread does not belong to automation")
 
         return thread
 

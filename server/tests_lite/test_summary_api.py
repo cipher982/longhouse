@@ -432,7 +432,7 @@ def test_get_session_thread_returns_lineage(tmp_path):
             continuation_kind="cloud",
             origin_label="Cloud",
             environment="Cloud",
-            device_id="zerg-commis-cloud",
+            device_id="zerg-automation-cloud",
             branched_from_event_id=None,
         )
         child.summary = "Continued in cloud."

@@ -686,7 +686,7 @@ async def get_user_usage_details(
     Returns:
     - User info with usage summary for all periods
     - Daily breakdown for the specified period
-    - Top fiches by cost for the specified period
+    - Top automations by cost for the specified period
 
     Admin-only endpoint.
     """

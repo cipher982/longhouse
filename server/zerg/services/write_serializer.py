@@ -1,7 +1,7 @@
 """Single-writer serializer for SQLite.
 
 SQLite permits only one writer at a time. When multiple background tasks
-(ingest, presence flush, task queue, commis jobs) all compete for the write
+(ingest, presence flush, task queue, runner jobs) all compete for the write
 lock via separate threads, `database is locked` errors and long waits result.
 
 This module serializes ALL database writes through a single asyncio.Lock.

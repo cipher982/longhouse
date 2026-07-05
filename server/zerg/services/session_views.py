@@ -713,7 +713,7 @@ class SessionResponse(UTCBaseModel):
     provider: str = Field(..., description="AI provider")
     project: Optional[str] = Field(None, description="Project name")
     device_id: Optional[str] = Field(None, description="Device ID")
-    environment: Optional[str] = Field(None, description="Environment (production, development, test, e2e, commis)")
+    environment: Optional[str] = Field(None, description="Environment (production, development, test, e2e, automation)")
     cwd: Optional[str] = Field(None, description="Working directory")
     git_repo: Optional[str] = Field(None, description="Git remote URL")
     git_branch: Optional[str] = Field(None, description="Git branch")
