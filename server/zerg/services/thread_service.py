@@ -216,7 +216,7 @@ class ThreadService:
         )
 
         # System prompt is now injected at runtime, not stored in DB
-        # See: runtime_runner.py run_thread() for runtime injection
+        # Runtime callers inject the system prompt when constructing model input.
 
         return thread
 
