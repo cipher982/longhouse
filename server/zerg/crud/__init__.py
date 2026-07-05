@@ -1,12 +1,6 @@
 """CRUD operations for all models."""
 
 # Fiche operations
-# Connector operations
-from .crud_connectors import create_connector
-from .crud_connectors import delete_connector
-from .crud_connectors import get_connector
-from .crud_connectors import get_connectors
-from .crud_connectors import update_connector
 from .crud_fiches import create_fiche
 from .crud_fiches import create_fiche_message
 from .crud_fiches import delete_fiche
@@ -45,12 +39,6 @@ from .crud_threads import get_thread
 from .crud_threads import get_threads
 from .crud_threads import update_thread
 
-# Trigger operations
-from .crud_triggers import create_trigger
-from .crud_triggers import delete_trigger
-from .crud_triggers import get_trigger
-from .crud_triggers import get_triggers
-
 # User operations
 from .crud_users import count_users
 from .crud_users import create_user
@@ -72,12 +60,6 @@ __all__ = [
     "get_fiche_messages",
     "get_fiches",
     "update_fiche",
-    # Connectors
-    "create_connector",
-    "delete_connector",
-    "get_connector",
-    "get_connectors",
-    "update_connector",
     # Messages
     "create_thread_message",
     "get_recent_thread_messages",
@@ -98,11 +80,6 @@ __all__ = [
     "get_thread",
     "get_threads",
     "update_thread",
-    # Triggers
-    "create_trigger",
-    "delete_trigger",
-    "get_trigger",
-    "get_triggers",
     # Users
     "count_users",
     "create_user",
