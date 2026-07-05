@@ -25,11 +25,6 @@ def test_initialize_database_sqlite_creates_tables(tmp_path):
     assert "events" in tables
     assert "events_fts" in tables
 
-    # Retired pre-launch automation tables are dropped during startup.
-    assert "threads" not in tables
-    assert "fiches" not in tables
-    assert "runs" not in tables
-
     event_indexes = {item["name"] for item in inspector.get_indexes("events")}
     assert "ix_events_session_branch_timestamp" in event_indexes
     assert "ix_events_thread_id" in event_indexes

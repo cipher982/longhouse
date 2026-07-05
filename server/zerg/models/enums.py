@@ -19,39 +19,6 @@ class UserRole(str, Enum):
     ADMIN = "ADMIN"
 
 
-class FicheStatus(str, Enum):
-    IDLE = "idle"
-    RUNNING = "running"
-    ERROR = "error"
-    PROCESSING = "processing"
-
-
-class RunStatus(str, Enum):
-    QUEUED = "queued"
-    RUNNING = "running"
-    WAITING = "waiting"  # Interrupted waiting for external completion
-    DEFERRED = "deferred"  # Timeout migration: still executing, but caller stopped waiting
-    SUCCESS = "success"
-    FAILED = "failed"
-    CANCELLED = "cancelled"
-
-
-class RunTrigger(str, Enum):
-    MANUAL = "manual"
-    SCHEDULE = "schedule"
-    CHAT = "chat"
-    WEBHOOK = "webhook"
-    API = "api"  # Generic fallback for other API calls
-    CONTINUATION = "continuation"  # Triggered by external completion
-
-
-class ThreadType(str, Enum):
-    CHAT = "chat"
-    SCHEDULED = "scheduled"
-    MANUAL = "manual"
-    SUPER = "super"  # Legacy thread type
-
-
 class RunnerStatus(str, Enum):
     """Runner connection status"""
 
@@ -73,10 +40,6 @@ class RunnerJobStatus(str, Enum):
 
 __all__ = [
     "UserRole",
-    "FicheStatus",
-    "RunStatus",
-    "RunTrigger",
-    "ThreadType",
     "RunnerStatus",
     "RunnerJobStatus",
     "SessionLoopMode",

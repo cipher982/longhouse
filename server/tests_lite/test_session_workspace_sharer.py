@@ -188,7 +188,7 @@ def test_workspace_sharer_handles_blank_display_name(tmp_path):
     session_local = _make_db(tmp_path)
     with session_local() as db:
         _seed_user(db, user_id=1, email="viewer@example.com", display_name="Viewer")
-        _seed_user(db, user_id=7, email="david010@gmail.com", display_name=None)
+        _seed_user(db, user_id=7, email="david010@example.com", display_name=None)
         session_id = _seed_session(db)
     client = _make_client(session_local)
 

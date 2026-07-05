@@ -1141,7 +1141,7 @@ def test_timeline_sessions_api_collapses_parent_with_children(tmp_path):
             db.close()
 
     api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[get_current_browser_user] = lambda: SimpleNamespace(id=1, email="david010@gmail.com")
+    api_app.dependency_overrides[get_current_browser_user] = lambda: SimpleNamespace(id=1, email="david010@example.com")
     api_app.dependency_overrides[require_single_tenant] = lambda: None
     try:
         client = TestClient(api_app)

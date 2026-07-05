@@ -11,7 +11,7 @@ class StructuredFormatter(logging.Formatter):
     """Formatter that renders structured fields for grep-able telemetry logs.
 
     For logs with 'extra' dict, formats as:
-        2025-12-15 03:19:33 INFO [FICHE] Starting run thread thread_id=1
+        2025-12-15 03:19:33 INFO [LONGHOUSE] Starting session session_id=abc123
     """
 
     BUILTIN_ATTRS = {

@@ -95,7 +95,7 @@ class Runner(Base):
     """User-owned runner daemon for executing commands.
 
     Runners connect outbound to the Longhouse platform and execute jobs
-    on behalf of commiss. This enables secure execution without backend
+    on behalf of the user. This enables secure execution without backend
     access to user SSH keys.
     """
 
@@ -176,7 +176,7 @@ class RunnerJob(Base):
     owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     owner = relationship("User", backref="runner_jobs")
 
-    commis_id = Column(String, nullable=True, index=True)  # Link to CommisArtifactStore
+    correlation_id = Column(String, nullable=True, index=True)
     run_id = Column(String, nullable=True)  # Link to run context
 
     # Runner assignment

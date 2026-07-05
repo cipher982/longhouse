@@ -846,8 +846,6 @@ def initialize_database(engine: Engine = None) -> None:
     # normalization, and non-trivial backfills.
     with _timed_database_step("residual_agents_migrations"):
         _migrate_agents_columns(target_engine)
-    with _timed_database_step("cleanup_legacy_agents_tables"):
-        _cleanup_legacy_agents_tables(target_engine)
 
     if target_engine.dialect.name == "sqlite":
         # Keep a ledger table ready for explicit heavy migrations.
@@ -1868,25 +1866,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception as exc:
         raise RuntimeError("Failed to initialize session_observations table") from exc
 
-    # Legacy jobs-platform teardown: drop retired tables if present. The generic
-    # job scheduler, its run/secret/repo tables, and the AI ops-watchman are gone.
-    # commis_jobs was renamed to commis_tasks (drop+recreate, no row preservation).
-    try:
-        with engine.connect() as conn:
-            for legacy_table in (
-                "job_runs",
-                "job_secrets",
-                "job_repo_configs",
-                "commis_jobs",
-                "operational_incidents",
-                "ops_watch_observations",
-                "ops_watch_runs",
-            ):
-                conn.execute(text(f"DROP TABLE IF EXISTS {legacy_table}"))
-            conn.commit()
-    except Exception:
-        logger.debug("Legacy jobs/ops table drop skipped", exc_info=True)
-
     # runners table migrations
     try:
         with engine.connect() as conn:
@@ -2152,65 +2131,6 @@ def _auto_add_missing_columns(
         _apply(conn)
 
     return [(t, c) for t, c, _ in pending]
-
-
-def _cleanup_legacy_agents_tables(engine: Engine) -> None:
-    """Drop removed legacy SQLite tables/columns so existing instances converge."""
-    if engine.dialect.name != "sqlite":
-        return
-
-    try:
-        with engine.connect() as conn:
-            conn.execute(text("PRAGMA foreign_keys=OFF"))
-            legacy_tables = (
-                "file_reservations",
-                "memories",
-                "sync_operations",
-                # Retired pre-launch automation data plane.
-                "llm_audit_log",
-                "run_events",
-                "commis_tasks",
-                "connector_credentials",
-                "runs",
-                "thread_messages",
-                "threads",
-                "fiche_messages",
-                "triggers",
-                "fiches",
-                "conversation_messages",
-                "conversation_bindings",
-                "conversations",
-                "connectors",
-                "surface_ingress_claims",
-                "runner_wakeups",
-                "insights",
-            )
-            for table_name in legacy_tables:
-                exists = conn.execute(
-                    text(
-                        """
-                        SELECT 1
-                        FROM sqlite_master
-                        WHERE type = 'table' AND name = :table_name
-                        LIMIT 1
-                        """
-                    ),
-                    {"table_name": table_name},
-                ).fetchone()
-                if exists is None:
-                    continue
-                conn.execute(text(f'DROP TABLE IF EXISTS "{table_name}"'))
-                logger.info("Dropped legacy %s table", table_name)
-
-            thread_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(threads)"))}
-            if "memory_strategy" in thread_columns:
-                conn.execute(text("ALTER TABLE threads DROP COLUMN memory_strategy"))
-                logger.info("Dropped legacy threads.memory_strategy column")
-
-            conn.commit()
-            conn.execute(text("PRAGMA foreign_keys=ON"))
-    except Exception:
-        logger.exception("legacy agents cleanup failed")
 
 
 def _ensure_agents_fts(engine: Engine) -> None:

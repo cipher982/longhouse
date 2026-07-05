@@ -111,8 +111,8 @@ def acquire_lock(
 
     Args:
         db: SQLAlchemy Session
-        lock_type: Type of resource being locked (e.g., 'fiche', 'user_creation')
-        lock_key: Unique key within the lock type (e.g., fiche_id as string)
+        lock_type: Type of resource being locked (e.g., 'session', 'user_creation')
+        lock_key: Unique key within the lock type (e.g., session ID as string)
         holder_id: Identifier for this lock holder (e.g., process ID, worker ID)
         blocking: Unused, for API compatibility only
 
@@ -285,7 +285,7 @@ def acquire_resource_lock(
 
     Args:
         db: SQLAlchemy Session
-        lock_type: Type of resource (e.g., 'fiche', 'user_creation')
+        lock_type: Type of resource (e.g., 'session', 'user_creation')
         lock_key: Unique key
         holder_id: Identifier for this lock holder
         blocking: Unused, for API compatibility
@@ -327,7 +327,7 @@ def resource_lock(
     """Context manager for resource locking.
 
     Usage:
-        with resource_lock(db, "fiche", fiche_id, worker_id) as acquired:
+        with resource_lock(db, "session", session_id, worker_id) as acquired:
             if acquired:
                 # Do work with exclusive access
                 pass

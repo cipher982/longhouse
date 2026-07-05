@@ -61,7 +61,6 @@ export const MCP_NAMESPACES: Record<string, McpNamespaceMeta> = {
   "search": { icon: "S", color: "secondary" },
   "web": { icon: "S", color: "secondary" },
   "gdrive": { icon: "G", color: "success" },
-  "gmail": { icon: "G", color: "success" },
 };
 
 const COLOR_TOKEN_TO_CSS: Record<ToolColorToken, string> = {

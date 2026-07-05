@@ -90,8 +90,7 @@ def _resolve_execution_context() -> tuple[int | None, str | None, int | None]:
     be called by runtime runs that provide CredentialResolver context.
 
     Returns:
-        Tuple of (owner_id, commis_id, run_id). The legacy commis_id field is
-        kept on runner jobs for schema compatibility and is no longer populated.
+        Tuple of (owner_id, correlation_id, run_id).
     """
     resolver = get_credential_resolver()
     owner_id = resolver.owner_id if resolver and resolver.owner_id is not None else None
@@ -158,7 +157,7 @@ def runner_exec(
     Note: Non-zero exit codes are NOT errors - they indicate the command ran
     but returned a failure code. Only connection/timeout failures are errors.
     """
-    owner_id, commis_id, run_id = _resolve_execution_context()
+    owner_id, correlation_id, run_id = _resolve_execution_context()
     if owner_id is None:
         return tool_error(
             ErrorType.VALIDATION_ERROR,
@@ -253,7 +252,7 @@ def runner_exec(
                 runner_id=runner_id,
                 command=command,
                 timeout_secs=timeout_secs,
-                commis_id=commis_id,
+                correlation_id=correlation_id,
                 run_id=run_id,
             )
         )

@@ -62,13 +62,13 @@ def _claims(*, cp_user_id: int, email: str, email_verified: bool = True) -> CPTo
 def test_verified_cp_email_can_link_existing_hosted_user(monkeypatch, db_session):
     monkeypatch.setenv("INSTANCE_ID", "david010")
     strategy = HostedCPAuthStrategy()
-    user = User(email="david010@gmail.com")
+    user = User(email="david010@example.com")
     db_session.add(user)
     db_session.commit()
 
     resolved = strategy._resolve_claims_user(  # noqa: SLF001
         db_session,
-        _claims(cp_user_id=123, email="david010@gmail.com", email_verified=True),
+        _claims(cp_user_id=123, email="david010@example.com", email_verified=True),
     )
 
     assert resolved.id == user.id
@@ -80,14 +80,14 @@ def test_verified_cp_email_can_link_existing_hosted_user(monkeypatch, db_session
 def test_unverified_cp_email_cannot_link_existing_hosted_user(monkeypatch, db_session):
     monkeypatch.setenv("INSTANCE_ID", "david010")
     strategy = HostedCPAuthStrategy()
-    user = User(email="david010@gmail.com")
+    user = User(email="david010@example.com")
     db_session.add(user)
     db_session.commit()
 
     with pytest.raises(HTTPException) as exc:
         strategy._resolve_claims_user(  # noqa: SLF001
             db_session,
-            _claims(cp_user_id=456, email="david010@gmail.com", email_verified=False),
+            _claims(cp_user_id=456, email="david010@example.com", email_verified=False),
         )
 
     assert exc.value.status_code == 403
@@ -109,7 +109,7 @@ def test_hosted_browser_route_rejects_query_jwt(monkeypatch, db_session):
 
 
 def test_hosted_browser_auth_accepts_runtime_bearer(monkeypatch, db_session):
-    user = User(email="david010@gmail.com")
+    user = User(email="david010@example.com")
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
@@ -137,7 +137,7 @@ def test_hosted_browser_auth_accepts_runtime_bearer(monkeypatch, db_session):
 
 def test_hosted_browser_auth_rejects_legacy_jwt_bearer(monkeypatch, db_session):
     monkeypatch.setenv("INSTANCE_ID", "david010")
-    user = User(email="david010@gmail.com")
+    user = User(email="david010@example.com")
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
@@ -171,7 +171,7 @@ def test_hosted_browser_auth_rejects_legacy_jwt_bearer(monkeypatch, db_session):
 
 @pytest.mark.asyncio
 async def test_accept_handoff_allows_code_only_control_plane_open_instance(monkeypatch, db_session):
-    user = User(email="david010@gmail.com")
+    user = User(email="david010@example.com")
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
@@ -248,7 +248,7 @@ async def test_accept_handoff_requires_cookie_for_tenant_state(monkeypatch, db_s
 
 @pytest.mark.asyncio
 async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_session):
-    user = User(email="david010@gmail.com")
+    user = User(email="david010@example.com")
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)

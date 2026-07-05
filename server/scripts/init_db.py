@@ -18,10 +18,6 @@ def init_db():
         print("🏗️ Creating initial database schema...")
         try:
             # Import models to ensure they are registered
-            from zerg.models.models import Fiche  # noqa: F401
-            from zerg.models.models import Run  # noqa: F401
-            from zerg.models.models import Thread  # noqa: F401
-            from zerg.models.models import ThreadMessage  # noqa: F401
             from zerg.models.models import User  # noqa: F401
             from zerg.models.models import Workflow  # noqa: F401
 

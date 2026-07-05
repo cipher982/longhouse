@@ -529,7 +529,7 @@ def test_workflow_run_query_endpoint(tmp_path):
     api_app.dependency_overrides[get_db] = override_db
     api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="d", id="t", owner_id=1)
     api_app.dependency_overrides[require_single_tenant] = lambda: None
-    api_app.dependency_overrides[get_current_browser_user] = lambda: SimpleNamespace(id=1, email="david010@gmail.com")
+    api_app.dependency_overrides[get_current_browser_user] = lambda: SimpleNamespace(id=1, email="david010@example.com")
     try:
         client = TestClient(api_app)
         # Machine-facing /agents route.

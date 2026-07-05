@@ -22,7 +22,7 @@ class _FakeDispatcher:
         runner_id,
         command,
         timeout_secs,
-        commis_id,
+        correlation_id,
         run_id,
     ):
         self.calls.append(
@@ -32,7 +32,7 @@ class _FakeDispatcher:
                 "runner_id": runner_id,
                 "command": command,
                 "timeout_secs": timeout_secs,
-                "commis_id": commis_id,
+                "correlation_id": correlation_id,
                 "run_id": run_id,
             }
         )
@@ -85,7 +85,7 @@ def test_runner_exec_uses_credential_resolver():
             "runner_id": 7,
             "command": "bash -lc pwd",
             "timeout_secs": 15,
-            "commis_id": None,
+            "correlation_id": None,
             "run_id": None,
         }
     ]

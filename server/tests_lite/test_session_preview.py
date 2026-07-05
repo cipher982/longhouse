@@ -46,7 +46,7 @@ def _isolate_state():
         db.query(AgentSession).delete()
 
 
-def _seed_user(*, display_name: str | None = "David Rose", email: str = "david010@gmail.com") -> None:
+def _seed_user(*, display_name: str | None = "David Rose", email: str = "david010@example.com") -> None:
     with db_session() as db:
         db.add(User(email=email, display_name=display_name, is_active=True))
 
@@ -113,8 +113,8 @@ def test_preview_returns_public_safe_metadata():
 
 def test_preview_falls_back_to_email_local_when_display_name_is_blank():
     with db_session() as db:
-        db.add(User(email="david010@gmail.com", display_name=None, is_active=True))
-        db.add(User(email="other@gmail.com", display_name="   ", is_active=True))
+        db.add(User(email="david010@example.com", display_name=None, is_active=True))
+        db.add(User(email="other@example.com", display_name="   ", is_active=True))
     session_id = _seed_session()
     prefix = session_id.split("-")[0]
     client = TestClient(app)

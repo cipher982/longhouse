@@ -69,7 +69,6 @@ public enum ToolTiers {
         "search": McpNamespaceMeta(icon: "S", color: .secondary),
         "web": McpNamespaceMeta(icon: "S", color: .secondary),
         "gdrive": McpNamespaceMeta(icon: "G", color: .success),
-        "gmail": McpNamespaceMeta(icon: "G", color: .success),
     ]
 
     public struct Resolved: Sendable {

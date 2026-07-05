@@ -11,8 +11,8 @@ const originalError = console.error;
 beforeAll(() => {
   console.warn = (...args: unknown[]) => {
     const msg = String(args[0] || '');
-    // CommisProgress orphan/edge case warnings - tests deliberately trigger these
-    if (msg.includes('[CommisProgress]')) return;
+    // Progress orphan/edge case warnings - tests deliberately trigger these
+    if (msg.includes('[SessionProgress]')) return;
     originalWarn.apply(console, args);
   };
 

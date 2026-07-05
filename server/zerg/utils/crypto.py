@@ -1,4 +1,4 @@
-"""Simple *Fernet* (AES-GCM) encryption helper for Gmail refresh tokens.
+"""Simple *Fernet* (AES-GCM) encryption helper for stored tokens.
 
 The project mandates `cryptography` as a hard dependency, therefore we no
 longer carry the legacy XOR fallback.  If the import fails the application

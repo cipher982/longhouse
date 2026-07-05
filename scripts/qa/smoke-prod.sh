@@ -577,7 +577,7 @@ if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
             fi
 
             if [[ "$MODE" == "full" ]]; then
-                info "Email/Gmail canaries removed with the legacy chat path"
+                info "Full authenticated canaries removed with the old chat path"
             else
                 info "Full tests skipped (pass --full to enable CRUD/infra)"
             fi

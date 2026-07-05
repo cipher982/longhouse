@@ -25,12 +25,12 @@ class CredentialResolver:
     def __init__(
         self,
         db: Session,
-        fiche_id: int | None = None,
+        context_id: int | None = None,
         *,
         owner_id: int | None = None,
         prefetch: bool = True,
     ):
-        _ = fiche_id
+        _ = context_id
         self.owner_id = owner_id
         self.db = db
         self._cache: dict[str, CacheEntry] = {}

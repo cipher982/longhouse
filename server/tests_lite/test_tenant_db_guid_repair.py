@@ -127,7 +127,7 @@ def test_scan_ignores_removed_legacy_memories_table(tmp_path):
             CREATE TABLE memories (
                 id TEXT PRIMARY KEY,
                 user_id INTEGER NOT NULL,
-                fiche_id INTEGER,
+                source_id INTEGER,
                 content TEXT NOT NULL,
                 type TEXT
             )
@@ -135,7 +135,7 @@ def test_scan_ignores_removed_legacy_memories_table(tmp_path):
         )
         conn.execute(
             """
-            INSERT INTO memories (id, user_id, fiche_id, content, type)
+            INSERT INTO memories (id, user_id, source_id, content, type)
             VALUES ('not-a-real-uuid', 1, NULL, 'hello', 'note')
             """
         )

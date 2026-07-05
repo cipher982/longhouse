@@ -31,8 +31,6 @@ def test_auth_router_aggregates_browser_and_sso_routes():
         "/auth/accept-handoff",
         "/auth/accept-native-handoff",
     } <= aggregate_paths
-    assert "/auth/google/gmail/start" not in aggregate_paths
-    assert "/auth/google/gmail" not in aggregate_paths
 
 
 def test_timeline_router_exposes_browser_archive_routes():

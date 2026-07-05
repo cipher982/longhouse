@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""Fail CI if pre-pivot product nouns return to the working tree."""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+SELF = Path(__file__).resolve()
+
+
+@dataclass(frozen=True)
+class Rule:
+    name: str
+    pattern: re.Pattern[str]
+
+
+RULES = (
+    Rule("old knowledge item noun", re.compile(r"\bfiches?\b|\bfiche_", re.IGNORECASE)),
+    Rule("old worker noun", re.compile(r"\bcommis\b|commis_|Commis")),
+    Rule("old sync service", re.compile(r"knowledge_sync", re.IGNORECASE)),
+    Rule("old mail API module", re.compile(r"gmail_api|gmail_refresh_token|/auth/google/gmail", re.IGNORECASE)),
+    Rule("old trigger config", re.compile(r"trigger_config", re.IGNORECASE)),
+    Rule("old cloud executor", re.compile(r"cloud_executor", re.IGNORECASE)),
+    Rule("old conversation service", re.compile(r"conversation_service", re.IGNORECASE)),
+    Rule("old mail conversation path", re.compile(r"email_conversation", re.IGNORECASE)),
+)
+
+
+def tracked_files() -> list[Path]:
+    output = subprocess.check_output(["git", "ls-files"], cwd=REPO, text=True)
+    return [REPO / line for line in output.splitlines() if line]
+
+
+def should_scan(path: Path) -> bool:
+    if path.resolve() == SELF:
+        return False
+    if path.suffix == ".lock":
+        return False
+    return path.is_file()
+
+
+def main() -> int:
+    failures: list[str] = []
+    for path in tracked_files():
+        if not should_scan(path):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        rel = path.relative_to(REPO)
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            for rule in RULES:
+                if rule.pattern.search(line):
+                    snippet = line.strip()
+                    if len(snippet) > 160:
+                        snippet = snippet[:157] + "..."
+                    failures.append(f"{rel}:{line_no}: {rule.name}: {snippet}")
+
+    if failures:
+        print("Legacy noun check failed. Rename or delete these pre-pivot references:")
+        for failure in failures:
+            print(f"  {failure}")
+        return 1
+
+    print("Legacy noun check passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

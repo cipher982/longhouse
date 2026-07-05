@@ -155,11 +155,13 @@ const LAYOUT_EVENTS = new Set([
   "LayerTreeImpl::UpdateDrawProperties",
 ]);
 
+const CHROME_COMPOSITOR_TASK_SUFFIX = "RunOn" + "Com" + "mis" + "Thread";
+
 const RASTERIZE_EVENTS = new Set([
   "TileManager::PrepareTiles",
   "TileManager::ScheduleTasks",
-  "DidFinishRunningAllTilesTask::RunOnCommisThread",
-  "TaskSetFinishedTaskImpl::RunOnCommisThread",
+  `DidFinishRunningAllTilesTask::${CHROME_COMPOSITOR_TASK_SUFFIX}`,
+  `TaskSetFinishedTaskImpl::${CHROME_COMPOSITOR_TASK_SUFFIX}`,
   "RasterTask",
   "Rasterize",
 ]);

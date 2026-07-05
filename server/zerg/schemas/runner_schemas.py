@@ -165,7 +165,7 @@ class RunnerJobResponse(UTCBaseModel):
 
     id: str  # UUID
     owner_id: int
-    commis_id: Optional[str] = None
+    correlation_id: Optional[str] = None
     run_id: Optional[str] = None
     runner_id: int
     command: str

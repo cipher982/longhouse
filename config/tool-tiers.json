@@ -45,8 +45,7 @@
     "browser":    { "icon": "B", "color": "cyan" },
     "search":     { "icon": "S", "color": "secondary" },
     "web":        { "icon": "S", "color": "secondary" },
-    "gdrive":     { "icon": "G", "color": "success" },
-    "gmail":      { "icon": "G", "color": "success" }
+    "gdrive":     { "icon": "G", "color": "success" }
   },
   "mcp_default_tier": "noise"
 }

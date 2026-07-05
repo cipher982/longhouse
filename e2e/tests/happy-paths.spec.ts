@@ -228,8 +228,8 @@ test.describe('Smoke Tests - Core Functionality', () => {
 
 test.describe('Thread Management', () => {
   test('THREAD 1: Create new thread - URL changes and thread appears', async ({ page }) => {
-    const ficheId = await createAutomationViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     const urlBeforeNewThread = page.url();
     const threadIdBeforeNewThread = urlBeforeNewThread.match(/\/thread\/([^/?]+)/)?.[1];
@@ -245,8 +245,8 @@ test.describe('Thread Management', () => {
   });
 
   test('THREAD 2: Switch threads - selected class changes', async ({ page }) => {
-    const ficheId = await createAutomationViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     // Create a second thread so we have two to switch between
     await createNewThread(page);
@@ -267,8 +267,8 @@ test.describe('Thread Management', () => {
   });
 
   test('THREAD 3: New thread starts empty - no message bleed', async ({ page }) => {
-    const ficheId = await createAutomationViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     // Send message in first thread
     const thread1Message = 'UNIQUE_MESSAGE_THREAD_ONE_12345';
@@ -293,8 +293,8 @@ test.describe('Thread Management', () => {
   });
 
   test('THREAD 4: Thread title editing', async ({ page }) => {
-    const ficheId = await createAutomationViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     // Create a new thread
     await createNewThread(page);
@@ -340,8 +340,8 @@ test.describe('Thread Management', () => {
 
 test.describe('Data Persistence', () => {
   test('PERSIST 1: Message persists after navigation', async ({ page }) => {
-    const ficheId = await createAutomationViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     const testMessage = 'Persistence test message';
     await sendMessage(page, testMessage);
@@ -352,15 +352,15 @@ test.describe('Data Persistence', () => {
     // Navigate away and back
     await waitForAutomationsReady(page);
 
-    await navigateToChat(page, ficheId);
+    await navigateToChat(page, automationId);
 
     // Message should still be there
     await expect(messagesContainer).toContainText(testMessage, { timeout: 15000 });
   });
 
   test('PERSIST 2: Message persists after page reload', async ({ page }) => {
-    const ficheId = await createAutomationViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     const persistentMessage = 'This should persist after reload';
     await sendMessage(page, persistentMessage);
@@ -389,10 +389,10 @@ test.describe('Data Persistence', () => {
 
 test.describe('URL Contract', () => {
   test('URL 1: No trailing slash bug - thread path always valid', async ({ page }) => {
-    const ficheId = await createAutomationViaUI(page);
+    const automationId = await createAutomationViaUI(page);
 
-    await page.locator(`[data-testid="chat-automation-${ficheId}"]`).click();
-    await page.waitForURL((url) => url.pathname.includes(`/automations/${ficheId}/thread`), { timeout: 10000 });
+    await page.locator(`[data-testid="chat-automation-${automationId}"]`).click();
+    await page.waitForURL((url) => url.pathname.includes(`/automations/${automationId}/thread`), { timeout: 10000 });
     await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 10000 });
 
     const url = page.url();
@@ -402,8 +402,8 @@ test.describe('URL Contract', () => {
   });
 
   test('URL 2: Thread ID preserved after sending message', async ({ page }) => {
-    const ficheId = await createAutomationViaUI(page);
-    await navigateToChat(page, ficheId);
+    const automationId = await createAutomationViaUI(page);
+    await navigateToChat(page, automationId);
 
     const urlBeforeSend = page.url();
     const threadIdBefore = urlBeforeSend.match(/\/thread\/([^/?]+)/)?.[1];

@@ -58,9 +58,6 @@ class User(Base):
     # Login tracking
     last_login = Column(DateTime, nullable=True)
 
-    # Legacy column kept for non-destructive schema compatibility.
-    gmail_refresh_token = Column(String, nullable=True)
-
     # Timestamps -------------------------------------------------------------
     created_at = Column(DateTime, server_default=func.now())
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())

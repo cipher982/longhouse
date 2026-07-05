@@ -21,6 +21,7 @@ PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 .PHONY: validate-dogfood-runtime
 .PHONY: validate-native-device-entrypoints
 .PHONY: perf-proof validate-perf-proof
+.PHONY: validate-legacy-nouns
 
 # ---------------------------------------------------------------------------
 # Help
@@ -329,6 +330,7 @@ validate: ## Run all contract checks
 	@$(MAKE) validate-build-identity
 	@$(MAKE) validate-playwright-install
 	@$(MAKE) validate-public-surface
+	@$(MAKE) validate-legacy-nouns
 	@$(MAKE) validate-managed-codex-contract
 	@$(MAKE) validate-managed-session-contract
 	@$(MAKE) validate-no-python-device-path
@@ -343,6 +345,9 @@ validate-playwright-install: ## @internal Playwright installer wrapper regressio
 
 validate-public-surface: ## @internal Guard public docs against private/local leakage
 	@python3 scripts/tests/public-surface-scan.test.py
+
+validate-legacy-nouns: ## @internal Guard against pre-pivot product nouns
+	@python3 scripts/qa/legacy-nouns-check
 
 validate-ship-monitor: ## @internal Ship monitor regression tests
 	@python3 scripts/tests/ship-monitor.test.py

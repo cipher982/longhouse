@@ -59,7 +59,7 @@ describe("Layout mobile navigation", () => {
   it("treats the mobile nav as a modal sheet with a dismissible scrim", async () => {
     authMocks.useAuth.mockReturnValue({
       user: {
-        email: "demo@gmail.com",
+        email: "demo@example.com",
         display_name: "Demo User",
         role: "ADMIN",
       },
@@ -105,7 +105,7 @@ describe("Layout user menu logout", () => {
   it("shows one Log out button on hosted tenants (no separate 'Log out everywhere')", () => {
     authMocks.useAuth.mockReturnValue({
       user: {
-        email: "david010@gmail.com",
+        email: "david010@example.com",
         display_name: "David",
         role: "ADMIN",
       },
@@ -136,7 +136,7 @@ describe("Layout user menu logout", () => {
   it("shows one Log out button on self-host tenants (no CP at all)", () => {
     authMocks.useAuth.mockReturnValue({
       user: {
-        email: "selfhost@gmail.com",
+        email: "selfhost@example.com",
         display_name: "Self Host",
         role: "ADMIN",
       },

@@ -523,15 +523,8 @@ async def debug_db_schema(
     if not settings.testing:
         raise HTTPException(status_code=403, detail="This endpoint is only available when TESTING=1.")
 
-    from sqlalchemy import text
-
     from zerg.database import get_session_factory
     from zerg.database import get_test_worker_id
-
-    # Check if fiches table exists and get count
-    tables_check = db.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='fiches'")).fetchone()
-    fiches_exists = tables_check is not None
-    fiches_count = db.execute(text("SELECT COUNT(*) FROM fiches")).scalar() if fiches_exists else None
 
     # Capture current DB url/path (use session factory bind to reflect worker routing)
     db_url = None
@@ -548,8 +541,6 @@ async def debug_db_schema(
 
     return {
         "dialect": "sqlite",
-        "fiches_exists": fiches_exists,
-        "fiches_count": fiches_count,
         "worker_id": get_test_worker_id(),
         "db_url": db_url,
         "db_path": db_path,

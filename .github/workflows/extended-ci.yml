@@ -25,7 +25,7 @@ jobs:
       # E2E tests use per-backend SQLite databases (no Postgres needed)
       FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
       # the runner has many cores; xdist -n auto can be too aggressive
-      PYTEST_XDIST_COMMIS: "8"
+      PYTEST_XDIST_WORKERS: "8"
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
     steps:

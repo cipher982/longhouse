@@ -65,7 +65,7 @@ EOF
 fi
 
 # Output scenario-appropriate message to stdout.
-# The commis_job_processor extracts a summary from this output,
+# The test harness extracts a summary from this output,
 # and E2E tests assert on evidence keywords (e.g., "45%").
 PROMPT_LOWER=$(echo "$PROMPT" | tr '[:upper:]' '[:lower:]')
 if echo "$PROMPT_LOWER" | grep -q "disk"; then

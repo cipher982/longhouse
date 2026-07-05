@@ -473,7 +473,7 @@ def delete_embeddings_cache() -> bool:
 # ---------------------------------------------------------------------------
 
 
-async def search_tools_for_fiche(
+async def search_tools_for_session(
     query: str,
     max_results: int = 5,
 ) -> dict:

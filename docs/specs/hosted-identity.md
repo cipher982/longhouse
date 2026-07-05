@@ -383,9 +383,8 @@ The table row carries:
 - `consumed: bool` (false initially)
 
 The CP exposes a small server-to-server API over the existing
-`X-Internal-Token: <instance_internal_api_secret>` header scheme
-(the same scheme used today for the Gmail handoff, see
-`control_plane/routers/auth.py:432`). No public mint endpoint.
+`X-Internal-Token: <instance_internal_api_secret>` header scheme. No
+public mint endpoint.
 
 Current hosted tenants share the same instance-internal secret. That
 secret is a coarse internal gate, not a per-tenant proof. The one-use
@@ -456,8 +455,7 @@ URL has the wrong `tenant_state` (or none) and is rejected.
    - Validates the request's `tenant_state` matches the
      `tenant_login_state` cookie (anti-CSRF).
    - Calls CP `POST /api/identity/exchange-handoff` with the
-     `code` and the header `X-Internal-Token: <secret>` (the
-     shared instance-internal secret, same as Gmail handoff).
+     `code` and the header `X-Internal-Token: <secret>`.
    - CP marks the handoff row `consumed=true`, returns the
      runtime JWT.
    - Tenant verifies the returned JWT against the CP JWKS
@@ -550,9 +548,8 @@ ordering, not compatibility phases.
   - `POST /api/identity/exchange-handoff` — tenant server-to-server
     call to swap a handoff code for a runtime JWT. Marks the
     handoff row consumed. Requires `X-Internal-Token:
-    <instance_internal_api_secret>` (the same scheme as the
-    existing Gmail handoff). Returns the runtime JWT plus the
-    standard claim set.
+    <instance_internal_api_secret>`. Returns the runtime JWT plus
+    the standard claim set.
 - Add `display_name` and `avatar_url` columns to CP `User` model in
   `control-plane/control_plane/models.py`. Populate from
   Google/GitHub userinfo in the OAuth callbacks. Make them optional
@@ -674,8 +671,7 @@ and David can install the bearer build in lockstep.
 ### Chunk D — Delete dead hosted auth and provisioning behavior
 
 - `control_plane/services/provisioner.py` stops writing
-  `LONGHOUSE_PASSWORD` to hosted tenant env. Hosted Google
-  credentials for Gmail integration stay.
+  `LONGHOUSE_PASSWORD` to hosted tenant env.
 - Remove CP issuance of hosted HS256 bridge tokens. CP
   `/dashboard/open-instance` and `/auth/start` both use the handoff
   code path for browser login.
@@ -772,8 +768,7 @@ Tenant:
   only.
 - **`POST /api/identity/runtime-token` (the former CP-internal mint) is
   not exposed.** Runtime tokens are minted only by first-party CP flows
-  such as handoff exchange, native open-instance, and hosted Gmail
-  callback.
+  such as handoff exchange and native open-instance.
 - **Anti-CSRF: tenant `accept-handoff` rejects requests where
   the `tenant_state` parameter does not match the
   `tenant_login_state` cookie, or where the cookie is missing.**
@@ -980,8 +975,7 @@ If you want to revisit any of them, do it before implementation ships.
    tenant subdomain, return_to, tenant_state CSRF nonce, 60-second
    expiry) in a server-side table keyed by the code hash. The
    tenant exchanges the code with the CP server-to-server
-   using the `X-Internal-Token` header (same auth scheme as
-    the existing Gmail handoff). The runtime JWT is never in a
+   using the `X-Internal-Token` header. The runtime JWT is never in a
     URL. iOS receives the runtime JWT in the custom-scheme deep
     link because the iOS app cannot hold the instance-internal
     secret; iOS uses its own local CSRF binding (a
