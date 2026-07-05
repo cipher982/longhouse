@@ -186,12 +186,43 @@ async def test_background_ingest_repair_stays_behind_machine_health_signals(tmp_
     presence = asyncio.create_task(serializer.execute(_make_write("presence"), label="presence"))
     heartbeat = asyncio.create_task(serializer.execute(_make_write("heartbeat"), label="heartbeat"))
     runtime = asyncio.create_task(serializer.execute(_make_write("runtime"), label="runtime-observations"))
+    live_operation = asyncio.create_task(
+        serializer.execute(_make_write("live-operation"), label="live-machine-control-operation")
+    )
+    live_result = asyncio.create_task(
+        serializer.execute(_make_write("live-result"), label="live-machine-control-result")
+    )
+    live_fail = asyncio.create_task(serializer.execute(_make_write("live-fail"), label="live-machine-control-fail"))
     result = asyncio.create_task(serializer.execute(_make_write("result"), label="machine-control-result"))
     reaper = asyncio.create_task(serializer.execute(_make_write("reaper"), label="machine-control-reaper"))
 
-    await asyncio.gather(first, replay, scan, presence, heartbeat, runtime, result, reaper)
+    await asyncio.gather(
+        first,
+        replay,
+        scan,
+        presence,
+        heartbeat,
+        runtime,
+        live_operation,
+        live_result,
+        live_fail,
+        result,
+        reaper,
+    )
 
-    assert run_order == ["first", "runtime", "result", "reaper", "presence", "heartbeat", "replay", "scan"]
+    assert run_order == [
+        "first",
+        "live-operation",
+        "live-result",
+        "live-fail",
+        "runtime",
+        "result",
+        "reaper",
+        "presence",
+        "heartbeat",
+        "replay",
+        "scan",
+    ]
 
 
 @pytest.mark.asyncio

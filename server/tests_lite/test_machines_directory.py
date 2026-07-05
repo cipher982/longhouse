@@ -26,7 +26,9 @@ from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 from zerg.database import Base  # noqa: E402
 from zerg.database import get_db  # noqa: E402
+from zerg.database import initialize_live_database  # noqa: E402
 from zerg.database import make_engine  # noqa: E402
+from zerg.database import make_live_engine  # noqa: E402
 from zerg.dependencies.agents_auth import require_single_tenant  # noqa: E402
 from zerg.dependencies.agents_auth import verify_agents_token  # noqa: E402
 from zerg.dependencies.browser_auth import get_current_browser_user  # noqa: E402
@@ -48,6 +50,27 @@ def _make_db(tmp_path):
     engine = engine.execution_options(schema_translate_map={"agents": None})
     Base.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
+
+
+def _make_live_db(tmp_path):
+    db_path = tmp_path / "test_machines_live.db"
+    engine = make_live_engine(f"sqlite:///{db_path}")
+    initialize_live_database(engine)
+    return engine, sessionmaker(bind=engine)
+
+
+class _InlineLiveSerializer:
+    is_configured = True
+
+    def __init__(self, session_factory):
+        self.session_factory = session_factory
+
+    async def execute(self, fn, *, auto_commit=True, label="", **_kwargs):
+        with self.session_factory() as db:
+            result = fn(db)
+            if auto_commit:
+                db.commit()
+            return result
 
 
 def _seed_user(SessionLocal, *, user_id: int = OWNER_ID, email: str | None = None):
@@ -443,6 +466,52 @@ def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):
     done_body = done_resp.json()
     assert done_body["status"] == "succeeded"
     assert done_body["result"]["artifact"]["verdict"] == "green"
+
+
+def test_provider_live_proof_route_uses_live_store_operation_when_configured(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    live_engine, LiveSession = _make_live_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    websocket = _CompletingWebSocket(registry, owner_id=OWNER_ID, device_id="cinder")
+    _register(
+        registry,
+        owner_id=OWNER_ID,
+        device_id="cinder",
+        supports=("claude.live_proof",),
+        websocket=websocket,
+    )
+
+    def archive_operation_must_not_be_required(*_args, **_kwargs):
+        raise AssertionError("provider-live operation should be created in live store")
+
+    original, module = _swap_agents_machines_registry(registry)
+    monkeypatch.setattr(module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(module.database_module, "get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr(module, "get_live_write_serializer", lambda: _InlineLiveSerializer(LiveSession))
+    monkeypatch.setattr(module, "create_provider_live_proof_operation", archive_operation_must_not_be_required)
+    try:
+        client, api_app = _make_agents_client(SessionLocal)
+        try:
+            resp = client.post(
+                "/api/agents/machines/cinder/provider-live-proof",
+                json={
+                    "provider": "claude",
+                    "expected_provider_version": "2.1.153",
+                },
+            )
+            body = resp.json()
+            running_resp = client.get(body["status_url"])
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+        live_engine.dispose()
+
+    assert resp.status_code == 202, resp.text
+    assert running_resp.status_code == 200, running_resp.text
+    assert running_resp.json()["status"] == "running"
+    assert websocket.sent[0]["command_id"] == f"machine-op:{body['operation_id']}"
 
 
 def test_provider_live_proof_route_rejects_machine_without_provider_support(tmp_path):

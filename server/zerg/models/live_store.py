@@ -145,6 +145,43 @@ class LiveSessionLivePreview(LiveBase):
     )
 
 
+class LiveMachineControlOperation(LiveBase):
+    """Hot-lane lifecycle for machine-control work that outlives one request."""
+
+    __tablename__ = "live_machine_control_operations"
+
+    id = Column(String(36), primary_key=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    device_id = Column(String(255), nullable=False, index=True)
+    command_type = Column(String(64), nullable=False, index=True)
+    command_id = Column(String(96), nullable=False, index=True)
+    provider = Column(String(64), nullable=True, index=True)
+    status = Column(String(32), nullable=False, server_default=text("'queued'"))
+    request_json = Column(Text, nullable=False)
+    result_json = Column(Text, nullable=True)
+    error_json = Column(Text, nullable=True)
+    timeout_secs = Column(Integer, nullable=False, server_default=text("120"))
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        Index("ix_live_machine_control_ops_owner_status", "owner_id", "status", "created_at"),
+        Index("ix_live_machine_control_ops_command", "command_id", unique=True),
+        Index(
+            "ux_live_machine_control_provider_live_active",
+            "owner_id",
+            "device_id",
+            "provider",
+            "command_type",
+            unique=True,
+            sqlite_where=text("status IN ('queued', 'running') AND provider IS NOT NULL AND command_type = 'provider.live_proof'"),
+        ),
+    )
+
+
 class LiveArchiveOutbox(LiveBase):
     __tablename__ = "live_archive_outbox"
 

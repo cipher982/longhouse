@@ -12,13 +12,16 @@ from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
 from sqlalchemy.orm import Session
 
+import zerg.database as database_module
 from zerg.config import get_settings
 from zerg.database import get_session_factory
 from zerg.models.device_token import DeviceToken
 from zerg.routers.device_tokens import validate_device_token
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.machine_control_operations import reconcile_live_machine_control_operation_from_command_result
 from zerg.services.machine_control_operations import reconcile_machine_control_operation_from_command_result
 from zerg.services.remote_session_launch import reconcile_launch_from_command_result
+from zerg.services.write_serializer import get_live_write_serializer
 from zerg.services.write_serializer import get_write_serializer
 
 logger = logging.getLogger(__name__)
@@ -49,6 +52,21 @@ async def _reconcile_machine_control_operation_result(
     owner_id: int,
     device_id: str,
 ) -> bool:
+    if database_module.live_store_configured():
+        live_ws = get_live_write_serializer()
+        if live_ws.is_configured:
+            matched = await live_ws.execute(
+                lambda live_db: reconcile_live_machine_control_operation_from_command_result(
+                    live_db,
+                    message,
+                    owner_id=owner_id,
+                    device_id=device_id,
+                ),
+                auto_commit=False,
+                label="live-machine-control-result",
+            )
+            if matched:
+                return True
     return await get_write_serializer().execute_or_direct(
         lambda write_db: reconcile_machine_control_operation_from_command_result(
             write_db,

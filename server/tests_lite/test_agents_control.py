@@ -48,6 +48,49 @@ async def test_machine_control_result_reconcile_uses_write_serializer(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_machine_control_result_reconcile_prefers_live_serializer(monkeypatch):
+    calls = []
+
+    class FakeLiveSerializer:
+        is_configured = True
+
+        async def execute(self, fn, *, auto_commit, label):
+            calls.append(("live_execute", label, auto_commit))
+            return fn("live-db")
+
+    def fake_live_reconcile(db, message, *, owner_id, device_id):
+        calls.append(("live_reconcile", db, message["command_id"], owner_id, device_id))
+        return True
+
+    def archive_reconcile_must_not_run(*_args, **_kwargs):
+        raise AssertionError("live machine-control operations should reconcile before archive")
+
+    monkeypatch.setattr("zerg.routers.agents_control.database_module.live_store_configured", lambda: True)
+    monkeypatch.setattr("zerg.routers.agents_control.get_live_write_serializer", lambda: FakeLiveSerializer())
+    monkeypatch.setattr(
+        "zerg.routers.agents_control.reconcile_live_machine_control_operation_from_command_result",
+        fake_live_reconcile,
+    )
+    monkeypatch.setattr(
+        "zerg.routers.agents_control.reconcile_machine_control_operation_from_command_result",
+        archive_reconcile_must_not_run,
+    )
+
+    matched = await _reconcile_machine_control_operation_result(
+        "fallback-db",
+        {"command_id": "machine-op:test"},
+        owner_id=7,
+        device_id="cinder",
+    )
+
+    assert matched is True
+    assert calls == [
+        ("live_execute", "live-machine-control-result", False),
+        ("live_reconcile", "live-db", "machine-op:test", 7, "cinder"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_late_launch_result_reconcile_uses_write_serializer(monkeypatch):
     calls = []
 

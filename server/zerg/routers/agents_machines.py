@@ -14,6 +14,7 @@ from fastapi import HTTPException
 from fastapi import Query
 from sqlalchemy.orm import Session
 
+import zerg.database as database_module
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -34,14 +35,18 @@ from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE
 from zerg.services.agent_heartbeat_health import list_machine_transport_health
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.machine_control_operations import ActiveMachineControlOperationError
+from zerg.services.machine_control_operations import create_live_provider_live_proof_operation
 from zerg.services.machine_control_operations import create_provider_live_proof_operation
+from zerg.services.machine_control_operations import fail_live_machine_control_operation
 from zerg.services.machine_control_operations import fail_machine_control_operation
+from zerg.services.machine_control_operations import get_live_machine_control_operation_for_owner
 from zerg.services.machine_control_operations import get_machine_control_operation_for_owner
 from zerg.services.machine_control_operations import machine_control_operation_to_response
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.observability_views import build_machine_health_list_response
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.workspace_suggestions import build_workspace_suggestions
+from zerg.services.write_serializer import get_live_write_serializer
 
 router = APIRouter(prefix="/agents/machines", tags=["agents"])
 
@@ -175,6 +180,9 @@ def get_machine_control_operation(
     _single: None = Depends(require_single_tenant),
 ) -> MachineControlOperationResponse:
     owner_id = _resolve_agents_owner_id(db, device_token)
+    operation = _get_live_machine_control_operation(owner_id=owner_id, operation_id=operation_id)
+    if operation is not None:
+        return MachineControlOperationResponse(**machine_control_operation_to_response(operation))
     operation = get_machine_control_operation_for_owner(db, owner_id=owner_id, operation_id=operation_id)
     if operation is None:
         raise HTTPException(status_code=404, detail="Machine control operation not found")
@@ -207,7 +215,7 @@ async def run_provider_live_proof(
     machine_timeout_secs = _provider_live_proof_machine_timeout_secs(request)
     operation_timeout_secs = machine_timeout_secs + PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS
     try:
-        operation = create_provider_live_proof_operation(
+        operation = await _create_provider_live_proof_operation(
             db,
             owner_id=owner_id,
             device_id=device_id,
@@ -230,7 +238,7 @@ async def run_provider_live_proof(
         command_id=operation.command_id,
     )
     if not command.transport_ok:
-        fail_machine_control_operation(
+        await _fail_provider_live_proof_operation(
             db,
             operation,
             code="machine_control_dispatch_failed",
@@ -258,3 +266,71 @@ def _provider_live_proof_machine_timeout_secs(request: ProviderLiveProofRequest)
     if request.timeout_secs is not None:
         return request.timeout_secs
     return 120
+
+
+def _get_live_machine_control_operation(*, owner_id: int, operation_id: str):
+    if not database_module.live_store_configured():
+        return None
+    live_session_factory = database_module.get_live_session_factory()
+    if live_session_factory is None:
+        return None
+    with live_session_factory() as live_db:
+        return get_live_machine_control_operation_for_owner(live_db, owner_id=owner_id, operation_id=operation_id)
+
+
+async def _create_provider_live_proof_operation(
+    db: Session,
+    *,
+    owner_id: int,
+    device_id: str,
+    provider: str,
+    request_payload: dict,
+    timeout_secs: int,
+):
+    if database_module.live_store_configured():
+        live_ws = get_live_write_serializer()
+        if live_ws.is_configured:
+            return await live_ws.execute(
+                lambda live_db: create_live_provider_live_proof_operation(
+                    live_db,
+                    owner_id=owner_id,
+                    device_id=device_id,
+                    provider=provider,
+                    request_payload=request_payload,
+                    timeout_secs=timeout_secs,
+                ),
+                auto_commit=False,
+                label="live-machine-control-operation",
+            )
+    return create_provider_live_proof_operation(
+        db,
+        owner_id=owner_id,
+        device_id=device_id,
+        provider=provider,
+        request_payload=request_payload,
+        timeout_secs=timeout_secs,
+    )
+
+
+async def _fail_provider_live_proof_operation(
+    db: Session,
+    operation,
+    *,
+    code: str,
+    message: str,
+) -> None:
+    if operation.__class__.__name__ == "LiveMachineControlOperation":
+        live_ws = get_live_write_serializer()
+        if live_ws.is_configured:
+            await live_ws.execute(
+                lambda live_db: fail_live_machine_control_operation(
+                    live_db,
+                    operation,
+                    code=code,
+                    message=message,
+                ),
+                auto_commit=False,
+                label="live-machine-control-fail",
+            )
+            return
+    fail_machine_control_operation(db, operation, code=code, message=message)
