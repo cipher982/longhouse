@@ -6,7 +6,7 @@ import logging
 from typing import Any
 from typing import Dict
 
-from zerg.context import get_commis_context
+from zerg.connectors.context import get_credential_resolver
 from zerg.crud import get_user
 from zerg.database import db_session
 from zerg.services.telegram_format import format_for_telegram
@@ -26,12 +26,12 @@ _DESCRIPTION = (
 
 def _resolve_chat_id() -> tuple[str | None, Dict[str, Any] | None]:
     """Return (chat_id, None) or (None, error_dict)."""
-    ctx = get_commis_context()
-    owner_id = ctx.owner_id if ctx else None
+    resolver = get_credential_resolver()
+    owner_id = resolver.owner_id if resolver else None
     if owner_id is None:
         return None, tool_error(
             error_type=ErrorType.EXECUTION_ERROR,
-            user_message="send_telegram requires a commis context with owner information.",
+            user_message="send_telegram requires authenticated execution context.",
         )
 
     with db_session() as db:

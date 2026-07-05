@@ -12,7 +12,6 @@ from pydantic import Field
 
 from zerg.config import get_settings
 from zerg.connectors.context import get_credential_resolver
-from zerg.context import get_commis_context
 from zerg.crud import memory_crud
 from zerg.database import db_session
 from zerg.services import memory_embeddings
@@ -31,10 +30,6 @@ MEMORY_FILE_TOOL_NAMES: frozenset[str] = frozenset({"memory_write", "memory_read
 
 def _get_owner_id() -> int | None:
     """Resolve owner_id from execution context."""
-    commis_ctx = get_commis_context()
-    if commis_ctx and commis_ctx.owner_id:
-        return commis_ctx.owner_id
-
     resolver = get_credential_resolver()
     if resolver and resolver.owner_id:
         return resolver.owner_id

@@ -47,7 +47,7 @@ class _FakeDispatcher:
         }
 
 
-def test_runner_exec_uses_credential_resolver_when_no_commis_context():
+def test_runner_exec_uses_credential_resolver():
     fake_db = _FakeDb()
     dispatcher = _FakeDispatcher()
     runner = SimpleNamespace(
@@ -58,7 +58,6 @@ def test_runner_exec_uses_credential_resolver_when_no_commis_context():
     )
 
     with (
-        patch("zerg.tools.builtin.runner_tools.get_commis_context", return_value=None),
         patch(
             "zerg.tools.builtin.runner_tools.get_credential_resolver",
             return_value=SimpleNamespace(owner_id=42),
@@ -94,7 +93,6 @@ def test_runner_exec_uses_credential_resolver_when_no_commis_context():
 
 def test_runner_exec_requires_authenticated_context():
     with (
-        patch("zerg.tools.builtin.runner_tools.get_commis_context", return_value=None),
         patch("zerg.tools.builtin.runner_tools.get_credential_resolver", return_value=None),
     ):
         result = runner_tools.runner_exec("demo-machine", "hostname")

@@ -16,7 +16,6 @@ from typing import List
 
 from zerg.config import get_settings
 from zerg.connectors.context import get_credential_resolver
-from zerg.context import get_commis_context
 from zerg.crud import runner_crud
 from zerg.database import get_db
 from zerg.services.command_validator import CommandValidator
@@ -88,19 +87,12 @@ def _resolve_execution_context() -> tuple[int | None, str | None, int | None]:
     """Resolve owner/run context for runner execution.
 
     runner_exec needs an authenticated owner for security filtering, but it can
-    be called from two execution paths:
-    - commis jobs, which provide CommisContext
-    - Runtime runs, which provide CredentialResolver context only
+    be called by runtime runs that provide CredentialResolver context.
 
     Returns:
-        Tuple of (owner_id, commis_id, run_id). For direct runtime runs, commis_id and
-        run_id are None because direct runner execution does not flow through a
-        commis job.
+        Tuple of (owner_id, commis_id, run_id). The legacy commis_id field is
+        kept on runner jobs for schema compatibility and is no longer populated.
     """
-    ctx = get_commis_context()
-    if ctx and ctx.owner_id is not None:
-        return ctx.owner_id, ctx.commis_id, ctx.run_id
-
     resolver = get_credential_resolver()
     owner_id = resolver.owner_id if resolver and resolver.owner_id is not None else None
     return owner_id, None, None
@@ -113,9 +105,9 @@ def runner_exec(
 ) -> Dict[str, Any]:
     """Execute a command on a user-owned runner.
 
-    This tool enables runtime or commis flows to execute commands on
-    user-managed compute infrastructure (laptops, servers, containers)
-    without the backend needing SSH keys or direct access.
+    This tool enables runtime flows to execute commands on user-managed compute
+    infrastructure (laptops, servers, containers) without the backend needing
+    SSH keys or direct access.
 
     Target resolution:
     - "laptop", "home-server", etc: Resolved by name (user-specific)
@@ -305,7 +297,7 @@ TOOLS: List[StructuredTool] = [
         name="runner_exec",
         description=(
             "Execute a shell command on a user-owned runner (laptop, server, container). "
-            "Available to runtime and commis flows. Use target name (e.g., 'laptop') "
+            "Available to runtime execution flows. Use target name (e.g., 'laptop') "
             "or explicit ID (e.g., 'runner:123'). Returns exit code, stdout, stderr, and duration. "
             "Non-zero exit codes are not errors - they indicate the command ran but returned a failure code."
         ),

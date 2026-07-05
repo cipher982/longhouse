@@ -22,8 +22,8 @@ Usage in a coordinator loop:
         llm = llm.bind_tools(tools)
         binder.clear_rebind_flag()
 
-Usage for commis:
-    binder = LazyToolBinder(registry, core_tools=COMMIS_CORE_TOOLS)
+Usage for execution agents:
+    binder = LazyToolBinder(registry, core_tools=EXECUTION_CORE_TOOLS)
 """
 
 from __future__ import annotations
@@ -61,7 +61,7 @@ CORE_TOOLS: frozenset[str] = frozenset(
 )
 
 # Core tools for execution-focused agents.
-COMMIS_CORE_TOOLS: frozenset[str] = frozenset(
+EXECUTION_CORE_TOOLS: frozenset[str] = frozenset(
     [
         "datetime_diff",
         "get_current_time",
