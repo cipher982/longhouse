@@ -53,9 +53,6 @@ def check_environment():
         if not os.getenv("GOOGLE_CLIENT_SECRET"):
             errors.append("GOOGLE_CLIENT_SECRET is missing (required when auth enabled)")
 
-    if not os.getenv("TRIGGER_SIGNING_SECRET"):
-        errors.append("TRIGGER_SIGNING_SECRET is missing")
-
     return errors
 
 

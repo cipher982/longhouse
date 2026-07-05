@@ -168,28 +168,6 @@ def _get_or_create_fernet_secret() -> str:
     return key
 
 
-def _get_or_create_trigger_secret() -> str:
-    """Get or create a persistent TRIGGER_SIGNING_SECRET for lite mode.
-
-    Stores the secret in ~/.longhouse/trigger.key for persistence across restarts.
-    """
-    secret_file = _get_longhouse_home() / "trigger.key"
-
-    if secret_file.exists():
-        return secret_file.read_text().strip()
-
-    # Generate a 64-char hex string (32 bytes)
-    key = secrets.token_hex(32)
-
-    fd = os.open(str(secret_file), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        os.write(fd, key.encode())
-    finally:
-        os.close(fd)
-
-    return key
-
-
 def _mask_db_url(url: str) -> str:
     """Mask sensitive parts of a database URL for display."""
     if not url or url.startswith("sqlite"):
@@ -216,7 +194,7 @@ def _apply_lite_mode_defaults(*, public_intent: bool = False) -> None:
     - SQLite database in ~/.longhouse/longhouse.db
     - Auth disabled (single-user local install) ONLY on a loopback bind
     - Single-tenant mode
-    - Auto-generated secrets (FERNET_SECRET, TRIGGER_SIGNING_SECRET)
+    - Auto-generated FERNET_SECRET
 
     ``public_intent`` is True when the operator asked to bind beyond loopback
     (``--host 0.0.0.0``/``::`` or ``--domain``). In that case we do NOT silently
@@ -240,10 +218,6 @@ def _apply_lite_mode_defaults(*, public_intent: bool = False) -> None:
     # FERNET_SECRET (required by crypto module)
     if not os.environ.get("FERNET_SECRET"):
         os.environ["FERNET_SECRET"] = _get_or_create_fernet_secret()
-
-    # TRIGGER_SIGNING_SECRET (required for webhook triggers, persisted like FERNET)
-    if not os.environ.get("TRIGGER_SIGNING_SECRET"):
-        os.environ["TRIGGER_SIGNING_SECRET"] = _get_or_create_trigger_secret()
 
 
 def _get_pid_file() -> Path:

@@ -43,7 +43,6 @@ services:
       DATABASE_URL: sqlite:////app/data/dev.db
       JWT_SECRET: ${JWT_SECRET:-dev_jwt_secret_change_in_production}
       FERNET_SECRET: ${FERNET_SECRET:-dev_fernet_secret_32_chars_long!}
-      TRIGGER_SIGNING_SECRET: ${TRIGGER_SIGNING_SECRET:-dev_trigger_secret}
       AUTH_DISABLED: ${AUTH_DISABLED:-1}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}

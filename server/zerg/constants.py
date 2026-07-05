@@ -26,36 +26,6 @@ AUTOMATIONS_PREFIX = "/automations"
 THREADS_PREFIX = "/threads"
 MODELS_PREFIX = "/models"
 
-# ---------------------------------------------------------------------------
-# Trigger HMAC signing secret – used by /api/triggers/{id}/events HMAC
-# verification (Stage 5 of auth hardening roadmap).
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# In production deployments users *must* provide an explicit
-# ``TRIGGER_SIGNING_SECRET``.  Tests, local dev setups or documentation
-# generation, however, should not break just because the environment variable
-# is missing.  We therefore fall back to a deterministic placeholder when the
-# variable is absent **and** the ``TESTING`` flag is set.
-# ---------------------------------------------------------------------------
-
-# Resolve trigger signing secret from unified settings.  In *production* the
-# value **must** be provided; in *testing* mode we fall back to the deterministic
-# value used across the suite so cryptographic checks stay reproducible.
-
-if _settings.trigger_signing_secret is not None:
-    TRIGGER_SIGNING_SECRET: Final[str] = _settings.trigger_signing_secret
-else:
-    if _settings.testing:
-        TRIGGER_SIGNING_SECRET = "super-secret-hex"  # noqa: S105 – test only
-    else:
-        raise KeyError(
-            "TRIGGER_SIGNING_SECRET is not set. This secret is required for " "secure webhook triggering in production deployments."
-        )
-
-# Accept ±5 minutes clock skew for HMAC timestamp header
-TRIGGER_TIMESTAMP_TOLERANCE_S: int = 300
-
 
 def get_full_path(relative_path: str) -> str:  # noqa: D401 – tiny helper
     """Return absolute API path by joining *relative_path* onto API_PREFIX."""

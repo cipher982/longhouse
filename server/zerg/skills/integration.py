@@ -221,7 +221,7 @@ def get_skill_tool_names(skill_context: SkillContext) -> List[str]:
 class SkillIntegration:
     """High-level skill integration for runs.
 
-    Provides a simple interface for integrating skills into fiche execution.
+    Provides a simple interface for integrating skills into runtime execution.
 
     Example:
         integration = SkillIntegration(

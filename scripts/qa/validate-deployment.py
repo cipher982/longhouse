@@ -26,7 +26,6 @@ def validate_environment():
         ("DATABASE_URL", "Database connection string"),
         ("JWT_SECRET", "JWT signing secret (>=16 chars)"),
         ("FERNET_SECRET", "Encryption key for data security"),
-        ("TRIGGER_SIGNING_SECRET", "Webhook security signing secret"),
     ]
 
     conditional_vars = [

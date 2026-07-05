@@ -179,7 +179,6 @@ class Settings:  # noqa: D401 – simple data container
     google_client_secret: str | None
     github_client_id: str | None
     github_client_secret: str | None
-    trigger_signing_secret: str | None
 
     # Database ---------------------------------------------------------
     database_url: str
@@ -211,9 +210,6 @@ class Settings:  # noqa: D401 – simple data container
     public_api_url: str | None
     runner_docker_image: str
     runner_binary_tag: str  # GitHub release tag for runner binaries
-    # Pub/Sub OIDC audience --------------------------------------------
-    pubsub_audience: str | None
-    pubsub_sa_email: str | None
     # User/account limits ----------------------------------------------
     max_users: int
     admin_emails: str  # comma-separated list
@@ -559,7 +555,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
         github_client_id=os.getenv("GITHUB_CLIENT_ID"),
         github_client_secret=os.getenv("GITHUB_CLIENT_SECRET"),
-        trigger_signing_secret=os.getenv("TRIGGER_SIGNING_SECRET"),
         database_url=database_url,
         live_database_url=live_database_url,
         archive_root=archive_root,
@@ -588,8 +583,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         umami_tag=_env_or_fallback("UMAMI_TAG", "VITE_UMAMI_TAG") or "prod",
         runner_docker_image=os.getenv("RUNNER_DOCKER_IMAGE", "ghcr.io/cipher982/longhouse-runner:latest"),
         runner_binary_tag=os.getenv("RUNNER_BINARY_TAG", "runner-v0.1.7"),
-        pubsub_audience=os.getenv("PUBSUB_AUDIENCE"),
-        pubsub_sa_email=os.getenv("PUBSUB_SA_EMAIL"),
         max_users=int(os.getenv("MAX_USERS", "20")),
         admin_emails=os.getenv("ADMIN_EMAILS", os.getenv("ADMIN_EMAIL", "")),
         allowed_models_non_admin=os.getenv("ALLOWED_MODELS_NON_ADMIN", ""),

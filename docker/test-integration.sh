@@ -100,7 +100,6 @@ if docker run --rm -d \
     -e DATABASE_URL="sqlite:///tmp/test.db" \
     -e JWT_SECRET="test_secret" \
     -e FERNET_SECRET="test_fernet_secret_32chars_long!" \
-    -e TRIGGER_SIGNING_SECRET="test_trigger" \
     -e AUTH_DISABLED=1 \
     -p 8001:8000 \
     zerg-backend:test; then
@@ -170,7 +169,6 @@ cat > .env.test << EOF
 POSTGRES_PASSWORD=test_password
 JWT_SECRET=test_jwt_secret_change_in_production
 FERNET_SECRET=test_fernet_secret_32chars_long!!
-TRIGGER_SIGNING_SECRET=test_trigger_secret
 OPENAI_API_KEY=sk-test-key
 EOF
 

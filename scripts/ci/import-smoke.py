@@ -42,7 +42,6 @@ def import_check():
     os.environ.setdefault("AUTH_DISABLED", "1")
     os.environ.setdefault("SINGLE_TENANT", "1")
     os.environ.setdefault("FERNET_SECRET", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
-    os.environ.setdefault("TRIGGER_SIGNING_SECRET", "a" * 64)
     os.environ.setdefault("TESTING", "1")
 
     modules = [

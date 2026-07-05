@@ -130,10 +130,6 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "projection-reconcile": 70,
     # Background queue maintenance is lowest priority.
     "task-resurrect": 85,
-    "commis-claim": 85,
-    "commis-reclaim": 85,
-    "commis-reclaim-async": 85,
-    "commis-heartbeat": 85,
     "job-run": 90,
 }
 
