@@ -156,11 +156,25 @@ def run_best_effort_session_turn_write(
         return None
 
 
+def _log_background_session_turn_write_failure(task: asyncio.Task, *, label: str) -> None:
+    try:
+        exc = task.exception()
+    except asyncio.CancelledError:
+        return
+    if exc is not None:
+        logger.warning(
+            "Background session turn write failed for %s",
+            label,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+
+
 async def execute_session_turn_write(
     *,
     db_bind,
     label: str,
     fn: Callable[[Session], T],
+    timeout_seconds: float | None = None,
 ) -> T:
     ws = get_write_serializer()
     if ws.is_configured:
@@ -168,8 +182,40 @@ async def execute_session_turn_write(
             make_sessionmaker(db_bind),
             fn,
             label=label,
+            timeout_seconds=timeout_seconds,
         )
-    return await asyncio.to_thread(run_session_turn_write, db_bind=db_bind, fn=fn)
+    if timeout_seconds is None:
+        return await asyncio.to_thread(run_session_turn_write, db_bind=db_bind, fn=fn)
+    task = asyncio.create_task(asyncio.to_thread(run_session_turn_write, db_bind=db_bind, fn=fn))
+    task.add_done_callback(lambda done: _log_background_session_turn_write_failure(done, label=label))
+    try:
+        return await asyncio.wait_for(asyncio.shield(task), timeout=timeout_seconds)
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Session turn write timed out for %s after %.1fs; continuing in background",
+            label,
+            timeout_seconds,
+        )
+        raise
+
+
+async def execute_best_effort_session_turn_write(
+    *,
+    db_bind,
+    label: str,
+    fn: Callable[[Session], T],
+    timeout_seconds: float | None = None,
+) -> T | None:
+    try:
+        return await execute_session_turn_write(
+            db_bind=db_bind,
+            label=label,
+            fn=fn,
+            timeout_seconds=timeout_seconds,
+        )
+    except Exception:
+        logger.warning("Session turn write failed for %s", label, exc_info=True)
+        return None
 
 
 def create_session_turn(

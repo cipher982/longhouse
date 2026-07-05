@@ -328,6 +328,59 @@ def test_managed_local_codex_dispatch_returns_json_ack(monkeypatch, tmp_path):
             api_app_ref.dependency_overrides = {}
 
 
+def test_managed_local_send_live_ack_survives_archive_turn_write_timeout(monkeypatch, tmp_path):
+    """send-live should ACK provider acceptance even if archive turn writes lag."""
+    session_local = _make_db(tmp_path)
+
+    class TimeoutTurnWriter:
+        is_configured = True
+
+        async def execute_with_session_factory(self, *_args, **_kwargs):
+            raise TimeoutError("archive turn writer saturated")
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+        calls: list[dict[str, object]] = []
+
+        async def fake_send_text(
+            *,
+            db,
+            owner_id,
+            session,
+            text,
+            request_id=None,
+            timeout_secs=15,
+            verify_turn_started=False,
+            verification_timeout_secs=None,
+            attachments=None,
+        ):
+            calls.append({"session_id": str(session.id), "text": text, "request_id": request_id})
+            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
+
+        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
+        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
+        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation", lambda **_kwargs: None)
+        monkeypatch.setattr("zerg.services.session_turns.get_write_serializer", lambda: TimeoutTurnWriter())
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/send-live",
+                json={"message": "continue while archive is slow"},
+            )
+            assert response.status_code == 200, response.text
+            data = response.json()
+            assert data["accepted"] is True
+            assert data["session_id"] == str(source_session.id)
+            assert len(calls) == 1
+            assert calls[0]["text"] == "continue while archive is slow"
+            assert db.query(SessionTurn).filter(SessionTurn.session_id == source_session.id).count() == 0
+        finally:
+            asyncio.run(session_lock_manager.release(str(source_session.id)))
+            api_app_ref.dependency_overrides = {}
+
+
 def test_managed_local_draft_reply_returns_prefill(monkeypatch, tmp_path):
     """Draft reply generates a composer prefill without dispatching to the live session."""
     session_local = _make_db(tmp_path)

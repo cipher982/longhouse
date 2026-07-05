@@ -69,6 +69,7 @@ from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
 from zerg.services.session_turns import SESSION_TURN_ERROR_TURN_TIMEOUT
 from zerg.services.session_turns import SESSION_TURN_ERROR_VERIFICATION_TIMEOUT
 from zerg.services.session_turns import create_session_turn
+from zerg.services.session_turns import execute_best_effort_session_turn_write
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import mark_session_turn_active
 from zerg.services.session_turns import mark_session_turn_failed
@@ -88,6 +89,7 @@ _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
 MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS = 300.0
 MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 10.0
 MANAGED_LOCAL_POST_DURABLE_TERMINAL_GRACE_SECS = 0.5
+MANAGED_LOCAL_TURN_ARCHIVE_ACK_TIMEOUT_SECS = 0.25
 _MANAGED_LOCAL_ACTIVE_PHASES = frozenset({"thinking", "running"})
 _MANAGED_LOCAL_TERMINAL_PHASES = frozenset({"idle", "needs_user", "blocked"})
 _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
@@ -930,6 +932,80 @@ def _managed_local_send_failure_code(send_result) -> str:
     return SESSION_TURN_ERROR_SEND_FAILED
 
 
+def _mark_managed_local_turn_send_accepted(
+    db: Session,
+    *,
+    session_id: UUID,
+    request_id: str,
+    baseline_event_id: int,
+    baseline_observation_cursor: int,
+    user_submitted_at: datetime,
+    expected_user_text: str,
+    accepted_at: datetime,
+    user_event_id: int | None,
+    session_input_id: int | None,
+) -> bool:
+    create_session_turn(
+        db,
+        session_id=session_id,
+        request_id=request_id,
+        baseline_event_id=baseline_event_id,
+        baseline_observation_cursor=baseline_observation_cursor,
+        user_submitted_at=user_submitted_at,
+        expected_user_text=expected_user_text,
+        session_input_id=session_input_id,
+    )
+    return mark_session_turn_send_accepted(
+        db,
+        session_id=session_id,
+        request_id=request_id,
+        accepted_at=accepted_at,
+        user_event_id=user_event_id,
+        session_input_id=session_input_id,
+    )
+
+
+def _mark_managed_local_turn_failed_for_send(
+    db: Session,
+    *,
+    session_id: UUID,
+    request_id: str,
+    baseline_event_id: int,
+    baseline_observation_cursor: int,
+    user_submitted_at: datetime,
+    expected_user_text: str,
+    accepted_at: datetime,
+    user_event_id: int | None,
+    session_input_id: int | None,
+    error_code: str,
+) -> bool:
+    create_session_turn(
+        db,
+        session_id=session_id,
+        request_id=request_id,
+        baseline_event_id=baseline_event_id,
+        baseline_observation_cursor=baseline_observation_cursor,
+        user_submitted_at=user_submitted_at,
+        expected_user_text=expected_user_text,
+        session_input_id=session_input_id,
+    )
+    if error_code == SESSION_TURN_ERROR_VERIFICATION_TIMEOUT:
+        mark_session_turn_send_accepted(
+            db,
+            session_id=session_id,
+            request_id=request_id,
+            accepted_at=accepted_at,
+            user_event_id=user_event_id,
+            session_input_id=session_input_id,
+        )
+    return mark_session_turn_failed(
+        db,
+        session_id=session_id,
+        request_id=request_id,
+        error_code=error_code,
+    )
+
+
 async def _dispatch_managed_local_text(
     *,
     source_session,
@@ -984,17 +1060,21 @@ async def _dispatch_managed_local_text(
         t_baseline = time.monotonic()
 
         with tracer.start_as_current_span("longhouse.turn.persist_create") as create_span:
-            create_session_turn(
-                db,
-                session_id=source_session.id,
-                request_id=request_id,
-                baseline_event_id=baseline_event_id,
-                baseline_observation_cursor=baseline_hook_observation_id,
-                user_submitted_at=user_submitted_at,
-                expected_user_text=message,
-                session_input_id=session_input_id,
+            await execute_best_effort_session_turn_write(
+                db_bind=db.get_bind(),
+                label="turn-create",
+                timeout_seconds=MANAGED_LOCAL_TURN_ARCHIVE_ACK_TIMEOUT_SECS,
+                fn=lambda turn_db: create_session_turn(
+                    turn_db,
+                    session_id=source_session.id,
+                    request_id=request_id,
+                    baseline_event_id=baseline_event_id,
+                    baseline_observation_cursor=baseline_hook_observation_id,
+                    user_submitted_at=user_submitted_at,
+                    expected_user_text=message,
+                    session_input_id=session_input_id,
+                ),
             )
-            db.commit()
             set_span_attributes(
                 create_span,
                 {
@@ -1034,24 +1114,24 @@ async def _dispatch_managed_local_text(
         if not send_result.ok or not bool(getattr(send_result, "verified_turn_started", False)):
             error_code = _managed_local_send_failure_code(send_result)
             with tracer.start_as_current_span("longhouse.turn.persist_send_result") as persist_span:
-                if error_code == SESSION_TURN_ERROR_VERIFICATION_TIMEOUT:
-                    if not mark_session_turn_send_accepted(
-                        db,
+                await execute_best_effort_session_turn_write(
+                    db_bind=db.get_bind(),
+                    label="turn-send-failed",
+                    timeout_seconds=MANAGED_LOCAL_TURN_ARCHIVE_ACK_TIMEOUT_SECS,
+                    fn=lambda turn_db: _mark_managed_local_turn_failed_for_send(
+                        turn_db,
                         session_id=source_session.id,
                         request_id=request_id,
+                        baseline_event_id=baseline_event_id,
+                        baseline_observation_cursor=baseline_hook_observation_id,
+                        user_submitted_at=user_submitted_at,
+                        expected_user_text=message,
                         accepted_at=send_observed_at,
                         user_event_id=getattr(send_result, "verified_user_event_id", None),
                         session_input_id=session_input_id,
-                    ):
-                        raise RuntimeError(f"Failed to record canonical send_accepted milestone for {source_session.id}/{request_id}")
-                if not mark_session_turn_failed(
-                    db,
-                    session_id=source_session.id,
-                    request_id=request_id,
-                    error_code=error_code,
-                ):
-                    raise RuntimeError(f"Failed to record canonical failed milestone for {source_session.id}/{request_id}")
-                db.commit()
+                        error_code=error_code,
+                    ),
+                )
                 set_span_attributes(
                     persist_span,
                     {
@@ -1104,16 +1184,23 @@ async def _dispatch_managed_local_text(
             )
 
         with tracer.start_as_current_span("longhouse.turn.persist_send_result") as persist_span:
-            if not mark_session_turn_send_accepted(
-                db,
-                session_id=source_session.id,
-                request_id=request_id,
-                accepted_at=send_observed_at,
-                user_event_id=getattr(send_result, "verified_user_event_id", None),
-                session_input_id=session_input_id,
-            ):
-                raise RuntimeError(f"Failed to record canonical send_accepted milestone for {source_session.id}/{request_id}")
-            db.commit()
+            await execute_best_effort_session_turn_write(
+                db_bind=db.get_bind(),
+                label="turn-send-accepted",
+                timeout_seconds=MANAGED_LOCAL_TURN_ARCHIVE_ACK_TIMEOUT_SECS,
+                fn=lambda turn_db: _mark_managed_local_turn_send_accepted(
+                    turn_db,
+                    session_id=source_session.id,
+                    request_id=request_id,
+                    baseline_event_id=baseline_event_id,
+                    baseline_observation_cursor=baseline_hook_observation_id,
+                    user_submitted_at=user_submitted_at,
+                    expected_user_text=message,
+                    accepted_at=send_observed_at,
+                    user_event_id=getattr(send_result, "verified_user_event_id", None),
+                    session_input_id=session_input_id,
+                ),
+            )
             set_span_attributes(
                 persist_span,
                 {
