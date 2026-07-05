@@ -35,6 +35,7 @@ from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
 from zerg.services.managed_local_control import answer_pause_request_on_managed_local_session
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
@@ -289,6 +290,7 @@ class SessionInputRequest(BaseModel):
 
 class QueuedInputSummary(BaseModel):
     id: int
+    live_input_id: str | None = None
     text: str
     intent: InputIntent
     status: InputStatus
@@ -301,6 +303,7 @@ class SessionInputResponse(BaseModel):
 
     outcome: InputOutcome = Field(..., description="sent | queued")
     input_id: int
+    live_input_id: str | None = None
     client_request_id: str | None = None
     intent: InputIntent
     queued: list[QueuedInputSummary] = Field(default_factory=list)
@@ -1437,6 +1440,27 @@ def _queued_summary(row) -> QueuedInputSummary:
     )
 
 
+async def _record_live_input_receipt_for_row(
+    *,
+    source_session,
+    owner_id: int,
+    row: SessionInput,
+    status_value: str | None = None,
+) -> str | None:
+    return await record_live_input_receipt_best_effort(
+        owner_id=owner_id,
+        session_id=source_session.id,
+        provider=str(getattr(source_session, "provider", "") or "unknown"),
+        device_id=str(getattr(source_session, "device_id", "") or "").strip() or None,
+        thread_id=getattr(row, "thread_id", None),
+        text=str(getattr(row, "body", "") or ""),
+        intent=str(getattr(row, "intent", "") or INPUT_INTENT_AUTO),
+        status=str(status_value or getattr(row, "status", "") or "created"),
+        client_request_id=getattr(row, "client_request_id", None),
+        archive_session_input_id=int(row.id),
+    )
+
+
 def _client_request_id_for_input(body: SessionInputRequest) -> str:
     client_request_id = (body.client_request_id or "").strip()
     if client_request_id:
@@ -1670,9 +1694,16 @@ async def _dispatch_steer_input(
 
         _mark_input_delivered(db, int(row.id))
         recent = list_recent_inputs(db, source_session.id)
+        live_input_id = await _record_live_input_receipt_for_row(
+            source_session=source_session,
+            owner_id=owner_id,
+            row=row,
+            status_value=INPUT_STATUS_DELIVERED,
+        )
         return SessionInputResponse(
             outcome="sent",
             input_id=int(row.id),
+            live_input_id=live_input_id,
             client_request_id=row.client_request_id,
             intent=INPUT_INTENT_STEER,
             queued=[_queued_summary(r) for r in recent],
@@ -1794,9 +1825,16 @@ async def _create_session_input_response(
                 return created
             row = created
         recent = list_recent_inputs(db, source_session.id)
+        live_input_id = await _record_live_input_receipt_for_row(
+            source_session=source_session,
+            owner_id=owner_id,
+            row=row,
+            status_value=INPUT_STATUS_QUEUED,
+        )
         return SessionInputResponse(
             outcome="queued",
             input_id=int(row.id),
+            live_input_id=live_input_id,
             client_request_id=row.client_request_id,
             intent=INPUT_INTENT_QUEUE,
             queued=[_queued_summary(r) for r in recent],
@@ -1835,9 +1873,16 @@ async def _create_session_input_response(
                 return created
             row = created
         recent = list_recent_inputs(db, source_session.id)
+        live_input_id = await _record_live_input_receipt_for_row(
+            source_session=source_session,
+            owner_id=owner_id,
+            row=row,
+            status_value=INPUT_STATUS_QUEUED,
+        )
         return SessionInputResponse(
             outcome="queued",
             input_id=int(row.id),
+            live_input_id=live_input_id,
             client_request_id=row.client_request_id,
             intent=INPUT_INTENT_AUTO,
             queued=[_queued_summary(r) for r in recent],
@@ -1936,9 +1981,16 @@ async def _create_session_input_response(
 
     _mark_input_delivered(db, int(row.id))
     recent = list_recent_inputs(db, source_session.id)
+    live_input_id = await _record_live_input_receipt_for_row(
+        source_session=source_session,
+        owner_id=owner_id,
+        row=row,
+        status_value=INPUT_STATUS_DELIVERED,
+    )
     return SessionInputResponse(
         outcome="sent",
         input_id=int(row.id),
+        live_input_id=live_input_id,
         client_request_id=row.client_request_id,
         intent=INPUT_INTENT_AUTO,
         queued=[_queued_summary(r) for r in recent],

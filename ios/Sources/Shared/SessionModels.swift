@@ -370,19 +370,55 @@ enum SessionInputStatus: String, Codable, Sendable {
 
 struct QueuedInputSummary: Codable, Sendable, Identifiable {
     let id: Int
+    let liveInputId: String?
     let text: String
     let intent: SessionInputIntent
     let status: SessionInputStatus
     let lastError: String?
     let createdAt: String?
+
+    init(
+        id: Int,
+        liveInputId: String? = nil,
+        text: String,
+        intent: SessionInputIntent,
+        status: SessionInputStatus,
+        lastError: String?,
+        createdAt: String?
+    ) {
+        self.id = id
+        self.liveInputId = liveInputId
+        self.text = text
+        self.intent = intent
+        self.status = status
+        self.lastError = lastError
+        self.createdAt = createdAt
+    }
 }
 
 struct SessionInputResponse: Codable, Sendable {
     let outcome: SessionInputOutcome
     let inputId: Int
+    let liveInputId: String?
     let clientRequestId: String?
     let intent: SessionInputIntent
     let queued: [QueuedInputSummary]
+
+    init(
+        outcome: SessionInputOutcome,
+        inputId: Int,
+        liveInputId: String? = nil,
+        clientRequestId: String?,
+        intent: SessionInputIntent,
+        queued: [QueuedInputSummary]
+    ) {
+        self.outcome = outcome
+        self.inputId = inputId
+        self.liveInputId = liveInputId
+        self.clientRequestId = clientRequestId
+        self.intent = intent
+        self.queued = queued
+    }
 
     var pendingInputCount: Int {
         queued.filter { $0.status == .queued || $0.status == .delivering }.count

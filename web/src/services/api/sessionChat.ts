@@ -16,6 +16,7 @@ export type SessionInputOutcome = "sent" | "queued";
 
 export interface QueuedInputSummary {
   id: number;
+  live_input_id?: string | null;
   text: string;
   intent: SessionInputIntent;
   status: SessionInputStatus;
@@ -26,6 +27,7 @@ export interface QueuedInputSummary {
 export interface SessionInputResponse {
   outcome: SessionInputOutcome;
   input_id: number;
+  live_input_id?: string | null;
   client_request_id?: string | null;
   intent: SessionInputIntent;
   queued: QueuedInputSummary[];

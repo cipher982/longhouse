@@ -6180,6 +6180,8 @@ export interface components {
         QueuedInputSummary: {
             /** Id */
             id: number;
+            /** Live Input Id */
+            live_input_id?: string | null;
             /** Text */
             text: string;
             /**
@@ -7779,6 +7781,8 @@ export interface components {
             outcome: "sent" | "queued";
             /** Input Id */
             input_id: number;
+            /** Live Input Id */
+            live_input_id?: string | null;
             /** Client Request Id */
             client_request_id?: string | null;
             /**

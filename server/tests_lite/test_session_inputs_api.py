@@ -386,6 +386,41 @@ def test_intent_auto_not_locked_returns_sent(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_auto_input_response_includes_live_input_id(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+    receipt_calls: list[dict[str, object]] = []
+
+    async def fake_live_receipt(**kwargs):
+        receipt_calls.append(kwargs)
+        return "live-input-1"
+
+    monkeypatch.setattr("zerg.routers.session_chat.record_live_input_receipt_best_effort", fake_live_receipt)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "hello hot lane", "intent": "auto", "client_request_id": "ios-live-1"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "sent"
+        assert body["live_input_id"] == "live-input-1"
+        assert body["input_id"] > 0
+        assert len(receipt_calls) == 1
+        assert receipt_calls[0]["client_request_id"] == "ios-live-1"
+        assert receipt_calls[0]["archive_session_input_id"] == body["input_id"]
+        assert receipt_calls[0]["status"] == INPUT_STATUS_DELIVERED
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        api_app_ref.dependency_overrides = {}
+
+
 def test_client_request_id_dedupes_delivered_auto(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)

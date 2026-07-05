@@ -16,6 +16,7 @@ from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 from sqlalchemy.sql import text
+from sqlalchemy.sql import text as sql_text
 
 from zerg.models.types import GUID
 
@@ -180,6 +181,41 @@ class LiveMachineControlOperation(LiveBase):
             unique=True,
             sqlite_where=text("status IN ('queued', 'running') AND provider IS NOT NULL AND command_type = 'provider.live_proof'"),
         ),
+    )
+
+
+class LiveSessionInputReceipt(LiveBase):
+    """Hot-lane user text input receipt before archive projection is required."""
+
+    __tablename__ = "live_session_input_receipts"
+
+    id = Column(String(36), primary_key=True)
+    owner_id = Column(Integer, nullable=False, index=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    thread_id = Column(String(36), nullable=True, index=True)
+    provider = Column(String(64), nullable=False, index=True)
+    device_id = Column(String(255), nullable=True, index=True)
+    client_request_id = Column(String(255), nullable=True)
+    intent = Column(String(32), nullable=False)
+    status = Column(String(32), nullable=False, index=True)
+    text = Column(Text, nullable=False)
+    archive_session_input_id = Column(Integer, nullable=True, index=True)
+    control_command_id = Column(String(96), nullable=True, index=True)
+    error_json = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        Index(
+            "ux_live_session_input_receipts_client_request",
+            "owner_id",
+            "session_id",
+            "client_request_id",
+            unique=True,
+            sqlite_where=sql_text("client_request_id IS NOT NULL"),
+        ),
+        Index("ix_live_session_input_receipts_session_status_created", "session_id", "status", "created_at"),
     )
 
 

@@ -36,6 +36,7 @@ from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveSessionLivePreview
+from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSession as LiveSessionRow
 from zerg.models.live_store import LiveRuntimeState
 from zerg.services.provisional_events import load_active_provisional_preview_map
@@ -54,6 +55,7 @@ from zerg.services.live_launch_readiness import latest_live_launch_readiness_map
 from zerg.services.live_launch_readiness import reap_expired_live_launch_readiness
 from zerg.services.live_launch_readiness import update_live_launch_readiness_state
 from zerg.services.live_launch_readiness import upsert_live_launch_readiness
+from zerg.services.live_session_inputs import upsert_live_input_receipt
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import upsert_live_control_leases
@@ -88,6 +90,7 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "live_launch_readiness",
         "live_machine_control_operations",
         "live_runtime_state",
+        "live_session_input_receipts",
         "live_session_live_previews",
         "live_sessions",
     }
@@ -183,6 +186,57 @@ def test_archive_and_live_runtime_state_columns_stay_in_sync():
     live_columns = {column.name for column in LiveRuntimeState.__table__.columns}
 
     assert live_columns == archive_columns
+
+
+def test_live_input_receipt_is_idempotent_by_client_request_id(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(engine)
+    LiveSession = sessionmaker(bind=engine)
+    session_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    try:
+        with LiveSession() as live_db:
+            first = upsert_live_input_receipt(
+                live_db,
+                owner_id=123,
+                session_id=session_id,
+                provider="codex",
+                device_id="cinder",
+                client_request_id="client-1",
+                text="ship it",
+                intent="auto",
+                status="queued",
+                archive_session_input_id=41,
+                now=now,
+            )
+            live_db.commit()
+            first_id = first.id
+
+        with LiveSession() as live_db:
+            second = upsert_live_input_receipt(
+                live_db,
+                owner_id=123,
+                session_id=session_id,
+                provider="codex",
+                device_id="cinder",
+                client_request_id="client-1",
+                text="ship it",
+                intent="auto",
+                status="delivered",
+                archive_session_input_id=41,
+                now=now + timedelta(seconds=1),
+            )
+            live_db.commit()
+
+            rows = live_db.query(LiveSessionInputReceipt).all()
+            assert len(rows) == 1
+            assert second.id == first_id
+            assert rows[0].status == "delivered"
+            assert rows[0].archive_session_input_id == 41
+            assert rows[0].text == "ship it"
+    finally:
+        engine.dispose()
 
 
 def test_live_archive_outbox_drains_heartbeat_to_archive_idempotently(tmp_path):

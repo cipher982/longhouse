@@ -364,6 +364,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         return SessionInputResponse(
             outcome: .sent,
             inputId: inputID,
+            liveInputId: nil,
             clientRequestId: clientRequestId,
             intent: SessionInputIntent(rawValue: intent) ?? .auto,
             queued: []
