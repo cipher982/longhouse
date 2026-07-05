@@ -409,7 +409,7 @@ struct APIQueuedInputSummary: Codable, Hashable, Sendable {
 
 struct APISessionInputResponse: Codable, Hashable, Sendable {
     let outcome: String
-    let inputId: Int
+    let inputId: Int?
     let liveInputId: String?
     let clientRequestId: String?
     let intent: String

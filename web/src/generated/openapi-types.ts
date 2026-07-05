@@ -7780,7 +7780,7 @@ export interface components {
              */
             outcome: "sent" | "queued";
             /** Input Id */
-            input_id: number;
+            input_id?: number | null;
             /** Live Input Id */
             live_input_id?: string | null;
             /** Client Request Id */

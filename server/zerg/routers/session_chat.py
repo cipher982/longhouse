@@ -302,7 +302,7 @@ class SessionInputResponse(BaseModel):
     """Shape returned from POST /api/sessions/{id}/input."""
 
     outcome: InputOutcome = Field(..., description="sent | queued")
-    input_id: int
+    input_id: int | None = None
     live_input_id: str | None = None
     client_request_id: str | None = None
     intent: InputIntent

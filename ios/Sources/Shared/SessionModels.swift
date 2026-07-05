@@ -398,7 +398,7 @@ struct QueuedInputSummary: Codable, Sendable, Identifiable {
 
 struct SessionInputResponse: Codable, Sendable {
     let outcome: SessionInputOutcome
-    let inputId: Int
+    let inputId: Int?
     let liveInputId: String?
     let clientRequestId: String?
     let intent: SessionInputIntent
@@ -406,7 +406,7 @@ struct SessionInputResponse: Codable, Sendable {
 
     init(
         outcome: SessionInputOutcome,
-        inputId: Int,
+        inputId: Int?,
         liveInputId: String? = nil,
         clientRequestId: String?,
         intent: SessionInputIntent,
