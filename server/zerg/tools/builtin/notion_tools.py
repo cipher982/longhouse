@@ -576,31 +576,31 @@ TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=notion_create_page,
         name="notion_create_page",
-        description="Create a new page in Notion workspace (in a page or database). Uses configured Notion credentials from Fiche Settings if api_key not provided.",
+        description="Create a new page in Notion workspace (in a page or database). Uses configured account Notion credentials if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_get_page,
         name="notion_get_page",
-        description="Retrieve a page from Notion by its ID. Uses configured Notion credentials from Fiche Settings if api_key not provided.",
+        description="Retrieve a page from Notion by its ID. Uses configured account Notion credentials if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_update_page,
         name="notion_update_page",
-        description="Update a Notion page's properties or archive status. Uses configured Notion credentials from Fiche Settings if api_key not provided.",
+        description="Update a Notion page's properties or archive status. Uses configured account Notion credentials if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_search,
         name="notion_search",
-        description="Search across pages and databases in Notion workspace. Uses configured Notion credentials from Fiche Settings if api_key not provided.",
+        description="Search across pages and databases in Notion workspace. Uses configured account Notion credentials if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_query_database,
         name="notion_query_database",
-        description="Query a Notion database with filters and sorting. Uses configured Notion credentials from Fiche Settings if api_key not provided.",
+        description="Query a Notion database with filters and sorting. Uses configured account Notion credentials if api_key not provided.",
     ),
     StructuredTool.from_function(
         func=notion_append_blocks,
         name="notion_append_blocks",
-        description="Append content blocks to an existing Notion page. Uses configured Notion credentials from Fiche Settings if api_key not provided.",
+        description="Append content blocks to an existing Notion page. Uses configured account Notion credentials if api_key not provided.",
     ),
 ]

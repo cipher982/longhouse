@@ -50,18 +50,6 @@ try:
         buckets=(0, 5, 10, 25, 50, 100, 200, 500, 1000, 2000),
     )
 
-    websocket_run_updates_total = Counter(
-        "websocket_run_updates_total",
-        "Total run_update events broadcast to WebSocket clients",
-        labelnames=("status", "source_event"),
-    )
-
-    websocket_run_update_latency_seconds = Histogram(
-        "websocket_run_update_latency_seconds",
-        "Elapsed time between run start and run_update broadcast (seconds)",
-        buckets=(0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60, 120),
-    )
-
     managed_turn_requests_total = Counter(
         "managed_turn_requests_total",
         "Managed turn requests by provider and outcome",
@@ -434,7 +422,6 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
 
     database_migrations_failed_total = _NoopCounter()  # type: ignore[assignment]
     dashboard_snapshot_requests_total = _NoopCounter()  # type: ignore[assignment]
-    websocket_run_updates_total = _NoopCounter()  # type: ignore[assignment]
     managed_turn_requests_total = _NoopCounter()  # type: ignore[assignment]
     managed_turn_wait_total = _NoopCounter()  # type: ignore[assignment]
     agents_ingest_requests_total = _NoopCounter()  # type: ignore[assignment]
@@ -477,7 +464,6 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
 
     dashboard_snapshot_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     dashboard_snapshot_runs_returned = _NoopHistogram()  # type: ignore[assignment]
-    websocket_run_update_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     managed_turn_dispatch_seconds = _NoopHistogram()  # type: ignore[assignment]
     managed_turn_phase_seconds = _NoopHistogram()  # type: ignore[assignment]
     managed_turn_wait_seconds = _NoopHistogram()  # type: ignore[assignment]

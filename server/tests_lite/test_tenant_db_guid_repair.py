@@ -12,11 +12,9 @@ from sqlalchemy import text
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.models.agents import AgentSession  # noqa: F401
 from zerg.models import User
 from zerg.models.enums import UserRole
-from zerg.models.models import Fiche
-from zerg.models.thread import Thread
-from zerg.models.enums import ThreadType
 from zerg.services.tenant_db_guid_repair import find_db_paths
 from zerg.services.tenant_db_guid_repair import repair_db
 from zerg.services.tenant_db_guid_repair import scan_db
@@ -68,29 +66,12 @@ def _make_db(tmp_path, name: str = "tenant.db"):
     return db_path, make_sessionmaker(engine)
 
 
-def _seed_run_graph(db):
+def _seed_user(db):
     user = User(email="repair@test.local", role=UserRole.USER.value)
     db.add(user)
     db.commit()
     db.refresh(user)
-
-    fiche = Fiche(
-        name="Repair Test",
-        status="idle",
-        system_instructions="sys",
-        task_instructions="task",
-        model="gpt-scripted",
-        owner_id=user.id,
-    )
-    db.add(fiche)
-    db.commit()
-    db.refresh(fiche)
-
-    thread = Thread(fiche_id=fiche.id, title="Repair Thread", thread_type=ThreadType.CHAT.value)
-    db.add(thread)
-    db.commit()
-    db.refresh(thread)
-    return user, fiche, thread
+    return user
 
 
 def test_scan_and_repair_safe_guid_columns(tmp_path):
@@ -99,49 +80,42 @@ def test_scan_and_repair_safe_guid_columns(tmp_path):
     db_path, SessionLocal = _make_db(instance_dir, "longhouse.db")
 
     with SessionLocal() as db:
-        _user, fiche, thread = _seed_run_graph(db)
+        _seed_user(db)
         started_at = datetime(2026, 3, 6, 4, 0, 0, tzinfo=timezone.utc).replace(tzinfo=None)
-        result = db.execute(
+        db.execute(
             text(
                 """
-                INSERT INTO runs (
-                    fiche_id, thread_id, status, trigger, started_at, assistant_message_id, trace_id, model
+                INSERT INTO sessions (
+                    id, provider, environment, started_at
                 ) VALUES (
-                    :fiche_id, :thread_id, :status, :trigger, :started_at, :assistant_message_id, :trace_id, :model
+                    :id, :provider, :environment, :started_at
                 )
                 """
             ),
             {
-                "fiche_id": fiche.id,
-                "thread_id": thread.id,
-                "status": "RUNNING",
-                "trigger": "API",
+                "id": "not-a-uuid",
+                "provider": "codex",
+                "environment": "test",
                 "started_at": started_at,
-                "assistant_message_id": "live-voice-1772742439",
-                "trace_id": "not-a-uuid",
-                "model": "gpt-scripted",
             },
         )
         db.commit()
-        run_id = result.lastrowid
 
     findings = scan_db(db_path)
     assert {(finding.table, finding.column, finding.action) for finding in findings} == {
-        ("runs", "assistant_message_id", "set_null"),
-        ("runs", "trace_id", "set_null"),
+        ("sessions", "id", "report_only"),
     }
 
     summary = repair_db(db_path)
-    assert summary.repaired_count == 2
-    assert summary.unsupported_count == 0
+    assert summary.repaired_count == 0
+    assert summary.unsupported_count == 1
 
     with SessionLocal() as db:
         row = db.execute(
-            text("SELECT assistant_message_id, trace_id FROM runs WHERE id = :run_id"),
-            {"run_id": run_id},
+            text("SELECT id FROM sessions WHERE id = :session_id"),
+            {"session_id": "not-a-uuid"},
         ).mappings().one()
-    assert row["assistant_message_id"] is None
-    assert row["trace_id"] is None
+    assert row["id"] == "not-a-uuid"
 
 
 def test_scan_ignores_removed_legacy_memories_table(tmp_path):

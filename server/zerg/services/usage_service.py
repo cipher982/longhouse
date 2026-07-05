@@ -1,7 +1,8 @@
 """LLM usage aggregation service.
 
-Provides user-facing and admin-facing usage statistics based on Run data.
-All costs are derived from Run.total_cost_usd (NULL costs are excluded from sums).
+The retired automation-run data plane no longer backs usage accounting.
+Launch usage endpoints intentionally return empty counters until the session
+runtime has a first-class usage ledger.
 """
 
 from __future__ import annotations
@@ -12,14 +13,10 @@ from datetime import timedelta
 from typing import Literal
 from typing import Optional
 
-from sqlalchemy import and_
-from sqlalchemy import case
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.models.models import Fiche as FicheModel
-from zerg.models.models import Run as RunModel
 from zerg.schemas.usage import TokenBreakdown
 from zerg.schemas.usage import UsageLimit
 from zerg.schemas.usage import UserUsageResponse
@@ -64,27 +61,8 @@ def _usage_range_for_period(period: Literal["today", "7d", "30d"]) -> tuple[date
 
 def _get_user_usage_range(db: Session, user_id: int, start_dt: datetime, end_dt: datetime) -> dict:
     """Aggregate token/cost/run stats for a user within [start_dt, end_dt)."""
-    result = (
-        db.query(
-            func.coalesce(func.sum(func.coalesce(RunModel.total_tokens, 0)), 0).label("total_tokens"),
-            func.coalesce(func.sum(func.coalesce(RunModel.total_cost_usd, 0.0)), 0.0).label("total_cost"),
-            func.count(RunModel.id).label("run_count"),
-        )
-        .join(FicheModel, FicheModel.id == RunModel.fiche_id)
-        .filter(
-            FicheModel.owner_id == user_id,
-            RunModel.started_at.isnot(None),
-            RunModel.started_at >= start_dt,
-            RunModel.started_at < end_dt,
-        )
-        .first()
-    )
-
-    return {
-        "tokens": int(result.total_tokens) if result else 0,
-        "cost_usd": round(float(result.total_cost), 4) if result else 0.0,
-        "runs": int(result.run_count) if result else 0,
-    }
+    _ = (db, user_id, start_dt, end_dt)
+    return {"tokens": 0, "cost_usd": 0.0, "runs": 0}
 
 
 def get_user_usage(
@@ -185,12 +163,6 @@ def get_all_users_usage(
     """
     from zerg.models.models import User as UserModel
 
-    today = _today_utc_date()
-    today_start = _utc_day_start(today)
-    tomorrow_start = _utc_day_start(today + timedelta(days=1))
-    start_7d = _utc_day_start(today - timedelta(days=6))
-    start_30d = _utc_day_start(today - timedelta(days=29))
-
     user_filters = []
     if active is True:
         user_filters.append(UserModel.is_active.is_(True))
@@ -199,70 +171,12 @@ def get_all_users_usage(
 
     total = int(db.query(func.count(UserModel.id)).filter(*user_filters).scalar() or 0)
 
-    # Limit the joined run rows to the last 30 days to keep the join small.
-    run_join_cond = and_(
-        RunModel.fiche_id == FicheModel.id,
-        RunModel.started_at.isnot(None),
-        RunModel.started_at >= start_30d,
-        RunModel.started_at < tomorrow_start,
-    )
-
-    def _sum_when(cond, value, *, else_value):
-        return func.coalesce(func.sum(case((cond, value), else_=else_value)), else_value)
-
-    # Today aggregates
-    today_cond = and_(RunModel.started_at >= today_start, RunModel.started_at < tomorrow_start)
-    tokens_today = _sum_when(today_cond, func.coalesce(RunModel.total_tokens, 0), else_value=0).label("tokens_today")
-    cost_today = _sum_when(today_cond, func.coalesce(RunModel.total_cost_usd, 0.0), else_value=0.0).label("cost_today")
-    runs_today = _sum_when(today_cond, 1, else_value=0).label("runs_today")
-
-    # 7d aggregates
-    seven_cond = and_(RunModel.started_at >= start_7d, RunModel.started_at < tomorrow_start)
-    tokens_7d = _sum_when(seven_cond, func.coalesce(RunModel.total_tokens, 0), else_value=0).label("tokens_7d")
-    cost_7d = _sum_when(seven_cond, func.coalesce(RunModel.total_cost_usd, 0.0), else_value=0.0).label("cost_7d")
-    runs_7d = _sum_when(seven_cond, 1, else_value=0).label("runs_7d")
-
-    # 30d aggregates
-    thirty_cond = and_(RunModel.started_at >= start_30d, RunModel.started_at < tomorrow_start)
-    tokens_30d = _sum_when(thirty_cond, func.coalesce(RunModel.total_tokens, 0), else_value=0).label("tokens_30d")
-    cost_30d = _sum_when(thirty_cond, func.coalesce(RunModel.total_cost_usd, 0.0), else_value=0.0).label("cost_30d")
-    runs_30d = _sum_when(thirty_cond, 1, else_value=0).label("runs_30d")
-
-    query = (
-        db.query(
-            UserModel.id,
-            UserModel.email,
-            UserModel.display_name,
-            UserModel.role,
-            UserModel.is_active,
-            UserModel.created_at,
-            tokens_today,
-            cost_today,
-            runs_today,
-            tokens_7d,
-            cost_7d,
-            runs_7d,
-            tokens_30d,
-            cost_30d,
-            runs_30d,
-        )
-        .outerjoin(FicheModel, FicheModel.owner_id == UserModel.id)
-        .outerjoin(RunModel, run_join_cond)
-        .filter(*user_filters)
-        .group_by(
-            UserModel.id,
-            UserModel.email,
-            UserModel.display_name,
-            UserModel.role,
-            UserModel.is_active,
-            UserModel.created_at,
-        )
-    )
+    query = db.query(UserModel).filter(*user_filters)
 
     sort_expr_map = {
-        "cost_today": cost_today,
-        "cost_7d": cost_7d,
-        "cost_30d": cost_30d,
+        "cost_today": UserModel.id,
+        "cost_7d": UserModel.id,
+        "cost_30d": UserModel.id,
         "email": func.lower(UserModel.email),
         "created_at": UserModel.created_at,
     }
@@ -282,21 +196,9 @@ def get_all_users_usage(
                 "is_active": row.is_active,
                 "created_at": row.created_at,
                 "usage": {
-                    "today": {
-                        "tokens": int(row.tokens_today or 0),
-                        "cost_usd": round(float(row.cost_today or 0.0), 4),
-                        "runs": int(row.runs_today or 0),
-                    },
-                    "seven_days": {
-                        "tokens": int(row.tokens_7d or 0),
-                        "cost_usd": round(float(row.cost_7d or 0.0), 4),
-                        "runs": int(row.runs_7d or 0),
-                    },
-                    "thirty_days": {
-                        "tokens": int(row.tokens_30d or 0),
-                        "cost_usd": round(float(row.cost_30d or 0.0), 4),
-                        "runs": int(row.runs_30d or 0),
-                    },
+                    "today": {"tokens": 0, "cost_usd": 0.0, "runs": 0},
+                    "seven_days": {"tokens": 0, "cost_usd": 0.0, "runs": 0},
+                    "thirty_days": {"tokens": 0, "cost_usd": 0.0, "runs": 0},
                 },
             }
         )
@@ -326,82 +228,18 @@ def get_user_usage_detail(
     if not user:
         return None
 
-    today = _today_utc_date()
-    today_start = _utc_day_start(today)
-    tomorrow_start = _utc_day_start(today + timedelta(days=1))
-
     start_dt, end_dt = _usage_range_for_period(period)
 
     # Get period summary
     summary = _get_user_usage_range(db, user_id, start_dt, end_dt)
 
-    # Get daily breakdown
-    daily_query = (
-        db.query(
-            func.date(RunModel.started_at).label("run_date"),
-            func.coalesce(func.sum(func.coalesce(RunModel.total_tokens, 0)), 0).label("tokens"),
-            func.coalesce(func.sum(func.coalesce(RunModel.total_cost_usd, 0.0)), 0.0).label("cost_usd"),
-            func.count(RunModel.id).label("runs"),
-        )
-        .join(FicheModel, FicheModel.id == RunModel.fiche_id)
-        .filter(
-            FicheModel.owner_id == user_id,
-            RunModel.started_at.isnot(None),
-            RunModel.started_at >= start_dt,
-            RunModel.started_at < end_dt,
-        )
-        .group_by(func.date(RunModel.started_at))
-        .order_by(func.date(RunModel.started_at).desc())
-        .all()
-    )
-
-    daily_breakdown = [
-        {
-            "date": row.run_date,
-            "tokens": int(row.tokens),
-            "cost_usd": round(float(row.cost_usd), 4),
-            "runs": int(row.runs),
-        }
-        for row in daily_query
-    ]
-
-    # Get top automations by cost
-    top_automations_query = (
-        db.query(
-            FicheModel.id.label("automation_id"),
-            FicheModel.name,
-            func.coalesce(func.sum(func.coalesce(RunModel.total_tokens, 0)), 0).label("tokens"),
-            func.coalesce(func.sum(func.coalesce(RunModel.total_cost_usd, 0.0)), 0.0).label("cost_usd"),
-            func.count(RunModel.id).label("runs"),
-        )
-        .join(RunModel, FicheModel.id == RunModel.fiche_id)
-        .filter(
-            FicheModel.owner_id == user_id,
-            RunModel.started_at.isnot(None),
-            RunModel.started_at >= start_dt,
-            RunModel.started_at < end_dt,
-        )
-        .group_by(FicheModel.id, FicheModel.name)
-        .order_by(func.sum(func.coalesce(RunModel.total_cost_usd, 0.0)).desc())
-        .limit(10)
-        .all()
-    )
-
-    top_automations = [
-        {
-            "automation_id": row.automation_id,
-            "name": row.name,
-            "tokens": int(row.tokens),
-            "cost_usd": round(float(row.cost_usd), 4),
-            "runs": int(row.runs),
-        }
-        for row in top_automations_query
-    ]
+    daily_breakdown = []
+    top_automations = []
 
     # Get usage for all periods for the user row
-    usage_today = _get_user_usage_range(db, user_id, today_start, tomorrow_start)
-    usage_7d = _get_user_usage_range(db, user_id, _utc_day_start(today - timedelta(days=6)), tomorrow_start)
-    usage_30d = _get_user_usage_range(db, user_id, _utc_day_start(today - timedelta(days=29)), tomorrow_start)
+    usage_today = {"tokens": 0, "cost_usd": 0.0, "runs": 0}
+    usage_7d = {"tokens": 0, "cost_usd": 0.0, "runs": 0}
+    usage_30d = {"tokens": 0, "cost_usd": 0.0, "runs": 0}
 
     return {
         "user": {

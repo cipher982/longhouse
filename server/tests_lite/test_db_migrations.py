@@ -143,7 +143,7 @@ def _make_legacy_schema(engine) -> None:
         )
 
 
-def test_startup_migration_adds_insight_origin_and_backfills_system_rows(tmp_path):
+def test_initialize_database_drops_legacy_insights_table(tmp_path):
     db_path = tmp_path / "legacy_insights.db"
     engine = make_engine(f"sqlite:///{db_path}")
 
@@ -188,19 +188,21 @@ def test_startup_migration_adds_insight_origin_and_backfills_system_rows(tmp_pat
             )
         )
 
-    _migrate_agents_columns(engine)
+    initialize_database(engine)
 
     with engine.connect() as conn:
-        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(insights)"))}
-        rows = conn.execute(text("SELECT title, origin FROM insights ORDER BY id")).fetchall()
+        exists = conn.execute(
+            text(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'insights'
+                LIMIT 1
+                """
+            )
+        ).fetchone()
 
-    assert "origin" in columns
-    assert rows == [
-        ("Manual note", None),
-        ("Agent stale", "system"),
-        ("Stale ingest detected", "system"),
-        ("Ingest recovered", "system"),
-    ]
+    assert exists is None
 
 
 def test_startup_migration_adds_runner_availability_policy_and_backfills_defaults(tmp_path):
@@ -637,7 +639,7 @@ def test_apply_heavy_migrations_is_idempotent_and_records_ledger(tmp_path):
     assert "unique(session_id,source_path,source_offset)" not in normalized_sql
 
 
-def test_initialize_database_drops_legacy_file_reservations_table(tmp_path):
+def test_initialize_database_drops_legacy_file_reservations_and_automation_tables(tmp_path):
     db_path = tmp_path / "legacy_memory_cleanup.db"
     engine = make_engine(f"sqlite:///{db_path}")
 
@@ -682,6 +684,16 @@ def test_initialize_database_drops_legacy_file_reservations_table(tmp_path):
             )
             """
         )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fiche_id INTEGER,
+                thread_id INTEGER,
+                status VARCHAR(20) NOT NULL
+            )
+            """
+        )
 
     initialize_database(engine)
 
@@ -706,8 +718,28 @@ def test_initialize_database_drops_legacy_file_reservations_table(tmp_path):
                 """
             )
         ).fetchone()
-        thread_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(threads)"))}
+        threads_exists = conn.execute(
+            text(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'threads'
+                LIMIT 1
+                """
+            )
+        ).fetchone()
+        runs_exists = conn.execute(
+            text(
+                """
+                SELECT 1
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'runs'
+                LIMIT 1
+                """
+            )
+        ).fetchone()
 
     assert file_reservations_exists is None
     assert memories_exists is None
-    assert "memory_strategy" not in thread_columns
+    assert threads_exists is None
+    assert runs_exists is None

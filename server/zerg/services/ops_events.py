@@ -1,126 +1,36 @@
-"""Ops events bridge: normalize EventBus events to an `ops:events` ticker.
+"""Ops events bridge lifecycle hook.
 
-Subscribes to core domain events (runs, automations, threads) and broadcasts
-compact, color-codable frames to the `ops:events` WebSocket topic.
+The retired automation data plane used this bridge to normalize run,
+automation, and thread events into an `ops:events` ticker. Keep the lifecycle
+object so startup/shutdown wiring stays stable while the launch-era ops surface
+has no domain events to subscribe to.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any
-from typing import Dict
-
-from zerg.events import EventType
-from zerg.events.event_bus import event_bus
-from zerg.generated.ws_messages import MessageType
-from zerg.generated.ws_messages import OpsEventData
-from zerg.generated.ws_messages import create_typed_emitter
-from zerg.websocket.manager import topic_manager
 
 logger = logging.getLogger(__name__)
 
 
 OPS_TOPIC = "ops:events"
 
-# Typed emitter bound to our topic manager broadcaster
-typed_emitter = create_typed_emitter(topic_manager.broadcast_to_topic)
-
 
 class OpsEventsBridge:
-    """Subscribe to EventBus and broadcast normalized ops ticker frames."""
+    """No-op bridge retained for app startup/shutdown compatibility."""
 
     _started: bool = False
-
-    async def _handle_run_event(self, data: Dict[str, Any]) -> None:
-        # Normalize RUN_* events into run_started/run_success/run_failed
-        status = data.get("status")
-        automation_id = data.get("automation_id", data.get("fiche_id"))
-        run_id = data.get("run_id") or data.get("id")
-        if not automation_id or not run_id:
-            return
-
-        if status == "running":
-            msg_type = "run_started"
-        elif status == "success":
-            msg_type = "run_success"
-        elif status == "failed":
-            msg_type = "run_failed"
-        else:
-            # Ignore queued and unknown statuses for the ticker
-            return
-
-        payload = OpsEventData(
-            type=msg_type,
-            automation_id=automation_id,
-            run_id=run_id,
-            thread_id=data.get("thread_id"),
-            duration_ms=data.get("duration_ms"),
-            error=data.get("error"),
-        )
-        await typed_emitter.send_typed(OPS_TOPIC, MessageType.OPS_EVENT, payload)
-
-    async def _handle_automation_event(self, data: Dict[str, Any]) -> None:
-        automation_id = data.get("automation_id", data.get("id"))
-        if not automation_id:
-            return
-        event_type = "automation_updated"
-        if data.get("event_type") == "automation_created":
-            event_type = "automation_created"
-        payload = OpsEventData(
-            type=event_type,
-            automation_id=automation_id,
-            automation_name=data.get("automation_name", data.get("name")),
-            status=data.get("status"),
-        )
-        await typed_emitter.send_typed(OPS_TOPIC, MessageType.OPS_EVENT, payload)
-
-    async def _handle_thread_message(self, data: Dict[str, Any]) -> None:
-        thread_id = data.get("thread_id")
-        if not thread_id:
-            return
-        payload = OpsEventData(type="thread_message_created", thread_id=thread_id)
-        await typed_emitter.send_typed(OPS_TOPIC, MessageType.OPS_EVENT, payload)
-
-    async def _handle_budget_denied(self, data: Dict[str, Any]) -> None:
-        # Data expected: { scope, percent, used_usd, limit_cents, user_email }
-        scope = data.get("scope")
-        if not scope:
-            return
-        payload = OpsEventData(
-            type="budget_denied",
-            scope=scope,
-            percent=data.get("percent"),
-            used_usd=data.get("used_usd"),
-            limit_cents=data.get("limit_cents"),
-            user_email=data.get("user_email"),
-        )
-        await typed_emitter.send_typed(OPS_TOPIC, MessageType.OPS_EVENT, payload)
 
     def start(self) -> None:
         if self._started:
             return
-        event_bus.subscribe(EventType.RUN_CREATED, self._handle_run_event)
-        event_bus.subscribe(EventType.RUN_UPDATED, self._handle_run_event)
-        event_bus.subscribe(EventType.AUTOMATION_CREATED, self._handle_automation_event)
-        event_bus.subscribe(EventType.AUTOMATION_UPDATED, self._handle_automation_event)
-        event_bus.subscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_message)
-        event_bus.subscribe(EventType.BUDGET_DENIED, self._handle_budget_denied)
         self._started = True
-        logger.info("OpsEventsBridge subscribed to core events")
+        logger.info("OpsEventsBridge started with no launch-era event subscriptions")
 
     def stop(self) -> None:
         if not self._started:
             return
-        try:
-            event_bus.unsubscribe(EventType.RUN_CREATED, self._handle_run_event)
-            event_bus.unsubscribe(EventType.RUN_UPDATED, self._handle_run_event)
-            event_bus.unsubscribe(EventType.AUTOMATION_CREATED, self._handle_automation_event)
-            event_bus.unsubscribe(EventType.AUTOMATION_UPDATED, self._handle_automation_event)
-            event_bus.unsubscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_message)
-            event_bus.unsubscribe(EventType.BUDGET_DENIED, self._handle_budget_denied)
-        finally:
-            self._started = False
+        self._started = False
 
 
-# Global instance used by app startup/shutdown
 ops_events_bridge = OpsEventsBridge()

@@ -1,4 +1,4 @@
-"""Authentication strategy abstraction for the Fiche Platform backend.
+"""Authentication strategy abstraction for the Longhouse backend.
 
 This module formalises the authentication flow behind a small *strategy*
 interface so that the actual logic can be swapped depending on the runtime

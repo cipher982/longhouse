@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from datetime import datetime
 from typing import Any
 from typing import Dict
 from typing import Set
@@ -21,36 +20,8 @@ from zerg.config import get_settings
 from zerg.events import EventType
 from zerg.events import event_bus
 from zerg.generated.ws_messages import Envelope
-from zerg.metrics import websocket_run_update_latency_seconds
-from zerg.metrics import websocket_run_updates_total
-from zerg.utils.time import utc_now
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_iso8601(value: str) -> datetime | None:
-    """Parse ISO8601 string to datetime if possible."""
-
-    try:
-        sanitized = value.strip()
-        if sanitized.endswith("Z"):
-            sanitized = sanitized[:-1] + "+00:00"
-        return datetime.fromisoformat(sanitized)
-    except Exception:  # noqa: BLE001 - defensive parsing helper
-        return None
-
-
-def _normalize_browser_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = dict(payload)
-    automation_id = normalized.pop("fiche_id", None)
-    if automation_id is not None and "automation_id" not in normalized:
-        normalized["automation_id"] = automation_id
-
-    automation_name = normalized.pop("fiche_name", None)
-    if automation_name is not None and "automation_name" not in normalized:
-        normalized["automation_name"] = automation_name
-
-    return normalized
 
 
 class TopicConnectionManager:
@@ -116,20 +87,6 @@ class TopicConnectionManager:
     def _setup_event_handlers(self) -> None:
         """Set up handlers for events we want to broadcast."""
         logger.info("Setting up WebSocket event handlers")
-        # Automation events
-        event_bus.subscribe(EventType.AUTOMATION_CREATED, self._handle_automation_event)
-        event_bus.subscribe(EventType.AUTOMATION_UPDATED, self._handle_automation_event)
-        event_bus.subscribe(EventType.AUTOMATION_DELETED, self._handle_automation_event)
-        # Thread events
-        event_bus.subscribe(EventType.THREAD_CREATED, self._handle_thread_event)
-        event_bus.subscribe(EventType.THREAD_UPDATED, self._handle_thread_event)
-        event_bus.subscribe(EventType.THREAD_DELETED, self._handle_thread_event)
-        event_bus.subscribe(EventType.THREAD_MESSAGE_CREATED, self._handle_thread_event)
-
-        # Run events
-        event_bus.subscribe(EventType.RUN_CREATED, self._handle_run_event)
-        event_bus.subscribe(EventType.RUN_UPDATED, self._handle_run_event)
-
         # User events (e.g., profile updated) – broadcast to dedicated topic
         event_bus.subscribe(EventType.USER_UPDATED, self._handle_user_event)
         logger.info("WebSocket event handlers ready")
@@ -279,7 +236,7 @@ class TopicConnectionManager:
 
         Args:
             client_id: The client ID to subscribe
-            topic: The topic to subscribe to (e.g., "automation:123", "thread:45")
+            topic: The topic to subscribe to (e.g., "user:1", "ops:events")
         """
         async with self._get_lock():
             if topic not in self.topic_subscriptions:
@@ -441,8 +398,7 @@ class TopicConnectionManager:
         """
         logger.debug(f"broadcast_to_topic called for topic: {topic}")
         # If there are no active subscribers we silently skip to avoid log
-        # spam – this situation is perfectly normal when scheduled automations or
-        # background jobs emit updates while no browser is connected.
+        # spam – this situation is normal when a user has navigated away.
         async with self._get_lock():
             if topic not in self.topic_subscriptions:
                 # Use debug level for no-subscriber warnings to keep logs clean
@@ -510,99 +466,6 @@ class TopicConnectionManager:
                 *(asyncio.wait_for(q.join(), timeout=1.0) for q in client_queues.values() if q is not None),
                 return_exceptions=True,
             )
-
-    async def _handle_automation_event(self, data: Dict[str, Any]) -> None:
-        """Handle automation lifecycle events."""
-        if "id" not in data:
-            return
-
-        automation_id = data["id"]
-        automation_topic = f"automation:{automation_id}"
-
-        # Extract event_type before serialization to avoid duplication in envelope
-        automation_event_type = data["event_type"]
-
-        # Create clean data payload without event_type (since it's in message type)
-        clean_data = _normalize_browser_payload({k: v for k, v in data.items() if k != "event_type"})
-        serialized_data = jsonable_encoder(clean_data)
-
-        automation_envelope = Envelope.create(message_type=automation_event_type, topic=automation_topic, data=serialized_data)
-        await self.broadcast_to_topic(automation_topic, automation_envelope.model_dump())
-
-    async def _handle_thread_event(self, data: Dict[str, Any]) -> None:
-        """Handle thread-related events from the event bus."""
-        if "thread_id" not in data:
-            return
-
-        thread_id = data["thread_id"]
-        topic = f"thread:{thread_id}"
-
-        # Extract event_type before serialization to avoid duplication in envelope
-        event_type = data["event_type"]
-
-        # Create clean data payload without event_type (since it's in message type)
-        clean_data = _normalize_browser_payload({k: v for k, v in data.items() if k != "event_type"})
-        serialized_data = jsonable_encoder(clean_data)
-
-        # Use envelope format
-        envelope = Envelope.create(message_type=event_type, topic=topic, data=serialized_data)
-        await self.broadcast_to_topic(topic, envelope.model_dump())
-
-    async def _handle_run_event(self, data: Dict[str, Any]) -> None:
-        """Forward run events to automation topics."""
-        automation_id = data.get("automation_id", data.get("fiche_id"))
-        if automation_id is None:
-            return
-
-        automation_topic = f"automation:{automation_id}"
-
-        # Map run_id to id to match schema expectations
-        clean_data = _normalize_browser_payload({k: v for k, v in data.items() if k != "event_type"})
-        if "run_id" in clean_data:
-            clean_data["id"] = clean_data.pop("run_id")
-        clean_data["automation_id"] = automation_id
-
-        run_id = clean_data.get("id")
-        source_event = str(data.get("event_type") or "unknown")
-        status_value = str(clean_data.get("status") or "unknown")
-
-        websocket_run_updates_total.labels(status=status_value, source_event=source_event).inc()
-
-        elapsed_seconds: float | None = None
-        started_at = clean_data.get("started_at")
-        if isinstance(started_at, str):
-            started_dt = _parse_iso8601(started_at)
-            if started_dt is not None:
-                elapsed_seconds = max(0.0, (utc_now() - started_dt).total_seconds())
-        elif isinstance(clean_data.get("duration_ms"), (int, float)):
-            elapsed_seconds = max(0.0, float(clean_data["duration_ms"]) / 1000.0)
-
-        if elapsed_seconds is not None:
-            websocket_run_update_latency_seconds.observe(elapsed_seconds)
-
-        thread_id = clean_data.get("thread_id")
-        if thread_id is None:
-            logger.warning(
-                "run_update payload missing thread_id (automation=%s run=%s source=%s)",
-                automation_id,
-                run_id,
-                source_event,
-            )
-
-        logger.info(
-            "Broadcasting run_update (automation=%s run=%s status=%s thread=%s elapsed=%s)",
-            automation_id,
-            run_id,
-            status_value,
-            thread_id if thread_id is not None else "unknown",
-            f"{elapsed_seconds:.3f}s" if elapsed_seconds is not None else "n/a",
-        )
-
-        serialized_data = jsonable_encoder(clean_data)
-
-        # Use envelope format
-        automation_envelope = Envelope.create(message_type="run_update", topic=automation_topic, data=serialized_data)
-        await self.broadcast_to_topic(automation_topic, automation_envelope.model_dump())
 
     async def _handle_user_event(self, data: Dict[str, Any]) -> None:
         """Forward user events to `user:{id}` topic so other tabs update."""

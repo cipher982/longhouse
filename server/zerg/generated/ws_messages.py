@@ -50,25 +50,10 @@ class Envelope(BaseModel):
 
 # Message payload schemas
 
-class AutomationRef(BaseModel):
-    """Payload for AutomationRef messages"""
-
-    id: int = Field(ge=1, description='')
-
-class ThreadRef(BaseModel):
-    """Payload for ThreadRef messages"""
-
-    thread_id: int = Field(ge=1, description='')
-
 class UserRef(BaseModel):
     """Payload for UserRef messages"""
 
     id: int = Field(ge=1, description='')
-
-class ExecutionRef(BaseModel):
-    """Payload for ExecutionRef messages"""
-
-    execution_id: int = Field(ge=1, description='')
 
 class PingData(BaseModel):
     """Payload for PingData messages"""
@@ -112,80 +97,6 @@ class UnsubscribeData(BaseModel):
     topics: List[str]
     message_id: Optional[str] = None
 
-class SendMessageData(BaseModel):
-    """Payload for SendMessageData messages"""
-
-    thread_id: int = Field(ge=1, description='')
-    content: str = Field(min_length=1, description='')
-    metadata: Optional[Dict[str, Any]] = None
-
-class ThreadMessageData(BaseModel):
-    """Payload for ThreadMessageData messages"""
-
-    thread_id: int = Field(ge=1, description='')
-    message: Dict[str, Any]
-
-class ThreadEventData(BaseModel):
-    """Payload for ThreadEventData messages"""
-
-    thread_id: int = Field(ge=1, description='')
-    automation_id: Optional[int] = Field(default=None, ge=1, description='')
-    title: Optional[str] = None
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
-
-class StreamStartData(BaseModel):
-    """Payload for StreamStartData messages"""
-
-    thread_id: int = Field(ge=1, description='')
-
-class StreamChunkData(BaseModel):
-    """Payload for StreamChunkData messages"""
-
-    thread_id: int = Field(ge=1, description='')
-    chunk_type: Literal['assistant_token', 'assistant_message', 'tool_output']
-    content: Optional[str] = None
-    tool_name: Optional[str] = None
-    tool_call_id: Optional[str] = None
-    message_id: Optional[int] = Field(default=None, ge=1, description='')
-
-class StreamEndData(BaseModel):
-    """Payload for StreamEndData messages"""
-
-    thread_id: int = Field(ge=1, description='')
-
-class AssistantIdData(BaseModel):
-    """Payload for AssistantIdData messages"""
-
-    thread_id: int = Field(ge=1, description='')
-    message_id: int = Field(ge=1, description='')
-
-class AutomationEventData(BaseModel):
-    """Payload for AutomationEventData messages"""
-
-    id: int = Field(ge=1, description='')
-    status: Optional[str] = None
-    last_run_at: Optional[str] = None
-    next_run_at: Optional[str] = None
-    last_error: Optional[str] = None
-    name: Optional[str] = None
-    description: Optional[str] = None
-
-class RunUpdateData(BaseModel):
-    """Payload for RunUpdateData messages"""
-
-    id: int = Field(ge=1, description='')
-    automation_id: int = Field(ge=1, description='')
-    thread_id: Optional[int] = Field(default=None, ge=1, description='')
-    status: Literal['queued', 'running', 'waiting', 'deferred', 'success', 'failed', 'cancelled']
-    trigger: Optional[Literal['manual', 'schedule', 'chat', 'webhook', 'api', 'continuation']] = None
-    started_at: Optional[str] = None
-    finished_at: Optional[str] = None
-    duration_ms: Optional[int] = Field(default=None, ge=0, description='')
-    total_tokens: Optional[int] = Field(default=None, ge=0, description='')
-    total_cost_usd: Optional[float] = Field(default=None, ge=0, description='')
-    error: Optional[str] = None
-
 class UserUpdateData(BaseModel):
     """Payload for UserUpdateData messages"""
 
@@ -197,19 +108,9 @@ class UserUpdateData(BaseModel):
 class OpsEventData(BaseModel):
     """Payload for OpsEventData messages"""
 
-    type: Literal['run_started', 'run_success', 'run_failed', 'automation_created', 'automation_updated', 'thread_message_created', 'budget_denied']
-    automation_id: Optional[int] = Field(default=None, ge=1, description='')
-    run_id: Optional[int] = Field(default=None, ge=1, description='')
-    thread_id: Optional[int] = Field(default=None, ge=1, description='')
-    duration_ms: Optional[int] = Field(default=None, ge=0, description='')
-    error: Optional[str] = None
-    automation_name: Optional[str] = None
+    type: Literal['notice']
+    message: Optional[str] = None
     status: Optional[str] = None
-    scope: Optional[Literal['user', 'global']] = None
-    percent: Optional[float] = None
-    used_usd: Optional[float] = None
-    limit_cents: Optional[int] = Field(default=None, ge=0, description='')
-    user_email: Optional[str] = None
 
 class MessageType(str, Enum):
     """Enumeration of all WebSocket message types."""
@@ -221,15 +122,6 @@ class MessageType(str, Enum):
     SUBSCRIBE_ACK = "subscribe_ack"
     SUBSCRIBE_ERROR = "subscribe_error"
     UNSUBSCRIBE = "unsubscribe"
-    SEND_MESSAGE = "send_message"
-    THREAD_MESSAGE = "thread_message"
-    THREAD_EVENT = "thread_event"
-    STREAM_START = "stream_start"
-    STREAM_CHUNK = "stream_chunk"
-    STREAM_END = "stream_end"
-    ASSISTANT_ID = "assistant_id"
-    AUTOMATION_EVENT = "automation_event"
-    RUN_UPDATE = "run_update"
     USER_UPDATE = "user_update"
     OPS_EVENT = "ops_event"
 

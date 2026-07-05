@@ -24,8 +24,8 @@ def update_json_field(model: Any, field_name: str, updates: Dict[str, Any]) -> N
         updates: Dictionary of updates to merge into the field
 
     Example:
-        >>> fiche = db.query(Fiche).first()
-        >>> update_json_field(fiche, 'config', {'new_setting': 'value'})
+        >>> row = db.query(Model).first()
+        >>> update_json_field(row, 'config', {'new_setting': 'value'})
         >>> db.commit()
     """
     current = getattr(model, field_name) or {}
@@ -46,8 +46,8 @@ def set_json_field(model: Any, field_name: str, value: Optional[Dict[str, Any]])
         value: The new value for the field (can be None)
 
     Example:
-        >>> fiche = db.query(Fiche).first()
-        >>> set_json_field(fiche, 'config', {'completely': 'new'})
+        >>> row = db.query(Model).first()
+        >>> set_json_field(row, 'config', {'completely': 'new'})
         >>> db.commit()
     """
     setattr(model, field_name, value)
@@ -69,8 +69,8 @@ def get_json_value(model: Any, field_name: str, key: str, default: Any = None) -
         The value at the key, or default if not found
 
     Example:
-        >>> fiche = db.query(Fiche).first()
-        >>> timeout = get_json_value(fiche, 'config', 'timeout', 30)
+        >>> row = db.query(Model).first()
+        >>> timeout = get_json_value(row, 'config', 'timeout', 30)
     """
     field_value = getattr(model, field_name)
     if not isinstance(field_value, dict):
@@ -90,8 +90,8 @@ def remove_json_key(model: Any, field_name: str, key: str) -> bool:
         True if the key was removed, False if it didn't exist
 
     Example:
-        >>> fiche = db.query(Fiche).first()
-        >>> removed = remove_json_key(fiche, 'config', 'old_setting')
+        >>> row = db.query(Model).first()
+        >>> removed = remove_json_key(row, 'config', 'old_setting')
         >>> db.commit()
     """
     field_value = getattr(model, field_name)

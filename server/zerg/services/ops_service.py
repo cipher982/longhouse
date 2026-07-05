@@ -1,26 +1,16 @@
-"""Ops metrics aggregation service (pure SQLAlchemy + small Python helpers)."""
+"""Ops metrics aggregation service."""
 
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import date
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import Any
-from typing import Dict
-from typing import List
-from typing import Optional
-from typing import Tuple
 
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.models.models import Fiche as FicheModel
-from zerg.models.models import Run as RunModel
-from zerg.models.models import Thread as ThreadModel
-from zerg.models.models import ThreadMessage as ThreadMessageModel
 from zerg.models.models import User as UserModel
 
 
@@ -44,343 +34,61 @@ def _window_label(window: str) -> str:
     raise ValueError("Unsupported window")
 
 
-def _apply_window_filter(query, dt_column, today: date, start_date: date, window: str):
-    if window == "today":
-        return query.filter(func.date(dt_column) == today)
-    return query.filter(func.date(dt_column) >= start_date)
-
-
 def _today_date_utc() -> date:
     return datetime.now(timezone.utc).date()
 
 
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+def get_summary(db: Session, current_user: UserModel, window: str = "today") -> dict[str, Any]:
+    """Compute Ops summary for launch-era data.
 
-
-def _percentile(values: List[int], p: float) -> Optional[int]:
-    if not values:
-        return None
-    values_sorted = sorted(values)
-    k = (len(values_sorted) - 1) * (p / 100.0)
-    f = int(k)
-    c = min(f + 1, len(values_sorted) - 1)
-    if f == c:
-        return int(values_sorted[int(k)])
-    d0 = values_sorted[f] * (c - k)
-    d1 = values_sorted[c] * (k - f)
-    return int(d0 + d1)
-
-
-def get_summary(db: Session, current_user: UserModel, window: str = "today") -> Dict[str, Any]:
-    """Compute the primary KPIs for the Ops summary widget/page."""
+    Automation/run KPIs were backed by the retired pre-launch tables and now
+    intentionally read as empty until session-native usage accounting exists.
+    """
+    _ = (db, current_user)
     today = _today_date_utc()
-    now = _now_utc()
-    start_date = _window_start_date(today, window)
-    label = _window_label(window)
-
-    # Runs in selected window (started)
-    runs_q = db.query(func.count(RunModel.id)).filter(RunModel.started_at.isnot(None))
-    runs_q = _apply_window_filter(runs_q, RunModel.started_at, today, start_date, window)
-    runs = int(runs_q.scalar() or 0)
-
-    # Cost in selected window (finished with known cost)
-    cost_sum_q = db.query(func.coalesce(func.sum(RunModel.total_cost_usd), 0.0)).filter(RunModel.finished_at.isnot(None))
-    cost_sum_q = _apply_window_filter(cost_sum_q, RunModel.finished_at, today, start_date, window)
-
-    cost_count_q = db.query(func.count(RunModel.id)).filter(
-        RunModel.finished_at.isnot(None),
-        RunModel.total_cost_usd.isnot(None),
-    )
-    cost_count_q = _apply_window_filter(cost_count_q, RunModel.finished_at, today, start_date, window)
-
-    known_cost_count = int(cost_count_q.scalar() or 0)
-    cost_usd_val = float(cost_sum_q.scalar() or 0.0)
-    cost_usd: Optional[float] = cost_usd_val if known_cost_count > 0 else None
-
-    # Budgets
+    _window_start_date(today, window)
     settings = get_settings()
-    # user budget
     user_budget_cents = int(getattr(settings, "daily_cost_per_user_cents", 0) or 0)
-    user_cost_q = (
-        db.query(func.coalesce(func.sum(RunModel.total_cost_usd), 0.0))
-        .join(FicheModel, FicheModel.id == RunModel.fiche_id)
-        .filter(
-            FicheModel.owner_id == current_user.id,
-            RunModel.finished_at.isnot(None),
-            func.date(RunModel.finished_at) == today,
-        )
-    )
-    user_used_usd = float(user_cost_q.scalar() or 0.0)
-    user_percent: Optional[float] = None
-    if user_budget_cents > 0:
-        user_percent = min(100.0, (user_used_usd / (user_budget_cents / 100.0)) * 100.0) if user_used_usd else 0.0
-
-    # global budget
     global_budget_cents = int(getattr(settings, "daily_cost_global_cents", 0) or 0)
-    global_cost_q = db.query(func.coalesce(func.sum(RunModel.total_cost_usd), 0.0)).filter(
-        RunModel.finished_at.isnot(None), func.date(RunModel.finished_at) == today
-    )
-    global_used_usd = float(global_cost_q.scalar() or 0.0)
-    global_percent: Optional[float] = None
-    if global_budget_cents > 0:
-        global_percent = min(100.0, (global_used_usd / (global_budget_cents / 100.0)) * 100.0) if global_used_usd else 0.0
-
-    # Active users (24h): owners of runs started in last 24h or posters of messages in last 24h
-    since_24h = now - timedelta(hours=24)
-    user_ids_from_runs = (
-        db.query(FicheModel.owner_id)
-        .join(RunModel, RunModel.fiche_id == FicheModel.id)
-        .filter(RunModel.started_at.isnot(None), RunModel.started_at >= since_24h)
-        .distinct()
-    )
-    user_ids_from_messages = (
-        db.query(FicheModel.owner_id)
-        .join(ThreadModel, ThreadModel.fiche_id == FicheModel.id)
-        .join(ThreadMessageModel, ThreadMessageModel.thread_id == ThreadModel.id)
-        .filter(ThreadMessageModel.sent_at >= since_24h)
-        .distinct()
-    )
-    # Execute both and union in Python for cross-DB simplicity
-    active_user_ids = {row[0] for row in user_ids_from_runs.all()} | {row[0] for row in user_ids_from_messages.all()}
-    active_users_24h = len({uid for uid in active_user_ids if uid is not None})
-
-    # Automations: total and scheduled (simple: schedule IS NOT NULL)
-    automations_total = int(db.query(func.count(FicheModel.id)).scalar() or 0)
-    automations_scheduled = int(db.query(func.count(FicheModel.id)).filter(FicheModel.schedule.isnot(None)).scalar() or 0)
-
-    # Latency: p50/p95 for successful runs in selected window
-    durations_rows = db.query(RunModel.duration_ms).filter(
-        RunModel.duration_ms.isnot(None),
-        RunModel.started_at.isnot(None),
-        RunModel.status == "success",
-    )
-    durations_rows = _apply_window_filter(durations_rows, RunModel.started_at, today, start_date, window).all()
-
-    durations = [int(r[0]) for r in durations_rows if r[0] is not None]
-    latency_p50 = _percentile(durations, 50) or 0
-    latency_p95 = _percentile(durations, 95) or 0
-
-    # Errors in last hour (finished failed)
-    since_1h = now - timedelta(hours=1)
-    errors_last_hour = int(
-        db.query(func.count(RunModel.id))
-        .filter(
-            RunModel.finished_at.isnot(None),
-            RunModel.finished_at >= since_1h,
-            RunModel.status == "failed",
-        )
-        .scalar()
-        or 0
-    )
-
-    # Top automations in selected window: run count, cost sum (nullable), p95 duration
-    top_automations = get_top_automations(db, window=window, limit=5)
 
     return {
         "window": window,
-        "window_label": label,
-        "runs": runs,
-        "cost_usd": cost_usd,
-        "budget_user": {
-            "limit_cents": user_budget_cents,
-            "used_usd": user_used_usd,
-            "percent": user_percent,
-        },
-        "budget_global": {
-            "limit_cents": global_budget_cents,
-            "used_usd": global_used_usd,
-            "percent": global_percent,
-        },
-        "active_users_24h": active_users_24h,
-        "automations_total": automations_total,
-        "automations_scheduled": automations_scheduled,
-        "latency_ms": {"p50": latency_p50, "p95": latency_p95},
-        "errors_last_hour": errors_last_hour,
-        "top_automations": top_automations,
+        "window_label": _window_label(window),
+        "runs": 0,
+        "cost_usd": None,
+        "budget_user": {"limit_cents": user_budget_cents, "used_usd": 0.0, "percent": 0.0 if user_budget_cents > 0 else None},
+        "budget_global": {"limit_cents": global_budget_cents, "used_usd": 0.0, "percent": 0.0 if global_budget_cents > 0 else None},
+        "active_users_24h": 0,
+        "automations_total": 0,
+        "automations_scheduled": 0,
+        "latency_ms": {"p50": 0, "p95": 0},
+        "errors_last_hour": 0,
+        "top_automations": [],
     }
 
 
-def get_timeseries(db: Session, metric: str, window: str = "today") -> List[Dict[str, Any]]:
-    """Return simple time-series suitable for small sparklines.
-
-    - Hourly series for window=today
-    - Daily series for window=7d or 30d
-    """
+def get_timeseries(db: Session, metric: str, window: str = "today") -> list[dict[str, Any]]:
+    """Return zero-filled time-series for retired automation metrics."""
+    _ = db
     today = _today_date_utc()
 
     if window == "today":
-        result: Dict[int, float] = {h: 0 for h in range(24)}
-
-        if metric == "runs_by_hour":
-            rows = (
-                db.query(func.extract("hour", RunModel.started_at), func.count(RunModel.id))
-                .filter(RunModel.started_at.isnot(None), func.date(RunModel.started_at) == today)
-                .group_by(func.extract("hour", RunModel.started_at))
-                .all()
-            )
-            for hour_value, count in rows:
-                result[int(hour_value)] = int(count)
-
-        elif metric == "errors_by_hour":
-            rows = (
-                db.query(func.extract("hour", RunModel.finished_at), func.count(RunModel.id))
-                .filter(
-                    RunModel.finished_at.isnot(None),
-                    func.date(RunModel.finished_at) == today,
-                    RunModel.status == "failed",
-                )
-                .group_by(func.extract("hour", RunModel.finished_at))
-                .all()
-            )
-            for hour_value, count in rows:
-                result[int(hour_value)] = int(count)
-
-        elif metric == "cost_by_hour":
-            rows = (
-                db.query(
-                    func.extract("hour", RunModel.finished_at),
-                    func.coalesce(func.sum(RunModel.total_cost_usd), 0.0),
-                )
-                .filter(
-                    RunModel.finished_at.isnot(None),
-                    func.date(RunModel.finished_at) == today,
-                    RunModel.total_cost_usd.isnot(None),
-                )
-                .group_by(func.extract("hour", RunModel.finished_at))
-                .all()
-            )
-            for hour_value, total in rows:
-                result[int(hour_value)] = float(total)
-        else:
+        if metric not in {"runs_by_hour", "errors_by_hour", "cost_by_hour"}:
             raise ValueError("Unsupported metric for window=today")
+        return [{"hour_iso": f"{h:02d}:00Z", "value": 0.0} for h in range(24)]
 
-        return [{"hour_iso": f"{h:02d}:00Z", "value": result[h]} for h in range(24)]
-
-    # Daily windows -------------------------------------------------
     if window not in {"7d", "30d"}:
         raise ValueError("Unsupported window")
+    if metric not in {"runs_by_day", "errors_by_day", "cost_by_day"}:
+        raise ValueError("Unsupported metric for daily window")
 
     days = 7 if window == "7d" else 30
     start_date = today - timedelta(days=days - 1)
-
-    # Prepare zero-filled map of date -> value
-    result_day: Dict[str, float] = {}
-    for i in range(days):
-        d = start_date + timedelta(days=i)
-        result_day[d.isoformat()] = 0.0
-
-    def _group_and_fill(select_date_col, select_value_expr, base_filter):
-        rows = db.query(select_date_col, select_value_expr).filter(base_filter).group_by(select_date_col).all()
-        for day_value, v in rows:
-            key = day_value.isoformat() if hasattr(day_value, "isoformat") else str(day_value)
-            if key in result_day:
-                result_day[key] = float(v)
-
-    if metric == "runs_by_day":
-        date_col = func.date(RunModel.started_at)
-        value = func.count(RunModel.id)
-        filt = RunModel.started_at.isnot(None) & (func.date(RunModel.started_at) >= start_date)
-        _group_and_fill(date_col, value, filt)
-
-    elif metric == "errors_by_day":
-        date_col = func.date(RunModel.finished_at)
-        value = func.count(RunModel.id)
-        filt = RunModel.finished_at.isnot(None) & (func.date(RunModel.finished_at) >= start_date) & (RunModel.status == "failed")
-        _group_and_fill(date_col, value, filt)
-
-    elif metric == "cost_by_day":
-        date_col = func.date(RunModel.finished_at)
-        value = func.coalesce(func.sum(RunModel.total_cost_usd), 0.0)
-        filt = RunModel.finished_at.isnot(None) & (func.date(RunModel.finished_at) >= start_date) & (RunModel.total_cost_usd.isnot(None))
-        _group_and_fill(date_col, value, filt)
-    else:
-        raise ValueError("Unsupported metric for daily window")
-
-    # Render as ordered array by day
-    out: List[Dict[str, Any]] = []
-    for i in range(days):
-        d = start_date + timedelta(days=i)
-        key = d.isoformat()
-        out.append({"hour_iso": key, "value": result_day.get(key, 0.0)})
-    return out
+    return [{"hour_iso": (start_date + timedelta(days=i)).isoformat(), "value": 0.0} for i in range(days)]
 
 
-def get_top_automations(db: Session, window: str = "today", limit: int = 5) -> List[Dict[str, Any]]:
-    """Compute per-automation aggregates for the given window.
-
-    Supports "today", "7d", and "30d".
-    """
-    today = _today_date_utc()
-    start_date: Optional[date] = None
-    if window == "7d":
-        start_date = today - timedelta(days=6)
-    elif window == "30d":
-        start_date = today - timedelta(days=29)
-    elif window != "today":
-        raise ValueError("Unsupported window")
-
-    # Base: runs started today per automation
-    base_runs_q = db.query(RunModel.fiche_id, func.count(RunModel.id).label("runs")).filter(RunModel.started_at.isnot(None))
-    if start_date is not None:
-        base_runs_q = base_runs_q.filter(func.date(RunModel.started_at) >= start_date)
-    else:
-        base_runs_q = base_runs_q.filter(func.date(RunModel.started_at) == today)
-    run_rows = base_runs_q.group_by(RunModel.fiche_id).all()
-    runs_map = {fiche_id: int(runs) for fiche_id, runs in run_rows}
-
-    # Cost sum for finished runs with cost
-    base_cost_q = db.query(RunModel.fiche_id, func.coalesce(func.sum(RunModel.total_cost_usd), 0.0)).filter(
-        RunModel.finished_at.isnot(None), RunModel.total_cost_usd.isnot(None)
-    )
-    if start_date is not None:
-        base_cost_q = base_cost_q.filter(func.date(RunModel.finished_at) >= start_date)
-    else:
-        base_cost_q = base_cost_q.filter(func.date(RunModel.finished_at) == today)
-    cost_rows = base_cost_q.group_by(RunModel.fiche_id).all()
-    cost_map = {fiche_id: float(total) for fiche_id, total in cost_rows}
-
-    # p95 duration for successful runs per automation (compute in Python)
-    base_dur_q = db.query(RunModel.fiche_id, RunModel.duration_ms).filter(
-        RunModel.duration_ms.isnot(None),
-        RunModel.started_at.isnot(None),
-        RunModel.status == "success",
-    )
-    if start_date is not None:
-        base_dur_q = base_dur_q.filter(func.date(RunModel.started_at) >= start_date)
-    else:
-        base_dur_q = base_dur_q.filter(func.date(RunModel.started_at) == today)
-    dur_rows = base_dur_q.all()
-    durations_by_automation: Dict[int, List[int]] = defaultdict(list)
-    for fiche_id, d in dur_rows:
-        if d is not None and fiche_id is not None:
-            durations_by_automation[int(fiche_id)].append(int(d))
-    p95_map = {fid: (_percentile(vals, 95) or 0) for fid, vals in durations_by_automation.items()}
-
-    # Join with automation + owner info
-    fiches_info_rows = (
-        db.query(FicheModel.id, FicheModel.name, UserModel.email)
-        .join(UserModel, UserModel.id == FicheModel.owner_id)
-        .filter(FicheModel.id.in_(runs_map.keys()) if runs_map else False)
-        .all()
-    )
-    info_map = {row[0]: (row[1], row[2]) for row in fiches_info_rows}
-
-    items: List[Tuple[int, int]] = sorted(runs_map.items(), key=lambda x: (-x[1], x[0]))
-    top_ids = [fid for fid, _ in items][: limit or 5]
-
-    result: List[Dict[str, Any]] = []
-    for fid in top_ids:
-        name, owner_email = info_map.get(fid, (None, None))
-        result.append(
-            {
-                "automation_id": fid,
-                "name": name,
-                "owner_email": owner_email,
-                "runs": runs_map.get(fid, 0),
-                "cost_usd": cost_map.get(fid),
-                "p95_ms": p95_map.get(fid, 0),
-            }
-        )
-
-    return result
+def get_top_automations(db: Session, window: str = "today", limit: int = 5) -> list[dict[str, Any]]:
+    """Return no automation rows because the automation data plane is retired."""
+    _ = (db, limit)
+    _window_start_date(_today_date_utc(), window)
+    return []

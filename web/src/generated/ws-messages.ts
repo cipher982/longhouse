@@ -23,20 +23,8 @@ export interface Envelope<T = unknown> {
 
 // Message payload types
 
-export interface AutomationRef {
-  id: number;
-}
-
-export interface ThreadRef {
-  thread_id: number;
-}
-
 export interface UserRef {
   id: number;
-}
-
-export interface ExecutionRef {
-  execution_id: number;
 }
 
 export interface PingData {
@@ -80,71 +68,6 @@ export interface UnsubscribeData {
   message_id?: string;
 }
 
-export interface SendMessageData {
-  thread_id: number;
-  content: string;
-  metadata?: Record<string, any>;
-}
-
-export interface ThreadMessageData {
-  thread_id: number;
-  message: Record<string, any>;
-}
-
-export interface ThreadEventData {
-  thread_id: number;
-  automation_id?: number;
-  title?: string;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export interface StreamStartData {
-  thread_id: number;
-}
-
-export interface StreamChunkData {
-  thread_id: number;
-  chunk_type: "assistant_token" | "assistant_message" | "tool_output";
-  content?: string;
-  tool_name?: string;
-  tool_call_id?: string;
-  message_id?: number;
-}
-
-export interface StreamEndData {
-  thread_id: number;
-}
-
-export interface AssistantIdData {
-  thread_id: number;
-  message_id: number;
-}
-
-export interface AutomationEventData {
-  id: number;
-  status?: string;
-  last_run_at?: string;
-  next_run_at?: string;
-  last_error?: string;
-  name?: string;
-  description?: string;
-}
-
-export interface RunUpdateData {
-  id: number;
-  automation_id: number;
-  thread_id?: number;
-  status: "queued" | "running" | "waiting" | "deferred" | "success" | "failed" | "cancelled";
-  trigger?: "manual" | "schedule" | "chat" | "webhook" | "api" | "continuation";
-  started_at?: string;
-  finished_at?: string;
-  duration_ms?: number;
-  total_tokens?: number;
-  total_cost_usd?: number;
-  error?: string;
-}
-
 export interface UserUpdateData {
   id: number;
   email?: string;
@@ -153,19 +76,9 @@ export interface UserUpdateData {
 }
 
 export interface OpsEventData {
-  type: "run_started" | "run_success" | "run_failed" | "automation_created" | "automation_updated" | "thread_message_created" | "budget_denied";
-  automation_id?: number;
-  run_id?: number;
-  thread_id?: number;
-  duration_ms?: number;
-  error?: string;
-  automation_name?: string;
+  type: "notice";
+  message?: string;
   status?: string;
-  scope?: "user" | "global";
-  percent?: number;
-  used_usd?: number;
-  limit_cents?: number;
-  user_email?: string;
 }
 
 // Typed message definitions with envelopes
@@ -205,51 +118,6 @@ export interface UnsubscribeMessage extends Envelope<UnsubscribeData> {
   type: 'unsubscribe';
 }
 
-/** Client request to send a message to a thread */
-export interface SendMessageRequest extends Envelope<SendMessageData> {
-  type: 'send_message';
-}
-
-/** New message added to thread */
-export interface ThreadMessage extends Envelope<ThreadMessageData> {
-  type: 'thread_message';
-}
-
-/** Thread lifecycle event */
-export interface ThreadEvent extends Envelope<ThreadEventData> {
-  type: 'thread_event';
-}
-
-/** Assistant response streaming started */
-export interface StreamStart extends Envelope<StreamStartData> {
-  type: 'stream_start';
-}
-
-/** Chunk of streaming assistant response */
-export interface StreamChunk extends Envelope<StreamChunkData> {
-  type: 'stream_chunk';
-}
-
-/** Assistant response streaming finished */
-export interface StreamEnd extends Envelope<StreamEndData> {
-  type: 'stream_end';
-}
-
-/** Assistant message ID assignment */
-export interface AssistantId extends Envelope<AssistantIdData> {
-  type: 'assistant_id';
-}
-
-/** Automation lifecycle or status event */
-export interface AutomationEvent extends Envelope<AutomationEventData> {
-  type: 'automation_event';
-}
-
-/** Automation run status update */
-export interface RunUpdate extends Envelope<RunUpdateData> {
-  type: 'run_update';
-}
-
 /** User profile update */
 export interface UserUpdate extends Envelope<UserUpdateData> {
   type: 'user_update';
@@ -269,14 +137,5 @@ export type WebSocketMessage =
   | SubscribeAckMessage
   | SubscribeErrorMessage
   | UnsubscribeMessage
-  | SendMessageRequest
-  | ThreadMessage
-  | ThreadEvent
-  | StreamStart
-  | StreamChunk
-  | StreamEnd
-  | AssistantId
-  | AutomationEvent
-  | RunUpdate
   | UserUpdate
   | OpsEvent

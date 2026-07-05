@@ -184,7 +184,7 @@ def health_db(request: Request):
     from zerg.database import default_engine
 
     trusted = _request_is_trusted(request)
-    required_tables = ["users", "fiches", "threads", "runs", "commis_tasks", "sessions", "events", "events_fts"]
+    required_tables = ["users", "sessions", "events", "events_fts"]
 
     try:
         with default_engine.connect() as conn:

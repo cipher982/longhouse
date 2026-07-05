@@ -116,7 +116,7 @@ def http_request(
             url = f"{url}?{urlencode(params)}"
 
         # Default headers
-        default_headers = {"User-Fiche": "Zerg-Fiche/1.0"}
+        default_headers = {"User-Agent": "Longhouse/1.0"}
         if headers:
             default_headers.update(headers)
 

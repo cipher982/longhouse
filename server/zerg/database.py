@@ -202,19 +202,8 @@ try:
     from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration  # noqa: F401
     from zerg.models.apns_widget_push_state import APNSWidgetPushState  # noqa: F401
     from zerg.models.machine_presence import MachinePresence  # noqa: F401
-    from zerg.models.models import Connector  # noqa: F401
-    from zerg.models.models import Conversation  # noqa: F401
-    from zerg.models.models import ConversationBinding  # noqa: F401
-    from zerg.models.models import ConversationMessage  # noqa: F401
-    from zerg.models.models import Fiche  # noqa: F401
-    from zerg.models.models import FicheMessage  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
-    from zerg.models.models import Run  # noqa: F401
-    from zerg.models.models import SurfaceIngressClaim  # noqa: F401
-    from zerg.models.models import Thread  # noqa: F401
-    from zerg.models.models import ThreadMessage  # noqa: F401
-    from zerg.models.models import Trigger  # noqa: F401
     from zerg.models.models import User  # noqa: F401
     from zerg.models.models import UserSkill  # noqa: F401
     from zerg.models.models import UserTask  # noqa: F401
@@ -222,7 +211,6 @@ try:
     from zerg.models.notification_event import NotificationEvent  # noqa: F401
     from zerg.models.session_share import SessionShare  # noqa: F401
     from zerg.models.session_share import SessionShareEvent  # noqa: F401
-    from zerg.models.work import Insight  # noqa: F401
 except ImportError:
     # Handle case where models module might not be available during certain imports
     pass
@@ -761,7 +749,7 @@ def _pre_migrate_session_inputs_identity_columns(engine: Engine) -> None:
         return
 
     try:
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             exists = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_inputs'")).fetchone()
             if not exists:
                 return
@@ -808,25 +796,14 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration  # noqa: F401
     from zerg.models.apns_widget_push_state import APNSWidgetPushState  # noqa: F401
     from zerg.models.machine_presence import MachinePresence  # noqa: F401
-    from zerg.models.models import Connector  # noqa: F401
-    from zerg.models.models import Conversation  # noqa: F401
-    from zerg.models.models import ConversationBinding  # noqa: F401
-    from zerg.models.models import ConversationMessage  # noqa: F401
-    from zerg.models.models import Fiche  # noqa: F401
-    from zerg.models.models import FicheMessage  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
-    from zerg.models.models import Run  # noqa: F401
-    from zerg.models.models import SurfaceIngressClaim  # noqa: F401
-    from zerg.models.models import Thread  # noqa: F401
-    from zerg.models.models import ThreadMessage  # noqa: F401
     from zerg.models.models import User  # noqa: F401
     from zerg.models.models import UserTask  # noqa: F401
     from zerg.models.notification_client_presence import NotificationClientPresence  # noqa: F401
     from zerg.models.notification_event import NotificationEvent  # noqa: F401
     from zerg.models.session_share import SessionShare  # noqa: F401
     from zerg.models.session_share import SessionShareEvent  # noqa: F401
-    from zerg.models.work import Insight  # noqa: F401
 
     target_engine = engine or default_engine or _ensure_default_engines_from_env()
 
@@ -2184,7 +2161,29 @@ def _cleanup_legacy_agents_tables(engine: Engine) -> None:
 
     try:
         with engine.connect() as conn:
-            legacy_tables = ("file_reservations", "memories", "sync_operations")
+            legacy_tables = (
+                "file_reservations",
+                "memories",
+                "sync_operations",
+                # Retired pre-launch automation data plane.
+                "llm_audit_log",
+                "run_events",
+                "commis_tasks",
+                "connector_credentials",
+                "runs",
+                "thread_messages",
+                "threads",
+                "fiche_messages",
+                "triggers",
+                "fiches",
+                "conversation_messages",
+                "conversation_bindings",
+                "conversations",
+                "connectors",
+                "surface_ingress_claims",
+                "runner_wakeups",
+                "insights",
+            )
             for table_name in legacy_tables:
                 exists = conn.execute(
                     text(

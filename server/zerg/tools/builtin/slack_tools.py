@@ -143,7 +143,7 @@ def send_slack_webhook(
                 json=payload,
                 headers={
                     "Content-Type": "application/json",
-                    "User-Fiche": "Zerg-Fiche/1.0",
+                    "User-Agent": "Longhouse/1.0",
                 },
                 timeout=10.0,
             )
@@ -220,7 +220,7 @@ TOOLS: List[StructuredTool] = [
         name="send_slack_webhook",
         description=(
             "Send a message to Slack via incoming webhook. "
-            "If Slack is configured in Fiche Settings -> Connectors, the webhook URL is used automatically. "
+            "If Slack is configured in account connectors, the webhook URL is used automatically. "
             "Supports simple text messages and rich formatting with Block Kit blocks. "
             "Use this to send notifications, alerts, or status updates to Slack channels."
         ),

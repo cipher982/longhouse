@@ -21,45 +21,6 @@
         "UnsubscribeMessage"
       ]
     },
-    "ThreadChannel": {
-      "address": "thread:{thread_id}",
-      "description": "Thread messages, streaming, and lifecycle events",
-      "parameters": {
-        "thread_id": {
-          "description": "Numeric identifier of the thread",
-          "examples": [
-            "42",
-            "123"
-          ]
-        }
-      },
-      "messages": [
-        "SendMessageRequest",
-        "ThreadMessage",
-        "ThreadEvent",
-        "StreamStart",
-        "StreamChunk",
-        "StreamEnd",
-        "AssistantId"
-      ]
-    },
-    "AutomationChannel": {
-      "address": "automation:{automation_id}",
-      "description": "Automation lifecycle events and run updates",
-      "parameters": {
-        "automation_id": {
-          "description": "Numeric identifier of the automation",
-          "examples": [
-            "17",
-            "42"
-          ]
-        }
-      },
-      "messages": [
-        "AutomationEvent",
-        "RunUpdate"
-      ]
-    },
     "UserChannel": {
       "address": "user:{user_id}",
       "description": "User profile updates and notifications",
@@ -142,89 +103,6 @@
       "handler_method": "handle_unsubscribe",
       "aliases": []
     },
-    "send_message": {
-      "summary": "Client request to send a message to a thread",
-      "payload_schema": {
-        "$ref": "#/components/schemas/SendMessageData"
-      },
-      "handler_method": "handle_send_message",
-      "aliases": []
-    },
-    "thread_message": {
-      "summary": "New message added to thread",
-      "payload_schema": {
-        "$ref": "#/components/schemas/ThreadMessageData"
-      },
-      "handler_method": "handle_thread_message",
-      "aliases": [
-        "thread_message_created"
-      ]
-    },
-    "thread_event": {
-      "summary": "Thread lifecycle event",
-      "payload_schema": {
-        "$ref": "#/components/schemas/ThreadEventData"
-      },
-      "handler_method": "handle_thread_event",
-      "aliases": [
-        "thread_created",
-        "thread_updated",
-        "thread_deleted"
-      ]
-    },
-    "stream_start": {
-      "summary": "Assistant response streaming started",
-      "payload_schema": {
-        "$ref": "#/components/schemas/StreamStartData"
-      },
-      "handler_method": "handle_stream_start",
-      "aliases": []
-    },
-    "stream_chunk": {
-      "summary": "Chunk of streaming assistant response",
-      "payload_schema": {
-        "$ref": "#/components/schemas/StreamChunkData"
-      },
-      "handler_method": "handle_stream_chunk",
-      "aliases": []
-    },
-    "stream_end": {
-      "summary": "Assistant response streaming finished",
-      "payload_schema": {
-        "$ref": "#/components/schemas/StreamEndData"
-      },
-      "handler_method": "handle_stream_end",
-      "aliases": []
-    },
-    "assistant_id": {
-      "summary": "Assistant message ID assignment",
-      "payload_schema": {
-        "$ref": "#/components/schemas/AssistantIdData"
-      },
-      "handler_method": "handle_assistant_id",
-      "aliases": []
-    },
-    "automation_event": {
-      "summary": "Automation lifecycle or status event",
-      "payload_schema": {
-        "$ref": "#/components/schemas/AutomationEventData"
-      },
-      "handler_method": "handle_automation_event",
-      "aliases": [
-        "automation_created",
-        "automation_updated",
-        "automation_deleted",
-        "automation_state"
-      ]
-    },
-    "run_update": {
-      "summary": "Automation run status update",
-      "payload_schema": {
-        "$ref": "#/components/schemas/RunUpdateData"
-      },
-      "handler_method": "handle_run_update",
-      "aliases": []
-    },
     "user_update": {
       "summary": "User profile update",
       "payload_schema": {
@@ -247,20 +125,6 @@
       "action": "send",
       "channel": {
         "$ref": "#/channels/SystemChannel"
-      },
-      "messages": []
-    },
-    "ThreadOperations": {
-      "action": "send",
-      "channel": {
-        "$ref": "#/channels/ThreadChannel"
-      },
-      "messages": []
-    },
-    "AutomationOperations": {
-      "action": "send",
-      "channel": {
-        "$ref": "#/channels/AutomationChannel"
       },
       "messages": []
     },
@@ -287,23 +151,17 @@
   ],
   "performance_contracts": {
     "message_size_limits": {
-      "run_update": "max_1kb",
-      "stream_chunk": "max_64kb"
+      "ops_event": "max_1kb"
     },
     "throughput_requirements": {
-      "dashboard_messages": "100/sec",
-      "chat_messages": "1000/sec"
+      "dashboard_messages": "100/sec"
     }
   },
   "security_contracts": {
     "authentication_required": [
-      "send_message",
       "subscribe"
     ],
-    "authorization_checks": [
-      "automation_event",
-      "run_update"
-    ],
+    "authorization_checks": [],
     "data_validation": "strict",
     "sanitization_rules": {
       "user_content": "html_escape",

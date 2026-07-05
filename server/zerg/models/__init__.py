@@ -8,19 +8,11 @@ from .agents import MachineControlOperation
 from .apns_device_registration import APNSDeviceRegistration
 from .apns_live_activity_registration import APNSLiveActivityRegistration
 from .apns_widget_push_state import APNSWidgetPushState
-from .connector import Connector
-from .conversation import Conversation
-from .conversation import ConversationBinding
-from .conversation import ConversationMessage
 from .device_token import DeviceToken
-from .fiche import Fiche
-from .fiche import FicheMessage
 from .machine_presence import MachinePresence
 
 # Re-export remaining models from models.py
 from .models import AccountConnectorCredential
-from .models import CommisTask
-from .models import ConnectorCredential
 from .models import KnowledgeDocument
 from .models import KnowledgeSource
 from .models import MemoryEmbedding
@@ -35,20 +27,10 @@ from .notification_event import NotificationEvent
 
 # Re-export remaining models from models.py
 from .refresh_session import RefreshSession
-from .run import Run
-from .run_event import RunEvent
 from .session_share import SessionShare
 from .session_share import SessionShareEvent
-from .surface_ingress import SurfaceIngressClaim
-
-# Re-export from other modules
-from .thread import Thread
-from .thread import ThreadMessage
-from .trigger import Trigger
-from .trigger_config import TriggerConfig
 from .types import GUID
 from .user import User
-from .work import Insight
 
 __all__ = [
     # Shared types
@@ -63,26 +45,12 @@ __all__ = [
     "APNSLiveActivityRegistration",
     "APNSWidgetPushState",
     "DeviceToken",
-    "Fiche",
-    "FicheMessage",
-    "Run",
-    "RunEvent",
-    "CommisBarrierJob",
-    "Connector",
-    "Conversation",
-    "ConversationBinding",
-    "ConversationMessage",
-    "Thread",
-    "ThreadMessage",
-    "Trigger",
     "User",
-    "CommisBarrier",
     "RefreshSession",
     "SessionShare",
     "SessionShareEvent",
     # Remaining models (still in models.py)
     "AccountConnectorCredential",
-    "ConnectorCredential",
     "KnowledgeDocument",
     "KnowledgeSource",
     "MemoryEmbedding",
@@ -90,12 +58,8 @@ __all__ = [
     "Runner",
     "RunnerEnrollToken",
     "RunnerJob",
-    "TriggerConfig",
     "UserTask",
     "UserSkill",
-    "CommisTask",
-    "SurfaceIngressClaim",
-    "Insight",
     "MachinePresence",
     "NotificationClientPresence",
     "NotificationEvent",

@@ -14,30 +14,12 @@ logger = logging.getLogger(__name__)
 class EventType(str, Enum):
     """Standardized event types for the system."""
 
-    # Automation events
-    AUTOMATION_CREATED = "automation_created"
-    AUTOMATION_UPDATED = "automation_updated"
-    AUTOMATION_DELETED = "automation_deleted"
-
-    # Thread events
-    THREAD_CREATED = "thread_created"
-    THREAD_UPDATED = "thread_updated"
-    THREAD_DELETED = "thread_deleted"
-    THREAD_MESSAGE_CREATED = "thread_message_created"
-
-    # Run events (new run history feature)
-    RUN_CREATED = "run_created"
-    RUN_UPDATED = "run_updated"
-
     # System events
     SYSTEM_STATUS = "system_status"
     ERROR = "error"
 
     # User events (profile updates, etc.)
     USER_UPDATED = "user_updated"
-
-    # Ops dashboard events
-    BUDGET_DENIED = "budget_denied"
 
     # Assistant events
     ASSISTANT_STARTED = "assistant_started"

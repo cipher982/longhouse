@@ -15,7 +15,6 @@ from zerg.database import make_sessionmaker
 from zerg.models.models import Runner
 from zerg.models.models import RunnerHealthIncident
 from zerg.models.user import User
-from zerg.models.work import RunnerWakeup
 from zerg.services.runner_health_reconciler import OPEN_INCIDENT_STATUS
 from zerg.services.runner_health_reconciler import RESOLVED_INCIDENT_STATUS
 from zerg.services.runner_health_reconciler import reconcile_runner_health

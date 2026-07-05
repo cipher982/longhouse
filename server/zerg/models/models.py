@@ -12,7 +12,6 @@ from sqlalchemy import LargeBinary
 from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import UniqueConstraint
-from sqlalchemy import text
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.ext.mutable import MutableList
 from sqlalchemy.orm import backref
@@ -21,91 +20,8 @@ from sqlalchemy.sql import func
 
 # Local helpers / enums
 from zerg.database import Base
-from zerg.models.types import GUID
 
-from .connector import Connector  # noqa: E402, F401
-from .conversation import Conversation  # noqa: E402, F401
-from .conversation import ConversationBinding  # noqa: E402, F401
-from .conversation import ConversationMessage  # noqa: E402, F401
-
-# Re-export models that have been split into separate files.
-from .fiche import Fiche  # noqa: E402, F401
-from .fiche import FicheMessage  # noqa: E402, F401
-from .llm_audit import LLMAuditLog  # noqa: E402, F401
-from .run import Run  # noqa: E402, F401
-from .surface_ingress import SurfaceIngressClaim  # noqa: E402, F401
-from .thread import Thread  # noqa: E402, F401
-from .thread import ThreadMessage  # noqa: E402, F401
-from .trigger import Trigger  # noqa: E402, F401
 from .user import User  # noqa: E402, F401
-
-# ---------------------------------------------------------------------------
-# Integrations – Connectors (single source of truth for provider creds)
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# ConnectorCredential – encrypted credentials for built-in connector tools
-# ---------------------------------------------------------------------------
-
-
-class ConnectorCredential(Base):
-    """Encrypted credential for a built-in connector tool.
-
-    Scoped to a single agent. Each agent can have at most one credential
-    per connector type (e.g., one Slack webhook, one GitHub token).
-
-    Credentials are stored encrypted using Fernet (AES-GCM) via the
-    ``zerg.utils.crypto`` module. The ``encrypted_value`` column contains
-    a JSON blob with the credential fields specific to each connector type.
-    """
-
-    __tablename__ = "connector_credentials"
-    __table_args__ = (
-        # One credential per connector type per agent
-        UniqueConstraint("fiche_id", "connector_type", name="uix_agent_connector"),
-    )
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    # Foreign key to agent with CASCADE delete – when an agent is deleted,
-    # all its credentials are automatically removed.
-    fiche_id = Column(
-        Integer,
-        ForeignKey("fiches.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-
-    # Connector type identifier: 'slack', 'discord', 'email', 'sms',
-    # 'github', 'jira', 'linear', 'notion', 'imessage'
-    connector_type = Column(String(50), nullable=False)
-
-    # Encrypted credential value (Fernet AES-GCM).
-    # Stored as JSON containing connector-specific fields:
-    # - Slack/Discord: {"webhook_url": "..."}
-    # - GitHub: {"token": "..."}
-    # - Jira: {"domain": "...", "email": "...", "api_token": "..."}
-    encrypted_value = Column(Text, nullable=False)
-
-    # Optional user-friendly label (e.g., "#engineering channel")
-    display_name = Column(String(255), nullable=True)
-
-    # Metadata discovered during test (e.g., GitHub username, Slack workspace).
-    # Stored as JSON, NOT encrypted (no secrets here).
-    # Note: Named "connector_metadata" to avoid conflict with SQLAlchemy's reserved "metadata".
-    connector_metadata = Column(MutableDict.as_mutable(JSON), nullable=True)
-
-    # Test status tracking
-    test_status = Column(String(20), nullable=False, default="untested")
-    last_tested_at = Column(DateTime, nullable=True)
-
-    # Timestamps
-    created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
-
-    # Relationships
-    fiche = relationship("Fiche", backref="connector_credentials")
-
 
 # ---------------------------------------------------------------------------
 # AccountConnectorCredential – account-level credentials for built-in tools
@@ -115,14 +31,7 @@ class ConnectorCredential(Base):
 class AccountConnectorCredential(Base):
     """Account-level encrypted credential for built-in connector tools.
 
-    These credentials are shared across all agents owned by the user.
-    Fiches can optionally override with per-fiche credentials in
-    ConnectorCredential (agent-level overrides).
-
-    Resolution order in CredentialResolver:
-    1. Fiche-level override (ConnectorCredential)
-    2. Account-level credential (this table)
-    3. None if neither exists
+    These credentials are shared across all tools owned by the user.
 
     The organization_id column is nullable and reserved for future
     multi-tenant support. When populated, credentials can be shared
@@ -155,7 +64,7 @@ class AccountConnectorCredential(Base):
     connector_type = Column(String(50), nullable=False)
 
     # Encrypted credential value (Fernet AES-GCM).
-    # Same format as ConnectorCredential.encrypted_value
+    # Fernet token string generated by the connector credential helpers.
     encrypted_value = Column(Text, nullable=False)
 
     # Optional user-friendly label (e.g., "Engineering Slack workspace")
@@ -175,96 +84,6 @@ class AccountConnectorCredential(Base):
 
     # Relationships
     owner = relationship("User", backref="account_connector_credentials")
-
-
-# ---------------------------------------------------------------------------
-# Commis Jobs – Background task execution for assistant agents
-# ---------------------------------------------------------------------------
-
-
-class CommisTask(Base):
-    """Background task for executing commis agent work.
-
-    Commis tasks let assistant agents delegate long-running work to background
-    commiss without blocking the assistant's execution flow.
-
-    SQLite-safe concurrency:
-    - worker_id: Identifies which worker claimed the task
-    - claimed_at: When the worker claimed the task
-    - heartbeat_at: Last heartbeat update (proves worker is alive)
-
-    Tasks with stale heartbeats (no update for >2min) are reclaimed.
-    """
-
-    __tablename__ = "commis_tasks"
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    # Job ownership and security
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-
-    # Parent run correlation - links commis to parent run for SSE event streaming
-    # ON DELETE SET NULL: if parent run is deleted, commis job remains but loses correlation
-    parent_run_id = Column(Integer, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True)
-
-    # Tool call idempotency - prevents duplicate commiss from assistant resume replay
-    # The tool_call_id comes from LangChain's ToolCall structure and is unique per LLM response
-    tool_call_id = Column(String(64), nullable=True, index=True)
-
-    # Trace ID for end-to-end debugging (inherited from parent run)
-    # GUID handles UUID↔string conversion for SQLite compatibility
-    trace_id = Column(GUID(), nullable=True, index=True)
-
-    # Job specification
-    task = Column(Text, nullable=False)
-    # Optional explicit model override. When null, hatch backend/default model is used.
-    model = Column(String(100), nullable=True, default=None)
-    reasoning_effort = Column(String(20), nullable=True, default="none")  # none, low, medium, high
-
-    # Flexible execution configuration (workspace execution, git repo, etc.)
-    # Keys: execution_mode ("standard" | "workspace"), git_repo (url), base_branch, etc.
-    config = Column(JSON, nullable=True)
-
-    # Deprecated: sandbox execution removed. Column retained for DB compatibility.
-    # Always False; code no longer reads this value.
-    sandbox = Column(Boolean, nullable=False, default=False, server_default="false")
-
-    # Execution state
-    status = Column(String(20), nullable=False, default="queued")  # queued, running, success, failed, cancelled
-    commis_id = Column(String(255), nullable=True, index=True)  # Set when execution starts
-
-    # Worker tracking for SQLite-safe concurrency
-    # These fields enable stale job detection and reclaim without advisory locks
-    worker_id = Column(String(255), nullable=True, index=True)  # hostname:pid of claiming worker
-    claimed_at = Column(DateTime, nullable=True)  # When worker claimed the job
-    heartbeat_at = Column(DateTime, nullable=True)  # Last heartbeat (proves worker is alive)
-
-    # Async inbox model - tracks whether assistant has acknowledged this result
-    acknowledged = Column(Boolean, nullable=False, default=False, server_default="false")
-
-    # Error handling
-    error = Column(Text, nullable=True)
-
-    # Timestamps
-    created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
-    started_at = Column(DateTime, nullable=True)
-    finished_at = Column(DateTime, nullable=True)
-
-    # Relationships
-    owner = relationship("User", backref="commis_tasks")
-
-    # Unique constraint for idempotency - prevents duplicate commiss from replay
-    # Uses partial index: only enforce when both fields are non-null
-    __table_args__ = (
-        Index(
-            "ix_commis_tasks_idempotency",
-            "parent_run_id",
-            "tool_call_id",
-            unique=True,
-            postgresql_where=text("parent_run_id IS NOT NULL AND tool_call_id IS NOT NULL"),
-        ),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -516,14 +335,14 @@ class KnowledgeDocument(Base):
 
 
 # ---------------------------------------------------------------------------
-# User Tasks – Fiche-created tasks for users
+# User Tasks – agent-created tasks for users
 # ---------------------------------------------------------------------------
 
 
 class UserTask(Base):
     """A task created by an agent for a user.
 
-    Fiches can use task management tools to create, update, and track
+    Agents can use task management tools to create, update, and track
     tasks for their users. This provides a lightweight task management
     system without external dependencies.
     """
