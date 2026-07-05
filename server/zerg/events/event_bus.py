@@ -14,10 +14,7 @@ logger = logging.getLogger(__name__)
 class EventType(str, Enum):
     """Standardized event types for the system."""
 
-    # Fiche events
-    FICHE_CREATED = "fiche_created"
-    FICHE_UPDATED = "fiche_updated"
-    FICHE_DELETED = "fiche_deleted"
+    # Automation events
     AUTOMATION_CREATED = "automation_created"
     AUTOMATION_UPDATED = "automation_updated"
     AUTOMATION_DELETED = "automation_deleted"
@@ -32,9 +29,6 @@ class EventType(str, Enum):
     RUN_CREATED = "run_created"
     RUN_UPDATED = "run_updated"
 
-    # Trigger events (external webhook or other sources)
-    TRIGGER_FIRED = "trigger_fired"
-
     # System events
     SYSTEM_STATUS = "system_status"
     ERROR = "error"
@@ -45,25 +39,12 @@ class EventType(str, Enum):
     # Ops dashboard events
     BUDGET_DENIED = "budget_denied"
 
-    # Assistant/Commis events
+    # Assistant events
     ASSISTANT_STARTED = "assistant_started"
     ASSISTANT_THINKING = "assistant_thinking"
     ASSISTANT_TOKEN = "assistant_token"  # Real-time LLM token streaming
     ASSISTANT_COMPLETE = "assistant_complete"
     ASSISTANT_DEFERRED = "assistant_deferred"  # Timeout migration: still running, caller stopped waiting
-    ASSISTANT_WAITING = "assistant_waiting"  # Interrupted waiting for commis resume
-    ASSISTANT_RESUMED = "assistant_resumed"  # Resumed from interrupt after commis completed
-    COMMIS_SPAWNED = "commis_spawned"
-    COMMIS_STARTED = "commis_started"
-    COMMIS_COMPLETE = "commis_complete"
-    COMMIS_SUMMARY_READY = "commis_summary_ready"
-
-    # Commis tool events (roundabout monitoring)
-    COMMIS_TOOL_STARTED = "commis_tool_started"
-    COMMIS_TOOL_COMPLETED = "commis_tool_completed"
-    COMMIS_TOOL_FAILED = "commis_tool_failed"
-    COMMIS_OUTPUT_CHUNK = "commis_output_chunk"
-
     # Assistant tool events (inline display in conversation)
     ASSISTANT_TOOL_STARTED = "assistant_tool_started"
     ASSISTANT_TOOL_PROGRESS = "assistant_tool_progress"
@@ -73,7 +54,6 @@ class EventType(str, Enum):
 
     # Heartbeat events (Phase 6: prevent false "no progress" warnings during LLM reasoning)
     ASSISTANT_HEARTBEAT = "assistant_heartbeat"
-    COMMIS_HEARTBEAT = "commis_heartbeat"
 
     # Stream lifecycle control (explicit keep_open/close signals)
     STREAM_CONTROL = "stream_control"

@@ -111,11 +111,8 @@ async def _handle_exec_chunk(
 ) -> None:
     """Process an exec_chunk message from a runner.
 
-    Appends output to the job record and publishes a live SSE chunk for
-    any waiting run subscribers.
+    Appends output to the job record.
     """
-    from zerg.events import EventType
-    from zerg.events.event_bus import event_bus
 
     job_id = message.get("job_id")
     stream = message.get("stream")
@@ -150,26 +147,6 @@ async def _handle_exec_chunk(
     if not updated_job:
         logger.warning(f"Ignoring exec_chunk for invalid job {job_id} from runner {runner_id}")
         return
-
-    run_id_int = None
-    run_id = updated_job.get("run_id")
-    if run_id is not None:
-        try:
-            run_id_int = int(run_id)
-        except (TypeError, ValueError):
-            run_id_int = None
-
-    # Publish live output chunk (ephemeral SSE only; not persisted)
-    if run_id_int:
-        MAX_CHUNK_CHARS = 4000
-        payload = {
-            "runner_job_id": job_id,
-            "stream": stream,
-            "data": data[-MAX_CHUNK_CHARS:] if len(data) > MAX_CHUNK_CHARS else data,
-            "run_id": run_id_int,
-            "owner_id": owner_id,
-        }
-        await event_bus.publish(EventType.COMMIS_OUTPUT_CHUNK, payload)
 
 
 async def _handle_exec_done(
