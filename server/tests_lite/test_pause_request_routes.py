@@ -276,6 +276,55 @@ def test_answerable_pause_response_dispatches_and_resolves(monkeypatch, tmp_path
         api_app_ref.dependency_overrides = {}
 
 
+def test_push_pause_response_ack_survives_archive_resolve_timeout(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_codex_session(session_local)
+    pause_id = _seed_pause_request(session_local, session_id, can_respond=True)
+    calls: list[dict[str, object]] = []
+
+    async def fake_answer(**kwargs):
+        calls.append(kwargs)
+        return ManagedLocalSendResult(
+            ok=True,
+            exit_code=0,
+            response_data={
+                "request_key": "codex:pause-routes:req-1",
+                "provider_request_id": "req-1",
+                "status": "resolved",
+                "response_payload": {"provider_result": {"status": "resolved"}},
+                "response_text": "Use SQLite.",
+            },
+        )
+
+    def archive_resolve_timeout(*_args, **_kwargs):
+        raise TimeoutError("archive pause writer saturated")
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", fake_answer)
+    monkeypatch.setattr(session_chat, "resolve_pause_request", archive_resolve_timeout)
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/pause-requests/{pause_id}/response",
+            json={"decision": "answer", "answers": {"storage": ["SQLite"]}, "message": "Use SQLite."},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "resolved"
+        assert body["pause_request"]["status"] == "resolved"
+        assert body["pause_request"]["id"] == str(pause_id)
+        assert len(calls) == 1
+
+        with session_local() as db:
+            row = db.query(SessionPauseRequest).filter(SessionPauseRequest.id == pause_id).one()
+            assert row.status == "pending"
+            assert row.response_text is None
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_pause_response_builds_message_from_structured_answers(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_codex_session(session_local)

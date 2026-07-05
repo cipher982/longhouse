@@ -552,6 +552,63 @@ def _resolve_pull_pause_request_in_place(
     )
 
 
+def _pause_request_projection_with_terminal_status(
+    row,
+    *,
+    status_value: str,
+    resolved_at: datetime,
+) -> dict[str, Any]:
+    projection = _pause_request_projection_or_empty(row)
+    projection["status"] = status_value
+    projection["resolved_at"] = resolved_at
+    return projection
+
+
+def _resolve_push_pause_request_best_effort(
+    *,
+    db: Session,
+    row,
+    status_value: str,
+    resolved_at: datetime,
+    response_payload: dict[str, Any],
+    response_text: str | None,
+) -> dict[str, Any]:
+    """Resolve a PUSH pause row without holding the user ACK hostage.
+
+    The provider answer has already been delivered over managed control. If the
+    archive DB is saturated here, runtime pause-resolution ingest can still
+    converge the durable row later, so return the delivered status and log the
+    deferred archive update instead of turning a successful answer into a 500.
+    """
+    fallback_projection = _pause_request_projection_with_terminal_status(
+        row,
+        status_value=status_value,
+        resolved_at=resolved_at,
+    )
+    try:
+        resolved = resolve_pause_request(
+            db,
+            pause_request_id=row.id,
+            status=status_value,
+            occurred_at=resolved_at,
+            response_payload=response_payload,
+            response_text=response_text,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "Pause request archive resolve deferred for %s after push dispatch",
+            getattr(row, "id", None),
+            exc_info=True,
+        )
+        return fallback_projection
+    if resolved is None:
+        db.refresh(row)
+        resolved = row
+    return _pause_request_projection_or_empty(resolved)
+
+
 def _opencode_permission_request_id(row) -> str | None:
     """The opencode permission id to reply to, for an opencode_bridge perm row."""
     ref = row.provider_ref_json if isinstance(row.provider_ref_json, dict) else {}
@@ -614,21 +671,18 @@ async def _resolve_opencode_permission_via_bridge(
         )
 
     status_value = "resolved" if decision == "answer" else "rejected"
-    resolved = resolve_pause_request(
-        db,
-        pause_request_id=row.id,
-        status=status_value,
-        occurred_at=datetime.now(timezone.utc),
+    resolved_at = datetime.now(timezone.utc)
+    pause_projection = _resolve_push_pause_request_best_effort(
+        db=db,
+        row=row,
+        status_value=status_value,
+        resolved_at=resolved_at,
         response_payload={"permissionDecision": bridge_decision, "decision": decision, "transport": "opencode_bridge"},
         response_text=response_message,
     )
-    db.commit()
-    if resolved is None:
-        db.refresh(row)
-        resolved = row
     return PauseRequestResponseResponse(
         status=status_value,
-        pause_request=_pause_request_projection_or_empty(resolved),
+        pause_request=pause_projection,
     )
 
 
@@ -748,21 +802,18 @@ async def _respond_to_pause_request(
             "bridge_response": bridge_response or None,
         }
     response_text = str(bridge_response.get("response_text") or response_message or "").strip() or None
-    resolved = resolve_pause_request(
-        db,
-        pause_request_id=row.id,
-        status=status_value,
-        occurred_at=datetime.now(timezone.utc),
+    resolved_at = datetime.now(timezone.utc)
+    pause_projection = _resolve_push_pause_request_best_effort(
+        db=db,
+        row=row,
+        status_value=status_value,
+        resolved_at=resolved_at,
         response_payload=response_payload,
         response_text=response_text,
     )
-    db.commit()
-    if resolved is None:
-        db.refresh(row)
-        resolved = row
     return PauseRequestResponseResponse(
         status=status_value,
-        pause_request=_pause_request_projection_or_empty(resolved),
+        pause_request=pause_projection,
     )
 
 
