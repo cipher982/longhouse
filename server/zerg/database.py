@@ -2161,6 +2161,7 @@ def _cleanup_legacy_agents_tables(engine: Engine) -> None:
 
     try:
         with engine.connect() as conn:
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
             legacy_tables = (
                 "file_reservations",
                 "memories",
@@ -2198,7 +2199,7 @@ def _cleanup_legacy_agents_tables(engine: Engine) -> None:
                 ).fetchone()
                 if exists is None:
                     continue
-                conn.execute(text(f"DROP TABLE {table_name}"))
+                conn.execute(text(f'DROP TABLE IF EXISTS "{table_name}"'))
                 logger.info("Dropped legacy %s table", table_name)
 
             thread_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(threads)"))}
@@ -2207,8 +2208,9 @@ def _cleanup_legacy_agents_tables(engine: Engine) -> None:
                 logger.info("Dropped legacy threads.memory_strategy column")
 
             conn.commit()
+            conn.execute(text("PRAGMA foreign_keys=ON"))
     except Exception:
-        logger.debug("legacy memory cleanup skipped", exc_info=True)
+        logger.exception("legacy agents cleanup failed")
 
 
 def _ensure_agents_fts(engine: Engine) -> None:
