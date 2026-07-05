@@ -152,6 +152,7 @@ class LiveMachineControlOperation(LiveBase):
 
     id = Column(String(36), primary_key=True)
     owner_id = Column(Integer, nullable=True, index=True)
+    session_id = Column(String(36), nullable=True, index=True)
     device_id = Column(String(255), nullable=False, index=True)
     command_type = Column(String(64), nullable=False, index=True)
     command_id = Column(String(96), nullable=False, index=True)

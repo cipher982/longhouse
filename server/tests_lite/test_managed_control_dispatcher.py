@@ -7,13 +7,18 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
+from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from zerg.database import initialize_live_database
+from zerg.database import make_live_engine
+from zerg.models.live_store import LiveMachineControlOperation
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+import zerg.services.managed_control_dispatcher as dispatcher_module
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
@@ -37,6 +42,26 @@ def _session(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _make_live_db(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'managed-control-live.db'}")
+    initialize_live_database(engine)
+    return engine, sessionmaker(bind=engine)
+
+
+class _InlineLiveSerializer:
+    is_configured = True
+
+    def __init__(self, session_factory):
+        self.session_factory = session_factory
+
+    async def execute(self, fn, *, auto_commit=True, label="", **_kwargs):
+        with self.session_factory() as db:
+            result = fn(db)
+            if auto_commit:
+                db.commit()
+            return result
 
 
 class _FakeMachineWebSocket:
@@ -350,6 +375,59 @@ def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
             assert websocket.sent[0]["command_id"] == f"managed-control:{session.id}:session.send_text:req-123"
         finally:
             await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
+def test_dispatch_managed_control_command_records_live_store_operation(tmp_path, monkeypatch):
+    live_engine, LiveSession = _make_live_db(tmp_path)
+    monkeypatch.setattr(dispatcher_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(dispatcher_module, "get_live_write_serializer", lambda: _InlineLiveSerializer(LiveSession))
+
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            websocket = await _connect_fake_engine(owner_id=42, supports=["codex.send"])
+            session = _session(source_runner_id=None)
+            completer = asyncio.create_task(
+                _complete_first_machine_command(
+                    websocket,
+                    {
+                        "ok": True,
+                        "result": {"exit_code": 0, "stdout": "accepted", "stderr": ""},
+                    },
+                )
+            )
+            result = await dispatch_managed_control_command(
+                db=object(),
+                owner_id=42,
+                session=session,
+                timeout_secs=1,
+                command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                payload={"text": "continue"},
+                request_id="req-live-store",
+            )
+            await completer
+
+            assert result.ok is True
+            command_id = f"managed-control:{session.id}:session.send_text:req-live-store"
+            with LiveSession() as live_db:
+                operation = (
+                    live_db.query(LiveMachineControlOperation)
+                    .filter(LiveMachineControlOperation.command_id == command_id)
+                    .one()
+                )
+                assert operation.owner_id == 42
+                assert operation.session_id == str(session.id)
+                assert operation.device_id == "cinder"
+                assert operation.provider == "codex"
+                assert operation.command_type == MANAGED_CONTROL_COMMAND_SEND_TEXT
+                assert operation.status == "succeeded"
+                assert '"stdout": "accepted"' in str(operation.result_json)
+                assert operation.error_json is None
+        finally:
+            await _clear_machine_registry()
+            live_engine.dispose()
 
     asyncio.run(_run())
 

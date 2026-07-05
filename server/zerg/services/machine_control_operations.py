@@ -16,6 +16,8 @@ from zerg.models import MachineControlOperation
 from zerg.models.live_store import LiveMachineControlOperation
 
 MACHINE_OPERATION_COMMAND_PREFIX = "machine-op:"
+MANAGED_CONTROL_COMMAND_PREFIX = "managed-control:"
+LIVE_CONTROL_COMMAND_PREFIXES = (MACHINE_OPERATION_COMMAND_PREFIX, MANAGED_CONTROL_COMMAND_PREFIX)
 MACHINE_OPERATION_TIMEOUT_GRACE_SECS = 30
 NONTERMINAL_OPERATION_STATUSES = {"queued", "running"}
 TERMINAL_OPERATION_STATUSES = {"succeeded", "failed", "timed_out"}
@@ -85,15 +87,44 @@ def create_live_provider_live_proof_operation(
 ) -> LiveMachineControlOperation:
     """Create a running provider-live proof operation in the Live Store."""
 
-    reap_stale_live_machine_control_operations(db)
     operation_id = str(uuid4())
-    started_at = _now()
-    operation = LiveMachineControlOperation(
-        id=operation_id,
+    return create_live_machine_control_operation(
+        db,
+        operation_id=operation_id,
         owner_id=owner_id,
         device_id=device_id,
         command_type="provider.live_proof",
         command_id=f"{MACHINE_OPERATION_COMMAND_PREFIX}{operation_id}",
+        provider=provider,
+        request_payload=request_payload,
+        timeout_secs=timeout_secs,
+    )
+
+
+def create_live_machine_control_operation(
+    db: Session,
+    *,
+    operation_id: str,
+    owner_id: int | None,
+    device_id: str,
+    command_type: str,
+    command_id: str,
+    request_payload: dict[str, Any],
+    timeout_secs: int,
+    provider: str | None = None,
+    session_id: str | None = None,
+) -> LiveMachineControlOperation:
+    """Create a running hot-lane machine-control operation."""
+
+    reap_stale_live_machine_control_operations(db)
+    started_at = _now()
+    operation = LiveMachineControlOperation(
+        id=operation_id,
+        owner_id=owner_id,
+        session_id=session_id,
+        device_id=device_id,
+        command_type=command_type,
+        command_id=command_id,
         provider=provider,
         status="running",
         request_json=_json_dump(dict(request_payload)),
@@ -234,7 +265,7 @@ def reconcile_live_machine_control_operation_from_command_result(
     """Apply an unmatched Machine Agent command_result to a Live Store operation."""
 
     command_id = str(message.get("command_id") or "").strip()
-    if not command_id.startswith(MACHINE_OPERATION_COMMAND_PREFIX):
+    if not command_id.startswith(LIVE_CONTROL_COMMAND_PREFIXES):
         return False
     operation = (
         db.query(LiveMachineControlOperation)
@@ -248,27 +279,49 @@ def reconcile_live_machine_control_operation_from_command_result(
     if str(operation.status) in TERMINAL_OPERATION_STATUSES:
         return True
 
+    if message.get("ok"):
+        result = message.get("result")
+        finish_live_machine_control_operation(
+            db,
+            operation,
+            status="succeeded",
+            result=dict(result) if isinstance(result, dict) else {},
+        )
+    else:
+        error = message.get("error") if isinstance(message.get("error"), dict) else {}
+        finish_live_machine_control_operation(
+            db,
+            operation,
+            status="failed",
+            error={
+                "code": str(error.get("code") or "machine_control_operation_failed"),
+                "message": str(error.get("message") or "Machine Agent control command failed"),
+            },
+        )
+    return True
+
+
+def finish_live_machine_control_operation(
+    db: Session,
+    operation: LiveMachineControlOperation,
+    *,
+    status: str,
+    result: dict[str, Any] | None = None,
+    error: dict[str, Any] | None = None,
+) -> None:
+    """Mark a Live Store machine-control operation terminal."""
+
+    if str(operation.status) in TERMINAL_OPERATION_STATUSES:
+        return
     finished_at = _now()
+    operation.status = status
+    operation.result_json = _json_dump(result or {}) if result is not None else None
+    operation.error_json = _json_dump(error or {}) if error is not None else None
     operation.finished_at = finished_at
     operation.updated_at = finished_at
     operation.expires_at = None
-    if message.get("ok"):
-        result = message.get("result")
-        operation.status = "succeeded"
-        operation.result_json = _json_dump(dict(result) if isinstance(result, dict) else {})
-        operation.error_json = None
-    else:
-        error = message.get("error") if isinstance(message.get("error"), dict) else {}
-        operation.status = "failed"
-        operation.error_json = _json_dump(
-            {
-                "code": str(error.get("code") or "machine_control_operation_failed"),
-                "message": str(error.get("message") or "Machine Agent control command failed"),
-            }
-        )
     db.add(operation)
     db.commit()
-    return True
 
 
 def reap_stale_machine_control_operations(db: Session, *, now: datetime | None = None) -> int:
