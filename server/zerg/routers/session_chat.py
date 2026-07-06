@@ -33,8 +33,11 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.agents import SessionTurn
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
+from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request_best_effort
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
 from zerg.services.managed_local_control import answer_pause_request_on_managed_local_session
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
@@ -1461,6 +1464,153 @@ async def _record_live_input_receipt_for_row(
     )
 
 
+async def _record_live_input_receipt_for_body(
+    *,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    client_request_id: str,
+    intent: InputIntent,
+    status_value: str,
+) -> str | None:
+    return await record_live_input_receipt_best_effort(
+        owner_id=owner_id,
+        session_id=source_session.id,
+        provider=str(getattr(source_session, "provider", "") or "unknown"),
+        device_id=str(getattr(source_session, "device_id", "") or "").strip() or None,
+        thread_id=getattr(source_session, "thread_id", None),
+        text=body.text,
+        intent=intent,
+        status=status_value,
+        client_request_id=client_request_id,
+    )
+
+
+def _live_receipt_response(
+    *,
+    source_session,
+    db: Session,
+    receipt: LiveInputReceiptSnapshot,
+) -> SessionInputResponse:
+    recent = list_recent_inputs(db, source_session.id)
+    return SessionInputResponse(
+        outcome="sent" if receipt.status == INPUT_STATUS_DELIVERED else "queued",
+        input_id=receipt.archive_session_input_id,
+        live_input_id=receipt.id,
+        client_request_id=receipt.client_request_id,
+        intent=receipt.intent if receipt.intent in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER) else INPUT_INTENT_AUTO,
+        queued=[_queued_summary(r) for r in recent],
+    )
+
+
+def _project_live_input_to_archive(
+    db: Session,
+    *,
+    source_session_id,
+    owner_id: int,
+    text: str,
+    intent: InputIntent,
+    client_request_id: str,
+    delivery_request_id: str,
+) -> int:
+    def _link_turn(input_id: int) -> None:
+        db.query(SessionTurn).filter(
+            SessionTurn.session_id == source_session_id,
+            SessionTurn.request_id == delivery_request_id,
+        ).update({"session_input_id": input_id}, synchronize_session=False)
+        db.commit()
+
+    existing = (
+        db.query(SessionInput)
+        .filter(
+            SessionInput.session_id == source_session_id,
+            SessionInput.owner_id == owner_id,
+            SessionInput.client_request_id == client_request_id,
+        )
+        .order_by(SessionInput.id.asc())
+        .first()
+    )
+    if existing is not None:
+        input_id = int(existing.id)
+        _link_turn(input_id)
+        return input_id
+    from zerg.services.session_inputs import mark_delivered as _mark_input_delivered
+
+    row = create_session_input(
+        db,
+        session_id=source_session_id,
+        text=text,
+        owner_id=owner_id,
+        intent=intent,
+        status=INPUT_STATUS_DELIVERING,
+        client_request_id=client_request_id,
+        delivery_request_id=delivery_request_id,
+    )
+    _mark_input_delivered(db, int(row.id))
+    input_id = int(row.id)
+    _link_turn(input_id)
+    return input_id
+
+
+def _schedule_live_input_archive_projection(
+    *,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    client_request_id: str,
+    delivery_request_id: str,
+    live_input_id: str,
+) -> None:
+    ws = get_write_serializer()
+    if not ws.is_configured:
+        return
+    source_session_id = source_session.id
+    provider = str(getattr(source_session, "provider", "") or "unknown")
+    device_id = str(getattr(source_session, "device_id", "") or "").strip() or None
+    text = body.text
+
+    async def _run() -> None:
+        try:
+            archive_input_id = await ws.execute(
+                lambda archive_db: _project_live_input_to_archive(
+                    archive_db,
+                    source_session_id=source_session_id,
+                    owner_id=owner_id,
+                    text=text,
+                    intent=INPUT_INTENT_AUTO,
+                    client_request_id=client_request_id,
+                    delivery_request_id=delivery_request_id,
+                ),
+                auto_commit=False,
+                label="session-input-projection",
+            )
+            await record_live_input_receipt_best_effort(
+                owner_id=owner_id,
+                session_id=source_session_id,
+                provider=provider,
+                device_id=device_id,
+                text=text,
+                intent=INPUT_INTENT_AUTO,
+                status=INPUT_STATUS_DELIVERED,
+                client_request_id=client_request_id,
+                archive_session_input_id=archive_input_id,
+            )
+        except Exception:
+            logger.warning("Failed to project live input %s to archive", live_input_id, exc_info=True)
+
+    task = asyncio.create_task(_run())
+
+    def _log_task_failure(done: asyncio.Task[None]) -> None:
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            logger.debug("Live input archive projection cancelled for %s", live_input_id)
+        except Exception:
+            logger.exception("Live input archive projection failed for %s", live_input_id)
+
+    task.add_done_callback(_log_task_failure)
+
+
 def _client_request_id_for_input(body: SessionInputRequest) -> str:
     client_request_id = (body.client_request_id or "").strip()
     if client_request_id:
@@ -1777,6 +1927,33 @@ async def _create_session_input_response(
             ):
                 return existing_response
 
+    if body.intent == INPUT_INTENT_AUTO and existing_input is None:
+        existing_live_receipt = await load_live_input_receipt_by_client_request_best_effort(
+            owner_id=owner_id,
+            session_id=source_session.id,
+            client_request_id=client_request_id,
+        )
+        if existing_live_receipt is not None:
+            if existing_live_receipt.text != body.text:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error_code": "input_conflict",
+                        "existing_live_input_id": existing_live_receipt.id,
+                        "reason": "different_text",
+                    },
+                )
+            if existing_live_receipt.status in (
+                INPUT_STATUS_DELIVERED,
+                INPUT_STATUS_QUEUED,
+                INPUT_STATUS_DELIVERING,
+            ):
+                return _live_receipt_response(
+                    source_session=source_session,
+                    db=db,
+                    receipt=existing_live_receipt,
+                )
+
     _assert_no_answerable_pause_request_pending(db=db, source_session=source_session)
 
     def _cap_check_or_raise() -> None:
@@ -1888,9 +2065,23 @@ async def _create_session_input_response(
             queued=[_queued_summary(r) for r in recent],
         )
 
-    # Lock acquired: record a delivering row for audit, then dispatch.
+    # Lock acquired: prefer a hot-lane receipt for the immediate ACK. If live
+    # receipts are unavailable, fall back to the archive SessionInput row path.
+    live_input_id = None
+    if existing_input is None:
+        live_input_id = await _record_live_input_receipt_for_body(
+            source_session=source_session,
+            owner_id=owner_id,
+            body=body,
+            client_request_id=client_request_id,
+            intent=INPUT_INTENT_AUTO,
+            status_value=INPUT_STATUS_DELIVERING,
+        )
+
     try:
-        if existing_input is not None:
+        if live_input_id is not None:
+            created: SessionInput | SessionInputResponse | None = None
+        elif existing_input is not None:
             row = retry_failed_input(
                 db,
                 int(existing_input.id),
@@ -1927,11 +2118,21 @@ async def _create_session_input_response(
             request_id=delivery_request_id,
             lock_scope_id=lock_scope_id,
             db=db,
-            session_input_id=int(row.id),
+            session_input_id=(int(row.id) if row is not None else None),
         )
     except asyncio.CancelledError:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
-        _mark_input_failed(db, int(row.id), error="request timed out")
+        if row is not None:
+            _mark_input_failed(db, int(row.id), error="request timed out")
+        elif live_input_id is not None:
+            await _record_live_input_receipt_for_body(
+                source_session=source_session,
+                owner_id=owner_id,
+                body=body,
+                client_request_id=client_request_id,
+                intent=INPUT_INTENT_AUTO,
+                status_value=INPUT_STATUS_FAILED,
+            )
         logger.warning(
             "[%s] Session input dispatch cancelled for %s; marked input failed and released lock",
             delivery_request_id,
@@ -1940,11 +2141,31 @@ async def _create_session_input_response(
         raise
     except HTTPException:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
-        _mark_input_failed(db, int(row.id), error="dispatch rejected")
+        if row is not None:
+            _mark_input_failed(db, int(row.id), error="dispatch rejected")
+        elif live_input_id is not None:
+            await _record_live_input_receipt_for_body(
+                source_session=source_session,
+                owner_id=owner_id,
+                body=body,
+                client_request_id=client_request_id,
+                intent=INPUT_INTENT_AUTO,
+                status_value=INPUT_STATUS_FAILED,
+            )
         raise
     except Exception as exc:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
-        _mark_input_failed(db, int(row.id), error=str(exc)[:200])
+        if row is not None:
+            _mark_input_failed(db, int(row.id), error=str(exc)[:200])
+        elif live_input_id is not None:
+            await _record_live_input_receipt_for_body(
+                source_session=source_session,
+                owner_id=owner_id,
+                body=body,
+                client_request_id=client_request_id,
+                intent=INPUT_INTENT_AUTO,
+                status_value=INPUT_STATUS_FAILED,
+            )
         logger.exception(f"[{delivery_request_id}] Error dispatching session input")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1965,7 +2186,17 @@ async def _create_session_input_response(
                 response_error_message = str(response_body.get("error") or response_error_message)
         except Exception:
             pass
-        _mark_input_failed(db, int(row.id), error=response_error_message[:200])
+        if row is not None:
+            _mark_input_failed(db, int(row.id), error=response_error_message[:200])
+        elif live_input_id is not None:
+            await _record_live_input_receipt_for_body(
+                source_session=source_session,
+                owner_id=owner_id,
+                body=body,
+                client_request_id=client_request_id,
+                intent=INPUT_INTENT_AUTO,
+                status_value=INPUT_STATUS_FAILED,
+            )
         # Lock already released by _dispatch_managed_local_text on failure.
         raise HTTPException(
             status_code=dispatch_status,
@@ -1979,19 +2210,40 @@ async def _create_session_input_response(
     # observation is handled inside the existing dispatch path.
     from zerg.services.session_inputs import mark_delivered as _mark_input_delivered
 
-    _mark_input_delivered(db, int(row.id))
-    recent = list_recent_inputs(db, source_session.id)
-    live_input_id = await _record_live_input_receipt_for_row(
-        source_session=source_session,
-        owner_id=owner_id,
-        row=row,
-        status_value=INPUT_STATUS_DELIVERED,
-    )
+    if row is not None:
+        _mark_input_delivered(db, int(row.id))
+        recent = list_recent_inputs(db, source_session.id)
+        live_input_id = await _record_live_input_receipt_for_row(
+            source_session=source_session,
+            owner_id=owner_id,
+            row=row,
+            status_value=INPUT_STATUS_DELIVERED,
+        )
+        input_id = int(row.id)
+    else:
+        recent = list_recent_inputs(db, source_session.id)
+        await _record_live_input_receipt_for_body(
+            source_session=source_session,
+            owner_id=owner_id,
+            body=body,
+            client_request_id=client_request_id,
+            intent=INPUT_INTENT_AUTO,
+            status_value=INPUT_STATUS_DELIVERED,
+        )
+        _schedule_live_input_archive_projection(
+            source_session=source_session,
+            owner_id=owner_id,
+            body=body,
+            client_request_id=client_request_id,
+            delivery_request_id=delivery_request_id,
+            live_input_id=live_input_id or "",
+        )
+        input_id = None
     return SessionInputResponse(
         outcome="sent",
-        input_id=int(row.id),
+        input_id=input_id,
         live_input_id=live_input_id,
-        client_request_id=row.client_request_id,
+        client_request_id=(row.client_request_id if row is not None else client_request_id),
         intent=INPUT_INTENT_AUTO,
         queued=[_queued_summary(r) for r in recent],
     )

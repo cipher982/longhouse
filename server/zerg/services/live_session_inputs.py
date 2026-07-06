@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -22,6 +23,19 @@ logger = logging.getLogger(__name__)
 LIVE_INPUT_RECEIPT_WRITE_TIMEOUT_SECS = 0.25
 
 
+@dataclass(frozen=True)
+class LiveInputReceiptSnapshot:
+    id: str
+    owner_id: int
+    session_id: str
+    provider: str
+    text: str
+    intent: str
+    status: str
+    client_request_id: str | None
+    archive_session_input_id: int | None
+
+
 def _session_key(session_id: UUID | str) -> str:
     return str(session_id)
 
@@ -35,6 +49,51 @@ def _json_or_none(value: dict[str, Any] | None) -> str | None:
     if value is None:
         return None
     return json.dumps(value, sort_keys=True)
+
+
+def _snapshot(row: LiveSessionInputReceipt) -> LiveInputReceiptSnapshot:
+    return LiveInputReceiptSnapshot(
+        id=str(row.id),
+        owner_id=int(row.owner_id),
+        session_id=str(row.session_id),
+        provider=str(row.provider),
+        text=str(row.text or ""),
+        intent=str(row.intent or "auto"),
+        status=str(row.status or "created"),
+        client_request_id=row.client_request_id,
+        archive_session_input_id=(int(row.archive_session_input_id) if row.archive_session_input_id is not None else None),
+    )
+
+
+def get_live_input_receipt_by_client_request(
+    db: Session,
+    *,
+    owner_id: int,
+    session_id: UUID | str,
+    client_request_id: str | None,
+) -> LiveInputReceiptSnapshot | None:
+    client_key = _clean_str(client_request_id)
+    if client_key is None:
+        return None
+    row = (
+        db.query(LiveSessionInputReceipt)
+        .filter(
+            LiveSessionInputReceipt.owner_id == int(owner_id),
+            LiveSessionInputReceipt.session_id == _session_key(session_id),
+            LiveSessionInputReceipt.client_request_id == client_key,
+        )
+        .first()
+    )
+    return _snapshot(row) if row is not None else None
+
+
+def load_live_input_receipt_by_id(
+    db: Session,
+    *,
+    receipt_id: str,
+) -> LiveInputReceiptSnapshot | None:
+    row = db.query(LiveSessionInputReceipt).filter(LiveSessionInputReceipt.id == str(receipt_id)).first()
+    return _snapshot(row) if row is not None else None
 
 
 def upsert_live_input_receipt(
@@ -141,4 +200,28 @@ async def record_live_input_receipt_best_effort(
         return str(row_id)
     except Exception:
         logger.warning("Failed to record live input receipt for session %s", session_id, exc_info=True)
+        return None
+
+
+async def load_live_input_receipt_by_client_request_best_effort(
+    *,
+    owner_id: int,
+    session_id: UUID | str,
+    client_request_id: str | None,
+) -> LiveInputReceiptSnapshot | None:
+    if not database_module.live_store_configured():
+        return None
+    session_factory = database_module.get_live_session_factory()
+    if session_factory is None:
+        return None
+    try:
+        with session_factory() as live_db:
+            return get_live_input_receipt_by_client_request(
+                live_db,
+                owner_id=owner_id,
+                session_id=session_id,
+                client_request_id=client_request_id,
+            )
+    except Exception:
+        logger.warning("Failed to load live input receipt for session %s", session_id, exc_info=True)
         return None

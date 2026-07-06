@@ -38,6 +38,7 @@ from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers.session_chat import SessionInputRequest
 from zerg.routers.session_chat import _create_session_input_response
+from zerg.routers.session_chat import _project_live_input_to_archive
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
@@ -50,6 +51,7 @@ from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import create_session_input
+from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
@@ -391,12 +393,17 @@ def test_auto_input_response_includes_live_input_id(monkeypatch, tmp_path):
     session_id, user_id = _seed_live_session(session_local)
     _stub_dispatch(monkeypatch)
     receipt_calls: list[dict[str, object]] = []
+    projection_calls: list[dict[str, object]] = []
 
     async def fake_live_receipt(**kwargs):
         receipt_calls.append(kwargs)
         return "live-input-1"
 
     monkeypatch.setattr("zerg.routers.session_chat.record_live_input_receipt_best_effort", fake_live_receipt)
+    monkeypatch.setattr(
+        "zerg.routers.session_chat._schedule_live_input_archive_projection",
+        lambda **kwargs: projection_calls.append(kwargs),
+    )
 
     client, api_app_ref = _make_client(
         session_local,
@@ -411,14 +418,87 @@ def test_auto_input_response_includes_live_input_id(monkeypatch, tmp_path):
         body = resp.json()
         assert body["outcome"] == "sent"
         assert body["live_input_id"] == "live-input-1"
-        assert body["input_id"] > 0
-        assert len(receipt_calls) == 1
+        assert body["input_id"] is None
+        assert len(receipt_calls) == 2
         assert receipt_calls[0]["client_request_id"] == "ios-live-1"
-        assert receipt_calls[0]["archive_session_input_id"] == body["input_id"]
-        assert receipt_calls[0]["status"] == INPUT_STATUS_DELIVERED
+        assert receipt_calls[0]["status"] == INPUT_STATUS_DELIVERING
+        assert receipt_calls[1]["client_request_id"] == "ios-live-1"
+        assert receipt_calls[1]["status"] == INPUT_STATUS_DELIVERED
+        assert len(projection_calls) == 1
+        assert projection_calls[0]["client_request_id"] == "ios-live-1"
+        with session_local() as db:
+            assert db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         api_app_ref.dependency_overrides = {}
+
+
+def test_auto_input_dedupes_existing_live_receipt(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    calls = _stub_dispatch(monkeypatch)
+
+    async def fake_live_lookup(**_kwargs):
+        return LiveInputReceiptSnapshot(
+            id="live-input-existing",
+            owner_id=user_id,
+            session_id=str(session_id),
+            provider="codex",
+            text="already sent",
+            intent="auto",
+            status=INPUT_STATUS_DELIVERED,
+            client_request_id="ios-live-repeat",
+            archive_session_input_id=None,
+        )
+
+    monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request_best_effort", fake_live_lookup)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "already sent", "intent": "auto", "client_request_id": "ios-live-repeat"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "sent"
+        assert body["live_input_id"] == "live-input-existing"
+        assert body["input_id"] is None
+        assert len(calls) == 0
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        api_app_ref.dependency_overrides = {}
+
+
+def test_live_input_projection_creates_archive_row_and_links_turn(tmp_path):
+    from zerg.services.session_turns import create_session_turn
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        create_session_turn(db, session_id=session_id, request_id="req-live-project")
+
+        input_id = _project_live_input_to_archive(
+            db,
+            source_session_id=session_id,
+            owner_id=user_id,
+            text="project me later",
+            intent="auto",
+            client_request_id="ios-live-project",
+            delivery_request_id="req-live-project",
+        )
+
+        row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+        assert row.status == INPUT_STATUS_DELIVERED
+        assert row.client_request_id == "ios-live-project"
+        assert row.delivery_request_id == "req-live-project"
+
+        turn = db.query(SessionTurn).filter(SessionTurn.session_id == session_id, SessionTurn.request_id == "req-live-project").one()
+        assert turn.session_input_id == input_id
 
 
 def test_client_request_id_dedupes_delivered_auto(monkeypatch, tmp_path):
