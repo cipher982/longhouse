@@ -688,6 +688,17 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         sortedProviderCounts(activitySummary?.providerCountsRecent)
     }
 
+    public var managedProviderCounts: [(provider: String, count: Int)] {
+        let counts = currentManagedSessions.reduce(into: [String: Int]()) { partialResult, session in
+            let provider = (session.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !provider.isEmpty else {
+                return
+            }
+            partialResult[provider, default: 0] += 1
+        }
+        return sortedProviderCounts(counts)
+    }
+
     public var providerMixLabel: String {
         let entries = providerCountsToday
         guard !entries.isEmpty else {
@@ -975,7 +986,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return []
         }
 
-        let preferredOrder = ["claude", "codex", "antigravity"]
+        let preferredOrder = ["claude", "codex", "opencode", "antigravity"]
         return providerCounts
             .filter { !$0.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.value > 0 }
             .sorted { lhs, rhs in
@@ -1040,6 +1051,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return "Claude"
         case "codex":
             return "Codex"
+        case "opencode":
+            return "OpenCode"
         case "gemini", "antigravity":
             return "Antigravity"
         default:

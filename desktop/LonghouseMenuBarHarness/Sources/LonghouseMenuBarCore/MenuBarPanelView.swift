@@ -438,11 +438,20 @@ public struct MenuBarPanelView: View {
 
             sectionDivider.padding(.horizontal, 4)
 
-            PanelSection(title: "Today", trailing: "\(snapshot.sessionsTodayLabel) archived") {
-                ProviderComparisonRows(
-                    entries: snapshot.providerCountsToday,
-                    totalCount: Int(snapshot.sessionsTodayLabel) ?? snapshot.providerCountsToday.map(\.count).reduce(0, +)
-                )
+            if snapshot.managedProviderCounts.isEmpty {
+                PanelSection(title: "Archive today", trailing: "\(snapshot.sessionsTodayLabel) archived") {
+                    ProviderComparisonRows(
+                        entries: snapshot.providerCountsToday,
+                        totalCount: Int(snapshot.sessionsTodayLabel) ?? snapshot.providerCountsToday.map(\.count).reduce(0, +)
+                    )
+                }
+            } else {
+                PanelSection(title: "Live providers", trailing: snapshot.managedSummaryLabel) {
+                    ProviderComparisonRows(
+                        entries: snapshot.managedProviderCounts,
+                        totalCount: snapshot.managedProviderCounts.map(\.count).reduce(0, +)
+                    )
+                }
             }
         }
     }
