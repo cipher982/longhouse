@@ -18,9 +18,7 @@ use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::process_identity::{
-    collect_process_facts_by_pid, command_contains_basename, ProcessFact,
-};
+use crate::process_identity::{collect_process_facts_by_pid, ProcessFact};
 
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_millis(750);
 const DEFAULT_USERNAME: &str = "opencode";
@@ -156,22 +154,23 @@ fn opencode_attach_foreground(
         return false;
     };
     let provider_session_id = provider_session_id.trim();
+    if provider_session_id.is_empty() {
+        return false;
+    }
 
     process_facts.values().any(|fact| {
-        if !fact.is_foreground_tty() || !command_contains_basename(&fact.command, "opencode") {
+        if !fact.is_foreground_tty() {
             return false;
         }
-        let mut saw_attach = false;
-        let mut saw_provider_session = provider_session_id.is_empty();
-        for part in fact.command.split_whitespace() {
-            if part == "attach" {
-                saw_attach = true;
-            }
-            if !provider_session_id.is_empty() && part == provider_session_id {
-                saw_provider_session = true;
-            }
-        }
-        saw_attach && saw_provider_session && fact.command.contains(server_url)
+        let parts = fact.command.split_whitespace().collect::<Vec<_>>();
+        let has_attach_shape = parts.windows(2).any(|window| {
+            Path::new(window[0])
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name == "opencode")
+                && window[1] == "attach"
+        });
+        has_attach_shape && parts.contains(&server_url) && parts.contains(&provider_session_id)
     })
 }
 
@@ -407,6 +406,11 @@ mod tests {
         assert!(!opencode_attach_foreground(
             Some("http://127.0.0.1:12345"),
             "ses_other",
+            &facts,
+        ));
+        assert!(!opencode_attach_foreground(
+            Some("http://127.0.0.1:12345"),
+            "",
             &facts,
         ));
     }
