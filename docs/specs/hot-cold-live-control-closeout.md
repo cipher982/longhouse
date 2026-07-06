@@ -166,11 +166,12 @@ until there is a hot media receipt model.
 
 ## Monitoring And Binary Checks
 
-David should not manually monitor. Add a check that answers:
+David should not manually monitor. The product/runtime should expose enough
+state for an agent to answer:
 
 > Did hot-control inputs work correctly since the last deploy?
 
-Instrumentation to add:
+Instrumentation to keep:
 
 - Counter: live input receipts created by intent/status.
 - Counter: live input dispatch accepted/failed/cancelled.
@@ -188,31 +189,18 @@ Instrumentation to add:
   - `archive_session_input_id`
   - `dispatch_request_id`
 
-Add one command:
-
-```bash
-make hot-control-check
-```
-
-It should check demo/canary/local dogfood where possible and print a binary
-summary:
+Do not add repo-local one-off scripts or Makefile targets for this alpha
+dogfood check. A future agent should query live runtime state directly
+(`db doctor --json`, targeted SQL, and container logs as needed), then produce a
+fresh binary summary:
 
 - `PASS`: no stuck queued/delivering receipts, no projection failures, no old
   missing projections, no duplicate dispatch evidence.
 - `FAIL`: print the exact sessions/live input ids and the reason.
 
-Add one reminder/helper:
-
-```bash
-make hot-control-remind
-```
-
-It should create a local reminder or at least print the exact command to run 24
-hours later:
-
-```bash
-make hot-control-check SINCE=24h
-```
+The reminder belongs outside the repo as user/task state. It should remind
+David to ask an agent to inspect hot-control health; it should not rely on a
+checked-in black-box script.
 
 ## Success Criteria
 
@@ -228,8 +216,9 @@ The epic is complete only when all are true:
 5. Duplicate client submissions do not duplicate provider sends.
 6. A cancelled queued live receipt is never drained.
 7. A delivering live receipt is not claimed twice.
-8. Failed live receipts are visible enough for the UI/check command.
-9. `make hot-control-check` provides a binary PASS/FAIL after dogfooding.
+8. Failed live receipts are visible enough for an agent to inspect directly.
+9. A 24-hour reminder exists outside the repo to ask an agent for a fresh
+   PASS/FAIL hot-control health read.
 10. Focused backend tests, core E2E, exact-SHA ship, hosted demo/canary health,
     and local dogfood refresh all pass.
 
@@ -273,8 +262,8 @@ The epic is complete only when all are true:
 
 ### Stage 6: Observability
 
-- Add metrics/logs/check command.
-- Add 24-hour reminder helper.
+- Add metrics/logs/doctor fields.
+- Add an out-of-repo 24-hour reminder to request agent inspection.
 - Make failures actionable by live input id/session id.
 
 ### Stage 7: Validation And Ship
@@ -286,7 +275,7 @@ The epic is complete only when all are true:
   still works.
 - Exact-SHA ship.
 - Local dogfood refresh.
-- Run `make hot-control-check`.
+- Inspect demo/canary live receipt and outbox fields directly.
 
 ## Non-Goals
 
