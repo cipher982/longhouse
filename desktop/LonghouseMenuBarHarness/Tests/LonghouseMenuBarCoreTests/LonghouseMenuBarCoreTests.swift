@@ -1161,7 +1161,7 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func decodesRecentTouchesAndRecentProviderMix() throws {
+    func decodesRecentTouchesAndRecentCounts() throws {
         let data = Data("""
         {
           "health_state": "healthy",
@@ -1201,7 +1201,6 @@ struct LonghouseMenuBarCoreTests {
         let snapshot = try HealthSnapshotDecoder.decode(data: data)
 
         #expect(snapshot.providerCountsRecent.map(\.provider) == ["claude", "codex"])
-        #expect(snapshot.recentProviderMixLabel == "Claude 3 · Codex 1")
         #expect(snapshot.recentActivitySummaryLabel == "4 active in 15m")
         #expect(snapshot.recentTouches.count == 2)
         #expect(snapshot.recentTouches.first?.provider == "claude")
@@ -1374,88 +1373,6 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.liveUnmanagedProviderMixLabel == "Codex 2")
         #expect(snapshot.currentManagedSessions.count == 1)
         #expect(snapshot.recentActivitySummaryLabel == "4 active in 15m")
-    }
-
-    @Test
-    func managedProviderMixUsesLiveManagedTruthInsteadOfArchiveCounts() {
-        let snapshot = HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: nil,
-            healthState: "healthy",
-            severity: "green",
-            headline: "Longhouse shipping healthy",
-            reasons: [],
-            suggestedActions: [],
-            service: nil,
-            engineStatus: nil,
-            outbox: nil,
-            activitySummary: ActivitySummarySnapshot(
-                path: nil,
-                exists: true,
-                error: nil,
-                sessionsToday: 6,
-                sessionsRecent: 4,
-                providerCountsToday: ["codex": 6],
-                providerCountsRecent: ["codex": 4],
-                sessionRecencyBands: nil,
-                recentTouches: nil,
-                latestActivityAt: "2026-07-06T22:18:17Z",
-                recentWindowMinutes: 15
-            ),
-            managedSummary: ManagedSummarySnapshot(
-                attachedCount: 3,
-                detachedCount: 0,
-                degradedCount: 0,
-                orphanBridgeCount: 0,
-                latestActivityAt: "2026-07-06T22:19:20Z"
-            ),
-            managedSessions: [
-                ManagedSessionSnapshot(
-                    sessionId: "codex-a",
-                    provider: "codex",
-                    workspaceLabel: "zerg",
-                    branch: nil,
-                    state: "attached",
-                    phase: "idle",
-                    lastActivityAt: "2026-07-06T22:19:20Z",
-                    bridgeStatus: nil,
-                    bridgePid: nil,
-                    bridgeHeartbeatAt: nil,
-                    reasonCodes: []
-                ),
-                ManagedSessionSnapshot(
-                    sessionId: "codex-b",
-                    provider: "codex",
-                    workspaceLabel: "zeta",
-                    branch: nil,
-                    state: "attached",
-                    phase: "thinking",
-                    lastActivityAt: "2026-07-06T22:18:35Z",
-                    bridgeStatus: nil,
-                    bridgePid: nil,
-                    bridgeHeartbeatAt: nil,
-                    reasonCodes: []
-                ),
-                ManagedSessionSnapshot(
-                    sessionId: "opencode-a",
-                    provider: "opencode",
-                    workspaceLabel: "zerg",
-                    branch: nil,
-                    state: "attached",
-                    phase: "idle",
-                    lastActivityAt: "2026-07-06T22:11:16Z",
-                    bridgeStatus: nil,
-                    bridgePid: nil,
-                    bridgeHeartbeatAt: nil,
-                    reasonCodes: []
-                ),
-            ],
-            launchReadiness: nil
-        )
-
-        #expect(snapshot.providerCountsToday.map { "\($0.provider):\($0.count)" } == ["codex:6"])
-        #expect(snapshot.managedProviderCounts.map { "\($0.provider):\($0.count)" } == ["codex:2", "opencode:1"])
-        #expect(HealthSnapshot.providerDisplayName("opencode") == "OpenCode")
     }
 
     @Test

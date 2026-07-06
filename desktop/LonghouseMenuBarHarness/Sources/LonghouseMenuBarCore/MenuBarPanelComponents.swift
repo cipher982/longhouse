@@ -497,36 +497,6 @@ struct UnmanagedActivityList: View {
     }
 }
 
-struct ProviderComparisonRows: View {
-    let entries: [(provider: String, count: Int)]
-    let totalCount: Int
-
-    var body: some View {
-        let baseline = max(entries.map(\.count).max() ?? 0, 1)
-
-        if entries.isEmpty {
-            Text("No archived sessions today.")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.secondary)
-        } else {
-            VStack(alignment: .leading, spacing: 9) {
-                ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
-                    ProviderComparisonRow(
-                        provider: entry.provider,
-                        count: entry.count,
-                        totalCount: totalCount,
-                        baselineCount: baseline
-                    )
-
-                    if index < entries.count - 1 {
-                        sectionDivider
-                    }
-                }
-            }
-        }
-    }
-}
-
 public enum ManagedAttentionKind: Equatable, Sendable {
     /// Managed, attached, agent is doing work. Don't interrupt.
     case working
@@ -877,63 +847,6 @@ private func inlineActionButton(
     }
     .buttonStyle(.plain)
     .accessibilityLabel(Text(accessibilityLabel))
-}
-
-private struct ProviderComparisonRow: View {
-    let provider: String
-    let count: Int
-    let totalCount: Int
-    let baselineCount: Int
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 8) {
-                HStack(alignment: .center, spacing: 7) {
-                    ProviderGlyph(provider: provider, size: 16, variant: .chip)
-
-                    Text(HealthSnapshot.providerDisplayName(provider))
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.84)
-                }
-
-                Spacer(minLength: 8)
-
-                Text("\(count)")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.primary)
-                    .lineLimit(1)
-                    .monospacedDigit()
-
-                Text(shareLabel)
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.secondary)
-                    .lineLimit(1)
-                    .monospacedDigit()
-            }
-
-            GeometryReader { geometry in
-                ZStack(alignment: .leading) {
-                    Capsule(style: .continuous)
-                        .fill(Color.white.opacity(0.07))
-
-                    Capsule(style: .continuous)
-                        .fill(providerColor(provider).opacity(0.85))
-                        .frame(width: max(14, geometry.size.width * CGFloat(count) / CGFloat(max(baselineCount, 1))))
-                }
-            }
-            .frame(height: 6)
-        }
-    }
-
-    private var shareLabel: String {
-        guard totalCount > 0 else {
-            return "0%"
-        }
-        let percent = Int((Double(count) / Double(totalCount) * 100).rounded())
-        return "\(percent)%"
-    }
 }
 
 struct AdaptiveTagGrid<Content: View>: View {

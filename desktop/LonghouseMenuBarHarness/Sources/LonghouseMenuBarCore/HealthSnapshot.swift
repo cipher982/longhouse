@@ -680,43 +680,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return providerLabel
     }
 
-    public var providerCountsToday: [(provider: String, count: Int)] {
-        sortedProviderCounts(activitySummary?.providerCountsToday)
-    }
-
     public var providerCountsRecent: [(provider: String, count: Int)] {
         sortedProviderCounts(activitySummary?.providerCountsRecent)
-    }
-
-    public var managedProviderCounts: [(provider: String, count: Int)] {
-        let counts = currentManagedSessions.reduce(into: [String: Int]()) { partialResult, session in
-            let provider = (session.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !provider.isEmpty else {
-                return
-            }
-            partialResult[provider, default: 0] += 1
-        }
-        return sortedProviderCounts(counts)
-    }
-
-    public var providerMixLabel: String {
-        let entries = providerCountsToday
-        guard !entries.isEmpty else {
-            return "No tracked sessions today"
-        }
-        return entries
-            .map { "\(Self.providerDisplayName($0.provider)) \($0.count)" }
-            .joined(separator: " · ")
-    }
-
-    public var recentProviderMixLabel: String {
-        let entries = providerCountsRecent
-        guard !entries.isEmpty else {
-            return "No recent provider traffic"
-        }
-        return entries
-            .map { "\(Self.providerDisplayName($0.provider)) \($0.count)" }
-            .joined(separator: " · ")
     }
 
     public var liveUnmanagedSummaryLabel: String {
