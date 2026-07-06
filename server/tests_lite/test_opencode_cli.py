@@ -106,6 +106,7 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
             "config_dir": None,
             "launch_mode": opencode_channel.LAUNCH_MODE_ATTACHED_TUI,
             "owner_wrapper_pid": os.getpid(),
+            "model": None,
         }
     ]
     assert attach_calls == [
@@ -116,6 +117,111 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
             "extra_args": ("--log-level", "debug"),
         }
     ]
+
+
+def test_opencode_funnels_model_flag_to_server(monkeypatch, tmp_path):
+    runner = CliRunner()
+    launch_calls: list[dict] = []
+    bridge_calls: list[dict] = []
+    attach_calls: list[dict] = []
+    _stub_managed_launch(monkeypatch, launch_calls)
+    monkeypatch.setattr(opencode_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(
+        opencode_channel,
+        "launch_opencode_server_bridge",
+        lambda **kwargs: bridge_calls.append(kwargs) or {"session_id": "session-123"},
+    )
+    monkeypatch.setattr(opencode_channel, "run_opencode_attach", lambda **kwargs: attach_calls.append(kwargs) or 0)
+    stop_calls: list[dict] = []
+    monkeypatch.setattr(
+        opencode_channel,
+        "stop_opencode_server_bridge",
+        lambda **kwargs: stop_calls.append(kwargs) or {},
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "opencode",
+            "--cwd",
+            str(tmp_path),
+            "--project",
+            "demo",
+            "-m",
+            "openrouter/z-ai/glm-5.2",
+            "--log-level",
+            "debug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert stop_calls == [{"session_id": "session-123", "config_dir": None}]
+    assert bridge_calls == [
+        {
+            "session_id": "session-123",
+            "api_url": "https://longhouse.test",
+            "api_token": "zdt_test_token",
+            "device_id": "work-laptop",
+            "display_name": None,
+            "opencode_bin": "/opt/homebrew/bin/opencode",
+            "cwd": tmp_path,
+            "config_dir": None,
+            "launch_mode": opencode_channel.LAUNCH_MODE_ATTACHED_TUI,
+            "owner_wrapper_pid": os.getpid(),
+            "model": "openrouter/z-ai/glm-5.2",
+        }
+    ]
+    assert attach_calls == [
+        {
+            "session_id": "session-123",
+            "opencode_bin": "/opt/homebrew/bin/opencode",
+            "config_dir": None,
+            "extra_args": ("--log-level", "debug"),
+        }
+    ]
+
+
+def test_opencode_funnels_model_equals_flag_to_server(monkeypatch, tmp_path):
+    runner = CliRunner()
+    bridge_calls: list[dict] = []
+    attach_calls: list[dict] = []
+    _stub_managed_launch(monkeypatch)
+    monkeypatch.setattr(opencode_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(
+        opencode_channel,
+        "launch_opencode_server_bridge",
+        lambda **kwargs: bridge_calls.append(kwargs) or {"session_id": "session-123"},
+    )
+    monkeypatch.setattr(opencode_channel, "run_opencode_attach", lambda **kwargs: attach_calls.append(kwargs) or 0)
+    monkeypatch.setattr(opencode_channel, "stop_opencode_server_bridge", lambda **_kwargs: {})
+
+    result = runner.invoke(
+        app,
+        [
+            "opencode",
+            "--cwd",
+            str(tmp_path),
+            "--model=openrouter/z-ai/glm-5.2",
+            "--log-level",
+            "debug",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert bridge_calls[0]["model"] == "openrouter/z-ai/glm-5.2"
+    assert attach_calls[0]["extra_args"] == ("--log-level", "debug")
+
+
+def test_opencode_model_flag_requires_value_before_launch(monkeypatch, tmp_path):
+    runner = CliRunner()
+    launch_calls: list[dict] = []
+    _stub_managed_launch(monkeypatch, launch_calls)
+
+    result = runner.invoke(app, ["opencode", "--cwd", str(tmp_path), "-m", "--log-level", "debug"])
+
+    assert result.exit_code == 1
+    assert "model flag requires" in result.output
+    assert launch_calls == []
 
 
 def test_opencode_keep_server_does_not_stop_on_exit(monkeypatch, tmp_path):
@@ -387,6 +493,23 @@ def test_opencode_config_content_preserves_existing_plugins(tmp_path):
     assert config["plugin"][0] == existing_plugin
     assert config["plugin"][1][0] == (tmp_path / "longhouse-opencode-runtime.mjs").resolve().as_uri()
     assert config["plugin"][1][1]["longhouseSessionID"] == "session-123"
+
+
+def test_opencode_config_content_sets_model(tmp_path):
+    content = opencode_cli._opencode_config_content_with_longhouse_plugin(
+        existing_content='{"theme":"system"}',
+        plugin_path=tmp_path / "longhouse-opencode-runtime.mjs",
+        runtime_events_url="https://longhouse.test/api/agents/runtime/events/batch",
+        token="zdt_test_token",
+        session_id="session-123",
+        device_id="work-laptop",
+        model="openrouter/z-ai/glm-5.2",
+    )
+
+    config = json.loads(content)
+    assert config["model"] == "openrouter/z-ai/glm-5.2"
+    assert config["theme"] == "system"
+    assert len(config["plugin"]) == 1
 
 
 def test_opencode_config_content_rejects_invalid_shapes(tmp_path):

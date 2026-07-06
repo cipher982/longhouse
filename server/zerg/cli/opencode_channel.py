@@ -431,6 +431,7 @@ def launch_opencode_server_bridge(
     # remote-launched servers as foreground TUIs.
     launch_mode: str = LAUNCH_MODE_DETACHED,
     owner_wrapper_pid: int | None = None,
+    model: str | None = None,
 ) -> dict:
     normalized_session_id = _validate_session_id(session_id)
     if launch_mode not in _VALID_LAUNCH_MODES:
@@ -458,6 +459,7 @@ def launch_opencode_server_bridge(
             token=api_token,
             session_id=normalized_session_id,
             device_id=device_id,
+            model=model,
         )
 
         username = _DEFAULT_USERNAME

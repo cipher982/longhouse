@@ -69,6 +69,7 @@ def test_launch_opencode_server_bridge_writes_private_state_without_token_in_arg
     session_id = str(uuid4())
     popen_calls: list[_FakePopen] = []
     create_calls: list[dict] = []
+    write_calls: list[dict] = []
     config_path = tmp_path / "config-content.json"
     config_path.write_text('{"plugin":[["file:///plugin.mjs",{"token":"zdt_test_token"}]]}\n', encoding="utf-8")
 
@@ -82,7 +83,11 @@ def test_launch_opencode_server_bridge_writes_private_state_without_token_in_arg
         "_resolve_opencode_binary",
         lambda explicit=None: "/opt/homebrew/bin/opencode",
     )
-    monkeypatch.setattr(opencode_channel, "_write_opencode_runtime_config_content", lambda **_kwargs: config_path)
+    monkeypatch.setattr(
+        opencode_channel,
+        "_write_opencode_runtime_config_content",
+        lambda **kwargs: write_calls.append(kwargs) or config_path,
+    )
     monkeypatch.setattr(opencode_channel.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(opencode_channel, "_wait_for_server_url", lambda *_args, **_kwargs: "http://127.0.0.1:57777")
     monkeypatch.setattr(opencode_channel, "_assert_health_ready", lambda **_kwargs: None)
@@ -126,6 +131,7 @@ def test_launch_opencode_server_bridge_writes_private_state_without_token_in_arg
     assert proc.env["LONGHOUSE_DEVICE_ID"] == "work-laptop"
     assert "zdt_test_token" in proc.env["OPENCODE_CONFIG_CONTENT"]
     assert proc.env["OPENCODE_SERVER_PASSWORD"]
+    assert write_calls[0]["model"] is None
 
     state_path = opencode_channel._opencode_server_state_path(session_id, tmp_path / "config")
     assert oct(state_path.stat().st_mode & 0o777) == "0o600"
@@ -149,6 +155,59 @@ def test_launch_opencode_server_bridge_writes_private_state_without_token_in_arg
 
     assert second["provider_session_id"] == "ses_test123"
     assert len(popen_calls) == 1
+    assert len(create_calls) == 1
+
+
+def test_launch_opencode_server_bridge_writes_model_config(monkeypatch, tmp_path):
+    session_id = str(uuid4())
+    popen_calls: list[_FakePopen] = []
+    create_calls: list[dict] = []
+    config_path = tmp_path / "config-content.json"
+
+    def fake_write_config(**kwargs):
+        content = json.dumps({"plugin": [], "model": kwargs["model"]}, separators=(",", ":"))
+        config_path.write_text(content + "\n", encoding="utf-8")
+        return config_path
+
+    monkeypatch.setattr(
+        opencode_channel,
+        "_resolve_opencode_binary",
+        lambda explicit=None: "/opt/homebrew/bin/opencode",
+    )
+    monkeypatch.setattr(opencode_channel, "_write_opencode_runtime_config_content", fake_write_config)
+    monkeypatch.setattr(
+        opencode_channel.subprocess,
+        "Popen",
+        lambda *args, **kwargs: popen_calls.append(_FakePopen(*args, **kwargs)) or popen_calls[-1],
+    )
+    monkeypatch.setattr(opencode_channel, "_wait_for_server_url", lambda *_args, **_kwargs: "http://127.0.0.1:57777")
+    monkeypatch.setattr(opencode_channel, "_assert_health_ready", lambda **_kwargs: None)
+    monkeypatch.setattr(opencode_channel, "_pid_is_running", lambda _pid: True)
+    monkeypatch.setattr(
+        opencode_channel,
+        "_process_identity",
+        lambda _pid: ("Mon May 27 00:00:00 2026", "opencode serve --hostname 127.0.0.1 --port 0 --print-logs"),
+    )
+    monkeypatch.setattr(
+        opencode_channel,
+        "_create_opencode_session",
+        lambda **kwargs: create_calls.append(kwargs) or "ses_test123",
+    )
+
+    opencode_channel.launch_opencode_server_bridge(
+        session_id=session_id,
+        cwd=tmp_path,
+        api_url="https://longhouse.test",
+        api_token="zdt_test_token",
+        device_id="work-laptop",
+        config_dir=tmp_path / "config",
+        model="openrouter/z-ai/glm-5.2",
+    )
+
+    env_config = json.loads(popen_calls[0].env["OPENCODE_CONFIG_CONTENT"])
+    assert env_config["model"] == "openrouter/z-ai/glm-5.2"
+    written_config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert written_config["model"] == "openrouter/z-ai/glm-5.2"
     assert len(create_calls) == 1
 
 

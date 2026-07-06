@@ -303,6 +303,7 @@ def _opencode_config_content_with_longhouse_plugin(
     token: str,
     session_id: str,
     device_id: str,
+    model: str | None = None,
 ) -> str:
     if existing_content and existing_content.strip():
         try:
@@ -332,6 +333,9 @@ def _opencode_config_content_with_longhouse_plugin(
         ]
     )
     config["plugin"] = plugins
+    normalized_model = str(model or "").strip()
+    if normalized_model:
+        config["model"] = normalized_model
     return json.dumps(config, separators=(",", ":"))
 
 
@@ -342,6 +346,7 @@ def _write_opencode_runtime_config_content(
     token: str,
     session_id: str,
     device_id: str,
+    model: str | None = None,
 ) -> Path:
     plugin_path = _ensure_opencode_runtime_plugin(config_dir)
     content = _opencode_config_content_with_longhouse_plugin(
@@ -351,6 +356,7 @@ def _write_opencode_runtime_config_content(
         token=token,
         session_id=session_id,
         device_id=device_id,
+        model=model,
     )
     runtime_dir = _opencode_runtime_dir(config_dir)
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -359,6 +365,37 @@ def _write_opencode_runtime_config_content(
     with os.fdopen(fd, "w", encoding="utf-8") as file:
         file.write(content + "\n")
     return config_path
+
+
+def _split_opencode_root_options(opencode_args: tuple[str, ...]) -> tuple[tuple[str, ...], str | None]:
+    """Return attach-safe args plus root-only model selection.
+
+    Managed OpenCode runs `opencode serve` and then `opencode attach`. The
+    upstream `-m/--model` option belongs to the root TUI command and is not
+    accepted by either subcommand, so Longhouse carries it through config.
+    """
+
+    attach_args: list[str] = []
+    model: str | None = None
+    i = 0
+    while i < len(opencode_args):
+        arg = str(opencode_args[i])
+        if arg in ("-m", "--model"):
+            if i + 1 >= len(opencode_args) or str(opencode_args[i + 1]).startswith("-"):
+                raise _OpenCodeLaunchError("OpenCode model flag requires a provider/model value.")
+            model = str(opencode_args[i + 1])
+            i += 2
+            continue
+        if arg.startswith("--model="):
+            value = arg.split("=", 1)[1].strip()
+            if not value:
+                raise _OpenCodeLaunchError("OpenCode model flag requires a provider/model value.")
+            model = value
+            i += 1
+            continue
+        attach_args.append(arg)
+        i += 1
+    return tuple(attach_args), model
 
 
 def _write_opencode_launch_script(
@@ -756,6 +793,11 @@ def opencode(
     """
 
     launch_ui.quiet_diagnostic_logs(verbose)
+    try:
+        opencode_args, model = _split_opencode_root_options(tuple(str(arg) for arg in (ctx.args or ())))
+    except _OpenCodeLaunchError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
 
     resolved_config_dir = Path(config_dir) if config_dir else None
     resolved_url, resolved_token = _load_api_credentials(
@@ -799,7 +841,6 @@ def opencode(
     )
     session_url = _build_session_url(resolved_url, result.session_id)
 
-    opencode_args = tuple(str(arg) for arg in (ctx.args or ()))
     is_interactive = _interactive_stdio()
 
     from zerg.cli.opencode_channel import LAUNCH_MODE_ATTACHED_TUI
@@ -836,6 +877,7 @@ def opencode(
             config_dir=resolved_config_dir,
             launch_mode=launch_mode,
             owner_wrapper_pid=os.getpid() if launch_mode == LAUNCH_MODE_ATTACHED_TUI else None,
+            model=model,
         )
     except (_OpenCodeLaunchError, OpenCodeServerBridgeError) as exc:
         typer.secho(str(exc), fg=typer.colors.RED)
