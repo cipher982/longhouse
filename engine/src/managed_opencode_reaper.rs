@@ -25,7 +25,10 @@ use tokio::time::Instant;
 
 use crate::managed_opencode_scan::OpenCodeServerObservation;
 use crate::managed_reaper_core::{ReaperCore, ReaperCoreDecision};
-use crate::process_identity::{collect_process_facts_by_pid, lstart_matches_recorded, ProcessFact};
+use crate::process_identity::{
+    collect_process_facts_by_pid, command_contains_basename, lstart_matches_recorded,
+    parse_rfc3339, ProcessFact, PID_REUSE_TOLERANCE_SECS,
+};
 
 pub const DEFAULT_OPENCODE_REAP_GRACE_SECS: u64 = 120;
 const OPENCODE_LAUNCH_MODE_ATTACHED_TUI: &str = "attached_tui";
@@ -55,12 +58,14 @@ pub fn wrapper_alive(obs: &OpenCodeServerObservation, facts: &HashMap<u32, Proce
         return false;
     };
     let recorded = obs.owner_wrapper_start_time.trim();
-    // If we have a recorded start time, it must match the live process exactly;
-    // otherwise the PID has been reused and our wrapper is gone.
-    if !lstart_matches_recorded(fact, recorded) {
-        return false;
+    if lstart_matches_recorded(fact, recorded) {
+        return true;
     }
-    true
+    // `ps lstart` is local-time text. If the machine/user timezone changed
+    // since launch, the same still-live wrapper can render with a different
+    // clock hour. Treat a live `longhouse opencode` wrapper as alive rather
+    // than risking cleanup of a terminal-owned server whose TUI still exists.
+    command_is_longhouse_opencode_wrapper(&fact.command)
 }
 
 /// Pure decision function. No fs/ps side effects.
@@ -200,14 +205,38 @@ fn server_pid_identity_matches(
     let Some(fact) = facts.get(&pid) else {
         return false;
     };
-    if !(fact.command.contains("opencode") && fact.command.contains(" serve")) {
+    if !command_is_opencode_serve(&fact.command) {
         return false;
     }
     let recorded = obs.process_start_time.trim();
-    if !lstart_matches_recorded(fact, recorded) {
-        return false;
+    if lstart_matches_recorded(fact, recorded) {
+        return true;
     }
-    true
+    server_started_near_state_started(obs, fact)
+}
+
+fn command_is_opencode_serve(command: &str) -> bool {
+    let parts = command.split_whitespace().collect::<Vec<_>>();
+    parts
+        .windows(2)
+        .any(|window| command_contains_basename(window[0], "opencode") && window[1] == "serve")
+}
+
+fn command_is_longhouse_opencode_wrapper(command: &str) -> bool {
+    let parts = command.split_whitespace().collect::<Vec<_>>();
+    parts
+        .windows(2)
+        .any(|window| command_contains_basename(window[0], "longhouse") && window[1] == "opencode")
+}
+
+fn server_started_near_state_started(obs: &OpenCodeServerObservation, fact: &ProcessFact) -> bool {
+    let Some(live_started_at) = fact.start_time else {
+        return false;
+    };
+    let Some(recorded_started_at) = parse_rfc3339(&obs.started_at) else {
+        return false;
+    };
+    (live_started_at - recorded_started_at).num_seconds().abs() <= PID_REUSE_TOLERANCE_SECS
 }
 
 #[cfg(unix)]
@@ -265,6 +294,14 @@ mod tests {
     }
 
     fn facts_with_wrapper(pid: u32, lstart: &str) -> HashMap<u32, ProcessFact> {
+        facts_with_wrapper_command(pid, lstart, "longhouse opencode")
+    }
+
+    fn facts_with_wrapper_command(
+        pid: u32,
+        lstart: &str,
+        command: &str,
+    ) -> HashMap<u32, ProcessFact> {
         let mut m = HashMap::new();
         m.insert(
             pid,
@@ -273,8 +310,24 @@ mod tests {
                 tty: "??".to_string(),
                 stat: "S".to_string(),
                 lstart: lstart.to_string(),
-                command: "longhouse opencode".to_string(),
+                command: command.to_string(),
                 start_time: None,
+            },
+        );
+        m
+    }
+
+    fn facts_with_server(pid: u32, lstart: &str, started_at: &str) -> HashMap<u32, ProcessFact> {
+        let mut m = HashMap::new();
+        m.insert(
+            pid,
+            ProcessFact {
+                pid,
+                tty: "??".to_string(),
+                stat: "Ss".to_string(),
+                lstart: lstart.to_string(),
+                command: "opencode serve --hostname 127.0.0.1 --port 0 --print-logs".to_string(),
+                start_time: parse_rfc3339(started_at),
             },
         );
         m
@@ -395,8 +448,49 @@ mod tests {
     fn wrapper_dead_when_pid_reused_with_different_start() {
         // PID present but a different start time -> reused -> wrapper gone.
         let o = obs("attached_tui", Some(9000), "Mon May  5 11:58:00 2026");
-        let facts = facts_with_wrapper(9000, "Tue Jun  2 09:00:00 2026");
+        let facts = facts_with_wrapper_command(9000, "Tue Jun  2 09:00:00 2026", "sleep 999");
         assert!(!wrapper_alive(&o, &facts));
+    }
+
+    #[test]
+    fn wrapper_alive_conservatively_handles_timezone_shifted_lstart() {
+        let o = obs("attached_tui", Some(9000), "Sat Jul  4 18:14:52 2026");
+        let facts = facts_with_wrapper(9000, "Sat Jul  4 17:14:52 2026");
+        assert!(wrapper_alive(&o, &facts));
+    }
+
+    #[test]
+    fn server_identity_matches_exact_recorded_lstart() {
+        let o = obs("attached_tui", Some(9000), "Mon May  5 11:58:00 2026");
+        let facts = facts_with_server(4242, "Mon May  5 11:59:00 2026", "2026-05-05T11:59:00Z");
+        assert!(server_pid_identity_matches(&o, &facts));
+    }
+
+    #[test]
+    fn server_identity_accepts_timezone_shifted_lstart_when_started_at_matches() {
+        let mut o = obs("attached_tui", Some(9000), "Sat Jul  4 18:14:52 2026");
+        o.started_at = "2026-07-04T23:14:53.525006Z".to_string();
+        o.process_start_time = "Sat Jul  4 18:14:52 2026".to_string();
+        let facts = facts_with_server(4242, "Sat Jul  4 17:14:52 2026", "2026-07-04T23:14:52Z");
+        assert!(server_pid_identity_matches(&o, &facts));
+    }
+
+    #[test]
+    fn server_identity_rejects_reused_pid_far_from_started_at() {
+        let mut o = obs("attached_tui", Some(9000), "Sat Jul  4 18:14:52 2026");
+        o.started_at = "2026-07-04T23:14:53.525006Z".to_string();
+        o.process_start_time = "Sat Jul  4 18:14:52 2026".to_string();
+        let facts = facts_with_server(4242, "Sat Jul  4 17:14:52 2026", "2026-07-05T23:14:52Z");
+        assert!(!server_pid_identity_matches(&o, &facts));
+    }
+
+    #[test]
+    fn server_identity_rejects_timezone_fallback_without_started_at() {
+        let mut o = obs("attached_tui", Some(9000), "Sat Jul  4 18:14:52 2026");
+        o.started_at.clear();
+        o.process_start_time = "Sat Jul  4 18:14:52 2026".to_string();
+        let facts = facts_with_server(4242, "Sat Jul  4 17:14:52 2026", "2026-07-04T23:14:52Z");
+        assert!(!server_pid_identity_matches(&o, &facts));
     }
 
     #[test]
