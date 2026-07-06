@@ -505,7 +505,7 @@ struct ProviderComparisonRows: View {
         let baseline = max(entries.map(\.count).max() ?? 0, 1)
 
         if entries.isEmpty {
-            Text("No tracked sessions today.")
+            Text("No archived sessions today.")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.secondary)
         } else {

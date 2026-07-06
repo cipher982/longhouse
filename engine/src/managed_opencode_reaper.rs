@@ -256,6 +256,7 @@ mod tests {
             started_at: "2026-05-05T11:59:00Z".to_string(),
             updated_at: "2026-05-05T12:00:00Z".to_string(),
             server_alive: true,
+            has_tui_attachment: false,
             launch_mode: launch_mode.to_string(),
             owner_wrapper_pid: wrapper_pid,
             owner_wrapper_start_time: wrapper_start.to_string(),
@@ -400,7 +401,8 @@ mod tests {
 
     #[test]
     fn parse_process_fact_extracts_pid_lstart_command() {
-        let line = "  4242 Mon May  5 11:58:00 2026 opencode serve --hostname 127.0.0.1";
+        let line =
+            "  4242 ??       Ss   Mon May  5 11:58:00 2026 opencode serve --hostname 127.0.0.1";
         let (pid, fact) = parse_process_fact(line).unwrap();
         assert_eq!(pid, 4242);
         assert_eq!(fact.lstart, "Mon May  5 11:58:00 2026");

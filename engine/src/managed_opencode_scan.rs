@@ -5,6 +5,7 @@
 //! that bridge in its complete managed-session heartbeat; otherwise the Runtime
 //! Host correctly interprets the missing session as detached.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -16,6 +17,10 @@ use base64::{engine::general_purpose, Engine as _};
 use reqwest::Url;
 use serde::Deserialize;
 use serde_json::Value;
+
+use crate::process_identity::{
+    collect_process_facts_by_pid, command_contains_basename, ProcessFact,
+};
 
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_millis(750);
 const DEFAULT_USERNAME: &str = "opencode";
@@ -31,6 +36,9 @@ pub struct OpenCodeServerObservation {
     pub started_at: String,
     pub updated_at: String,
     pub server_alive: bool,
+    /// True when a foreground `opencode attach` TUI is currently connected to
+    /// this server/session. This is live UI presence, not launch history.
+    pub has_tui_attachment: bool,
     /// Lifecycle ownership: attached_tui | keep_server | detached. Drives UI
     /// presence projection and gates the reaper (only attached_tui servers are
     /// reapable).
@@ -82,6 +90,7 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<OpenCodeServerObservat
     let Ok(entries) = fs::read_dir(state_dir) else {
         return out;
     };
+    let process_facts = collect_process_facts_by_pid();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
@@ -114,6 +123,8 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<OpenCodeServerObservat
                 state.username.as_deref(),
                 state.password.as_deref(),
             );
+        let has_tui_attachment =
+            opencode_attach_foreground(server_url.as_deref(), &provider_session_id, &process_facts);
 
         out.push(OpenCodeServerObservation {
             session_id,
@@ -125,6 +136,7 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<OpenCodeServerObservat
             started_at: state.started_at.unwrap_or_default(),
             updated_at: state.updated_at.unwrap_or_default(),
             server_alive,
+            has_tui_attachment,
             launch_mode: state.launch_mode.unwrap_or_default().trim().to_string(),
             owner_wrapper_pid: state.owner_wrapper_pid,
             owner_wrapper_start_time: state.owner_wrapper_start_time.unwrap_or_default(),
@@ -133,6 +145,34 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<OpenCodeServerObservat
     }
     out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     out
+}
+
+fn opencode_attach_foreground(
+    server_url: Option<&str>,
+    provider_session_id: &str,
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> bool {
+    let Some(server_url) = server_url.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let provider_session_id = provider_session_id.trim();
+
+    process_facts.values().any(|fact| {
+        if !fact.is_foreground_tty() || !command_contains_basename(&fact.command, "opencode") {
+            return false;
+        }
+        let mut saw_attach = false;
+        let mut saw_provider_session = provider_session_id.is_empty();
+        for part in fact.command.split_whitespace() {
+            if part == "attach" {
+                saw_attach = true;
+            }
+            if !provider_session_id.is_empty() && part == provider_session_id {
+                saw_provider_session = true;
+            }
+        }
+        saw_attach && saw_provider_session && fact.command.contains(server_url)
+    })
 }
 
 fn opencode_health_ready(
@@ -220,6 +260,7 @@ fn socket_addr_for_url(url: &Url) -> Option<SocketAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::process_identity::parse_process_fact;
     use std::net::TcpListener;
     use std::sync::mpsc;
     use std::thread;
@@ -277,6 +318,7 @@ mod tests {
         assert_eq!(obs[0].cwd.as_deref(), Some("/Users/test/repo"));
         assert_eq!(obs[0].server_url.as_deref(), Some("http://127.0.0.1:12345"));
         assert!(!obs[0].server_alive);
+        assert!(!obs[0].has_tui_attachment);
     }
 
     #[test]
@@ -306,6 +348,7 @@ mod tests {
 
         assert_eq!(obs.len(), 1);
         assert!(obs[0].server_alive);
+        assert!(!obs[0].has_tui_attachment);
         let request = request_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(request.contains("GET /global/health HTTP/1.1"));
         let expected_auth =
@@ -340,6 +383,51 @@ mod tests {
 
         assert_eq!(obs.len(), 1);
         assert!(!obs[0].server_alive);
+    }
+
+    #[test]
+    fn opencode_attach_foreground_requires_foreground_attach_for_same_server_and_session() {
+        let mut facts = HashMap::new();
+        let (pid, fact) = parse_process_fact(
+            "  4242 ttys003  S+   Mon May  5 11:58:00 2026 /opt/homebrew/bin/opencode attach http://127.0.0.1:12345 --session ses_native",
+        )
+        .unwrap();
+        facts.insert(pid, fact);
+
+        assert!(opencode_attach_foreground(
+            Some("http://127.0.0.1:12345"),
+            "ses_native",
+            &facts,
+        ));
+        assert!(!opencode_attach_foreground(
+            Some("http://127.0.0.1:54321"),
+            "ses_native",
+            &facts,
+        ));
+        assert!(!opencode_attach_foreground(
+            Some("http://127.0.0.1:12345"),
+            "ses_other",
+            &facts,
+        ));
+    }
+
+    #[test]
+    fn opencode_attach_foreground_rejects_detached_or_server_processes() {
+        let mut facts = HashMap::new();
+        let rows = [
+            "  4242 ??       Ss   Mon May  5 11:58:00 2026 /opt/homebrew/bin/opencode attach http://127.0.0.1:12345 --session ses_native",
+            "  4243 ttys003  S+   Mon May  5 11:58:00 2026 /opt/homebrew/bin/opencode serve --hostname 127.0.0.1 --port 0 --print-logs",
+        ];
+        for row in rows {
+            let (pid, fact) = parse_process_fact(row).unwrap();
+            facts.insert(pid, fact);
+        }
+
+        assert!(!opencode_attach_foreground(
+            Some("http://127.0.0.1:12345"),
+            "ses_native",
+            &facts,
+        ));
     }
 
     fn spawn_health_server() -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {

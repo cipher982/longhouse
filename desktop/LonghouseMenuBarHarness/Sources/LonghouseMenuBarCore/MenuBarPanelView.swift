@@ -438,7 +438,7 @@ public struct MenuBarPanelView: View {
 
             sectionDivider.padding(.horizontal, 4)
 
-            PanelSection(title: "Today", trailing: "\(snapshot.sessionsTodayLabel) sessions") {
+            PanelSection(title: "Today", trailing: "\(snapshot.sessionsTodayLabel) archived") {
                 ProviderComparisonRows(
                     entries: snapshot.providerCountsToday,
                     totalCount: Int(snapshot.sessionsTodayLabel) ?? snapshot.providerCountsToday.map(\.count).reduce(0, +)
@@ -504,7 +504,7 @@ public struct MenuBarPanelView: View {
             PanelReadout(
                 label: "Today",
                 value: snapshot.sessionsTodayLabel,
-                detail: "Sessions"
+                detail: "Archived"
             ),
             PanelReadout(
                 label: "Queue",

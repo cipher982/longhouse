@@ -20,8 +20,8 @@ use sha2::{Digest, Sha256};
 use crate::build_identity::BuildIdentity;
 use crate::managed_bridge_scan::CodexBridgeObservation;
 use crate::managed_claude_scan::ClaudeChannelObservation;
-use crate::managed_opencode_scan::OpenCodeServerObservation;
 use crate::managed_cursor_helm_scan::CursorHelmObservation;
+use crate::managed_opencode_scan::OpenCodeServerObservation;
 
 /// Captured once per daemon process at the first write_status_file call.
 /// Compared against the on-disk binary mtime to detect "restart pending".
@@ -777,7 +777,7 @@ fn resolved_managed_opencode_session(
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
                 .or_else(|| Some("server_bridge".to_string())),
-            ui_attached: None,
+            ui_attached: obs.map(|obs| obs.has_tui_attachment),
             ui_presence: opencode_ui_presence(&lease.state, obs).map(str::to_string),
         },
         evidence: ResolvedEvidence {
@@ -794,9 +794,9 @@ fn resolved_managed_opencode_session(
 /// Project UI presence for an OpenCode managed session from its launch mode.
 ///
 /// Crucially this does NOT influence the lease `state`: a live server stays
-/// `attached` for control-liveness purposes regardless of launch mode. Only the
-/// human-facing presence differs — a terminal-owned `attached_tui` server is a
-/// foreground TUI, while `keep_server` / `detached` servers are background and
+/// `attached` for control-liveness purposes regardless of UI presence. Only the
+/// human-facing presence differs — a live foreground `opencode attach` TUI is a
+/// foreground terminal, while unattached/persistent servers are background and
 /// reattachable. Legacy state files (empty launch_mode) report no presence.
 fn opencode_ui_presence(
     lease_state: &str,
@@ -810,7 +810,8 @@ fn opencode_ui_presence(
 
     let obs = obs?;
     match obs.launch_mode.trim() {
-        "attached_tui" => Some("foreground_tui"),
+        "attached_tui" if obs.has_tui_attachment => Some("foreground_tui"),
+        "attached_tui" => Some("background"),
         "keep_server" | "detached" => Some("background"),
         _ => None,
     }
@@ -1745,7 +1746,10 @@ mod tests {
             Some("background")
         );
         // Not alive and no observation -> no presence projected.
-        assert_eq!(claude_ui_presence("attached", Some(&claude_obs(false, false))), None);
+        assert_eq!(
+            claude_ui_presence("attached", Some(&claude_obs(false, false))),
+            None
+        );
         assert_eq!(claude_ui_presence("attached", None), None);
         // Lease-level states win over process signal.
         assert_eq!(
@@ -1769,6 +1773,7 @@ mod tests {
             started_at: "2026-05-05T11:59:00Z".to_string(),
             updated_at: "2026-05-05T12:00:00Z".to_string(),
             server_alive: true,
+            has_tui_attachment: false,
             launch_mode: launch_mode.to_string(),
             owner_wrapper_pid: Some(9000),
             owner_wrapper_start_time: "Mon May  5 11:58:00 2026".to_string(),
@@ -1794,20 +1799,43 @@ mod tests {
 
     #[test]
     fn resolved_sessions_project_opencode_ui_presence_without_changing_lease_state() {
-        // attached_tui -> foreground_tui; keep_server/detached -> background;
+        // attached_tui needs live attach proof for foreground_tui; otherwise
+        // the live server remains attached for control but background in UI.
+        let lease = opencode_lease("managed-opencode");
+        let mut obs = test_opencode_observation("managed-opencode", "attached_tui");
+        let sessions = resolved_sessions_from_observations(
+            std::slice::from_ref(&lease),
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&obs),
+        );
+        let session = &sessions[0];
+        assert_eq!(session.state, "attached");
+        assert_eq!(session.bridge.ui_attached, Some(false));
+        assert_eq!(session.bridge.ui_presence.as_deref(), Some("background"));
+
+        obs.has_tui_attachment = true;
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs]);
+        let session = &sessions[0];
+        assert_eq!(session.state, "attached");
+        assert_eq!(session.bridge.ui_attached, Some(true));
+        assert_eq!(
+            session.bridge.ui_presence.as_deref(),
+            Some("foreground_tui")
+        );
+
+        // keep_server/detached -> background;
         // every live launch mode keeps lease state "attached" so control
         // liveness (send/interrupt) is never disabled by presence alone.
-        let cases = [
-            ("attached_tui", "foreground_tui"),
-            ("keep_server", "background"),
-            ("detached", "background"),
-        ];
+        let cases = [("keep_server", "background"), ("detached", "background")];
         for (launch_mode, expected_presence) in cases {
             let lease = opencode_lease("managed-opencode");
             let obs = test_opencode_observation("managed-opencode", launch_mode);
             let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs]);
             let session = &sessions[0];
             assert_eq!(session.state, "attached", "launch_mode={launch_mode}");
+            assert_eq!(session.bridge.ui_attached, Some(false));
             assert_eq!(
                 session.bridge.ui_presence.as_deref(),
                 Some(expected_presence),
@@ -2306,6 +2334,7 @@ mod tests {
             started_at: "2026-05-05T11:59:00Z".to_string(),
             updated_at: "2026-05-05T12:00:00Z".to_string(),
             server_alive: true,
+            has_tui_attachment: true,
             launch_mode: "attached_tui".to_string(),
             owner_wrapper_pid: Some(9000),
             owner_wrapper_start_time: "Mon May  5 11:58:00 2026".to_string(),
