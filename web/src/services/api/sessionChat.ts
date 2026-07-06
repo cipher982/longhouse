@@ -15,7 +15,7 @@ export type SessionInputStatus =
 export type SessionInputOutcome = "sent" | "queued";
 
 export interface QueuedInputSummary {
-  id: number;
+  id?: number | null;
   live_input_id?: string | null;
   text: string;
   intent: SessionInputIntent;
@@ -102,9 +102,13 @@ export async function fetchSessionInputs(
 
 export async function cancelSessionInput(
   sessionId: string,
-  inputId: number,
-): Promise<{ cancelled: boolean; input_id: number }> {
-  return request(`/sessions/${sessionId}/inputs/${inputId}`, {
+  input: { id?: number | null; live_input_id?: string | null },
+): Promise<{ cancelled: boolean; input_id?: number | null; live_input_id?: string | null }> {
+  const liveInputId = input.live_input_id;
+  const path = liveInputId
+    ? `/sessions/${sessionId}/inputs/live/${liveInputId}`
+    : `/sessions/${sessionId}/inputs/${input.id}`;
+  return request(path, {
     method: "DELETE",
   });
 }

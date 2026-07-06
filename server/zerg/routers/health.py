@@ -462,11 +462,26 @@ def health_check(request: Request):
                         outbox_reason = "live_archive_outbox_lagging"
                 except (ValueError, TypeError):
                     pass
-        live_is_warn = live_status == "unsupported" or live_warnings or outbox_warn
+        receipts = live_store.get("live_input_receipts") or {}
+        receipts_warn = False
+        receipts_reason = None
+        if receipts.get("checked") and receipts.get("table_exists"):
+            if int(receipts.get("failed_count") or 0) > 0:
+                receipts_warn = True
+                receipts_reason = "live_input_receipt_failures"
+            elif int(receipts.get("delivering_old_count") or 0) > 0:
+                receipts_warn = True
+                receipts_reason = "live_input_receipts_stuck_delivering"
+            elif int(receipts.get("missing_projection_old_count") or 0) > 0:
+                receipts_warn = True
+                receipts_reason = "live_input_receipts_projection_lag"
+        live_is_warn = live_status == "unsupported" or live_warnings or outbox_warn or receipts_warn
         checks["live_store"] = {
             **live_store,
             "status": "warn" if live_is_warn else "pass",
             "store_status": live_status,
+            "outbox_warn_reason": outbox_reason,
+            "input_receipts_warn_reason": receipts_reason,
         }
         if outbox_warn and outbox_reason:
             checks["live_store"]["outbox_warn_reason"] = outbox_reason

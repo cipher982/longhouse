@@ -502,13 +502,18 @@ export function SessionChat({
   );
 
   const handleCancelQueuedInput = useCallback(
-    async (inputId: number) => {
+    async (input: QueuedInputSummary) => {
       try {
-        await cancelSessionInput(session.id, inputId);
+        await cancelSessionInput(session.id, input);
         // Optimistically drop it from the cache; refetch to confirm.
         queryClient.setQueryData<QueuedInputSummary[]>(
           ["session-inputs", session.id],
-          (rows = []) => rows.filter((row) => row.id !== inputId),
+          (rows = []) =>
+            rows.filter((row) =>
+              input.live_input_id
+                ? row.live_input_id !== input.live_input_id
+                : row.id !== input.id,
+            ),
         );
         void queuedInputsQuery.refetch();
       } catch (e) {
@@ -957,7 +962,7 @@ export function SessionChat({
           <div className="session-chat-queued__label">Queued (auto-sends next)</div>
           <ul className="session-chat-queued__list">
             {activeQueuedInputs.map((row) => (
-              <li key={row.id} className="session-chat-queued__item">
+              <li key={row.live_input_id ?? row.id ?? row.text} className="session-chat-queued__item">
                 <span className="session-chat-queued__text">{row.text}</span>
                 <span
                   className={`session-chat-queued__status session-chat-queued__status--${row.status}`}
@@ -968,7 +973,7 @@ export function SessionChat({
                   <button
                     type="button"
                     className="session-chat-queued__cancel"
-                    onClick={() => void handleCancelQueuedInput(row.id)}
+                    onClick={() => void handleCancelQueuedInput(row)}
                     aria-label="Cancel queued message"
                   >
                     Cancel
@@ -988,7 +993,7 @@ export function SessionChat({
           <div className="session-chat-queued__label">Delivery failed</div>
           <ul className="session-chat-queued__list">
             {failedInputs.map((row) => (
-              <li key={row.id} className="session-chat-queued__item">
+              <li key={row.live_input_id ?? row.id ?? row.text} className="session-chat-queued__item">
                 <span className="session-chat-queued__text">{row.text}</span>
                 <span className="session-chat-queued__status session-chat-queued__status--failed">
                   {row.last_error || "failed"}

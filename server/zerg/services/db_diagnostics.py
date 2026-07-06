@@ -772,6 +772,7 @@ def collect_sqlite_store_stats(
             "db_path": None,
             "warnings": [],
             "live_archive_outbox": {"checked": False, "reason": "store_disabled"},
+            "live_input_receipts": {"checked": False, "reason": "store_disabled"},
         }
 
     payload = collect_sqlite_db_stats(database_url, db=db)
@@ -783,6 +784,7 @@ def collect_sqlite_store_stats(
             "db_path": None,
             "warnings": ["not_file_backed_sqlite"],
             "live_archive_outbox": {"checked": False, "reason": "unsupported_store"},
+            "live_input_receipts": {"checked": False, "reason": "unsupported_store"},
         }
 
     warnings: list[str] = []
@@ -825,6 +827,14 @@ def collect_sqlite_store_stats(
             "reason": "no_connection",
         }
     )
+    payload["live_input_receipts"] = (
+        _collect_live_input_receipt_stats(db)
+        if db is not None
+        else {
+            "checked": False,
+            "reason": "no_connection",
+        }
+    )
     return payload
 
 
@@ -857,4 +867,68 @@ def _collect_live_archive_outbox_stats(db: Session | Connection) -> dict[str, An
         "failed_count": int(row[1] or 0) if row is not None else 0,
         "oldest_pending_created_at": str(row[2]) if row is not None and row[2] is not None else None,
         "max_attempts": int(row[3] or 0) if row is not None else 0,
+    }
+
+
+def _collect_live_input_receipt_stats(db: Session | Connection) -> dict[str, Any]:
+    if not _table_exists(db, "live_session_input_receipts"):
+        return {
+            "checked": True,
+            "table_exists": False,
+            "queued_old_count": None,
+            "delivering_old_count": None,
+            "missing_projection_old_count": None,
+            "failed_count": None,
+            "oldest_queued_created_at": None,
+            "oldest_delivering_updated_at": None,
+            "oldest_missing_projection_updated_at": None,
+        }
+    row = db.execute(
+        text(
+            """
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE status = 'queued'
+                      AND created_at <= datetime('now', '-2 minutes')
+                ) AS queued_old_count,
+                COUNT(*) FILTER (
+                    WHERE status = 'delivering'
+                      AND updated_at <= datetime('now', '-5 minutes')
+                ) AS delivering_old_count,
+                COUNT(*) FILTER (
+                    WHERE status = 'delivered'
+                      AND archive_session_input_id IS NULL
+                      AND updated_at <= datetime('now', '-5 minutes')
+                ) AS missing_projection_old_count,
+                COUNT(*) FILTER (WHERE status = 'failed') AS failed_count,
+                MIN(CASE
+                    WHEN status = 'queued'
+                     AND created_at <= datetime('now', '-2 minutes')
+                    THEN created_at END
+                ) AS oldest_queued_created_at,
+                MIN(CASE
+                    WHEN status = 'delivering'
+                     AND updated_at <= datetime('now', '-5 minutes')
+                    THEN updated_at END
+                ) AS oldest_delivering_updated_at,
+                MIN(CASE
+                    WHEN status = 'delivered'
+                     AND archive_session_input_id IS NULL
+                     AND updated_at <= datetime('now', '-5 minutes')
+                    THEN updated_at END
+                ) AS oldest_missing_projection_updated_at
+            FROM live_session_input_receipts
+            """
+        )
+    ).fetchone()
+    return {
+        "checked": True,
+        "table_exists": True,
+        "queued_old_count": int(row[0] or 0) if row is not None else 0,
+        "delivering_old_count": int(row[1] or 0) if row is not None else 0,
+        "missing_projection_old_count": int(row[2] or 0) if row is not None else 0,
+        "failed_count": int(row[3] or 0) if row is not None else 0,
+        "oldest_queued_created_at": str(row[4]) if row is not None and row[4] is not None else None,
+        "oldest_delivering_updated_at": str(row[5]) if row is not None and row[5] is not None else None,
+        "oldest_missing_projection_updated_at": str(row[6]) if row is not None and row[6] is not None else None,
     }

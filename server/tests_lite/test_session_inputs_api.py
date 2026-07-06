@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -24,7 +25,9 @@ import pytest
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import get_db
 from zerg.database import initialize_database
+from zerg.database import initialize_live_database
 from zerg.database import make_engine
+from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import AgentEvent
@@ -34,11 +37,15 @@ from zerg.models.agents import SessionInputAttachment
 from zerg.models.agents import SessionInputDeliveryAttempt
 from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
+from zerg.models.live_store import LiveArchiveOutbox
+from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers.session_chat import SessionInputRequest
 from zerg.routers.session_chat import _create_session_input_response
 from zerg.routers.session_chat import _project_live_input_to_archive
+from zerg.services.live_archive_outbox import SESSION_INPUT_RECEIPT_KIND
+from zerg.services.live_archive_outbox import drain_live_archive_outbox
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
@@ -62,6 +69,29 @@ def _make_db(tmp_path):
     engine = make_engine(f"sqlite:///{db_path}")
     initialize_database(engine)
     return make_sessionmaker(engine)
+
+
+def _enable_live_input_store(monkeypatch, tmp_path):
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-inputs.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    class LiveSerializer:
+        is_configured = True
+
+        async def execute(self, fn, *, auto_commit=True, **_kwargs):
+            with LiveSession() as live_db:
+                result = fn(live_db)
+                if auto_commit:
+                    live_db.commit()
+                return result
+
+    serializer = LiveSerializer()
+    monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
+    monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr("zerg.services.live_session_inputs.get_live_write_serializer", lambda: serializer)
+    monkeypatch.setattr("zerg.routers.session_chat.get_live_write_serializer", lambda: serializer)
+    return LiveSession, live_engine
 
 
 def _make_client(session_local, current_user):
@@ -393,17 +423,12 @@ def test_auto_input_response_includes_live_input_id(monkeypatch, tmp_path):
     session_id, user_id = _seed_live_session(session_local)
     _stub_dispatch(monkeypatch)
     receipt_calls: list[dict[str, object]] = []
-    projection_calls: list[dict[str, object]] = []
 
     async def fake_live_receipt(**kwargs):
         receipt_calls.append(kwargs)
         return "live-input-1"
 
     monkeypatch.setattr("zerg.routers.session_chat.record_live_input_receipt_best_effort", fake_live_receipt)
-    monkeypatch.setattr(
-        "zerg.routers.session_chat._schedule_live_input_archive_projection",
-        lambda **kwargs: projection_calls.append(kwargs),
-    )
 
     client, api_app_ref = _make_client(
         session_local,
@@ -424,8 +449,8 @@ def test_auto_input_response_includes_live_input_id(monkeypatch, tmp_path):
         assert receipt_calls[0]["status"] == INPUT_STATUS_DELIVERING
         assert receipt_calls[1]["client_request_id"] == "ios-live-1"
         assert receipt_calls[1]["status"] == INPUT_STATUS_DELIVERED
-        assert len(projection_calls) == 1
-        assert projection_calls[0]["client_request_id"] == "ios-live-1"
+        assert receipt_calls[1]["enqueue_archive_projection"] is True
+        assert receipt_calls[1]["delivery_request_id"]
         with session_local() as db:
             assert db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
     finally:
@@ -449,6 +474,7 @@ def test_auto_input_dedupes_existing_live_receipt(monkeypatch, tmp_path):
             status=INPUT_STATUS_DELIVERED,
             client_request_id="ios-live-repeat",
             archive_session_input_id=None,
+            delivery_request_id="delivery-live-repeat",
         )
 
     monkeypatch.setattr("zerg.routers.session_chat.load_live_input_receipt_by_client_request_best_effort", fake_live_lookup)
@@ -911,6 +937,125 @@ def test_intent_queue_always_persists_queued(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_queue_input_acks_from_live_receipt_without_archive_row(monkeypatch, tmp_path):
+    LiveSession, live_engine = _enable_live_input_store(monkeypatch, tmp_path)
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    calls = _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "queued hot", "intent": "queue", "client_request_id": "live-queue-1"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "queued"
+        assert body["input_id"] is None
+        assert body["live_input_id"]
+        assert body["queued"] == [
+            {
+                "id": None,
+                "live_input_id": body["live_input_id"],
+                "text": "queued hot",
+                "intent": "queue",
+                "status": "queued",
+                "last_error": None,
+                "created_at": body["queued"][0]["created_at"],
+            }
+        ]
+        assert calls == []
+
+        with session_local() as db:
+            assert db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
+        with LiveSession() as live_db:
+            receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=body["live_input_id"]).one()
+            assert receipt.status == INPUT_STATUS_QUEUED
+            assert receipt.client_request_id == "live-queue-1"
+    finally:
+        api_app_ref.dependency_overrides = {}
+        live_engine.dispose()
+
+
+def test_cancel_live_queued_input_uses_live_receipt(monkeypatch, tmp_path):
+    LiveSession, live_engine = _enable_live_input_store(monkeypatch, tmp_path)
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        queued = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "cancel hot", "intent": "queue", "client_request_id": "live-cancel-1"},
+        )
+        assert queued.status_code == 200, queued.text
+        live_input_id = queued.json()["live_input_id"]
+
+        resp = client.delete(f"/api/sessions/{session_id}/inputs/live/{live_input_id}")
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {"cancelled": True, "live_input_id": live_input_id, "input_id": None}
+
+        listed = client.get(f"/api/sessions/{session_id}/inputs")
+        assert listed.status_code == 200, listed.text
+        assert listed.json() == []
+        with LiveSession() as live_db:
+            receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=live_input_id).one()
+            assert receipt.status == INPUT_STATUS_CANCELLED
+    finally:
+        api_app_ref.dependency_overrides = {}
+        live_engine.dispose()
+
+
+def test_input_queue_recovery_tick_finds_live_queued_receipt(monkeypatch, tmp_path):
+    from zerg.services.session_input_queue import recover_session_input_queues
+
+    LiveSession, live_engine = _enable_live_input_store(monkeypatch, tmp_path)
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        queued = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "recover hot receipt", "intent": "queue", "client_request_id": "live-recovery-1"},
+        )
+        assert queued.status_code == 200, queued.text
+        live_input_id = queued.json()["live_input_id"]
+        with session_local() as db:
+            db_bind = db.get_bind()
+            assert db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
+
+        result = asyncio.run(recover_session_input_queues(db_bind=db_bind, reason="test_live_recovery"))
+
+        assert result.session_ids == (session_id,)
+        assert len(result.wake_results) == 1
+        assert result.wake_results[0].dispatched is True
+        assert result.wake_results[0].live_input_id == live_input_id
+        with LiveSession() as live_db:
+            receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=live_input_id).one()
+            assert receipt.status == INPUT_STATUS_DELIVERED
+            assert receipt.delivery_request_id
+            assert live_db.query(LiveArchiveOutbox).filter_by(kind=SESSION_INPUT_RECEIPT_KIND).count() == 1
+        with session_local() as db:
+            assert db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        api_app_ref.dependency_overrides = {}
+        live_engine.dispose()
+
+
 def test_client_request_id_dedupes_queued_input(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
@@ -1134,6 +1279,70 @@ def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
         assert result.input_id == input_id
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
+
+
+def test_live_queue_drain_dispatches_receipt_then_projects_archive(monkeypatch, tmp_path):
+    from zerg.services.session_input_queue import wake_session_input_queue
+
+    LiveSession, live_engine = _enable_live_input_store(monkeypatch, tmp_path)
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    _stub_dispatch(monkeypatch, emit_verified_user_event=True)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        queued = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "drain hot receipt", "intent": "queue", "client_request_id": "live-drain-1"},
+        )
+        assert queued.status_code == 200, queued.text
+        live_input_id = queued.json()["live_input_id"]
+        with session_local() as db:
+            db_bind = db.get_bind()
+
+        result = asyncio.run(
+            wake_session_input_queue(
+                db_bind=db_bind,
+                session_id=session_id,
+                reason="test_live_queue",
+                lock_scope_id=str(session_id),
+            )
+        )
+
+        assert result.dispatched is True
+        assert result.input_id is None
+        assert result.live_input_id == live_input_id
+        with session_local() as db:
+            assert db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
+        with LiveSession() as live_db:
+            receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=live_input_id).one()
+            assert receipt.status == INPUT_STATUS_DELIVERED
+            assert receipt.delivery_request_id
+            outbox = live_db.query(LiveArchiveOutbox).one()
+            assert outbox.kind == SESSION_INPUT_RECEIPT_KIND
+            assert outbox.drained_at is None
+
+        with LiveSession() as live_db, session_local() as archive_db:
+            drain_result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+        assert drain_result.drained == 1
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
+            assert row.status == INPUT_STATUS_DELIVERED
+            assert row.client_request_id == "live-drain-1"
+            assert row.delivery_request_id
+            turn = db.query(SessionTurn).filter(SessionTurn.request_id == row.delivery_request_id).one()
+            assert turn.session_input_id == row.id
+        with LiveSession() as live_db:
+            receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=live_input_id).one()
+            assert receipt.archive_session_input_id == row.id
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        api_app_ref.dependency_overrides = {}
+        live_engine.dispose()
 
 
 def test_queue_wake_defers_behind_active_turn(monkeypatch, tmp_path):
@@ -2420,6 +2629,55 @@ def test_intent_steer_success_returns_sent_for_claude_channel(monkeypatch, tmp_p
         assert body["intent"] == "steer"
     finally:
         api_app_ref.dependency_overrides = {}
+
+
+def test_intent_steer_acks_from_live_receipt_without_archive_row(monkeypatch, tmp_path):
+    LiveSession, live_engine = _enable_live_input_store(monkeypatch, tmp_path)
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    with session_local() as db:
+        session = db.query(AgentSession).filter_by(id=session_id).one()
+        _seed_live_runtime_state(db, session, phase="running")
+
+    async def fake_steer(*, db, owner_id, session, text, request_id=None, timeout_secs=15):
+        from zerg.services.managed_local_control import ManagedLocalSendResult
+
+        assert request_id
+        assert text == "redirect hot"
+        return ManagedLocalSendResult(ok=True, exit_code=0)
+
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
+        fake_steer,
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "redirect hot", "intent": "steer", "client_request_id": "live-steer-1"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "sent"
+        assert body["intent"] == "steer"
+        assert body["input_id"] is None
+        assert body["live_input_id"]
+
+        with session_local() as db:
+            assert db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
+        with LiveSession() as live_db:
+            receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=body["live_input_id"]).one()
+            assert receipt.status == INPUT_STATUS_DELIVERED
+            assert receipt.intent == "steer"
+            assert receipt.client_request_id == "live-steer-1"
+            assert live_db.query(LiveArchiveOutbox).filter_by(kind=SESSION_INPUT_RECEIPT_KIND).count() == 1
+    finally:
+        api_app_ref.dependency_overrides = {}
+        live_engine.dispose()
 
 
 def test_intent_steer_requires_active_turn_for_claude_channel(monkeypatch, tmp_path):

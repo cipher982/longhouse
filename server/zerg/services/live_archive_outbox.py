@@ -13,13 +13,20 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentHeartbeat
+from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveArchiveOutbox
+from zerg.models.live_store import LiveSessionInputReceipt
+from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
+from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
+from zerg.services.session_inputs import create_session_input
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.utils.time import normalize_utc
 
 HEARTBEAT_STAMP_KIND = "heartbeat_stamp.v1"
 RUNTIME_EVENT_KIND = "runtime_event.v1"
+SESSION_INPUT_RECEIPT_KIND = "session_input_receipt.v1"
 
 
 @dataclass(frozen=True)
@@ -115,6 +122,60 @@ def enqueue_runtime_events_outbox(db: Session, events: list[RuntimeEventIngest])
     return queued
 
 
+def session_input_receipt_idempotency_key(*, receipt_id: str) -> str:
+    return f"{SESSION_INPUT_RECEIPT_KIND}:{str(receipt_id).strip()}"
+
+
+def enqueue_session_input_receipt_outbox(
+    db: Session,
+    *,
+    receipt_id: str,
+    owner_id: int,
+    session_id: UUID | str,
+    text: str,
+    intent: str,
+    client_request_id: str | None,
+    delivery_request_id: str | None,
+    idempotency_key: str | None = None,
+) -> bool:
+    """Queue a delivered live input receipt for async archive provenance."""
+
+    clean_receipt_id = str(receipt_id or "").strip()
+    clean_delivery_request_id = str(delivery_request_id or "").strip()
+    if not clean_receipt_id:
+        raise ValueError("session input receipt outbox is missing receipt_id")
+    if not clean_delivery_request_id:
+        raise ValueError("session input receipt outbox is missing delivery_request_id")
+
+    key = idempotency_key or session_input_receipt_idempotency_key(receipt_id=clean_receipt_id)
+    existing = db.query(LiveArchiveOutbox.id).filter(LiveArchiveOutbox.idempotency_key == key).first()
+    if existing is not None:
+        return False
+    db.add(
+        LiveArchiveOutbox(
+            idempotency_key=key,
+            kind=SESSION_INPUT_RECEIPT_KIND,
+            payload_json=json.dumps(
+                {
+                    "receipt": _jsonable(
+                        {
+                            "id": clean_receipt_id,
+                            "owner_id": int(owner_id),
+                            "session_id": str(session_id),
+                            "text": str(text or ""),
+                            "intent": str(intent or "auto"),
+                            "client_request_id": str(client_request_id).strip() if client_request_id else None,
+                            "delivery_request_id": clean_delivery_request_id,
+                        }
+                    )
+                },
+                sort_keys=True,
+            ),
+        )
+    )
+    return True
+
+
 def cleanup_drained_live_archive_outbox(
     db: Session,
     *,
@@ -177,7 +238,7 @@ def drain_live_archive_outbox(
         processed += 1
         row.attempts = int(row.attempts or 0) + 1
         try:
-            _drain_row(row, archive_db)
+            _drain_row(row, archive_db, live_db)
             archive_db.commit()
         except Exception as exc:
             archive_db.rollback()
@@ -198,12 +259,15 @@ def drain_live_archive_outbox(
     return LiveArchiveDrainResult(processed=processed, drained=drained, failed=failed)
 
 
-def _drain_row(row: LiveArchiveOutbox, archive_db: Session) -> None:
+def _drain_row(row: LiveArchiveOutbox, archive_db: Session, live_db: Session) -> None:
     if row.kind == HEARTBEAT_STAMP_KIND:
         _drain_heartbeat_stamp(row, archive_db)
         return
     if row.kind == RUNTIME_EVENT_KIND:
         _drain_runtime_event(row, archive_db)
+        return
+    if row.kind == SESSION_INPUT_RECEIPT_KIND:
+        _drain_session_input_receipt(row, archive_db, live_db)
         return
     raise ValueError(f"Unsupported live archive outbox kind: {row.kind}")
 
@@ -235,6 +299,97 @@ def _drain_runtime_event(row: LiveArchiveOutbox, archive_db: Session) -> None:
     event_payload = _restore_jsonable(payload.get("event") or {})
     event = RuntimeEventIngest.model_validate(event_payload)
     ingest_runtime_events(archive_db, [event])
+
+
+def _drain_session_input_receipt(row: LiveArchiveOutbox, archive_db: Session, live_db: Session) -> None:
+    payload = json.loads(row.payload_json or "{}")
+    receipt = _restore_jsonable(payload.get("receipt") or {})
+    receipt_id = str(receipt.get("id") or "").strip()
+    session_id = str(receipt.get("session_id") or "").strip()
+    owner_id = int(receipt.get("owner_id") or 0)
+    text = str(receipt.get("text") or "")
+    intent = str(receipt.get("intent") or "auto").strip() or "auto"
+    client_request_id = str(receipt.get("client_request_id") or "").strip() or None
+    delivery_request_id = str(receipt.get("delivery_request_id") or "").strip()
+    if not receipt_id or not session_id or not owner_id or not delivery_request_id:
+        raise ValueError("session input receipt outbox payload is missing identity fields")
+
+    archive_input_id = project_session_input_receipt_to_archive(
+        archive_db,
+        source_session_id=session_id,
+        owner_id=owner_id,
+        text=text,
+        intent=intent,
+        client_request_id=client_request_id,
+        delivery_request_id=delivery_request_id,
+    )
+    live_db.query(LiveSessionInputReceipt).filter(LiveSessionInputReceipt.id == receipt_id).update(
+        {
+            "archive_session_input_id": archive_input_id,
+            "status": INPUT_STATUS_DELIVERED,
+            "delivery_request_id": delivery_request_id,
+            "updated_at": datetime.now(timezone.utc),
+        },
+        synchronize_session=False,
+    )
+
+
+def project_session_input_receipt_to_archive(
+    db: Session,
+    *,
+    source_session_id: UUID | str,
+    owner_id: int,
+    text: str,
+    intent: str,
+    client_request_id: str | None,
+    delivery_request_id: str,
+) -> int:
+    """Materialize live input receipt provenance in archive SQLite idempotently."""
+
+    existing_query = db.query(SessionInput).filter(
+        SessionInput.session_id == source_session_id,
+        SessionInput.owner_id == owner_id,
+    )
+    if client_request_id:
+        existing_query = existing_query.filter(SessionInput.client_request_id == client_request_id)
+    else:
+        existing_query = existing_query.filter(SessionInput.delivery_request_id == delivery_request_id)
+    existing = existing_query.order_by(SessionInput.id.asc()).first()
+    if existing is not None:
+        input_id = int(existing.id)
+        _link_session_turn(db, source_session_id=source_session_id, delivery_request_id=delivery_request_id, input_id=input_id)
+        return input_id
+
+    from zerg.services.session_inputs import mark_delivered as _mark_input_delivered
+
+    row = create_session_input(
+        db,
+        session_id=source_session_id,
+        text=text,
+        owner_id=owner_id,
+        intent=intent,
+        status=INPUT_STATUS_DELIVERING,
+        client_request_id=client_request_id,
+        delivery_request_id=delivery_request_id,
+    )
+    _mark_input_delivered(db, int(row.id))
+    input_id = int(row.id)
+    _link_session_turn(db, source_session_id=source_session_id, delivery_request_id=delivery_request_id, input_id=input_id)
+    return input_id
+
+
+def _link_session_turn(
+    db: Session,
+    *,
+    source_session_id: UUID | str,
+    delivery_request_id: str,
+    input_id: int,
+) -> None:
+    db.query(SessionTurn).filter(
+        SessionTurn.session_id == source_session_id,
+        SessionTurn.request_id == delivery_request_id,
+    ).update({"session_input_id": input_id}, synchronize_session=False)
+    db.commit()
 
 
 def _jsonable(value: Any) -> Any:

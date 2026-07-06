@@ -201,6 +201,7 @@ class LiveSessionInputReceipt(LiveBase):
     text = Column(Text, nullable=False)
     archive_session_input_id = Column(Integer, nullable=True, index=True)
     control_command_id = Column(String(96), nullable=True, index=True)
+    delivery_request_id = Column(String(64), nullable=True, index=True)
     error_json = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())

@@ -28,9 +28,11 @@ from zerg.database import make_live_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionLaunchAttempt
+from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
@@ -43,9 +45,11 @@ from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.agents import AgentsStore
 from zerg.services.live_archive_outbox import HEARTBEAT_STAMP_KIND
 from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
+from zerg.services.live_archive_outbox import SESSION_INPUT_RECEIPT_KIND
 from zerg.services.live_archive_outbox import drain_live_archive_outbox
 from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
+from zerg.services.live_archive_outbox import enqueue_session_input_receipt_outbox
 from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.live_session_state import mark_missing_live_sessions
 from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
@@ -314,6 +318,118 @@ def test_live_archive_outbox_drains_heartbeat_to_archive_idempotently(tmp_path):
         assert result.processed == 0
         with ArchiveSession() as archive_db:
             assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "live-drain").count() == 1
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_live_archive_outbox_drains_session_input_receipt_to_archive(tmp_path):
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    try:
+        with ArchiveSession() as archive_db:
+            session = AgentSession(
+                provider="codex",
+                environment="test",
+                project="live-input-outbox",
+                device_id="cinder",
+                started_at=now,
+                last_activity_at=now,
+            )
+            archive_db.add(session)
+            archive_db.commit()
+            session_id = session.id
+
+            from zerg.services.session_turns import create_session_turn
+
+            create_session_turn(archive_db, session_id=session_id, request_id="req-live-input-1")
+            archive_db.commit()
+
+        with LiveSession() as live_db:
+            receipt = upsert_live_input_receipt(
+                live_db,
+                owner_id=123,
+                session_id=session_id,
+                provider="codex",
+                device_id="cinder",
+                client_request_id="client-live-input-1",
+                text="project through outbox",
+                intent="auto",
+                status="delivered",
+                delivery_request_id="req-live-input-1",
+                now=now,
+            )
+            assert (
+                enqueue_session_input_receipt_outbox(
+                    live_db,
+                    receipt_id=receipt.id,
+                    owner_id=123,
+                    session_id=session_id,
+                    text="project through outbox",
+                    intent="auto",
+                    client_request_id="client-live-input-1",
+                    delivery_request_id="req-live-input-1",
+                )
+                is True
+            )
+            assert (
+                enqueue_session_input_receipt_outbox(
+                    live_db,
+                    receipt_id=receipt.id,
+                    owner_id=123,
+                    session_id=session_id,
+                    text="project through outbox",
+                    intent="auto",
+                    client_request_id="client-live-input-1",
+                    delivery_request_id="req-live-input-1",
+                )
+                is False
+            )
+            live_db.commit()
+            receipt_id = receipt.id
+
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 0
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            result = drain_live_archive_outbox(live_db, archive_db, limit=10, now=now + timedelta(seconds=1))
+
+        assert result.processed == 1
+        assert result.drained == 1
+        assert result.failed == 0
+
+        with ArchiveSession() as archive_db:
+            row = archive_db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
+            assert row.status == "delivered"
+            assert row.client_request_id == "client-live-input-1"
+            assert row.delivery_request_id == "req-live-input-1"
+            assert row.body == "project through outbox"
+            turn = archive_db.query(SessionTurn).filter(SessionTurn.request_id == "req-live-input-1").one()
+            assert turn.session_input_id == row.id
+            archive_input_id = int(row.id)
+
+        with LiveSession() as live_db:
+            outbox = live_db.query(LiveArchiveOutbox).one()
+            assert outbox.kind == SESSION_INPUT_RECEIPT_KIND
+            assert outbox.drained_at is not None
+            assert outbox.last_error is None
+            receipt = live_db.query(LiveSessionInputReceipt).filter(LiveSessionInputReceipt.id == receipt_id).one()
+            assert receipt.archive_session_input_id == archive_input_id
+            assert receipt.delivery_request_id == "req-live-input-1"
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+
+        assert result.processed == 0
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(SessionInput).filter(SessionInput.session_id == session_id).count() == 1
     finally:
         archive_engine.dispose()
         live_engine.dispose()

@@ -21,12 +21,19 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
+import zerg.database as database_module
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionInputDeliveryAttempt
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
 from zerg.models.user import User
+from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
+from zerg.services.live_session_inputs import claim_next_live_queued_receipt
+from zerg.services.live_session_inputs import list_recent_live_input_receipts
+from zerg.services.live_session_inputs import list_session_ids_with_queued_live_receipts
+from zerg.services.live_session_inputs import mark_live_receipt_delivered_with_projection
+from zerg.services.live_session_inputs import mark_live_receipt_failed
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_inputs import ACTIVE_DELIVERY_ATTEMPT_STATUSES
@@ -74,6 +81,7 @@ class QueueReadiness:
 class QueueWakeResult:
     dispatched: bool = False
     input_id: int | None = None
+    live_input_id: str | None = None
     reason: str = "noop"
 
 
@@ -190,6 +198,17 @@ def _append_unique_session_ids(target: list[UUID], rows: list[tuple[UUID]], *, l
             return
 
 
+def _append_unique_live_session_ids(target: list[UUID], rows: list[UUID], *, limit: int) -> None:
+    seen = set(target)
+    for session_id in rows:
+        if session_id in seen:
+            continue
+        target.append(session_id)
+        seen.add(session_id)
+        if len(target) >= limit:
+            return
+
+
 def find_sessions_needing_input_queue_wake(
     db: Session,
     *,
@@ -261,9 +280,24 @@ async def recover_session_input_queues(
     SessionLocal = sessionmaker(bind=db_bind, expire_on_commit=False)
     db = SessionLocal()
     try:
-        session_ids = tuple(find_sessions_needing_input_queue_wake(db, limit=limit))
+        selected = find_sessions_needing_input_queue_wake(db, limit=limit)
     finally:
         db.close()
+
+    if database_module.live_store_configured() and len(selected) < limit:
+        live_session_factory = database_module.get_live_session_factory()
+        if live_session_factory is not None:
+            try:
+                with live_session_factory() as live_db:
+                    live_session_ids = list_session_ids_with_queued_live_receipts(
+                        live_db,
+                        limit=limit - len(selected),
+                    )
+                _append_unique_live_session_ids(selected, live_session_ids, limit=max(1, int(limit)))
+            except Exception:
+                logger.warning("Input queue recovery could not scan live queued receipts", exc_info=True)
+
+    session_ids = tuple(selected)
 
     if session_ids:
         logger.info("Input queue recovery waking %d sessions after %s", len(session_ids), reason)
@@ -343,6 +377,15 @@ async def wake_session_input_queue(
     SessionLocal = sessionmaker(bind=db_bind, expire_on_commit=False)
     db = SessionLocal()
     try:
+        live_result = await _wake_live_session_input_queue(
+            db=db,
+            session_id=session_id,
+            reason=reason,
+            lock_scope_id=lock_scope_id,
+        )
+        if live_result is not None:
+            return live_result
+
         now = datetime.now(timezone.utc)
         # Accepted attempts belong to an active provider turn; the terminal
         # watcher marks them completed. Reap only pre-accept attempts here so a
@@ -462,6 +505,145 @@ async def wake_session_input_queue(
         return result
     finally:
         db.close()
+
+
+async def _wake_live_session_input_queue(
+    *,
+    db: Session,
+    session_id: UUID,
+    reason: str,
+    lock_scope_id: str | None,
+) -> QueueWakeResult | None:
+    if not database_module.live_store_configured():
+        return None
+    live_session_factory = database_module.get_live_session_factory()
+    if live_session_factory is None:
+        return None
+    try:
+        with live_session_factory() as live_db:
+            receipts = list_recent_live_input_receipts(live_db, session_id=session_id)
+    except Exception:
+        logger.warning("Live queue wake could not read receipts for session %s", session_id, exc_info=True)
+        return None
+
+    queued = next((receipt for receipt in receipts if receipt.status == INPUT_STATUS_QUEUED), None)
+    if queued is None:
+        return None
+
+    source_session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if source_session is None:
+        logger.warning("Live queue wake aborted: session %s not found", session_id)
+        return QueueWakeResult(live_input_id=queued.id, reason="session_missing")
+
+    readiness = evaluate_session_input_queue_readiness(
+        db,
+        session=source_session,
+        owner_id=queued.owner_id,
+    )
+    if not readiness.ready:
+        logger.info(
+            "Live queue wake deferred for session %s after %s: %s (live_input_id=%s)",
+            session_id,
+            reason,
+            readiness.reason,
+            queued.id,
+        )
+        return QueueWakeResult(live_input_id=queued.id, reason=readiness.reason)
+
+    lock_scope = lock_scope_id or session_lock_scope_id(source_session.id)
+    drain_request_id = f"drain-{uuid4().hex}"
+    lock = await session_lock_manager.acquire(
+        session_id=lock_scope,
+        holder=drain_request_id,
+        ttl_seconds=300,
+    )
+    if not lock:
+        logger.info("Live queue wake yielded for session %s after %s: lock already held", session_id, reason)
+        return QueueWakeResult(live_input_id=queued.id, reason="lock_active")
+
+    try:
+        with live_session_factory() as live_db:
+            claimed = claim_next_live_queued_receipt(
+                live_db,
+                session_id=session_id,
+                delivery_request_id=drain_request_id,
+            )
+    except Exception:
+        await session_lock_manager.release(lock_scope, drain_request_id)
+        logger.warning("Live queue wake failed to claim receipt for session %s", session_id, exc_info=True)
+        return QueueWakeResult(live_input_id=queued.id, reason="claim_failed")
+
+    if claimed is None:
+        await session_lock_manager.release(lock_scope, drain_request_id)
+        return QueueWakeResult(live_input_id=queued.id, reason="claim_raced")
+
+    result = await _dispatch_claimed_live_input(
+        db=db,
+        live_session_factory=live_session_factory,
+        source_session=source_session,
+        claimed=claimed,
+        lock_scope=lock_scope,
+        drain_request_id=drain_request_id,
+    )
+    if result.dispatched:
+        logger.info(
+            "Live queue wake drained receipt %s for session %s after %s",
+            claimed.id,
+            session_id,
+            reason,
+        )
+    return result
+
+
+async def _dispatch_claimed_live_input(
+    *,
+    db: Session,
+    live_session_factory,
+    source_session: AgentSession,
+    claimed: LiveInputReceiptSnapshot,
+    lock_scope: str,
+    drain_request_id: str,
+) -> QueueWakeResult:
+    from zerg.services.session_chat_impl import _dispatch_managed_local_text
+
+    try:
+        dispatch_response = await _dispatch_managed_local_text(
+            source_session=source_session,
+            owner_id=int(claimed.owner_id),
+            message=claimed.text,
+            request_id=drain_request_id,
+            lock_scope_id=lock_scope,
+            db=db,
+            session_input_id=None,
+        )
+    except Exception as exc:
+        with live_session_factory() as live_db:
+            mark_live_receipt_failed(live_db, receipt_id=claimed.id, error=str(exc)[:200])
+        await session_lock_manager.release(lock_scope, drain_request_id)
+        logger.exception("Live queue dispatch failed for receipt %s", claimed.id)
+        return QueueWakeResult(live_input_id=claimed.id, reason="dispatch_exception")
+
+    dispatch_status = int(getattr(dispatch_response, "status_code", 200) or 200)
+    if dispatch_status >= 400:
+        response_error_message = f"drain dispatch returned {dispatch_status}"
+        try:
+            response_body = json.loads(getattr(dispatch_response, "body", b"{}") or b"{}")
+            if isinstance(response_body, dict):
+                response_error_message = str(response_body.get("error") or response_error_message)
+        except Exception:
+            pass
+        with live_session_factory() as live_db:
+            mark_live_receipt_failed(live_db, receipt_id=claimed.id, error=response_error_message)
+        await session_lock_manager.release(lock_scope, drain_request_id)
+        return QueueWakeResult(live_input_id=claimed.id, reason="dispatch_failed")
+
+    with live_session_factory() as live_db:
+        mark_live_receipt_delivered_with_projection(
+            live_db,
+            receipt_id=claimed.id,
+            delivery_request_id=drain_request_id,
+        )
+    return QueueWakeResult(dispatched=True, live_input_id=claimed.id, reason="dispatched")
 
 
 async def _dispatch_claimed_input(

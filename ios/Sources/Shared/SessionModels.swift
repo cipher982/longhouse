@@ -369,7 +369,11 @@ enum SessionInputStatus: String, Codable, Sendable {
 }
 
 struct QueuedInputSummary: Codable, Sendable, Identifiable {
-    let id: Int
+    var id: String {
+        liveInputId ?? archiveInputId.map(String.init) ?? text
+    }
+
+    let archiveInputId: Int?
     let liveInputId: String?
     let text: String
     let intent: SessionInputIntent
@@ -377,8 +381,18 @@ struct QueuedInputSummary: Codable, Sendable, Identifiable {
     let lastError: String?
     let createdAt: String?
 
+    enum CodingKeys: String, CodingKey {
+        case archiveInputId = "id"
+        case liveInputId
+        case text
+        case intent
+        case status
+        case lastError
+        case createdAt
+    }
+
     init(
-        id: Int,
+        id: Int?,
         liveInputId: String? = nil,
         text: String,
         intent: SessionInputIntent,
@@ -386,7 +400,7 @@ struct QueuedInputSummary: Codable, Sendable, Identifiable {
         lastError: String?,
         createdAt: String?
     ) {
-        self.id = id
+        self.archiveInputId = id
         self.liveInputId = liveInputId
         self.text = text
         self.intent = intent

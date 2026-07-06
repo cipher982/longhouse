@@ -398,7 +398,7 @@ struct APISessionWorkspaceResponse: Codable, Hashable, Sendable {
 }
 
 struct APIQueuedInputSummary: Codable, Hashable, Sendable {
-    let id: Int
+    let id: Int?
     let liveInputId: String?
     let text: String
     let intent: String

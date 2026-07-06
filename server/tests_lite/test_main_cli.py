@@ -323,6 +323,91 @@ def test_db_doctor_reports_live_archive_outbox_stats(tmp_path):
     assert outbox["oldest_pending_created_at"] is not None
 
 
+def test_db_doctor_reports_live_input_receipt_stats(tmp_path):
+    from datetime import datetime
+    from datetime import timedelta
+    from datetime import timezone
+
+    from sqlalchemy.orm import sessionmaker
+
+    from zerg.database import initialize_live_database
+    from zerg.database import make_live_engine
+    from zerg.models.live_store import LiveSessionInputReceipt
+
+    _db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
+    live_path = tmp_path / "live-inputs.db"
+    live_url = f"sqlite:///{live_path}"
+    live_engine = make_live_engine(live_url)
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    now = datetime.now(timezone.utc)
+    try:
+        with LiveSession() as live_db:
+            live_db.add_all(
+                [
+                    LiveSessionInputReceipt(
+                        id="queued-old",
+                        owner_id=1,
+                        session_id="session-1",
+                        provider="codex",
+                        intent="queue",
+                        status="queued",
+                        text="queued",
+                        created_at=now - timedelta(minutes=3),
+                        updated_at=now - timedelta(minutes=3),
+                    ),
+                    LiveSessionInputReceipt(
+                        id="delivering-old",
+                        owner_id=1,
+                        session_id="session-1",
+                        provider="codex",
+                        intent="queue",
+                        status="delivering",
+                        text="delivering",
+                        created_at=now - timedelta(minutes=6),
+                        updated_at=now - timedelta(minutes=6),
+                    ),
+                    LiveSessionInputReceipt(
+                        id="project-missing",
+                        owner_id=1,
+                        session_id="session-1",
+                        provider="codex",
+                        intent="auto",
+                        status="delivered",
+                        text="delivered",
+                        created_at=now - timedelta(minutes=6),
+                        updated_at=now - timedelta(minutes=6),
+                    ),
+                    LiveSessionInputReceipt(
+                        id="failed",
+                        owner_id=1,
+                        session_id="session-1",
+                        provider="codex",
+                        intent="auto",
+                        status="failed",
+                        text="failed",
+                    ),
+                ]
+            )
+            live_db.commit()
+
+        result = CliRunner().invoke(
+            app,
+            ["db", "doctor", "--database-url", db_url, "--live-database-url", live_url, "--json"],
+        )
+    finally:
+        live_engine.dispose()
+
+    assert result.exit_code == 0, result.output
+    receipts = json.loads(result.output)["live_store"]["live_input_receipts"]
+    assert receipts["checked"] is True
+    assert receipts["table_exists"] is True
+    assert receipts["queued_old_count"] == 1
+    assert receipts["delivering_old_count"] == 1
+    assert receipts["missing_projection_old_count"] == 1
+    assert receipts["failed_count"] == 1
+
+
 def test_db_doctor_warns_when_live_store_is_archive_db(tmp_path):
     db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
 
