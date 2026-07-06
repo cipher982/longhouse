@@ -14,6 +14,8 @@ import subprocess
 import time
 from dataclasses import asdict
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.error import URLError
@@ -39,6 +41,7 @@ _DEFAULT_USERNAME = "opencode"
 # "newer than this build" forward-protection.
 _STATE_SCHEMA_VERSION = 1
 _MAX_READABLE_STATE_SCHEMA_VERSION = _STATE_SCHEMA_VERSION
+_PID_REUSE_TOLERANCE_SECONDS = 120
 
 # Lifecycle ownership of the backing `opencode serve` process.
 LAUNCH_MODE_ATTACHED_TUI = "attached_tui"  # server dies when the attach TUI exits
@@ -108,9 +111,6 @@ class OpenCodeServerBridgeState:
 
 
 def _utc_now() -> str:
-    from datetime import datetime
-    from datetime import timezone
-
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
@@ -351,6 +351,45 @@ def _process_identity(pid: int) -> tuple[str, str] | None:
     return (lstart, command)
 
 
+def _command_is_opencode_serve(command: str) -> bool:
+    parts = command.split()
+    return any(Path(left).name == "opencode" and right == "serve" for left, right in zip(parts, parts[1:]))
+
+
+def _parse_ps_lstart_utc(value: str) -> datetime | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    try:
+        parsed = datetime.strptime(normalized, "%a %b %d %H:%M:%S %Y")
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _parse_rfc3339_utc(value: str) -> datetime | None:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    if normalized.endswith("Z"):
+        normalized = f"{normalized[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _lstart_matches_started_at(live_start: str, started_at: str) -> bool:
+    live = _parse_ps_lstart_utc(live_start)
+    recorded = _parse_rfc3339_utc(started_at)
+    if live is None or recorded is None:
+        return False
+    return abs((live - recorded).total_seconds()) <= _PID_REUSE_TOLERANCE_SECONDS
+
+
 def _pid_matches_recorded_identity(state: "OpenCodeServerBridgeState") -> bool:
     """True iff state.pid is live AND is provably the server we launched.
 
@@ -372,11 +411,13 @@ def _pid_matches_recorded_identity(state: "OpenCodeServerBridgeState") -> bool:
     if not recorded_start and not recorded_cmd:
         # No recorded identity: only stop if the live process still looks like
         # an OpenCode server, so a recycled PID for an unrelated process is safe.
-        return "opencode" in live_cmd and " serve" in live_cmd
+        return _command_is_opencode_serve(live_cmd)
     if recorded_start and recorded_start != live_start:
-        return False
+        if not _lstart_matches_started_at(live_start, state.started_at):
+            return False
     if recorded_cmd and recorded_cmd != live_cmd:
-        return False
+        if not (_command_is_opencode_serve(recorded_cmd) and _command_is_opencode_serve(live_cmd)):
+            return False
     return True
 
 

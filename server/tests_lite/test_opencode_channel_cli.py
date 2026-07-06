@@ -382,6 +382,120 @@ def test_stop_bridge_rejects_reused_pid(monkeypatch, tmp_path):
     assert result["stopped"] is False
 
 
+def test_stop_bridge_accepts_timezone_shifted_lstart_when_started_at_matches(monkeypatch, tmp_path):
+    session_id = str(uuid4())
+    state = {
+        "schema_version": 1,
+        "session_id": session_id,
+        "provider_session_id": "ses_test123",
+        "server_url": "http://127.0.0.1:57777",
+        "pid": 4242,
+        "cwd": str(tmp_path),
+        "username": "opencode",
+        "password": "server-secret",
+        "log_path": str(tmp_path / "server.log"),
+        "config_content_path": str(tmp_path / "config.json"),
+        "started_at": "2026-07-04T23:14:53.525006Z",
+        "updated_at": "2026-07-04T23:14:53.525006Z",
+        "process_start_time": "Sat Jul  4 18:14:52 2026",
+        "process_command": "opencode serve --hostname 127.0.0.1 --port 0 --print-logs",
+    }
+    path = opencode_channel._opencode_server_state_path(session_id, tmp_path / "config")
+    opencode_channel._write_private_json(path, state)
+    killed: list[int] = []
+
+    monkeypatch.setattr(opencode_channel, "_pid_is_running", lambda _pid: True)
+    monkeypatch.setattr(
+        opencode_channel,
+        "_process_identity",
+        lambda _pid: ("Sat Jul  4 17:14:52 2026", "opencode serve --hostname 127.0.0.1 --port 0 --print-logs"),
+    )
+    monkeypatch.setattr(
+        opencode_channel,
+        "_lstart_matches_started_at",
+        lambda live, started: live == "Sat Jul  4 17:14:52 2026" and started == "2026-07-04T23:14:53.525006Z",
+    )
+    monkeypatch.setattr(opencode_channel, "_terminate_pid", lambda pid: killed.append(pid))
+
+    result = opencode_channel.stop_opencode_server_bridge(session_id=session_id, config_dir=tmp_path / "config")
+
+    assert killed == [4242]
+    assert result["stopped"] is True
+
+
+def test_existing_live_state_reuses_timezone_shifted_identity(monkeypatch, tmp_path):
+    session_id = str(uuid4())
+    state = {
+        "schema_version": 1,
+        "session_id": session_id,
+        "provider_session_id": "ses_test123",
+        "server_url": "http://127.0.0.1:57777",
+        "pid": 4242,
+        "cwd": str(tmp_path),
+        "username": "opencode",
+        "password": "server-secret",
+        "log_path": str(tmp_path / "server.log"),
+        "config_content_path": str(tmp_path / "config.json"),
+        "started_at": "2026-07-04T23:14:53.525006Z",
+        "updated_at": "2026-07-04T23:14:53.525006Z",
+        "process_start_time": "Sat Jul  4 18:14:52 2026",
+        "process_command": "opencode serve --hostname 127.0.0.1 --port 0 --print-logs",
+    }
+    path = opencode_channel._opencode_server_state_path(session_id, tmp_path / "config")
+    opencode_channel._write_private_json(path, state)
+
+    monkeypatch.setattr(opencode_channel, "_pid_is_running", lambda _pid: True)
+    monkeypatch.setattr(
+        opencode_channel,
+        "_process_identity",
+        lambda _pid: ("Sat Jul  4 17:14:52 2026", "opencode serve --hostname 127.0.0.1 --port 0 --print-logs"),
+    )
+    monkeypatch.setattr(opencode_channel, "_lstart_matches_started_at", lambda _live, _started: True)
+    monkeypatch.setattr(opencode_channel, "_assert_health_ready", lambda **_kwargs: None)
+
+    result = opencode_channel._existing_live_state_result(session_id=session_id, config_dir=tmp_path / "config")
+
+    assert result is not None
+    assert result["provider_session_id"] == "ses_test123"
+
+
+def test_stop_bridge_rejects_same_command_pid_far_from_started_at(monkeypatch, tmp_path):
+    session_id = str(uuid4())
+    state = {
+        "schema_version": 1,
+        "session_id": session_id,
+        "provider_session_id": "ses_test123",
+        "server_url": "http://127.0.0.1:57777",
+        "pid": 4242,
+        "cwd": str(tmp_path),
+        "username": "opencode",
+        "password": "server-secret",
+        "log_path": str(tmp_path / "server.log"),
+        "config_content_path": str(tmp_path / "config.json"),
+        "started_at": "2026-07-04T23:14:53.525006Z",
+        "updated_at": "2026-07-04T23:14:53.525006Z",
+        "process_start_time": "Sat Jul  4 18:14:52 2026",
+        "process_command": "opencode serve --hostname 127.0.0.1 --port 0 --print-logs",
+    }
+    path = opencode_channel._opencode_server_state_path(session_id, tmp_path / "config")
+    opencode_channel._write_private_json(path, state)
+    killed: list[int] = []
+
+    monkeypatch.setattr(opencode_channel, "_pid_is_running", lambda _pid: True)
+    monkeypatch.setattr(
+        opencode_channel,
+        "_process_identity",
+        lambda _pid: ("Sun Jul  5 17:14:52 2026", "opencode serve --hostname 127.0.0.1 --port 0 --print-logs"),
+    )
+    monkeypatch.setattr(opencode_channel, "_lstart_matches_started_at", lambda _live, _started: False)
+    monkeypatch.setattr(opencode_channel, "_terminate_pid", lambda pid: killed.append(pid))
+
+    result = opencode_channel.stop_opencode_server_bridge(session_id=session_id, config_dir=tmp_path / "config")
+
+    assert killed == []
+    assert result["stopped"] is False
+
+
 def test_pid_matches_recorded_identity_when_ps_cannot_confirm(monkeypatch, tmp_path):
     state = opencode_channel.OpenCodeServerBridgeState(
         schema_version=1,
