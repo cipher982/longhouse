@@ -440,7 +440,7 @@ public struct MenuBarPanelView: View {
 
     private var managedRuntimeSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !foregroundManagedSessionEntries.isEmpty || (backgroundManagedSessionEntries.isEmpty && backgroundBridgeEntries.isEmpty) {
+            if !foregroundManagedSessionEntries.isEmpty || (consoleManagedSessionEntries.isEmpty && attentionManagedSessionEntries.isEmpty && backgroundBridgeEntries.isEmpty) {
                 PanelSection(title: "Managed now", trailing: snapshot.managedSummaryLabel) {
                     if foregroundManagedSessionEntries.isEmpty {
                         Text("No managed Claude or Codex sessions are running on this Mac.")
@@ -452,14 +452,22 @@ public struct MenuBarPanelView: View {
                 }
             }
 
-            if !backgroundManagedSessionEntries.isEmpty {
+            if !consoleManagedSessionEntries.isEmpty {
                 sectionDivider.padding(.horizontal, 4)
 
-                PanelSection(title: "Background managed", trailing: "\(backgroundManagedSessionEntries.count)") {
+                PanelSection(title: "Console sessions", trailing: "\(consoleManagedSessionEntries.count)") {
+                    ManagedSessionList(entries: consoleManagedSessionEntries)
+                }
+            }
+
+            if !attentionManagedSessionEntries.isEmpty {
+                sectionDivider.padding(.horizontal, 4)
+
+                PanelSection(title: "Needs attention", trailing: "\(attentionManagedSessionEntries.count)") {
                     ManagedSessionList(
-                        entries: backgroundManagedSessionEntries,
-                        bulkStopAction: backgroundManagedStopAllAction(),
-                        bulkStopTargetCount: backgroundManagedBulkStopTargets.count
+                        entries: attentionManagedSessionEntries,
+                        bulkStopAction: attentionManagedStopAllAction(),
+                        bulkStopTargetCount: attentionManagedBulkStopTargets.count
                     )
                 }
             }
@@ -467,7 +475,7 @@ public struct MenuBarPanelView: View {
             if !backgroundBridgeEntries.isEmpty {
                 sectionDivider.padding(.horizontal, 4)
 
-                PanelSection(title: "Background bridges", trailing: "\(backgroundBridgeEntries.count)") {
+                PanelSection(title: "Detached bridges", trailing: "\(backgroundBridgeEntries.count)") {
                     BackgroundBridgeList(
                         entries: backgroundBridgeEntries,
                         bulkStopAction: backgroundBridgeStopAllAction(),
@@ -553,13 +561,19 @@ public struct MenuBarPanelView: View {
 
     private var foregroundManagedSessionEntries: [ManagedSessionEntry] {
         snapshot.currentManagedSessions
-            .filter { !$0.isBackgroundManagedSession }
+            .filter { !$0.isConsoleManagedSession && !$0.needsManagedSessionAttention }
             .map { managedSessionEntry(for: $0) }
     }
 
-    private var backgroundManagedSessionEntries: [ManagedSessionEntry] {
+    private var consoleManagedSessionEntries: [ManagedSessionEntry] {
         snapshot.currentManagedSessions
-            .filter { $0.isBackgroundManagedSession }
+            .filter { $0.isConsoleManagedSession }
+            .map { managedSessionEntry(for: $0) }
+    }
+
+    private var attentionManagedSessionEntries: [ManagedSessionEntry] {
+        snapshot.currentManagedSessions
+            .filter { $0.needsManagedSessionAttention }
             .map { managedSessionEntry(for: $0) }
     }
 
@@ -598,8 +612,8 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    private var backgroundManagedBulkStopTargets: [ManagedStopTarget] {
-        backgroundManagedSessionEntries.compactMap { entry -> ManagedStopTarget? in
+    private var attentionManagedBulkStopTargets: [ManagedStopTarget] {
+        attentionManagedSessionEntries.compactMap { entry -> ManagedStopTarget? in
             guard entry.stopAction != nil,
                   isIdleBulkStopCandidate(entry),
                   let sessionID = entry.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -685,8 +699,8 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    private func backgroundManagedStopAllAction() -> (() -> Void)? {
-        let targets = backgroundManagedBulkStopTargets
+    private func attentionManagedStopAllAction() -> (() -> Void)? {
+        let targets = attentionManagedBulkStopTargets
         guard !targets.isEmpty else {
             return nil
         }
@@ -695,7 +709,7 @@ public struct MenuBarPanelView: View {
             setFeedback(
                 actionSink.handleStopManagedBridges(
                     targets: targets,
-                    label: "idle background managed sessions",
+                    label: "managed sessions needing attention",
                     snapshot: snapshot
                 )
             )
@@ -712,7 +726,7 @@ public struct MenuBarPanelView: View {
             setFeedback(
                 actionSink.handleStopManagedBridges(
                     targets: targets,
-                    label: "background bridges",
+                    label: "detached bridges",
                     snapshot: snapshot
                 )
             )
@@ -752,7 +766,7 @@ public struct MenuBarPanelView: View {
         case "foreground_tui":
             presenceDetail = "Terminal attached."
         case "background":
-            presenceDetail = "Running in background."
+            presenceDetail = "Console session."
         default:
             presenceDetail = nil
         }

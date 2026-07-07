@@ -1427,8 +1427,16 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         normalizedUIPresence == "foreground_tui"
     }
 
+    public var isConsoleManagedSession: Bool {
+        normalizedUIPresence == "background" && normalizedState == "attached"
+    }
+
+    public var needsManagedSessionAttention: Bool {
+        normalizedState == "detached" || normalizedState == "degraded"
+    }
+
     public var isBackgroundManagedSession: Bool {
-        normalizedUIPresence == "background" || normalizedState == "detached" || normalizedState == "degraded"
+        isConsoleManagedSession || needsManagedSessionAttention
     }
 
     public var canStopFromMenuBar: Bool {

@@ -1485,11 +1485,15 @@ struct LonghouseMenuBarCoreTests {
         #expect(terminal.launchMode == "tui")
         #expect(terminal.uiAttached == true)
         #expect(terminal.normalizedUIPresence == "foreground_tui")
+        #expect(terminal.isConsoleManagedSession == false)
+        #expect(terminal.needsManagedSessionAttention == false)
         #expect(terminal.isBackgroundManagedSession == false)
         #expect(terminal.canStopFromMenuBar == false)
         #expect(background.launchMode == "detached_ui")
         #expect(background.uiAttached == false)
         #expect(background.normalizedUIPresence == "background")
+        #expect(background.isConsoleManagedSession == true)
+        #expect(background.needsManagedSessionAttention == false)
         #expect(background.isBackgroundManagedSession == true)
         #expect(background.canStopFromMenuBar == true)
     }
@@ -1645,7 +1649,62 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(session.menuBarAttentionKind == .idle)
         #expect(session.normalizedUIPresence == nil)
+        #expect(session.isConsoleManagedSession == false)
+        #expect(session.needsManagedSessionAttention == false)
         #expect(session.canStopFromMenuBar == false)
+    }
+
+    @Test
+    func consoleManagedSessionIsHealthyRemotePresenceNotAttention() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "sess-console",
+            provider: "codex",
+            workspaceLabel: "assistants-service",
+            branch: nil,
+            state: "attached",
+            phase: "idle",
+            phaseObservedAt: "2026-04-22T02:43:47Z",
+            lastActivityAt: "2026-04-22T02:43:47Z",
+            bridgeStatus: "ready",
+            bridgePid: 95434,
+            bridgeHeartbeatAt: "2026-04-22T02:43:47Z",
+            launchMode: "detached_ui",
+            uiAttached: false,
+            uiPresence: "background",
+            reasonCodes: []
+        )
+
+        #expect(session.isConsoleManagedSession == true)
+        #expect(session.needsManagedSessionAttention == false)
+        #expect(session.isBackgroundManagedSession == true)
+        #expect(session.menuBarAttentionKind == .idle)
+    }
+
+    @Test
+    func detachedManagedSessionNeedsAttentionEvenWithoutBackgroundPresence() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "sess-detached",
+            provider: "codex",
+            workspaceLabel: "assistants-service",
+            branch: nil,
+            state: "detached",
+            phase: "idle",
+            phaseObservedAt: "2026-04-22T02:43:47Z",
+            lastActivityAt: "2026-04-22T02:43:47Z",
+            bridgeStatus: "missing",
+            bridgePid: nil,
+            bridgeHeartbeatAt: nil,
+            launchMode: "detached_ui",
+            uiAttached: false,
+            uiPresence: nil,
+            reasonCodes: ["bridge_missing"]
+        )
+
+        #expect(session.isConsoleManagedSession == false)
+        #expect(session.needsManagedSessionAttention == true)
+        #expect(session.isBackgroundManagedSession == true)
+        #expect(session.menuBarAttentionKind == .detached)
+        #expect(session.canStopFromMenuBar == true)
     }
 
     @Test

@@ -565,27 +565,27 @@ struct ManagedSessionList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let bulkStopAction, bulkStopTargetCount > 0 {
-                BulkStopActionRow(
-                    title: "Stop all idle background sessions",
-                    detail: "\(bulkStopTargetCount) idle sessions on this Mac",
-                    tint: Color(red: 0.90, green: 0.67, blue: 0.16),
-                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.stopAllBackgroundManaged,
-                    accessibilityLabel: "Stop all idle background managed sessions",
-                    action: bulkStopAction
-                )
-
-                if !entries.isEmpty {
-                    sectionDivider
-                }
-            }
-
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 ManagedSessionRow(entry: entry)
 
                 if index < entries.count - 1 {
                     sectionDivider
                 }
+            }
+
+            if let bulkStopAction, bulkStopTargetCount > 0 {
+                if !entries.isEmpty {
+                    sectionDivider
+                }
+
+                BulkStopActionRow(
+                    title: "Clean up sessions needing attention",
+                    detail: "\(bulkStopTargetCount) sessions on this Mac",
+                    tint: Color(red: 0.90, green: 0.67, blue: 0.16),
+                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.stopAllBackgroundManaged,
+                    accessibilityLabel: "Clean up managed sessions needing attention",
+                    action: bulkStopAction
+                )
             }
         }
     }
@@ -793,27 +793,27 @@ struct BackgroundBridgeList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if let bulkStopAction, bulkStopTargetCount > 0 {
-                BulkStopActionRow(
-                    title: "Stop all background bridges",
-                    detail: "\(bulkStopTargetCount) detached bridges on this Mac",
-                    tint: .red,
-                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.stopAllBackgroundBridges,
-                    accessibilityLabel: "Stop all background bridges",
-                    action: bulkStopAction
-                )
-
-                if !entries.isEmpty {
-                    sectionDivider
-                }
-            }
-
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 BackgroundBridgeRow(entry: entry)
 
                 if index < entries.count - 1 {
                     sectionDivider
                 }
+            }
+
+            if let bulkStopAction, bulkStopTargetCount > 0 {
+                if !entries.isEmpty {
+                    sectionDivider
+                }
+
+                BulkStopActionRow(
+                    title: "Clean up detached bridges",
+                    detail: "\(bulkStopTargetCount) detached bridges on this Mac",
+                    tint: .red,
+                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.stopAllBackgroundBridges,
+                    accessibilityLabel: "Clean up detached bridges",
+                    action: bulkStopAction
+                )
             }
         }
     }
