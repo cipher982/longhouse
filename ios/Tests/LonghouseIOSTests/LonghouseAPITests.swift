@@ -139,6 +139,45 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func structuredErrorParsingAcceptsBareLegacyErrorBody() throws {
+        let data = try #require("""
+        {
+          "error_code": "send_failed",
+          "error": "Control channel returned 502"
+        }
+        """.data(using: .utf8))
+
+        let error = LonghouseAPI.parseStructuredError(statusCode: 502, data: data)
+
+        guard case let .structured(status, code, message)? = error else {
+            Issue.record("expected structured error, got \(String(describing: error))")
+            return
+        }
+        #expect(status == 502)
+        #expect(code == "send_failed")
+        #expect(message == "Control channel returned 502")
+    }
+
+    @Test
+    func sendInputDecodeFailureUsesDomainErrorCopy() throws {
+        let data = try #require("""
+        {
+          "input_id": 7
+        }
+        """.data(using: .utf8))
+
+        do {
+            _ = try LonghouseAPI.decodeSessionInputResponse(data)
+            Issue.record("expected decodeSessionInputResponse to throw")
+        } catch let LonghouseAPIError.unexpectedResponse(message) {
+            #expect(message.contains("unexpected send response"))
+            #expect(!message.contains("data couldn't be read"))
+        } catch {
+            Issue.record("expected unexpectedResponse, got \(error)")
+        }
+    }
+
+    @Test
     func launchErrorParsingAcceptsErrorCodeField() throws {
         let data = try #require("""
         {

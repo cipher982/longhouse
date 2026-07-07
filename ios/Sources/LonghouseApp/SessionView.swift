@@ -1890,13 +1890,18 @@ final class SessionViewModel: ObservableObject {
             errorMessage = message.isEmpty ? "Active turn ended before your update arrived." : message
             return false
         } catch {
+            let failureMessage = sendFailureMessage(for: error)
             updateSubmittedInput(
                 clientRequestId,
                 phase: .failed,
                 serverInputId: nil,
-                lastError: error.localizedDescription
+                lastError: failureMessage
             )
-            errorMessage = "Send failed: \(error.localizedDescription)"
+            errorMessage = "Send failed: \(failureMessage)"
+            Task { [weak self] in
+                guard let self else { return }
+                try? await self.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+            }
             return false
         }
     }
@@ -2524,7 +2529,11 @@ final class SessionViewModel: ObservableObject {
     private func reconcileSubmittedInputs(with events: [SessionEvent]) {
         guard !submittedInputs.isEmpty else { return }
         submittedInputs.removeAll { input in
-            guard input.phase == .sent || input.phase == .queued || input.phase == .submitting else { return false }
+            guard input.phase == .sent
+                || input.phase == .queued
+                || input.phase == .submitting
+                || input.phase == .failed
+            else { return false }
             return events.contains { event in
                 guard event.role == "user", event.isHeadBranch, let origin = event.inputOrigin else { return false }
                 if let serverInputId = input.serverInputId,
@@ -2533,6 +2542,30 @@ final class SessionViewModel: ObservableObject {
                 }
                 return origin.clientRequestId == input.clientRequestId
             }
+        }
+    }
+
+    private func sendFailureMessage(for error: Error) -> String {
+        switch error {
+        case LonghouseAPIError.upstreamFailed:
+            return "Longhouse couldn't confirm delivery. Refreshing to check whether it landed."
+        case LonghouseAPIError.requestFailed:
+            return "Longhouse couldn't confirm delivery. Refreshing to check whether it landed."
+        case LonghouseAPIError.unexpectedResponse(let message):
+            return message
+        case LonghouseAPIError.serviceUnavailable:
+            return "Longhouse is temporarily unavailable. Refreshing to check whether it landed."
+        case LonghouseAPIError.structured(_, _, let message):
+            return message.isEmpty ? "Longhouse couldn't send this message." : message
+        case is DecodingError:
+            return "Longhouse returned an unexpected send response. Refreshing to check whether it landed."
+        case let urlError as URLError:
+            if urlError.code == .notConnectedToInternet || urlError.code == .networkConnectionLost {
+                return "The network dropped before Longhouse could confirm delivery. Refreshing to check whether it landed."
+            }
+            return "Longhouse couldn't confirm delivery. Refreshing to check whether it landed."
+        default:
+            return error.localizedDescription
         }
     }
 

@@ -21,7 +21,7 @@ The iOS send flow already attaches a `client_request_id` to each local optimisti
 
 The iOS API client also lets `DecodingError` escape directly. `DecodingError.localizedDescription` is the exact user-facing string from the screenshots: `The data couldn't be read because it is missing.`
 
-Remote launch has a separate compatibility footgun. Current iOS sends an explicit `execution_lifetime`, but the server defaults omitted launch lifetime to `one_shot`. Older clients or scripts that omit it can accidentally ask for one-shot semantics, which require an initial prompt and do not create a continuing live-control session. The execution-lifetime spec says new clients should be explicit while omitted lifetime should preserve the legacy live-control behavior.
+Remote launch has a separate compatibility edge to audit later, but it is not the cause of these screenshots. Current iOS sends an explicit `execution_lifetime`, so omitted server defaults are not in the reported path.
 
 ## Root Causes
 
@@ -33,31 +33,21 @@ The zeta send likely failed before the input reached the Runtime Host or before 
 
 The g55 launch and first prompt succeeded. The app still rendered a failed optimistic input because the client treats every thrown send as final and does not reconcile `.failed` local inputs against durable transcript events by `client_request_id`.
 
-### Launch Semantics
-
-The launch stack now has two valid managed lifetimes:
-
-- `live_control`: create a continuing Helm-style remote session that the user can keep talking to.
-- `one_shot`: run one prompt headlessly and end.
-
-The server default should not choose one-shot for omitted lifetime. That makes old callers silently switch product modes. Clients should choose explicitly; the server should preserve legacy live-control semantics when the field is absent.
-
 ## Fix Plan
 
 1. Add iOS domain error copy.
    - Parse both FastAPI `{"detail": {"code"|"error_code", "message"}}` bodies and legacy bare `{"error_code", "error"|"message"}` bodies.
    - Wrap unexpected successful response decode failures as a Longhouse API error with stable copy instead of leaking `DecodingError.localizedDescription`.
-   - Make 502/service errors say Longhouse could not confirm delivery, not "Generation failed."
+   - Keep send-specific 502/transport copy at the send call site: the app could not confirm delivery and is refreshing to check.
 
 2. Reconcile failed optimistic sends.
    - On send failure, kick a best-effort tail refresh because the server may have accepted the input before the client saw an error.
    - Let `reconcileSubmittedInputs` clear `.failed` inputs when a head-branch durable user event matches the same `client_request_id` or `session_input_id`.
    - Keep the no-identity guard: matching text alone must never clear a failed bubble.
 
-3. Preserve launch compatibility.
-   - Change omitted `/api/sessions/launch` `execution_lifetime` back to `live_control`.
-   - Keep iOS Launch Session explicit. The segmented control may default to `Run once`, but it must send `one_shot` explicitly.
-   - Update endpoint descriptions and tests so one-shot requires an explicit lifetime.
+3. Leave launch lifetime defaults out of this fix.
+   - The fresh g55 launch worked and iOS already sends lifetime explicitly.
+   - Any broader default change needs a named non-iOS caller and separate product decision.
 
 4. Keep the deeper architecture simple.
    - Do not add a second delivery channel or local fallback.
@@ -70,5 +60,4 @@ The server default should not choose one-shot for omitted lifetime. That makes o
 - iOS API tests map malformed successful `sendInput` responses to stable unexpected-response copy.
 - iOS view-model tests prove a failed optimistic send clears after a tail refresh returns a durable user event with the same `client_request_id`.
 - iOS view-model tests prove failed bubbles do not clear by matching text without identity.
-- Server launch tests prove omitted lifetime creates `session.launch` / `live_control`.
-- Server launch tests prove explicit `one_shot` still creates `session.run_once` and still requires an initial prompt.
+- Existing server tests already prove `/input` dedupes delivered and queued rows by `client_request_id`; do not loosen that contract.

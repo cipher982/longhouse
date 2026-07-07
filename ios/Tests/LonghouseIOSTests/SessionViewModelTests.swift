@@ -720,6 +720,40 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func failedSubmittedInputReconcilesByClientRequestIdAfterTailRefresh() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            afterSendWorkspace: { clientRequestId in
+                try makeWorkspace(
+                    eventId: 11,
+                    content: "server projected text",
+                    timestamp: ISO8601DateFormatter().string(from: Date()),
+                    inputOriginJSON: """
+                    {
+                      "authored_via": "longhouse",
+                      "session_input_id": null,
+                      "client_request_id": "\(clientRequestId ?? "")"
+                    }
+                    """
+                )
+            }
+        )
+        await api.setSendSteps([.requestFailed])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        await waitForSubmittedInputsToClear(model)
+
+        #expect(!sent)
+        #expect(model.submittedInputs.isEmpty)
+        #expect(model.items.map(\.id) == ["user:11"])
+    }
+
+    @Test
     func submittedInputDoesNotReconcileByMatchingTextWithoutIdentity() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let after = try makeWorkspace(
@@ -738,6 +772,34 @@ struct SessionViewModelTests {
 
         #expect(sent)
         #expect(model.submittedInputs.count == 1)
+        #expect(model.items.map(\.id) == ["user:11"])
+    }
+
+    @Test
+    func failedSubmittedInputDoesNotReconcileByMatchingTextWithoutIdentity() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            afterSendWorkspace: { _ in
+                try makeWorkspace(
+                    eventId: 11,
+                    content: "continue",
+                    timestamp: ISO8601DateFormatter().string(from: Date())
+                )
+            }
+        )
+        await api.setSendSteps([.requestFailed])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        await waitForWorkspaceRequestCount(api, atLeast: 2)
+
+        #expect(!sent)
+        #expect(model.submittedInputs.count == 1)
+        #expect(model.submittedInputs.first?.phase == .failed)
         #expect(model.items.map(\.id) == ["user:11"])
     }
 

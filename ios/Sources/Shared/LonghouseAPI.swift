@@ -342,7 +342,7 @@ struct LonghouseAPI: Sendable {
             }
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
-        return try JSONDecoder.snakeCase.decode(APISessionInputResponse.self, from: data).sessionInputResponse
+        return try Self.decodeSessionInputResponse(data)
     }
 
     /// Multipart POST for inputs that include image attachments. Server route
@@ -395,7 +395,7 @@ struct LonghouseAPI: Sendable {
             }
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
-        return try JSONDecoder.snakeCase.decode(APISessionInputResponse.self, from: data).sessionInputResponse
+        return try Self.decodeSessionInputResponse(data)
     }
 
     func respondToPauseRequest(
@@ -478,19 +478,30 @@ struct LonghouseAPI: Sendable {
         return stripped.isEmpty ? "image.jpg" : stripped
     }
 
-    /// Extract `{"detail": {"error_code": ..., "message": ...}}` from an
-    /// HTTPException body. Returns nil when the body isn't structured,
-    /// letting callers fall back to the generic `LonghouseAPIError.from(...)`.
+    /// Extract stable error codes from wrapped FastAPI HTTPException bodies and
+    /// older bare `{"error_code": ..., "error": ...}` payloads.
+    /// Returns nil when the body isn't structured, letting callers fall back to
+    /// the generic `LonghouseAPIError.from(...)`.
     static func parseStructuredError(statusCode: Int, data: Data) -> LonghouseAPIError? {
-        guard
-            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-            let detail = obj["detail"] as? [String: Any],
-            let code = (detail["error_code"] as? String) ?? (detail["code"] as? String)
-        else {
+        guard let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
             return nil
         }
-        let message = (detail["message"] as? String) ?? ""
+        let detail = (obj["detail"] as? [String: Any]) ?? obj
+        guard let code = (detail["error_code"] as? String) ?? (detail["code"] as? String) else {
+            return nil
+        }
+        let message = (detail["message"] as? String) ?? (detail["error"] as? String) ?? ""
         return .structured(status: statusCode, errorCode: code, message: message)
+    }
+
+    static func decodeSessionInputResponse(_ data: Data) throws -> SessionInputResponse {
+        do {
+            return try JSONDecoder.snakeCase.decode(APISessionInputResponse.self, from: data).sessionInputResponse
+        } catch {
+            throw LonghouseAPIError.unexpectedResponse(
+                "Longhouse returned an unexpected send response. Refreshing to check whether it landed."
+            )
+        }
     }
 
     func draftReply(id: String, maxChars: Int = 1200) async throws -> DraftReplyResponse {
@@ -948,15 +959,7 @@ extension LonghouseAPI {
     }
 
     static func parseLaunchError(statusCode: Int, data: Data) -> LonghouseAPIError? {
-        guard
-            let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-            let detail = obj["detail"] as? [String: Any],
-            let code = (detail["code"] as? String) ?? (detail["error_code"] as? String)
-        else {
-            return nil
-        }
-        let message = (detail["message"] as? String) ?? ""
-        return .structured(status: statusCode, errorCode: code, message: message)
+        parseStructuredError(statusCode: statusCode, data: data)
     }
 }
 
@@ -968,6 +971,7 @@ enum LonghouseAPIError: Error {
     case conflict
     case serviceUnavailable
     case upstreamFailed
+    case unexpectedResponse(String)
     /// Server returned a structured error payload (e.g. `{"detail": {"error_code": "turn_ended"}}`).
     /// Carries status + code + message so the caller can branch on the
     /// semantic outcome instead of parsing ad-hoc strings.
@@ -1002,6 +1006,8 @@ extension LonghouseAPIError: LocalizedError {
             return "Service is not configured yet."
         case .upstreamFailed:
             return "Generation failed. Try again."
+        case .unexpectedResponse(let message):
+            return message
         case .structured(_, _, let message):
             return message.isEmpty ? "Request was rejected." : message
         }
