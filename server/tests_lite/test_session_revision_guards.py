@@ -26,7 +26,11 @@ def _make_db(tmp_path, name: str) -> make_sessionmaker:
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
     Base.metadata.create_all(bind=engine)
-    return make_sessionmaker(engine)
+    factory = make_sessionmaker(engine)
+    from zerg.services.write_serializer import get_write_serializer
+
+    get_write_serializer().configure(factory)
+    return factory
 
 
 @pytest.mark.asyncio
@@ -38,7 +42,7 @@ async def test_generate_summary_impl_skips_provider_when_summary_revision_curren
     db = factory()
     session = AgentSession(
         provider="claude",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         summary="Already summarized",
@@ -74,7 +78,7 @@ async def test_generate_summary_impl_marks_summary_current_when_llm_disabled(tmp
     db = factory()
     session = AgentSession(
         provider="claude",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         transcript_revision=2,
@@ -118,7 +122,7 @@ async def test_generate_summary_impl_marks_summary_current_when_llm_misconfigure
     db = factory()
     session = AgentSession(
         provider="claude",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         transcript_revision=2,
@@ -170,6 +174,50 @@ async def test_generate_summary_impl_marks_summary_current_when_llm_misconfigure
 
 
 @pytest.mark.asyncio
+async def test_generate_summary_impl_skips_test_environment(tmp_path):
+    from zerg.services.session_summaries import generate_summary_impl
+
+    factory = _make_db(tmp_path, "summary_test_environment.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="opencode",
+        environment="test",
+        project="longhouse-provider-live-proof",
+        started_at=datetime.now(timezone.utc),
+        first_user_message_preview="LONGHOUSE_OPENCODE_NOREPLY_skip_summary",
+        transcript_revision=3,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.close()
+
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            side_effect=AssertionError("summary provider should not be fetched for test sessions"),
+        ),
+    ):
+        await generate_summary_impl(session_id)
+
+    verify = factory()
+    try:
+        refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert refreshed.summary is None
+        assert refreshed.summary_title is None
+        assert refreshed.summary_revision == 0
+    finally:
+        verify.close()
+
+
+@pytest.mark.asyncio
 async def test_generate_initial_title_impl_persists_stable_title(tmp_path, monkeypatch):
     from zerg.services.session_pubsub import TOPIC_TIMELINE
     from zerg.services.session_pubsub import get_pubsub
@@ -183,7 +231,7 @@ async def test_generate_initial_title_impl_persists_stable_title(tmp_path, monke
     db = factory()
     session = AgentSession(
         provider="codex",
-        environment="test",
+        environment="cinder",
         project="zerg",
         git_branch="main",
         started_at=datetime.now(timezone.utc),
@@ -272,7 +320,7 @@ async def test_generate_initial_title_impl_does_not_publish_when_title_empty(tmp
     db = factory()
     session = AgentSession(
         provider="codex",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         first_user_message_preview="Please create an empty title regression test.",
@@ -328,7 +376,7 @@ async def test_generate_initial_title_impl_does_not_publish_without_first_user_m
     db = factory()
     session = AgentSession(
         provider="codex",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         user_messages=0,
@@ -361,6 +409,61 @@ async def test_generate_initial_title_impl_does_not_publish_without_first_user_m
 
 
 @pytest.mark.asyncio
+async def test_generate_initial_title_impl_skips_test_environment(tmp_path):
+    from zerg.services.session_pubsub import TOPIC_TIMELINE
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
+    from zerg.services.session_summaries import generate_initial_title_impl
+
+    reset_pubsub_for_test()
+    factory = _make_db(tmp_path, "initial_title_test_environment.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="opencode",
+        environment="test",
+        project="longhouse-provider-live-proof",
+        started_at=datetime.now(timezone.utc),
+        first_user_message_preview="LONGHOUSE_OPENCODE_NOREPLY_skip_title",
+        user_messages=1,
+        assistant_messages=0,
+        transcript_revision=1,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.close()
+
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            side_effect=AssertionError("provider should not be fetched for test sessions"),
+        ),
+    ):
+        updated = await generate_initial_title_impl(session_id)
+
+    assert updated is False
+    assert get_pubsub().peek_latest_seq(topic_session(session_id)) == 0
+    assert get_pubsub().peek_latest_seq(TOPIC_TIMELINE) == 0
+
+    verify = factory()
+    try:
+        refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert refreshed.summary_title is None
+        assert refreshed.summary_revision == 0
+    finally:
+        verify.close()
+    reset_pubsub_for_test()
+
+
+@pytest.mark.asyncio
 async def test_generate_initial_title_impl_skips_blank_user_event(tmp_path, monkeypatch):
     from zerg.services.session_pubsub import reset_pubsub_for_test
     from zerg.services.session_summaries import generate_initial_title_impl
@@ -371,7 +474,7 @@ async def test_generate_initial_title_impl_skips_blank_user_event(tmp_path, monk
     db = factory()
     session = AgentSession(
         provider="cursor",
-        environment="test",
+        environment="cinder",
         project="zeta",
         started_at=datetime.now(timezone.utc),
         user_messages=2,
@@ -453,7 +556,7 @@ async def test_generate_initial_title_impl_does_not_overwrite_existing_title(tmp
     db = factory()
     session = AgentSession(
         provider="codex",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         first_user_message_preview="Rename should not happen.",
@@ -494,7 +597,7 @@ async def test_generate_embeddings_impl_skips_provider_when_embedding_revision_c
     db = factory()
     session = AgentSession(
         provider="claude",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         needs_embedding=1,
@@ -530,7 +633,7 @@ async def test_summarize_and_persist_updates_summary_revision(tmp_path, monkeypa
     db = factory()
     session = AgentSession(
         provider="claude",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         transcript_revision=2,
@@ -583,7 +686,7 @@ async def test_generate_summary_impl_releases_db_connection_during_llm_call(tmp_
     db = factory()
     session = AgentSession(
         provider="claude",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         transcript_revision=2,
@@ -653,7 +756,7 @@ async def test_generate_summary_impl_bootstraps_from_bounded_message_tail(tmp_pa
     db = factory()
     session = AgentSession(
         provider="claude",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         transcript_revision=9,
@@ -729,7 +832,7 @@ async def test_generate_summary_impl_chunks_cursor_backlog_without_marking_curre
     db = factory()
     session = AgentSession(
         provider="codex",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         transcript_revision=10,
@@ -805,7 +908,7 @@ async def test_generate_summary_impl_does_not_overwrite_with_placeholder_result(
     db = factory()
     session = AgentSession(
         provider="codex",
-        environment="test",
+        environment="cinder",
         project="floodmap",
         started_at=datetime.now(timezone.utc),
         summary="Verified the slider QA flow and aggregate runner.",
@@ -877,7 +980,7 @@ async def test_generate_embeddings_impl_releases_db_connection_during_provider_c
     db = factory()
     session = AgentSession(
         provider="claude",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         needs_embedding=1,
@@ -943,7 +1046,7 @@ async def test_generate_embeddings_impl_raises_when_reconcile_makes_no_progress(
     db = factory()
     session = AgentSession(
         provider="claude",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         needs_embedding=1,
@@ -999,7 +1102,7 @@ async def test_summary_lock_prevents_duplicate_llm_call(tmp_path, monkeypatch):
     db = factory()
     session = AgentSession(
         provider="claude",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         transcript_revision=5,
@@ -1074,7 +1177,7 @@ async def test_summary_lock_stale_lock_is_broken(tmp_path, monkeypatch):
     db = factory()
     session = AgentSession(
         provider="codex",
-        environment="test",
+        environment="cinder",
         project="zerg",
         started_at=datetime.now(timezone.utc),
         transcript_revision=5,

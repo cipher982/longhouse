@@ -32,6 +32,8 @@ def _seed_session(
     db,
     *,
     project: str = "zerg",
+    environment: str = "cinder",
+    cwd: str | None = None,
     summary: str | None = None,
     summary_title: str | None = None,
     first_user_message_preview: str | None = None,
@@ -44,8 +46,9 @@ def _seed_session(
     now = datetime.now(timezone.utc)
     session = AgentSession(
         provider="codex",
-        environment="test",
+        environment=environment,
         project=project,
+        cwd=cwd,
         started_at=last_activity_at or now,
         last_activity_at=last_activity_at or now,
         user_messages=user_messages,
@@ -90,6 +93,23 @@ def test_select_stale_summary_sessions_orders_missing_title_then_recency(tmp_pat
             str(missing_old.id),
             str(titled_recent.id),
         ]
+    finally:
+        db.close()
+
+
+def test_select_stale_summary_sessions_skips_test_and_provider_proof_rows(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        normal = _seed_session(db, project="normal")
+        _seed_session(db, project="test-row", environment="test")
+        _seed_session(
+            db,
+            project="proof-row",
+            cwd="/Users/david/.longhouse/canaries/provider-live/opencode/proof/workspace",
+        )
+
+        assert select_stale_summary_session_ids(db, limit=10) == [str(normal.id)]
     finally:
         db.close()
 
@@ -185,6 +205,57 @@ async def test_low_content_sessions_try_initial_title_before_fast_forward(tmp_pa
         refreshed = verify.get(AgentSession, session_id)
         assert refreshed is not None
         assert refreshed.summary_title == "Menu Bar Row Affordance"
+        assert refreshed.summary_revision == 4
+    finally:
+        verify.close()
+
+
+@pytest.mark.asyncio
+async def test_low_content_test_sessions_skip_initial_title(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            first_user_message_preview="LONGHOUSE_OPENCODE_NOREPLY_skip_title",
+            user_messages=1,
+            assistant_messages=0,
+            transcript_revision=4,
+            summary_revision=0,
+        )
+        session.environment = "test"
+        db.commit()
+        session_id = str(session.id)
+    finally:
+        db.close()
+
+    async def _generate_initial_title(_session_id: str) -> bool:
+        raise AssertionError("test/provider-proof session should not call title provider")
+
+    async def _generate_summary(_session_id: str) -> None:
+        raise AssertionError("low-content session should not call full summary provider")
+
+    result = await reconcile_summaries_once(
+        session_factory=factory,
+        limit=10,
+        concurrency=2,
+        generate_summary=_generate_summary,
+        generate_initial_title=_generate_initial_title,
+    )
+
+    assert result.initial_selected == 0
+    assert result.initial_started == 0
+    assert result.initial_titled == 0
+    # Fast-forwarding is a local DB revision catch-up, not provider work; test
+    # sessions still use it so they do not remain permanently stale.
+    assert result.fast_forwarded == 1
+    assert result.started == 0
+
+    verify = factory()
+    try:
+        refreshed = verify.get(AgentSession, session_id)
+        assert refreshed is not None
+        assert refreshed.summary_title is None
         assert refreshed.summary_revision == 4
     finally:
         verify.close()

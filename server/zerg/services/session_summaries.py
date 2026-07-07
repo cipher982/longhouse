@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from zerg.config import get_settings
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_title import freeze_anchor_title
 from zerg.services.session_title import sanitize_title
@@ -332,6 +333,13 @@ async def generate_initial_title_impl(session_id: str) -> bool:
             return False
         if sanitize_title(session.anchor_title) or sanitize_title(session.summary_title):
             return False
+        if session.environment in {"test", "e2e"}:
+            return False
+        if classify_provider_proof_environment(
+            cwd=session.cwd,
+            first_user_text=session.first_user_message_preview,
+        ):
+            return False
 
         first_user_message = (session.first_user_message_preview or "").strip()
         if not first_user_message:
@@ -450,6 +458,15 @@ async def generate_summary_impl(session_id: str) -> None:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if not session:
             logger.warning("Session %s not found for summary generation", session_id)
+            return
+        if session.environment in {"test", "e2e"}:
+            logger.debug("Skipping summary for test session %s", session_id)
+            return
+        if classify_provider_proof_environment(
+            cwd=session.cwd,
+            first_user_text=session.first_user_message_preview,
+        ):
+            logger.debug("Skipping summary for provider proof session %s", session_id)
             return
 
         transcript_revision = int(getattr(session, "transcript_revision", 0) or 0)

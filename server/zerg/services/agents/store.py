@@ -51,6 +51,7 @@ from zerg.services.agents.session_graph_writes import record_thread_alias
 from zerg.services.agents.session_graph_writes import resolve_thread_by_provider_session_id
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.archive_transcript import load_session_source_line_bytes
+from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.provisional_events import durable_transcript_event_predicate
@@ -104,6 +105,19 @@ def _bounded_session_preview(value: str | None, *, max_len: int) -> str | None:
     return stripped[:max_len]
 
 
+def _first_user_text_from_ingest(data: SessionIngest) -> str | None:
+    for event in data.events:
+        if str(event.role or "").strip().lower() != "user":
+            continue
+        preview = _bounded_session_preview(
+            event.content_text,
+            max_len=_SESSION_FIRST_USER_PREVIEW_CHARS,
+        )
+        if preview:
+            return preview
+    return None
+
+
 def _is_managed_codex_ingest(
     db: Session,
     session: AgentSession | None,
@@ -133,15 +147,6 @@ def _has_managed_binding_evidence(
         return True
     caps = project_session_capabilities(db, session_id=session.id)
     return bool(caps.live_control_available or caps.host_reattach_available)
-
-
-def _is_opencode_provider_live_test_ingest(data: SessionIngest, incoming_environment: str) -> bool:
-    if incoming_environment not in {"test", "e2e"}:
-        return False
-    if str(data.provider or "").strip().lower() != "opencode":
-        return False
-    cwd = str(data.cwd or "").replace("\\", "/")
-    return "/.longhouse/canaries/provider-live/opencode/" in cwd and cwd.endswith("/workspace")
 
 
 def _should_repair_opencode_workspace_project(session: AgentSession, data: SessionIngest) -> bool:
@@ -682,7 +687,13 @@ class AgentsStore:
         except Exception:
             return False
 
-    def _refresh_existing_session_metadata(self, session: AgentSession, data: SessionIngest) -> None:
+    def _refresh_existing_session_metadata(
+        self,
+        session: AgentSession,
+        data: SessionIngest,
+        *,
+        first_user_text: str | None = None,
+    ) -> None:
         """Backfill richer session metadata when the same session is ingested again."""
         incoming_execution_home = _infer_execution_home_from_ingest(data)
 
@@ -728,6 +739,12 @@ class AgentsStore:
             session.git_branch = data.git_branch
 
         incoming_environment = data.environment.strip()
+        provider_proof_environment = classify_provider_proof_environment(
+            cwd=data.cwd or session.cwd,
+            first_user_text=session.first_user_message_preview or first_user_text,
+        )
+        if provider_proof_environment:
+            incoming_environment = provider_proof_environment
         existing_environment = (session.environment or "").strip()
         existing_environment_is_generic = is_generic_environment_label(existing_environment)
         incoming_environment_is_specific = not is_generic_environment_label(incoming_environment)
@@ -736,7 +753,7 @@ class AgentsStore:
             if not should_update_environment:
                 should_update_environment = existing_environment_is_generic and incoming_environment_is_specific
             if not should_update_environment:
-                should_update_environment = _is_opencode_provider_live_test_ingest(data, incoming_environment)
+                should_update_environment = bool(provider_proof_environment and existing_environment not in {"test", "e2e"})
             if should_update_environment:
                 session.environment = incoming_environment
 
@@ -1902,6 +1919,7 @@ class AgentsStore:
         session_id = data.id if data.id else uuid4()
         source_lines = self._normalize_source_lines_for_ingest(data)
         primary_source_path = self._primary_source_path_for_ingest(data, source_lines)
+        first_user_text_from_ingest = _first_user_text_from_ingest(data)
 
         # Dynamic-workflow `journal.jsonl` is a control ledger, not a session.
         # The engine now skips it at discovery, but guard here too: an ingest
@@ -2040,7 +2058,11 @@ class AgentsStore:
 
         if existing:
             if resolved_child_thread is None:
-                self._refresh_existing_session_metadata(existing, data)
+                self._refresh_existing_session_metadata(
+                    existing,
+                    data,
+                    first_user_text=first_user_text_from_ingest,
+                )
             session_id = existing.id
         else:
             # Derive device_name from device_id if not explicitly provided
@@ -2053,10 +2075,17 @@ class AgentsStore:
             # not a closure signal. Never seed session.ended_at from it.
             # Real terminal state comes from an explicit terminal_signal
             # ingest into SessionRuntimeState (or Phase 6 process-gone).
+            session_environment = (
+                classify_provider_proof_environment(
+                    cwd=data.cwd,
+                    first_user_text=first_user_text_from_ingest,
+                )
+                or data.environment
+            )
             session = AgentSession(
                 id=session_id,
                 provider=data.provider,
-                environment=data.environment,
+                environment=session_environment,
                 project=_normalize_ingested_project(data),
                 device_id=data.device_id,
                 device_name=device_name,
@@ -2557,6 +2586,12 @@ class AgentsStore:
                     durable_event_id=latest_inserted_event_id,
                 )
         if session_obj is not None:
+            provider_proof_environment = classify_provider_proof_environment(
+                cwd=session_obj.cwd,
+                first_user_text=first_user_preview_delta[2] if first_user_preview_delta else session_obj.first_user_message_preview,
+            )
+            if provider_proof_environment and session_obj.environment not in {"test", "e2e"}:
+                session_obj.environment = provider_proof_environment
             upsert_timeline_card_from_session(self.db, session_obj)
         _record_stage("session_projection", stage_started)
 
@@ -2576,7 +2611,7 @@ class AgentsStore:
                 device_id=data.device_id,
                 source="agents_ingest",
                 kind="binding_signal",
-                occurred_at=_normalize_utc_naive(data.started_at) or datetime.now(timezone.utc).replace(tzinfo=None),
+                occurred_at=(_normalize_utc_naive(data.started_at) or datetime.now(timezone.utc).replace(tzinfo=None)),
                 dedupe_key=f"binding:{runtime_key}:{thread_id}",
                 payload={},
             )
