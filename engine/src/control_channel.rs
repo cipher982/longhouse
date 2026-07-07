@@ -835,9 +835,10 @@ async fn execute_command(
                 });
             }
             let initial_prompt = payload_required_string(&payload, "initial_prompt")?;
-            let console_prompt = console_run_once_prompt(&initial_prompt);
             let run_id = payload_required_string(&payload, "run_id")?;
             let resume_target = payload_resume_target(&payload)?;
+            let provider_prompt =
+                run_once_provider_prompt(&initial_prompt, resume_target.is_some());
             let api_token = config.api_token.clone().ok_or_else(|| CommandError {
                 code: "provider_launch_failed".to_string(),
                 message: "Machine Agent has no device token configured".to_string(),
@@ -855,7 +856,7 @@ async fn execute_command(
                     api_url: config.api_url.clone(),
                     api_token,
                     cursor_bin: DEFAULT_CURSOR_BIN.to_string(),
-                    prompt: console_prompt,
+                    prompt: provider_prompt,
                     resume_acp_session_id: resume_target
                         .as_ref()
                         .map(|target| target.thread_id.clone()),
@@ -887,7 +888,7 @@ async fn execute_command(
                 codex_bin: DEFAULT_CODEX_BIN.to_string(),
                 approval_policy: Some(REMOTE_CODEX_EXEC_APPROVAL_POLICY.to_string()),
                 sandbox: Some(REMOTE_CODEX_EXEC_SANDBOX.to_string()),
-                prompt: console_prompt,
+                prompt: provider_prompt,
                 resume_thread_id: resume_target
                     .as_ref()
                     .map(|target| target.thread_id.clone()),
@@ -1958,6 +1959,14 @@ impl CompletedCommandCache {
     }
 }
 
+fn run_once_provider_prompt(user_prompt: &str, is_resume: bool) -> String {
+    if is_resume {
+        user_prompt.to_string()
+    } else {
+        console_run_once_prompt(user_prompt)
+    }
+}
+
 fn console_run_once_prompt(user_prompt: &str) -> String {
     format!("{CONSOLE_RUN_ONCE_CONTEXT}\n\nUser message:\n{user_prompt}")
 }
@@ -2659,6 +2668,20 @@ mod tests {
 
         let (_, preserved) = prompt.split_once("User message:\n").unwrap();
         assert_eq!(preserved, user_prompt);
+    }
+
+    #[test]
+    fn run_once_provider_prompt_leaves_resume_turns_unwrapped() {
+        let user_prompt = "Continue with the next fix.";
+        assert_eq!(run_once_provider_prompt(user_prompt, true), user_prompt);
+    }
+
+    #[test]
+    fn run_once_provider_prompt_wraps_fresh_console_turns() {
+        let prompt = run_once_provider_prompt("Start the task.", false);
+
+        assert!(prompt.starts_with("Longhouse Console runtime note:"));
+        assert!(prompt.ends_with("User message:\nStart the task."));
     }
 
     #[test]
