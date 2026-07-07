@@ -23,6 +23,8 @@ from zerg.utils.time import normalize_utc
 
 LiveLaunchReadinessState = Literal["pending", "dispatched", "adopted", "failed", "abandoned"]
 MANAGED_LOCAL_LAUNCH_OUTBOX_KIND = "managed_local_launch.v1"
+REMOTE_LAUNCH_OUTBOX_KIND = "remote_launch.v1"
+REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND = "remote_launch_outcome.v1"
 
 
 @dataclass(frozen=True)
@@ -207,20 +209,33 @@ def reap_expired_live_launch_readiness(
     )
     removed = 0
     for row in rows:
-        if _has_pending_managed_local_launch_outbox(db, session_id=str(row.session_id)):
+        if _has_pending_launch_outbox(db, session_id=str(row.session_id)):
             continue
         db.delete(row)
         removed += 1
     return removed
 
 
-def _has_pending_managed_local_launch_outbox(db: Session, *, session_id: str) -> bool:
-    key = f"{MANAGED_LOCAL_LAUNCH_OUTBOX_KIND}:{session_id}"
-    return (
+def _has_pending_launch_outbox(db: Session, *, session_id: str) -> bool:
+    for kind in (MANAGED_LOCAL_LAUNCH_OUTBOX_KIND, REMOTE_LAUNCH_OUTBOX_KIND):
+        key = f"{kind}:{session_id}"
+        exists = (
+            db.query(LiveArchiveOutbox.id)
+            .filter(LiveArchiveOutbox.kind == kind)
+            .filter(LiveArchiveOutbox.idempotency_key == key)
+            .filter(LiveArchiveOutbox.drained_at.is_(None))
+            .first()
+        )
+        if exists is not None:
+            return True
+    outcome_prefix = f"{REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND}:{session_id}:"
+    outcome_exists = (
         db.query(LiveArchiveOutbox.id)
-        .filter(LiveArchiveOutbox.kind == MANAGED_LOCAL_LAUNCH_OUTBOX_KIND)
-        .filter(LiveArchiveOutbox.idempotency_key == key)
+        .filter(LiveArchiveOutbox.kind == REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND)
+        .filter(LiveArchiveOutbox.idempotency_key.like(f"{outcome_prefix}%"))
         .filter(LiveArchiveOutbox.drained_at.is_(None))
         .first()
-        is not None
     )
+    if outcome_exists is not None:
+        return True
+    return False
