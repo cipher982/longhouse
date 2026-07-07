@@ -104,6 +104,7 @@ def load_session_workspace_revision(db: Session, session_id: UUID) -> SessionWor
         live_preview_updated_at,
         pause_signature,
         managed_control_signature,
+        str(session.anchor_title or ""),
     )
     fingerprint = _fingerprint(signature)
 

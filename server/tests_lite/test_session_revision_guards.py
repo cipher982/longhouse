@@ -172,7 +172,12 @@ async def test_generate_summary_impl_marks_summary_current_when_llm_misconfigure
 @pytest.mark.asyncio
 async def test_generate_initial_title_impl_persists_stable_title(tmp_path, monkeypatch):
     from zerg.services.session_summaries import generate_initial_title_impl
+    from zerg.services.session_pubsub import TOPIC_TIMELINE
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
 
+    reset_pubsub_for_test()
     factory = _make_db(tmp_path, "initial_title.db")
 
     db = factory()
@@ -235,11 +240,132 @@ async def test_generate_initial_title_impl_persists_stable_title(tmp_path, monke
     finally:
         verify.close()
 
+    bus = get_pubsub()
+    with bus.subscribe(topic_session(session_id), since_seq=0) as session_sub, bus.subscribe(TOPIC_TIMELINE, since_seq=0) as timeline_sub:
+        session_msg = await session_sub.next_message(timeout=0.1)
+        timeline_msg = await timeline_sub.next_message(timeout=0.1)
+
+    assert session_msg is not None
+    assert timeline_msg is not None
+    for msg in (session_msg, timeline_msg):
+        assert msg.payload["kind"] == "title_update"
+        assert msg.payload["session_id"] == session_id
+        assert msg.payload["provider"] == "codex"
+        assert msg.payload["source"] == "initial_title"
+    reset_pubsub_for_test()
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_title_impl_does_not_publish_when_title_empty(tmp_path, monkeypatch):
+    from zerg.services.session_summaries import generate_initial_title_impl
+    from zerg.services.session_pubsub import TOPIC_TIMELINE
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
+
+    reset_pubsub_for_test()
+    factory = _make_db(tmp_path, "initial_title_empty.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="codex",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        first_user_message_preview="Please create an empty title regression test.",
+        user_messages=1,
+        assistant_messages=0,
+        transcript_revision=1,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.close()
+
+    async def _fake_generate_initial_session_title(**_kwargs):
+        return '"""'
+
+    client = SimpleNamespace(close=AsyncMock())
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    monkeypatch.setattr(
+        "zerg.services.title_generator.generate_initial_session_title",
+        _fake_generate_initial_session_title,
+    )
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(client, "deepseek/deepseek-v4-flash", "openrouter"),
+        ),
+    ):
+        updated = await generate_initial_title_impl(session_id)
+
+    assert updated is False
+    assert get_pubsub().peek_latest_seq(topic_session(session_id)) == 0
+    assert get_pubsub().peek_latest_seq(TOPIC_TIMELINE) == 0
+    reset_pubsub_for_test()
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_title_impl_does_not_publish_without_first_user_message(tmp_path):
+    from zerg.services.session_summaries import generate_initial_title_impl
+    from zerg.services.session_pubsub import TOPIC_TIMELINE
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
+
+    reset_pubsub_for_test()
+    factory = _make_db(tmp_path, "initial_title_no_first_user.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="codex",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        user_messages=0,
+        assistant_messages=1,
+        transcript_revision=1,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.close()
+
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            side_effect=AssertionError("provider should not be fetched when no first user message exists"),
+        ),
+    ):
+        updated = await generate_initial_title_impl(session_id)
+
+    assert updated is False
+    assert get_pubsub().peek_latest_seq(topic_session(session_id)) == 0
+    assert get_pubsub().peek_latest_seq(TOPIC_TIMELINE) == 0
+    reset_pubsub_for_test()
+
 
 @pytest.mark.asyncio
 async def test_generate_initial_title_impl_does_not_overwrite_existing_title(tmp_path):
     from zerg.services.session_summaries import generate_initial_title_impl
+    from zerg.services.session_pubsub import TOPIC_TIMELINE
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
 
+    reset_pubsub_for_test()
     factory = _make_db(tmp_path, "initial_title_existing.db")
 
     db = factory()
@@ -272,6 +398,9 @@ async def test_generate_initial_title_impl_does_not_overwrite_existing_title(tmp
         updated = await generate_initial_title_impl(session_id)
 
     assert updated is False
+    assert get_pubsub().peek_latest_seq(topic_session(session_id)) == 0
+    assert get_pubsub().peek_latest_seq(TOPIC_TIMELINE) == 0
+    reset_pubsub_for_test()
 
 
 @pytest.mark.asyncio

@@ -259,6 +259,25 @@ def publish_session_runtime_update(
     bus.publish(TOPIC_TIMELINE, payload)
 
 
+def publish_session_title_update(
+    *,
+    session_id: str,
+    provider: str | None,
+    source: str | None,
+) -> None:
+    """Wake session and timeline subscribers after persisted title changes."""
+    payload = {
+        "kind": "title_update",
+        "session_id": session_id,
+        "provider": provider,
+        "source": source,
+        "server_fanout_at_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+    }
+    bus = get_pubsub()
+    bus.publish(topic_session(session_id), payload)
+    bus.publish(TOPIC_TIMELINE, payload)
+
+
 def publish_session_transcript_preview_update(
     *,
     session_id: str,

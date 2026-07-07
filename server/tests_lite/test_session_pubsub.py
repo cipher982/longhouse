@@ -6,6 +6,9 @@ import pytest
 
 from zerg.services.session_pubsub import SessionPubsub
 from zerg.services.session_pubsub import TOPIC_TIMELINE
+from zerg.services.session_pubsub import get_pubsub
+from zerg.services.session_pubsub import publish_session_title_update
+from zerg.services.session_pubsub import reset_pubsub_for_test
 from zerg.services.session_pubsub import topic_session
 
 
@@ -92,6 +95,32 @@ async def test_publish_wakes_live_subscriber():
         msg = await sub.next_message(timeout=0.5)
         assert msg and msg.payload == {"kind": "hello"}
         await task
+
+
+@pytest.mark.asyncio
+async def test_publish_session_title_update_wakes_session_and_timeline_topics():
+    reset_pubsub_for_test()
+    bus = get_pubsub()
+    session_id = "title-session"
+    with bus.subscribe(topic_session(session_id)) as session_sub, bus.subscribe(TOPIC_TIMELINE) as timeline_sub:
+        publish_session_title_update(
+            session_id=session_id,
+            provider="codex",
+            source="initial_title",
+        )
+
+        session_msg = await session_sub.next_message(timeout=0.1)
+        timeline_msg = await timeline_sub.next_message(timeout=0.1)
+
+    assert session_msg is not None
+    assert timeline_msg is not None
+    for msg in (session_msg, timeline_msg):
+        assert msg.payload["kind"] == "title_update"
+        assert msg.payload["session_id"] == session_id
+        assert msg.payload["provider"] == "codex"
+        assert msg.payload["source"] == "initial_title"
+        assert isinstance(msg.payload["server_fanout_at_ms"], int)
+    reset_pubsub_for_test()
 
 
 @pytest.mark.asyncio

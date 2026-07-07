@@ -299,6 +299,50 @@ def test_workspace_revision_is_stable_for_identical_reads(tmp_path):
         assert second.fingerprint == first.fingerprint
 
 
+def test_workspace_revision_tracks_anchor_title_changes(tmp_path):
+    sf = _make_db(tmp_path, name="session_workspace_revision_title.db")
+
+    with sf() as db:
+        session = _seed_session(db)
+        db.commit()
+        session_id = session.id
+
+        initial = load_session_workspace_revision(db, session_id)
+        assert initial is not None
+
+        session.anchor_title = "Realtime Session Titles"
+        session.updated_at = initial.latest_session_updated_at
+        db.add(session)
+        db.commit()
+
+        titled = load_session_workspace_revision(db, session_id)
+        assert titled is not None
+        assert titled.fingerprint != initial.fingerprint
+
+
+def test_workspace_revision_does_not_track_non_anchor_title_inputs(tmp_path):
+    sf = _make_db(tmp_path, name="session_workspace_revision_non_anchor_title.db")
+
+    with sf() as db:
+        session = _seed_session(db)
+        db.commit()
+        session_id = session.id
+
+        initial = load_session_workspace_revision(db, session_id)
+        assert initial is not None
+
+        session.summary_title = "Drifting Summary Title"
+        session.first_user_message_preview = "Please add realtime titles."
+        session.summary_revision = 99
+        session.updated_at = initial.latest_session_updated_at
+        db.add(session)
+        db.commit()
+
+        changed = load_session_workspace_revision(db, session_id)
+        assert changed is not None
+        assert changed.fingerprint == initial.fingerprint
+
+
 def test_workspace_responses_include_matching_revision(tmp_path):
     sf = _make_db(tmp_path, name="session_workspace_revision_response.db")
     now = datetime.now(timezone.utc)

@@ -571,6 +571,69 @@ def test_workspace_stream_wake_includes_fanout_metadata(tmp_path):
     assert changed["transcript_preview"]["is_provisional"] is False
 
 
+def test_workspace_stream_title_update_wakes_on_anchor_title_change(tmp_path):
+    """Title-only writes should wake the focused detail stream."""
+    from zerg.services.session_pubsub import publish_session_title_update
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+
+    reset_pubsub_for_test()
+    sf = _make_db(tmp_path, name="workspace_stream_title_update.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="claude",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=1,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+
+    async def _run():
+        events: list[dict] = []
+
+        async def mutate_and_publish():
+            await asyncio.sleep(0.01)
+            with sf() as db:
+                refreshed = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+                refreshed.anchor_title = "Realtime Title Update"
+                db.commit()
+            publish_session_title_update(
+                session_id=str(session_id),
+                provider="claude",
+                source="initial_title",
+            )
+
+        publish_task = asyncio.create_task(mutate_and_publish())
+        async for event in timeline_mod._session_workspace_stream(
+            _DisconnectAfterNCycles(4),
+            session_factory=sf,
+            session_id=session_id,
+            skip_initial=True,
+            known_workspace_fingerprint=_current_workspace_fingerprint(sf, session_id),
+        ):
+            events.append(event)
+            if event.get("event") == "workspace_changed":
+                break
+        await publish_task
+        return events
+
+    events = asyncio.run(_run())
+    changed_events = [event for event in events if event["event"] == "workspace_changed"]
+
+    assert len(changed_events) == 1
+    assert changed_events[0]["id"] == "1"
+    changed = json.loads(changed_events[0]["data"])
+    assert changed["session_id"] == str(session_id)
+    assert changed["pubsub_seq"] == 1
+    assert changed["transcript_preview"] is None
+
+
 def test_workspace_stream_does_not_preview_durable_tool_call(tmp_path):
     """Tool-call ledger updates should wake clients without masquerading as answer text."""
     from zerg.services.session_pubsub import get_pubsub

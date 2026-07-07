@@ -404,6 +404,13 @@ async def generate_initial_title_impl(session_id: str) -> bool:
             finally:
                 fallback_db.close()
         if updated:
+            from zerg.services.session_pubsub import publish_session_title_update
+
+            publish_session_title_update(
+                session_id=session_id,
+                provider=metadata.get("provider"),
+                source="initial_title",
+            )
             logger.info("Generated initial title for session %s in %dms: %s", session_id, elapsed_ms, title)
         return bool(updated)
     except Exception:

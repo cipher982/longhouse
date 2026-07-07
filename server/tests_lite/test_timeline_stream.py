@@ -434,6 +434,58 @@ def test_timeline_stream_wakes_on_topic_timeline_publish(tmp_path):
     reset_pubsub_for_test()
 
 
+def test_timeline_stream_title_update_wakes_targeted_card(tmp_path):
+    from zerg.services.session_pubsub import publish_session_title_update
+
+    reset_pubsub_for_test()
+    session_local = _make_db(tmp_path, "timeline_stream_title_update.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="title-update-wake",
+        )
+        session_id = session.id
+
+    async def _collect_after_publish():
+        stream = timeline_stream.stream_timeline_sessions_for_browser(
+            _ConnectedRequest(),
+            session_factory=session_local,
+            params=_stream_params(),
+            skip_initial_replay=True,
+        )
+        try:
+            connected = await anext(stream)
+            next_event = asyncio.create_task(anext(stream))
+            await asyncio.sleep(0)
+            with session_local() as db:
+                refreshed = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+                refreshed.anchor_title = "Realtime Title Update"
+                upsert_timeline_card_from_session(db, refreshed)
+                db.commit()
+            publish_session_title_update(
+                session_id=str(session_id),
+                provider="claude",
+                source="initial_title",
+            )
+            upsert = await asyncio.wait_for(next_event, timeout=2.0)
+            return connected, upsert
+        finally:
+            await stream.aclose()
+
+    connected, upsert = asyncio.run(_collect_after_publish())
+    payload = json.loads(upsert["data"])
+
+    assert connected["event"] == "connected"
+    assert upsert["event"] == "session_upsert"
+    assert payload["session"]["thread_id"] == str(session_id)
+    assert payload["session"]["head"]["timeline_title"] == "Realtime Title Update"
+    reset_pubsub_for_test()
+
+
 def test_timeline_stream_skip_initial_replay_sends_targeted_update_only(tmp_path):
     reset_pubsub_for_test()
     session_local = _make_db(tmp_path, "timeline_stream_skip_initial_targeted.db")
