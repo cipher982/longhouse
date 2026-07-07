@@ -686,8 +686,8 @@ struct SessionView: View {
                 }
             }
         } else if !pendingAttachments.isEmpty {
-            // Send failed: re-ingest the compressed attachments so the user
-            // can retry without re-picking from Photos.
+            // Re-ingest compressed attachments after a terminal failure or
+            // ambiguous confirmation so the user can decide whether to retry.
             let raw = pendingAttachments.map { (filename: $0.filename, data: $0.data) }
             await attachmentStore.ingest(rawImages: raw)
         }
@@ -1494,6 +1494,7 @@ enum SubmittedInputPhase: String, Sendable {
     case submitting
     case sent
     case queued
+    case couldNotConfirm
     case failed
     case needsUserDecision
 }
@@ -1804,7 +1805,7 @@ final class SessionViewModel: ObservableObject {
             if hasContent {
                 refreshErrorMessage = "Couldn't refresh. Showing saved messages."
             } else {
-                errorMessage = "Couldn't load session: \(error.localizedDescription)"
+                errorMessage = "Couldn't load session. Pull to refresh."
             }
         }
         isInitialLoading = false
@@ -1891,13 +1892,28 @@ final class SessionViewModel: ObservableObject {
             return false
         } catch {
             let failureMessage = sendFailureMessage(for: error)
+            if sendConfirmationMayHaveLanded(error) {
+                updateSubmittedInput(
+                    clientRequestId,
+                    phase: .couldNotConfirm,
+                    serverInputId: nil,
+                    lastError: failureMessage
+                )
+                errorMessage = nil
+                refreshErrorMessage = failureMessage
+                Task { [weak self] in
+                    guard let self else { return }
+                    try? await self.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+                }
+                return false
+            }
             updateSubmittedInput(
                 clientRequestId,
                 phase: .failed,
                 serverInputId: nil,
                 lastError: failureMessage
             )
-            errorMessage = "Send failed: \(failureMessage)"
+            errorMessage = "Could not send: \(failureMessage)"
             Task { [weak self] in
                 guard let self else { return }
                 try? await self.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
@@ -2522,7 +2538,7 @@ final class SessionViewModel: ObservableObject {
         submittedInputs.removeAll { input in
             input.clientRequestId != keepClientRequestId
                 && input.text == text
-                && (input.phase == .failed || input.phase == .needsUserDecision)
+                && (input.phase == .failed || input.phase == .couldNotConfirm || input.phase == .needsUserDecision)
         }
     }
 
@@ -2532,6 +2548,7 @@ final class SessionViewModel: ObservableObject {
             guard input.phase == .sent
                 || input.phase == .queued
                 || input.phase == .submitting
+                || input.phase == .couldNotConfirm
                 || input.phase == .failed
             else { return false }
             return events.contains { event in
@@ -2566,6 +2583,32 @@ final class SessionViewModel: ObservableObject {
             return "Longhouse couldn't confirm delivery. Refreshing to check whether it landed."
         default:
             return error.localizedDescription
+        }
+    }
+
+    private func sendConfirmationMayHaveLanded(_ error: Error) -> Bool {
+        switch error {
+        case LonghouseAPIError.upstreamFailed,
+             LonghouseAPIError.requestFailed,
+             LonghouseAPIError.unexpectedResponse,
+             LonghouseAPIError.serviceUnavailable:
+            return true
+        case is DecodingError:
+            return true
+        case let urlError as URLError:
+            switch urlError.code {
+            case .notConnectedToInternet,
+                 .networkConnectionLost,
+                 .timedOut,
+                 .cannotConnectToHost,
+                 .cannotFindHost,
+                 .dnsLookupFailed:
+                return true
+            default:
+                return false
+            }
+        default:
+            return false
         }
     }
 

@@ -160,6 +160,24 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertEqual(rows.map(\.body), ["already streaming", "queue after this turn"])
     }
 
+    func testPayloadLabelsUnconfirmedSubmittedInput() {
+        let rows = WebTranscriptView.payloadItems(
+            timelineItems: [],
+            submittedInputs: [
+                makeSubmittedInput(
+                    text: "maybe landed",
+                    clientRequestId: "ios-request-1",
+                    serverInputId: nil,
+                    phase: .couldNotConfirm
+                ),
+            ]
+        )
+
+        XCTAssertEqual(rows.first?.kind, "submitted")
+        XCTAssertEqual(rows.first?.status, "couldNotConfirm")
+        XCTAssertEqual(rows.first?.subtitle, "Could not confirm")
+    }
+
     func testPayloadCarriesPresentMediaRefsWithAbsoluteThumbnailURL() {
         let mediaRef = SessionEventMediaRef(
             sha256: "abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
