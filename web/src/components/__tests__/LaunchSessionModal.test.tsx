@@ -213,7 +213,7 @@ describe("LaunchSessionModal", () => {
 
     const cwdInput = await screen.findByTestId("launch-cwd-input");
     await user.type(cwdInput, "/Users/me/repo");
-    expect(screen.getByText("Advanced").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByTestId("launch-advanced-runtime")).not.toHaveAttribute("open");
     expect(screen.getByTestId("launch-submit")).toBeDisabled();
     await user.type(screen.getByTestId("launch-initial-prompt"), "Fix the telemetry test");
     await user.click(screen.getByTestId("launch-submit"));

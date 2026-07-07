@@ -154,6 +154,12 @@
     display: none;
   }
 
+  .launch-advanced summary:focus-visible {
+    border-radius: var(--radius-sm);
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 3px;
+  }
+
   .launch-advanced summary::before {
     content: ">";
     display: inline-block;

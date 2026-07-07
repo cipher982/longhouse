@@ -374,7 +374,7 @@ export default function LaunchSessionModal({
                 />
               </label>
 
-              <details className="launch-advanced">
+              <details className="launch-advanced" data-testid="launch-advanced-runtime">
                 <summary>Advanced</summary>
                 <div className="form-field">
                   <span>Runtime</span>
