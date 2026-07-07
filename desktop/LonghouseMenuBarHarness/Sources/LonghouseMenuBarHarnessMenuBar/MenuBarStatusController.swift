@@ -111,7 +111,7 @@ final class MenuBarStatusController: NSObject {
     private func openPanel(relativeTo button: NSStatusBarButton) {
         panelGeneration &+= 1
         store.beginPresentationUpdates()
-        store.refresh(reason: .background)
+        store.refreshForPresentation()
         panelController.show(relativeTo: button)
         installEventMonitors(for: panelGeneration)
     }

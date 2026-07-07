@@ -12,6 +12,7 @@ public final class SnapshotStore: ObservableObject {
     public static let historyRetentionMinutes = 30
     public static let bootGraceSeconds: TimeInterval = 10
     public static let staleCacheFailureSeconds: TimeInterval = 120
+    public static let presentationRefreshFreshnessSeconds: TimeInterval = 10
 
     @Published public private(set) var snapshot: HealthSnapshot?
     @Published public private(set) var history: [SnapshotHistorySample]
@@ -101,6 +102,25 @@ public final class SnapshotStore: ObservableObject {
         }
 
         startRefresh(reason: reason)
+    }
+
+    public func refreshForPresentation(
+        maxSnapshotAge: TimeInterval = SnapshotStore.presentationRefreshFreshnessSeconds,
+        referenceDate: Date = Date()
+    ) {
+        guard activeRefreshReason == nil else {
+            return
+        }
+        guard let snapshot,
+              let collectedAt = snapshot.collectedAtDate
+        else {
+            refresh(reason: .background)
+            return
+        }
+
+        if referenceDate.timeIntervalSince(collectedAt) >= maxSnapshotAge {
+            refresh(reason: .background)
+        }
     }
 
     public func beginPresentationUpdates() {

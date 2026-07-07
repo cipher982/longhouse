@@ -29,6 +29,32 @@ private struct ThrowingHealthSnapshotSource: HealthSnapshotSource {
     }
 }
 
+private final class CountingHealthSnapshotSource: HealthSnapshotSource, @unchecked Sendable {
+    private let lock = NSLock()
+    private var snapshots: [HealthSnapshot]
+    private var index = 0
+    private var count = 0
+
+    init(snapshots: [HealthSnapshot]) {
+        self.snapshots = snapshots
+    }
+
+    var loadCount: Int {
+        lock.withLock {
+            count
+        }
+    }
+
+    func load() throws -> HealthSnapshot {
+        lock.withLock {
+            count += 1
+            let snapshot = snapshots[min(index, snapshots.count - 1)]
+            index += 1
+            return snapshot
+        }
+    }
+}
+
 private func watchingAttentionSnapshot() -> HealthSnapshot {
     HealthSnapshot(
         schemaVersion: 1,
@@ -780,6 +806,82 @@ struct LonghouseMenuBarCoreTests {
         #expect(store.staleCachedSnapshotFailureMessage(relativeTo: referenceDate) == nil)
         #expect(store.snapshot?.headline == "Fresh Longhouse status")
         #expect(store.loadError == nil)
+    }
+
+    @Test
+    @MainActor
+    func snapshotStoreSkipsPresentationRefreshWhenSnapshotIsFresh() async throws {
+        let collectedAt = "2026-05-05T12:00:00Z"
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: collectedAt,
+            healthState: "healthy",
+            severity: "green",
+            headline: "Fresh enough Longhouse status",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+        let source = CountingHealthSnapshotSource(snapshots: [snapshot])
+        let store = SnapshotStore(source: source, cacheURL: nil)
+        let referenceDate = try #require(HealthSnapshot.parseISO8601("2026-05-05T12:00:05Z"))
+
+        store.refreshForPresentation(maxSnapshotAge: 10, referenceDate: referenceDate)
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(source.loadCount == 1)
+        #expect(store.snapshot?.headline == "Fresh enough Longhouse status")
+    }
+
+    @Test
+    @MainActor
+    func snapshotStoreRefreshesForPresentationWhenSnapshotIsStale() async throws {
+        let oldSnapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-05-05T12:00:00Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Old Longhouse status",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+        let refreshedSnapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-05-05T12:00:12Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Refreshed Longhouse status",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+        let source = CountingHealthSnapshotSource(snapshots: [oldSnapshot, refreshedSnapshot])
+        let store = SnapshotStore(source: source, cacheURL: nil)
+        let referenceDate = try #require(HealthSnapshot.parseISO8601("2026-05-05T12:00:12Z"))
+
+        store.refreshForPresentation(maxSnapshotAge: 10, referenceDate: referenceDate)
+        for _ in 0..<40 {
+            if store.snapshot?.headline == "Refreshed Longhouse status" {
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+
+        #expect(source.loadCount == 2)
+        #expect(store.snapshot?.headline == "Refreshed Longhouse status")
     }
 
     @Test
