@@ -397,12 +397,14 @@ struct SessionViewModelTests {
 
         #expect(sent)
         #expect(model.errorMessage == nil)
+        #expect(model.refreshErrorMessage == nil)
         #expect(model.items.map(\.id) == ["user:10"])
+        #expect(model.submittedInputs.first?.phase == .sent)
         #expect(await api.workspaceRequestCount() >= 1)
     }
 
     @Test
-    func sendFailureKeepsSubmittedTextOutOfComposerState() async throws {
+    func ambiguousSendKeepsSubmittedTextWithoutTerminalFailure() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(workspaces: [before])
         await api.failFutureSends(URLError(.notConnectedToInternet))
@@ -416,8 +418,33 @@ struct SessionViewModelTests {
         #expect(!sent)
         #expect(model.submittedInputs.count == 1)
         #expect(model.submittedInputs.first?.text == "do not lose this")
+        #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
+        #expect(model.errorMessage == nil)
+        #expect(model.refreshErrorMessage?.contains("confirm delivery") == true)
+        #expect(model.refreshErrorMessage?.contains("Send failed") != true)
+    }
+
+    @Test
+    func structuredSendRejectionIsTerminalFailure() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(workspaces: [before])
+        await api.failFutureSends(LonghouseAPIError.structured(
+            status: 409,
+            errorCode: "input_conflict",
+            message: "That client request id already belongs to a different message."
+        ))
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "conflict", sessionId: "session-1", appState: appState)
+
+        #expect(!sent)
+        #expect(model.submittedInputs.count == 1)
         #expect(model.submittedInputs.first?.phase == .failed)
-        #expect(model.errorMessage?.contains("Send failed") == true)
+        #expect(model.errorMessage == "Could not send: That client request id already belongs to a different message.")
+        #expect(model.refreshErrorMessage == nil)
     }
 
     @Test
@@ -629,7 +656,7 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func successfulRetryClearsPriorFailedBubbleForSameText() async throws {
+    func successfulRetryClearsPriorUnconfirmedBubbleForSameText() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(workspaces: [before])
         await api.setSendSteps([
@@ -643,7 +670,7 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
         let failed = await model.send(text: "retry me", sessionId: "session-1", appState: appState)
         #expect(!failed)
-        #expect(model.submittedInputs.first?.phase == .failed)
+        #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
 
         let retried = await model.send(text: "retry me", sessionId: "session-1", appState: appState)
 
@@ -720,7 +747,7 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func failedSubmittedInputReconcilesByClientRequestIdAfterTailRefresh() async throws {
+    func unconfirmedSubmittedInputReconcilesByClientRequestIdAfterTailRefresh() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(
             workspaces: [before],
@@ -751,6 +778,7 @@ struct SessionViewModelTests {
         #expect(!sent)
         #expect(model.submittedInputs.isEmpty)
         #expect(model.items.map(\.id) == ["user:11"])
+        #expect(model.errorMessage == nil)
     }
 
     @Test
@@ -776,7 +804,7 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func failedSubmittedInputDoesNotReconcileByMatchingTextWithoutIdentity() async throws {
+    func unconfirmedSubmittedInputDoesNotReconcileByMatchingTextWithoutIdentity() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(
             workspaces: [before],
@@ -799,7 +827,7 @@ struct SessionViewModelTests {
 
         #expect(!sent)
         #expect(model.submittedInputs.count == 1)
-        #expect(model.submittedInputs.first?.phase == .failed)
+        #expect(model.submittedInputs.first?.phase == .couldNotConfirm)
         #expect(model.items.map(\.id) == ["user:11"])
     }
 

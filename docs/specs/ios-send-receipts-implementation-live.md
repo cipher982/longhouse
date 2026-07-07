@@ -61,51 +61,75 @@ activity pulses / Signal Rail / Packet Crackle.
 
 ### Stage 1: Contract Audit
 
-- [ ] Read current iOS send path: optimistic bubble, `sendInput`, decode,
+- [x] Read current iOS send path: optimistic bubble, `sendInput`, decode,
   `refreshTail`, and reconciliation.
-- [ ] Read current server JSON and multipart input routes.
-- [ ] Define exact copy semantics:
+- [x] Read current server JSON and multipart input routes.
+- [x] Define exact copy semantics:
   `Sent`, `Queued`, `Could not confirm`, `In transcript`, `Could not send`.
-- [ ] Decide whether existing `mobile-tail` plus queued-input routes can prove
+- [x] Decide whether existing `mobile-tail` plus queued-input routes can prove
   ambiguous sends by `clientRequestId`.
-- [ ] If not, write the smallest API delta for receipt lookup.
+- [x] Document that no receipt-lookup API delta is needed for this dogfood
+  slice.
+
+Stage 1 decision: no backend/API delta for the first Xcode dogfood slice.
+The server already records idempotent `client_request_id` receipts and replay
+handles duplicate POSTs. The iOS proof boundary for "In transcript" is the
+head-branch durable user event carrying the same `clientRequestId`. The
+existing queued-input route is intentionally active-queue/failure state, not
+delivered-proof state; add a delivered receipt lookup only if dogfood shows tail
+projection lag is still the user-visible gap.
 
 ### Stage 2: Tests First
 
-- [ ] Add iOS test: successful send response followed by refresh failure does
+- [x] Add iOS test: successful send response followed by refresh failure does
   not mark the submitted input failed.
-- [ ] Add iOS test: ambiguous send confirmation moves to checking /
+- [x] Add iOS test: ambiguous send confirmation moves to checking /
   could-not-confirm instead of terminal failure.
-- [ ] Add iOS test: later transcript/input reconciliation by `clientRequestId`
+- [x] Add iOS test: later transcript/input reconciliation by `clientRequestId`
   clears the ambiguous state.
-- [ ] Add backend tests only if a receipt lookup/API change is needed.
+- [x] Skip backend tests because no receipt lookup/API change is needed.
 
 ### Stage 3: Implementation
 
-- [ ] Add or refine `SubmittedInputPhase` / display-state adapter.
-- [ ] Preserve strongest-known confirmation for each submitted input.
-- [ ] Make post-send refresh failures non-destructive.
-- [ ] Make initial fresh-launch load failures non-destructive when launch or
+- [x] Add or refine `SubmittedInputPhase` / display-state adapter.
+- [x] Preserve strongest-known confirmation for each submitted input.
+- [x] Make post-send refresh failures non-destructive.
+- [x] Make initial fresh-launch load failures non-destructive when launch or
   input succeeded.
-- [ ] Remove raw decode/load copy from user-facing send/session messages.
-- [ ] Implement narrow backend/API support if Stage 1 proves it is needed.
+- [x] Remove raw decode/load copy from user-facing send/session messages.
+- [x] Skip backend/API support because Stage 1 did not prove it is needed.
 
 ### Stage 4: Verification
 
-- [ ] Run focused iOS tests while iterating.
-- [ ] Run `make test-ios`.
-- [ ] Render SwiftUI previews if receipt UI surfaces changed.
-- [ ] Run backend focused tests if backend/API changed.
-- [ ] Check `git status` and commit only files touched for this epic.
+- [x] Cover the focused iOS cases in the supported `make test-ios` harness.
+- [x] Run `make test-ios`.
+- [x] Render SwiftUI previews if receipt UI surfaces changed.
+- [x] Run backend focused tests if backend/API changed.
+- [x] Check `git status` and commit only files touched for this epic.
+
+Verification note: `make test-ios` passed on 2026-07-07. That target rebuilt the
+Xcode harness, ran the Longhouse unit suite including PreviewSnapshots, and ran
+the LonghouseSmoke UI scheme. No backend tests were needed because no backend
+code changed.
 
 ### Stage 5: Dogfood Handoff Pause
 
-- [ ] Summarize exact changes and tests.
-- [ ] Tell David the exact build/install step needed in Xcode.
-- [ ] Provide a short dogfood script:
+- [x] Summarize exact changes and tests.
+- [x] Tell David the exact build/install step needed in Xcode.
+- [x] Provide a short dogfood script:
   fresh launch from iOS, send into existing managed session, force transient
   refresh/presence trouble if practical.
-- [ ] Pause before starting activity-pulse epic.
+- [x] Pause before starting activity-pulse epic.
+
+Dogfood handoff: open `ios/XcodeHarness/LonghouseIOS.xcodeproj` in Xcode,
+select the `Longhouse` scheme and David's phone, then build/run. Try one send
+into an existing Helm session and one fresh iOS-launched Console session. The
+expected behavior is an immediate optimistic user row with `Sending...`, then
+`Sent`/`Queued`; if transport confirmation is ambiguous, the row should say
+`Could not confirm` and later disappear into the durable transcript once the
+same `clientRequestId` appears on the head user event. It should not show
+`Send failed` for accepted/delivered messages, and no raw Swift decode text
+should appear in the session view.
 
 ## Deferred Next Epic
 

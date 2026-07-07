@@ -175,7 +175,7 @@ struct WebTranscriptView: UIViewRepresentable {
                 return true
             case .queued:
                 return input.createdAt <= previewDate
-            case .failed, .needsUserDecision:
+            case .couldNotConfirm, .failed, .needsUserDecision:
                 return false
             }
         }
@@ -548,6 +548,7 @@ struct WebTranscriptView: UIViewRepresentable {
         case .submitting: return "Sending..."
         case .sent: return "Sent"
         case .queued: return "Queued"
+        case .couldNotConfirm: return "Could not confirm"
         case .failed: return lastError ?? "Could not send"
         case .needsUserDecision: return "Needs choice"
         }
