@@ -639,6 +639,7 @@ async def test_active_writer_metrics_track_label_and_age(tmp_path):
     release = threading.Event()
 
     def _write(db):
+        serializer.set_active_stage("archive-blocked")
         started.set()
         release.wait(1.0)
         db.execute(sa_text("INSERT INTO writes(label) VALUES ('archive')"))
@@ -653,6 +654,7 @@ async def test_active_writer_metrics_track_label_and_age(tmp_path):
     metrics = serializer.get_metrics()
     assert metrics["writer_active"] is True
     assert metrics["active_label"] == "ingest-replay"
+    assert metrics["active_stage"] == "archive-blocked"
     assert metrics["queue_depth"] == 0
 
     release.set()
@@ -660,6 +662,7 @@ async def test_active_writer_metrics_track_label_and_age(tmp_path):
 
     assert serializer.writer_active is False
     assert serializer.active_label is None
+    assert serializer.active_stage is None
     assert serializer.active_age_ms == 0.0
 
 

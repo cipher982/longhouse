@@ -18,6 +18,14 @@ from zerg.config import get_settings
 router = APIRouter(tags=["health"])
 
 EVENTS_FTS_EXISTS_SQL = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1"
+_ARCHIVE_DEGRADABLE_WRITER_LABELS = {
+    "archive-shadow-manifest",
+    "heartbeat-bookkeeping",
+    "ingest",
+    "ingest-replay",
+    "ingest-scan",
+    "live-archive-drain",
+}
 
 
 def _write_serializer_stale_active_ms() -> float:
@@ -44,6 +52,21 @@ def _serializer_metrics_check(serializer_getter_name: str) -> tuple[bool, dict]:
         return writer_stale, {"status": "fail" if writer_stale else "pass", **metrics}
     except Exception as e:
         return False, {"status": "warn", "error": str(e)}
+
+
+def _archive_degraded_metrics(metrics: dict) -> dict:
+    """Project cold archive writer pressure as degraded, not hot-path down."""
+
+    return {
+        **metrics,
+        "status": "warn",
+        "archive_degraded": True,
+    }
+
+
+def _writer_stall_is_archive_degraded(metrics: dict) -> bool:
+    label = str(metrics.get("active_label") or "").strip()
+    return label in _ARCHIVE_DEGRADABLE_WRITER_LABELS
 
 
 def _write_serializer_stall_check() -> tuple[bool, dict]:
@@ -275,15 +298,7 @@ def readyz_check():
             )
 
     writer_stale, writer_metrics = _write_serializer_stall_check()
-    if writer_stale:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "unhealthy",
-                "reason": "write_serializer_stalled",
-                "write_serializer": writer_metrics,
-            },
-        )
+    archive_degraded = writer_stale and _writer_stall_is_archive_degraded(writer_metrics)
     live_writer_stale, live_writer_metrics = _live_write_serializer_check()
     if live_writer_stale:
         return JSONResponse(
@@ -292,6 +307,21 @@ def readyz_check():
                 "status": "unhealthy",
                 "reason": "live_write_serializer_stalled",
                 "live_write_serializer": live_writer_metrics,
+            },
+        )
+    if archive_degraded:
+        return {
+            "status": "ready_with_archive_degraded",
+            "reason": "archive_write_serializer_stalled",
+            "write_serializer": _archive_degraded_metrics(writer_metrics),
+        }
+    if writer_stale:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "unhealthy",
+                "reason": "write_serializer_stalled",
+                "write_serializer": writer_metrics,
             },
         )
 
@@ -560,8 +590,13 @@ def health_check(request: Request):
 
     # 7. Write serializer metrics
     writer_stale, writer_metrics = _write_serializer_stall_check()
-    checks["write_serializer"] = writer_metrics
-    if writer_stale:
+    archive_degraded = writer_stale and _writer_stall_is_archive_degraded(writer_metrics)
+    checks["write_serializer"] = _archive_degraded_metrics(writer_metrics) if archive_degraded else writer_metrics
+    if archive_degraded:
+        if health_status.get("status") == "healthy":
+            health_status["status"] = "degraded"
+            health_status["message"] = "Archive write serializer is stalled; live lane may remain available"
+    elif writer_stale:
         health_status["status"] = "unhealthy"
         health_status["message"] = "Write serializer is stalled"
         critical_failure = True

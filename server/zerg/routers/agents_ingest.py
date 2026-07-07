@@ -1073,9 +1073,13 @@ async def ingest_session(
             ws = get_write_serializer()
             ingest_chunk = _ingest_chunk_for_label(write_label)
 
-            def _do_ingest(write_db, ingest_data: SessionIngest = data):
+            def _do_ingest(write_db, ingest_data: SessionIngest = data, batch_index: int = 0):
                 nonlocal archive_primary_state
                 nonlocal legacy_raw_effective
+                if write_label in _ARCHIVE_INGEST_LABELS:
+                    set_active_stage = getattr(ws, "set_active_stage", None)
+                    if callable(set_active_stage):
+                        set_active_stage(f"{write_label}:batch-{batch_index + 1}:store-ingest")
                 write_started_at_ms = _unix_ms()
                 if archive_primary_prepared is not None and archive_primary_state == "prepared" and archive_primary_prepared.chunks:
                     from zerg.services.archive_shadow import insert_archive_chunk_manifests
@@ -1156,7 +1160,11 @@ async def ingest_session(
                         await asyncio.sleep(0)
                         await _check_archive_ingest_writer_pressure(write_label, response)
                     batch_result = await ws.execute_after_closing_request_session(
-                        lambda write_db, ingest_batch=ingest_batch: _do_ingest(write_db, ingest_batch),
+                        lambda write_db, ingest_batch=ingest_batch, batch_index=batch_index: _do_ingest(
+                            write_db,
+                            ingest_batch,
+                            batch_index,
+                        ),
                         db,
                         label=write_label,
                     )

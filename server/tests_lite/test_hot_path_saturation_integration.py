@@ -165,6 +165,19 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
         raise AssertionError("hot health/list/launch paths must not open derived/archive stores")
 
     monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_STALE_ACTIVE_MS", "1")
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_STALE_QUEUE_DEPTH", "1")
+    monkeypatch.setattr(
+        "zerg.build_info.load",
+        lambda: SimpleNamespace(
+            as_dict=lambda: {"commit": "test"},
+            version="0.0.0-test",
+            channel="test",
+            commit_short="test",
+            dirty=False,
+            qualified_version="0.0.0-test+test",
+        ),
+    )
     monkeypatch.setattr(database_module, "default_engine", request_engine)
     monkeypatch.setattr(database_module, "default_session_factory", request_factory)
     monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
@@ -222,11 +235,18 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
             ),
             timeout=1.0,
         )
+        assert health["status"] == "degraded"
         assert health["checks"]["write_serializer"]["writer_active"] is True
+        assert health["checks"]["write_serializer"]["status"] == "warn"
+        assert health["checks"]["write_serializer"]["archive_degraded"] is True
         assert health["checks"]["write_serializer"]["queue_depth"] == 1
         assert health["checks"]["write_serializer"]["queued_labels"] == ["heartbeat-bookkeeping"]
         assert health["checks"]["live_write_serializer"]["status"] == "pass"
         assert health["checks"]["db_pool"]["checked_out"] == 0
+
+        readyz = await asyncio.wait_for(asyncio.to_thread(health_router.readyz_check), timeout=1.0)
+        assert readyz["status"] == "ready_with_archive_degraded"
+        assert readyz["reason"] == "archive_write_serializer_stalled"
 
         with request_factory() as list_db:
             sessions = await asyncio.wait_for(
