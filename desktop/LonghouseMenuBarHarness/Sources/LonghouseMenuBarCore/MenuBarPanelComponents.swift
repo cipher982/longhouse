@@ -645,17 +645,25 @@ private struct ManagedSessionRow: View {
             if let openAction = entry.openAction {
                 Button(action: openAction) {
                     rowMainContent(isOpenable: true)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                         .background {
-                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            Rectangle()
                                 .fill(Color.primary.opacity(isOpenHovered ? 0.06 : 0))
                         }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("Open \(entry.title) in Longhouse"))
-                .onHover(perform: updateOpenHover)
+                .onHover { hovering in
+                    isOpenHovered = hovering
+                }
                 .onDisappear(perform: resetOpenHover)
             } else {
                 rowMainContent(isOpenable: false)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
             }
 
             if let stopAction = entry.stopAction {
@@ -668,7 +676,6 @@ private struct ManagedSessionRow: View {
                 }
             }
         }
-        .padding(.vertical, 8)
     }
 
     private func rowMainContent(isOpenable: Bool) -> some View {
@@ -705,32 +712,14 @@ private struct ManagedSessionRow: View {
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(Color.secondary.opacity(isOpenHovered ? 0.9 : 0.55))
                     .frame(width: 10, height: 16)
-                    .offset(x: isOpenHovered ? 1 : 0)
                     .accessibilityHidden(true)
             }
         }
         .contentShape(Rectangle())
-        .animation(.easeOut(duration: 0.12), value: isOpenHovered)
-    }
-
-    private func updateOpenHover(_ hovering: Bool) {
-        guard hovering != isOpenHovered else {
-            return
-        }
-
-        isOpenHovered = hovering
-        if hovering {
-            NSCursor.pointingHand.push()
-        } else {
-            NSCursor.pop()
-        }
     }
 
     private func resetOpenHover() {
-        if isOpenHovered {
-            NSCursor.pop()
-            isOpenHovered = false
-        }
+        isOpenHovered = false
     }
 }
 
