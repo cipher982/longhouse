@@ -185,6 +185,7 @@ extension APISessionResponse {
     var sessionDetail: SessionDetail {
         SessionDetail(
             id: id,
+            title: timelineCardTitle(for: self),
             provider: provider,
             project: project,
             cwd: cwd,

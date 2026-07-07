@@ -598,6 +598,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         let idleDetail = isMarketing ? "Ready" : "Ready for UI test input"
         let detail = SessionDetail(
             id: sessionID,
+            title: title,
             provider: "codex",
             project: "longhouse",
             cwd: "/Users/example/git/zerg/longhouse",

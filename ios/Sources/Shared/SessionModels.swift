@@ -667,6 +667,7 @@ enum SessionLoopMode: String, Codable, Sendable, CaseIterable, Hashable {
 
 struct SessionDetail: Codable, Identifiable, Sendable {
     let id: String
+    let title: String?
     let provider: String
     let project: String?
     let cwd: String?
@@ -688,7 +689,16 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var transcriptPreview: SessionTranscriptPreview? = nil
 
     var displayTitle: String {
-        summaryTitle ?? summary ?? provider
+        if let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        if let summaryTitle = summaryTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !summaryTitle.isEmpty {
+            return summaryTitle
+        }
+        if let summary = summary?.trimmingCharacters(in: .whitespacesAndNewlines), !summary.isEmpty {
+            return summary
+        }
+        return provider
     }
 
     var effectiveLoopMode: SessionLoopMode {
@@ -819,6 +829,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     func replacingTranscriptPreview(_ transcriptPreview: SessionTranscriptPreview?) -> SessionDetail {
         SessionDetail(
             id: id,
+            title: title,
             provider: provider,
             project: project,
             cwd: cwd,

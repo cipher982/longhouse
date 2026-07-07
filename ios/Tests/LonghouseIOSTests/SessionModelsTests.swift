@@ -160,6 +160,30 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionDetailDisplayTitleUsesTimelineTitle() throws {
+        let json = apiSessionJSON()
+            .replacingOccurrences(
+                of: #""summary_title": "Timeline contract","#,
+                with: #""summary_title": "Now wiring retries", "timeline_title": "Open menu bar sessions","#
+            )
+        let decoded = try JSONDecoder.snakeCase.decode(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
+
+        #expect(decoded.displayTitle == "Open menu bar sessions")
+    }
+
+    @Test
+    func sessionDetailDisplayTitleFallsBackToFirstUserMessageBeforeGeneratedTitle() throws {
+        let json = apiSessionJSON()
+            .replacingOccurrences(
+                of: #""summary_title": "Timeline contract","#,
+                with: #""summary_title": null, "timeline_title": null, "first_user_message": "Fix the menu bar hover lag","#
+            )
+        let decoded = try JSONDecoder.snakeCase.decode(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
+
+        #expect(decoded.displayTitle == "Fix the menu bar hover lag")
+    }
+
+    @Test
     func sessionWorkspaceDecodesThreadProjectionEventsAndSeams() throws {
         let json = """
         {
