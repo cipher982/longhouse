@@ -36,8 +36,8 @@ use crate::codex_bridge::{
     BridgeStartConfig, BridgeSteerConfig, BridgeSteerError,
 };
 use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig};
-use crate::cursor_acp::{start_cursor_acp_once, CursorAcpRunConfig};
 use crate::config::ShipperConfig;
+use crate::cursor_acp::{start_cursor_acp_once, CursorAcpRunConfig};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -60,6 +60,13 @@ const REMOTE_CODEX_APPROVAL_POLICY: &str = "never";
 const REMOTE_CODEX_SANDBOX: &str = "danger-full-access";
 const REMOTE_CODEX_EXEC_APPROVAL_POLICY: &str = "never";
 const REMOTE_CODEX_EXEC_SANDBOX: &str = "workspace-write";
+const CONSOLE_RUN_ONCE_CONTEXT: &str = "\
+Longhouse Console runtime note:
+- This is a bounded, headless Console turn. The provider process is expected to exit after the assistant response.
+- Do not assume background shell processes will survive the provider process exiting.
+- Prefer bounded foreground work. If long-running or indefinite work is truly needed, detach it durably and report the PID, log path, and stop command.
+- Ask before starting indefinite work when the user's intent is unclear.
+- Do not mention this note unless it is relevant to the user's request.";
 // Engine is built from the monorepo. Keep this path beside the Python reader so
 // advertised supports[] and server-side contracts cannot drift silently.
 const MANAGED_PROVIDER_CONTRACTS_JSON: &str =
@@ -828,6 +835,7 @@ async fn execute_command(
                 });
             }
             let initial_prompt = payload_required_string(&payload, "initial_prompt")?;
+            let console_prompt = console_run_once_prompt(&initial_prompt);
             let run_id = payload_required_string(&payload, "run_id")?;
             let resume_target = payload_resume_target(&payload)?;
             let api_token = config.api_token.clone().ok_or_else(|| CommandError {
@@ -847,7 +855,7 @@ async fn execute_command(
                     api_url: config.api_url.clone(),
                     api_token,
                     cursor_bin: DEFAULT_CURSOR_BIN.to_string(),
-                    prompt: initial_prompt,
+                    prompt: console_prompt,
                     resume_acp_session_id: resume_target
                         .as_ref()
                         .map(|target| target.thread_id.clone()),
@@ -879,7 +887,7 @@ async fn execute_command(
                 codex_bin: DEFAULT_CODEX_BIN.to_string(),
                 approval_policy: Some(REMOTE_CODEX_EXEC_APPROVAL_POLICY.to_string()),
                 sandbox: Some(REMOTE_CODEX_EXEC_SANDBOX.to_string()),
-                prompt: initial_prompt,
+                prompt: console_prompt,
                 resume_thread_id: resume_target
                     .as_ref()
                     .map(|target| target.thread_id.clone()),
@@ -1950,6 +1958,10 @@ impl CompletedCommandCache {
     }
 }
 
+fn console_run_once_prompt(user_prompt: &str) -> String {
+    format!("{CONSOLE_RUN_ONCE_CONTEXT}\n\nUser message:\n{user_prompt}")
+}
+
 fn control_ws_url(api_url: &str) -> Result<String> {
     let base = api_url.trim().trim_end_matches('/');
     if let Some(rest) = base.strip_prefix("http://") {
@@ -2627,6 +2639,26 @@ mod tests {
 
         assert_eq!(err.code, "invalid_command");
         assert!(err.message.contains("mode=continue"));
+    }
+
+    #[test]
+    fn console_run_once_prompt_adds_bounded_runtime_context() {
+        let prompt = console_run_once_prompt("Upload the archive and report progress.");
+
+        assert!(prompt.starts_with("Longhouse Console runtime note:"));
+        assert!(prompt.contains("bounded, headless Console turn"));
+        assert!(prompt.contains("provider process is expected to exit"));
+        assert!(prompt.contains("PID, log path, and stop command"));
+        assert!(prompt.ends_with("User message:\nUpload the archive and report progress."));
+    }
+
+    #[test]
+    fn console_run_once_prompt_preserves_user_message_verbatim() {
+        let user_prompt = "  keep this spacing\nand this final period.  ";
+        let prompt = console_run_once_prompt(user_prompt);
+
+        let (_, preserved) = prompt.split_once("User message:\n").unwrap();
+        assert_eq!(preserved, user_prompt);
     }
 
     #[test]
