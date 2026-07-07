@@ -7,6 +7,7 @@ mod codex_app_server_canary;
 mod codex_attachments;
 mod codex_bridge;
 mod codex_exec;
+mod console_prompt;
 mod cursor_acp;
 mod cursor_helm_control;
 mod codex_source;

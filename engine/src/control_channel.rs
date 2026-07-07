@@ -37,6 +37,7 @@ use crate::codex_bridge::{
 };
 use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig};
 use crate::config::ShipperConfig;
+use crate::console_prompt::wrap_console_run_once_prompt;
 use crate::cursor_acp::{start_cursor_acp_once, CursorAcpRunConfig};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -60,13 +61,6 @@ const REMOTE_CODEX_APPROVAL_POLICY: &str = "never";
 const REMOTE_CODEX_SANDBOX: &str = "danger-full-access";
 const REMOTE_CODEX_EXEC_APPROVAL_POLICY: &str = "never";
 const REMOTE_CODEX_EXEC_SANDBOX: &str = "workspace-write";
-const CONSOLE_RUN_ONCE_CONTEXT: &str = "\
-Longhouse Console runtime note:
-- This is a bounded, headless Console turn. The provider process is expected to exit after the assistant response.
-- Do not assume background shell processes will survive the provider process exiting.
-- Prefer bounded foreground work. If long-running or indefinite work is truly needed, detach it durably and report the PID, log path, and stop command.
-- Ask before starting indefinite work when the user's intent is unclear.
-- Do not mention this note unless it is relevant to the user's request.";
 // Engine is built from the monorepo. Keep this path beside the Python reader so
 // advertised supports[] and server-side contracts cannot drift silently.
 const MANAGED_PROVIDER_CONTRACTS_JSON: &str =
@@ -1963,12 +1957,8 @@ fn run_once_provider_prompt(user_prompt: &str, is_resume: bool) -> String {
     if is_resume {
         user_prompt.to_string()
     } else {
-        console_run_once_prompt(user_prompt)
+        wrap_console_run_once_prompt(user_prompt)
     }
-}
-
-fn console_run_once_prompt(user_prompt: &str) -> String {
-    format!("{CONSOLE_RUN_ONCE_CONTEXT}\n\nUser message:\n{user_prompt}")
 }
 
 fn control_ws_url(api_url: &str) -> Result<String> {
@@ -2648,26 +2638,6 @@ mod tests {
 
         assert_eq!(err.code, "invalid_command");
         assert!(err.message.contains("mode=continue"));
-    }
-
-    #[test]
-    fn console_run_once_prompt_adds_bounded_runtime_context() {
-        let prompt = console_run_once_prompt("Upload the archive and report progress.");
-
-        assert!(prompt.starts_with("Longhouse Console runtime note:"));
-        assert!(prompt.contains("bounded, headless Console turn"));
-        assert!(prompt.contains("provider process is expected to exit"));
-        assert!(prompt.contains("PID, log path, and stop command"));
-        assert!(prompt.ends_with("User message:\nUpload the archive and report progress."));
-    }
-
-    #[test]
-    fn console_run_once_prompt_preserves_user_message_verbatim() {
-        let user_prompt = "  keep this spacing\nand this final period.  ";
-        let prompt = console_run_once_prompt(user_prompt);
-
-        let (_, preserved) = prompt.split_once("User message:\n").unwrap();
-        assert_eq!(preserved, user_prompt);
     }
 
     #[test]
