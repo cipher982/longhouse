@@ -36,6 +36,7 @@ from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.services.session_chat_impl import _managed_local_launch_response
 from zerg.services.session_chat_impl import _session_is_closed_for_input
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
@@ -428,7 +429,7 @@ def test_managed_local_launch_response_requires_managed_local_execution_home(tmp
             attach_command="longhouse claude-channel attach --session-id session-123",
         )
         with pytest.raises(RuntimeError, match="kernel-managed session"):
-            session_chat._managed_local_launch_response(db, result)
+            _managed_local_launch_response(db, result)
 
 
 def test_managed_local_launch_response_requires_managed_transport(tmp_path):
@@ -449,7 +450,7 @@ def test_managed_local_launch_response_requires_managed_transport(tmp_path):
             attach_command="longhouse claude-channel attach --session-id session-123",
         )
         with pytest.raises(RuntimeError, match="managed transport metadata"):
-            session_chat._managed_local_launch_response(db, result)
+            _managed_local_launch_response(db, result)
 
 
 def test_managed_local_claude_live_send_requires_live_control(tmp_path):

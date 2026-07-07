@@ -17,6 +17,7 @@ from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveSessionInputReceipt
+from zerg.services.live_launch_readiness import MANAGED_LOCAL_LAUNCH_OUTBOX_KIND
 from zerg.services.live_launch_readiness import update_live_launch_readiness_state
 from zerg.services.managed_local_launcher import ManagedLocalLaunchPlan
 from zerg.services.managed_local_launcher import materialize_managed_local_launch_plan_sync
@@ -28,7 +29,7 @@ from zerg.services.session_runtime import ingest_runtime_events
 from zerg.utils.time import normalize_utc
 
 HEARTBEAT_STAMP_KIND = "heartbeat_stamp.v1"
-MANAGED_LOCAL_LAUNCH_KIND = "managed_local_launch.v1"
+MANAGED_LOCAL_LAUNCH_KIND = MANAGED_LOCAL_LAUNCH_OUTBOX_KIND
 RUNTIME_EVENT_KIND = "runtime_event.v1"
 SESSION_INPUT_RECEIPT_KIND = "session_input_receipt.v1"
 

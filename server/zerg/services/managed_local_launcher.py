@@ -246,6 +246,13 @@ def build_managed_local_launch_plan(
     return replace(plan, attach_command=_build_attach_command_for_plan(plan))
 
 
+def resolve_managed_local_launch_runner(db: Session, params: ManagedLocalLaunchParams):
+    runner = _resolve_runner(db, params.owner_id, params.runner_target, required=params.require_runner_ready)
+    if params.require_runner_ready:
+        _require_runner_ready(runner, owner_id=params.owner_id)
+    return runner
+
+
 def materialize_managed_local_launch_plan_sync(
     db: Session,
     plan: ManagedLocalLaunchPlan,
@@ -344,9 +351,7 @@ def materialize_managed_local_launch_plan_sync(
 
 
 def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
-    runner = _resolve_runner(db, params.owner_id, params.runner_target, required=params.require_runner_ready)
-    if params.require_runner_ready:
-        _require_runner_ready(runner, owner_id=params.owner_id)
+    runner = resolve_managed_local_launch_runner(db, params)
     plan = build_managed_local_launch_plan(params, runner=runner)
     session = materialize_managed_local_launch_plan_sync(
         db,
@@ -372,4 +377,5 @@ __all__ = [
     "launch_managed_local_session",
     "launch_managed_local_session_sync",
     "materialize_managed_local_launch_plan_sync",
+    "resolve_managed_local_launch_runner",
 ]

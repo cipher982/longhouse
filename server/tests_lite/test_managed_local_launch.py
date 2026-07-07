@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -37,7 +36,6 @@ from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import _derive_project
 from zerg.services.managed_local_launcher import _initial_provider_session_id_for_spawn
 from zerg.services.managed_local_launcher import build_managed_local_launch_plan
-from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
@@ -67,6 +65,36 @@ def _make_device_client(db_session, device_token):
     api_app.dependency_overrides[get_db] = override_get_db
     api_app.dependency_overrides[verify_agents_token] = override_device_token
     return TestClient(app, backend="asyncio"), api_app
+
+
+@pytest.fixture(autouse=True)
+def managed_launch_live_store(monkeypatch, tmp_path):
+    import zerg.database as database_module
+    from zerg.routers import session_chat
+
+    live_url = f"sqlite:///{tmp_path / 'managed-launch-live-autouse.db'}"
+    live_engine = make_live_engine(live_url)
+    live_write_engine = make_live_write_engine(live_url)
+    initialize_live_database(live_engine)
+    LiveSession = make_sessionmaker(live_engine)
+    LiveWriteSession = make_sessionmaker(live_write_engine)
+
+    class LiveSerializer:
+        is_configured = True
+
+        async def execute(self, fn, **_kwargs):
+            with LiveWriteSession() as live_db:
+                result = fn(live_db)
+                live_db.commit()
+                return result
+
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(session_chat, "get_live_write_serializer", lambda: LiveSerializer())
+    try:
+        yield LiveSession
+    finally:
+        live_engine.dispose()
+        live_write_engine.dispose()
 
 
 def _seed_user_and_runner(db):
@@ -222,15 +250,15 @@ def test_this_device_launch_discards_session_when_response_contract_fails(monkey
 def test_browser_managed_local_launch_route_is_absent():
     from zerg.main import app
 
-    with TestClient(app, backend="asyncio") as client:
-        response = client.post(
-            "/api/sessions/managed-local",
-            json={
-                "runner_target": "runner:1",
-                "cwd": "/tmp/demo",
-                "provider": "claude",
-            },
-        )
+    client = TestClient(app, backend="asyncio")
+    response = client.post(
+        "/api/sessions/managed-local",
+        json={
+            "runner_target": "runner:1",
+            "cwd": "/tmp/demo",
+            "provider": "claude",
+        },
+    )
 
     assert response.status_code == 404
 
@@ -264,12 +292,11 @@ def test_this_device_launch_allows_offline_runner_for_local_provider_start(monke
             api_app.dependency_overrides = {}
 
         payload = response.json()
-        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
 
     assert response.status_code == 200, response.text
     assert payload["source_runner_id"] == runner.id
     assert payload["source_runner_name"] == "cinder"
-    assert session.device_id == "cinder"
+    assert runner.name == "cinder"
 
 
 def test_this_device_launch_uses_machine_name_as_dev_device_id(monkeypatch, tmp_path):
@@ -278,7 +305,7 @@ def test_this_device_launch_uses_machine_name_as_dev_device_id(monkeypatch, tmp_
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
-        _user, _runner = _seed_user_and_runner(db)
+        _user, runner = _seed_user_and_runner(db)
         client, api_app = _make_device_client(db, None)
         monkeypatch.setattr(
             managed_local_launcher,
@@ -300,13 +327,11 @@ def test_this_device_launch_uses_machine_name_as_dev_device_id(monkeypatch, tmp_
             api_app.dependency_overrides = {}
 
         payload = response.json()
-        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
 
     assert response.status_code == 200, response.text
-    assert payload["source_runner_id"] is None
+    assert payload["source_runner_id"] == runner.id
     assert payload["source_runner_name"] == "cinder"
-    assert session.device_id == "cinder"
-    assert session.provider == "antigravity"
+    assert payload["provider"] == "antigravity"
 
 
 def test_this_device_launch_does_not_require_runner_record(monkeypatch, tmp_path):
@@ -340,35 +365,29 @@ def test_this_device_launch_does_not_require_runner_record(monkeypatch, tmp_path
             api_app.dependency_overrides = {}
 
         payload = response.json()
-        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
 
     assert response.status_code == 200, response.text
     assert payload["source_runner_id"] is None
     assert payload["source_runner_name"] == "cinder"
-    assert session.device_id == "cinder"
-    _capabilities, control = _project_control(db, session)
-    assert control.source_runner_id is None
+    assert payload["managed_transport"] == "codex_app_server"
 
 
-def test_this_device_launch_uses_managed_launch_write_serializer(monkeypatch, tmp_path):
+def test_this_device_launch_uses_live_store_not_archive_writer(monkeypatch, tmp_path, managed_launch_live_store):
     from zerg.routers import session_chat
     from zerg.services import managed_local_launcher
 
     SessionLocal = _make_db(tmp_path)
-    calls: list[dict] = []
+    live_calls: list[dict] = []
 
-    class RecordingSerializer:
+    class RecordingLiveSerializer:
         is_configured = True
-        writer_active = False
-        active_label = None
-        active_age_ms = 0.0
 
-        async def repair_idle_queue(self):
-            return False
-
-        async def execute_or_direct(self, fn, fallback_db, **kwargs):
-            calls.append(kwargs)
-            return fn(fallback_db)
+        async def execute(self, fn, **kwargs):
+            live_calls.append(kwargs)
+            with managed_launch_live_store() as live_db:
+                result = fn(live_db)
+                live_db.commit()
+                return result
 
     with SessionLocal() as db:
         user = User(email="managed-local@test.local", role=UserRole.USER.value)
@@ -377,7 +396,7 @@ def test_this_device_launch_uses_managed_launch_write_serializer(monkeypatch, tm
         db.refresh(user)
         device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
         client, api_app = _make_device_client(db, device_token)
-        monkeypatch.setattr(session_chat, "get_write_serializer", lambda: RecordingSerializer())
+        monkeypatch.setattr(session_chat, "get_live_write_serializer", lambda: RecordingLiveSerializer())
         monkeypatch.setattr(
             managed_local_launcher,
             "get_runner_connection_manager",
@@ -397,14 +416,15 @@ def test_this_device_launch_uses_managed_launch_write_serializer(monkeypatch, tm
             api_app.dependency_overrides = {}
 
         payload = response.json()
-        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
 
     assert response.status_code == 200, response.text
-    assert calls == [{"label": "managed-launch", "auto_commit": False}]
+    assert live_calls == [{"label": "managed-launch-readiness"}]
     assert payload["managed_transport"] == "codex_app_server"
-    capabilities, control = _project_control(db, session)
-    assert capabilities.managed_transport.value == "codex_app_server"
-    assert control.source_runner_id is None
+    assert db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).count() == 0
+    with managed_launch_live_store() as live_db:
+        readiness = live_db.get(LiveLaunchReadiness, payload["session_id"])
+        assert readiness is not None
+        assert readiness.state == "pending"
 
 
 def test_this_device_launch_returns_hot_readiness_when_archive_writer_is_stale(monkeypatch, tmp_path):
@@ -418,18 +438,6 @@ def test_this_device_launch_returns_hot_readiness_when_archive_writer_is_stale(m
     LiveSession = make_sessionmaker(live_engine)
     LiveWriteSession = make_sessionmaker(live_write_engine)
 
-    class StaleSerializer:
-        is_configured = True
-        writer_active = True
-        active_label = "ingest-scan"
-        active_age_ms = 20_000.0
-
-        async def repair_idle_queue(self):
-            return False
-
-        async def execute_or_direct(self, *_args, **_kwargs):  # pragma: no cover - regression guard
-            raise AssertionError("stale archive writer should not queue managed launch")
-
     class LiveSerializer:
         is_configured = True
 
@@ -440,8 +448,8 @@ def test_this_device_launch_returns_hot_readiness_when_archive_writer_is_stale(m
                 return result
 
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(session_chat, "get_write_serializer", lambda: StaleSerializer())
     monkeypatch.setattr(session_chat, "get_live_write_serializer", lambda: LiveSerializer())
+    monkeypatch.setattr(session_chat, "resolve_managed_local_launch_runner", lambda _db, _params: None)
 
     result, response = asyncio.run(
         session_chat._launch_managed_local_session_serialized(
@@ -520,15 +528,6 @@ def test_this_device_launch_reports_503_when_hot_readiness_write_fails(monkeypat
     import zerg.database as database_module
     from zerg.routers import session_chat
 
-    class StaleSerializer:
-        is_configured = True
-        writer_active = True
-        active_label = "ingest-scan"
-        active_age_ms = 20_000.0
-
-        async def repair_idle_queue(self):
-            return False
-
     class FailingLiveSerializer:
         is_configured = True
 
@@ -536,8 +535,8 @@ def test_this_device_launch_reports_503_when_hot_readiness_write_fails(monkeypat
             raise RuntimeError("live db unavailable")
 
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(session_chat, "get_write_serializer", lambda: StaleSerializer())
     monkeypatch.setattr(session_chat, "get_live_write_serializer", lambda: FailingLiveSerializer())
+    monkeypatch.setattr(session_chat, "resolve_managed_local_launch_runner", lambda _db, _params: None)
 
     with pytest.raises(session_chat.ManagedLocalLaunchError) as exc_info:
         asyncio.run(
@@ -558,136 +557,73 @@ def test_this_device_launch_reports_503_when_hot_readiness_write_fails(monkeypat
     assert "Live Store writer failed" in exc_info.value.detail
 
 
-def test_this_device_launch_builds_response_inside_serialized_write(monkeypatch):
+def test_this_device_launch_validates_response_before_hot_write(monkeypatch, managed_launch_live_store):
     from zerg.routers import session_chat
+    from zerg.services import managed_local_launcher
 
-    request_db = object()
-    write_db = object()
-    expected_result = object()
-    expected_response = object()
-    seen: dict[str, object | int | None] = {}
-
-    class FreshSessionSerializer:
-        is_configured = True
-        writer_active = False
-        active_label = None
-        active_age_ms = 0.0
-
-        async def repair_idle_queue(self):
-            return False
-
-        async def execute_or_direct(self, fn, fallback_db, **kwargs):
-            seen["fallback_db"] = fallback_db
-            seen["kwargs"] = kwargs
-            return fn(write_db)
-
-    def fake_response(db, result, *, owner_id=None):
-        seen["response_db"] = db
-        seen["response_result"] = result
-        seen["owner_id"] = owner_id
-        return expected_response
-
-    monkeypatch.setattr(session_chat, "get_write_serializer", lambda: FreshSessionSerializer())
-    monkeypatch.setattr(session_chat, "launch_managed_local_session_sync", lambda db, _params: expected_result)
-    monkeypatch.setattr(session_chat, "_managed_local_launch_response", fake_response)
-
-    result = asyncio.run(
-        session_chat._launch_managed_local_session_serialized(
-            request_db,
-            SimpleNamespace(owner_id=42, provider="codex", runner_target="cinder"),
-        )
+    monkeypatch.setattr(
+        managed_local_launcher,
+        "_initial_provider_session_id_for_spawn",
+        lambda _provider: None,
     )
+    monkeypatch.setattr(session_chat, "resolve_managed_local_launch_runner", lambda _db, _params: None)
 
-    assert result == (expected_result, expected_response)
-    assert seen["fallback_db"] is request_db
-    assert seen["response_db"] is write_db
-    assert seen["response_result"] is expected_result
-    assert seen["owner_id"] == 42
-    assert seen["kwargs"] == {"label": "managed-launch", "auto_commit": False}
-
-
-def test_this_device_launch_does_not_block_event_loop(monkeypatch):
-    from zerg.routers import session_chat
-
-    expected_result = object()
-    expected_response = object()
-
-    class ThreadedSerializer:
-        is_configured = True
-        writer_active = False
-        active_label = None
-        active_age_ms = 0.0
-
-        async def repair_idle_queue(self):
-            return False
-
-        async def execute_or_direct(self, fn, fallback_db, **_kwargs):
-            return await asyncio.to_thread(fn, fallback_db)
-
-    def fake_launch(_db, _params):
-        time.sleep(0.2)
-        return expected_result
-
-    async def run_probe():
-        monkeypatch.setattr(session_chat, "get_write_serializer", lambda: ThreadedSerializer())
-        monkeypatch.setattr(session_chat, "launch_managed_local_session_sync", fake_launch)
-        monkeypatch.setattr(
-            session_chat,
-            "_managed_local_launch_response",
-            lambda _db, result, *, owner_id=None: expected_response,
-        )
-        task = asyncio.create_task(
+    with pytest.raises(RuntimeError, match="missing provider_session_id"):
+        asyncio.run(
             session_chat._launch_managed_local_session_serialized(
-                SimpleNamespace(rollback=lambda: None),
-                SimpleNamespace(owner_id=42, provider="codex", runner_target="cinder"),
+                SimpleNamespace(),
+                ManagedLocalLaunchParams(
+                    owner_id=42,
+                    runner_target="cinder",
+                    cwd="/tmp/demo",
+                    provider="claude",
+                    project="demo",
+                    machine_name="cinder",
+                    native_claude_channels_available=True,
+                ),
             )
         )
-        started_at = time.monotonic()
-        await asyncio.sleep(0.02)
-        assert time.monotonic() - started_at < 0.1
-        result = await task
-        assert result == (expected_result, expected_response)
 
-    asyncio.run(run_probe())
+    with managed_launch_live_store() as live_db:
+        assert live_db.query(LiveLaunchReadiness).count() == 0
+        assert live_db.query(LiveArchiveOutbox).count() == 0
 
 
-def test_this_device_launch_uses_serializer_label(monkeypatch):
+def test_this_device_launch_uses_live_serializer_label(monkeypatch, managed_launch_live_store):
     from zerg.routers import session_chat
 
-    expected_result = object()
-    expected_response = object()
     calls: list[dict] = []
 
-    class RecordingSerializer:
+    class RecordingLiveSerializer:
         is_configured = True
-        writer_active = False
-        active_label = None
-        active_age_ms = 0.0
 
-        async def repair_idle_queue(self):
-            return False
-
-        async def execute_or_direct(self, fn, fallback_db, **kwargs):
+        async def execute(self, fn, **kwargs):
             calls.append(kwargs)
-            return fn(fallback_db)
+            with managed_launch_live_store() as live_db:
+                result = fn(live_db)
+                live_db.commit()
+                return result
 
-    monkeypatch.setattr(session_chat, "get_write_serializer", lambda: RecordingSerializer())
-    monkeypatch.setattr(session_chat, "launch_managed_local_session_sync", lambda _db, _params: expected_result)
-    monkeypatch.setattr(
-        session_chat,
-        "_managed_local_launch_response",
-        lambda _db, result, *, owner_id=None: expected_response,
-    )
+    monkeypatch.setattr(session_chat, "get_live_write_serializer", lambda: RecordingLiveSerializer())
+    monkeypatch.setattr(session_chat, "resolve_managed_local_launch_runner", lambda _db, _params: None)
 
-    result = asyncio.run(
+    result, response = asyncio.run(
         session_chat._launch_managed_local_session_serialized(
             SimpleNamespace(),
-            SimpleNamespace(owner_id=42, provider="codex", runner_target="cinder"),
+            ManagedLocalLaunchParams(
+                owner_id=42,
+                runner_target="cinder",
+                cwd="/tmp/demo",
+                provider="codex",
+                project="demo",
+                machine_name="cinder",
+            ),
         )
     )
 
-    assert result == (expected_result, expected_response)
-    assert calls == [{"label": "managed-launch", "auto_commit": False}]
+    assert result is None
+    assert response.provider == "codex"
+    assert calls == [{"label": "managed-launch-readiness"}]
 
 
 def test_this_device_launch_rejects_claude_without_native_channels(monkeypatch, tmp_path):
@@ -721,13 +657,13 @@ def test_this_device_launch_rejects_claude_without_native_channels(monkeypatch, 
     assert "requires the local Claude channel bridge" in response.json()["detail"]
 
 
-def test_this_device_launch_creates_native_claude_session(monkeypatch, tmp_path):
+def test_this_device_launch_returns_native_claude_hot_launch(monkeypatch, tmp_path, managed_launch_live_store):
     from zerg.services import managed_local_launcher
 
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
-        user, runner = _seed_user_and_runner(db)
+        user, _runner = _seed_user_and_runner(db)
         device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
         client, api_app = _make_device_client(db, device_token)
         monkeypatch.setattr(
@@ -751,25 +687,24 @@ def test_this_device_launch_creates_native_claude_session(monkeypatch, tmp_path)
             api_app.dependency_overrides = {}
 
         payload = response.json()
-        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
-        runtime_state = (
-            db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == payload["session_id"]).one()
-        )
 
     assert response.status_code == 200, response.text
     assert payload["managed_transport"] == "claude_channel_bridge"
-    assert payload["source_runner_id"] == runner.id
+    assert payload["source_runner_id"] == _runner.id
     assert payload["source_runner_name"] == "cinder"
     assert payload["managed_session_name"] == "Demo-session"
     assert payload["provider_session_id"]
     assert payload["provider_session_id"] != payload["session_id"]
-    assert project_provider_session_id(db, session) == payload["provider_session_id"]
     assert f"--session-id {payload['provider_session_id']}" in payload["attach_command"]
     assert f"LONGHOUSE_PROVIDER_SESSION_ID={payload['provider_session_id']}" in payload["attach_command"]
-    capabilities, control = _project_control(db, session)
-    assert capabilities.managed_transport.value == "claude_channel_bridge"
-    assert control.source_runner_id == runner.id
-    assert runtime_state.phase == "idle"
+    assert db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).count() == 0
+    with managed_launch_live_store() as live_db:
+        readiness = live_db.get(LiveLaunchReadiness, payload["session_id"])
+        assert readiness is not None
+        assert readiness.state == "pending"
+        assert readiness.provider == "claude"
+        outbox = live_db.query(LiveArchiveOutbox).one()
+        assert outbox.kind == MANAGED_LOCAL_LAUNCH_KIND
 
 
 def test_this_device_launch_uses_token_device_id_for_runner_lookup(monkeypatch, tmp_path):
@@ -802,13 +737,11 @@ def test_this_device_launch_uses_token_device_id_for_runner_lookup(monkeypatch, 
             api_app.dependency_overrides = {}
 
         payload = response.json()
-        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
 
     assert response.status_code == 200, response.text
     assert payload["source_runner_name"] == "cinder"
-    _capabilities, control = _project_control(db, session)
-    assert control.source_runner_id == runner.id
-    assert session.device_id == "cinder"
+    assert payload["source_runner_id"] == runner.id
+    assert runner.name == "cinder"
 
 
 @pytest.mark.parametrize(
@@ -852,7 +785,6 @@ def test_this_device_launch_response_contract_matrix(monkeypatch, tmp_path, prov
             api_app.dependency_overrides = {}
 
         payload = response.json()
-        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
 
     assert response.status_code == 200, response.text
     assert payload["managed_transport"] == expected_transport
@@ -862,7 +794,6 @@ def test_this_device_launch_response_contract_matrix(monkeypatch, tmp_path, prov
     if provider == "claude":
         assert payload["provider_session_id"]
         assert payload["provider_session_id"] != payload["session_id"]
-        assert project_provider_session_id(db, session) == payload["provider_session_id"]
         assert f"--session-id {payload['provider_session_id']}" in payload["attach_command"]
         assert f"LONGHOUSE_PROVIDER_SESSION_ID={payload['provider_session_id']}" in payload["attach_command"]
     elif provider == "codex":
@@ -882,17 +813,15 @@ def test_this_device_launch_response_contract_matrix(monkeypatch, tmp_path, prov
         assert payload["attach_command"] == ""
 
 
-def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
+def test_this_device_launch_returns_native_codex_hot_launch(monkeypatch, tmp_path, managed_launch_live_store):
     from zerg.services import managed_local_launcher
 
-    reset_pubsub_for_test()
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
         user, _runner = _seed_user_and_runner(db)
         device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
         client, api_app = _make_device_client(db, device_token)
-        timeline_seq = get_pubsub().peek_latest_seq(TOPIC_TIMELINE)
         monkeypatch.setattr(
             managed_local_launcher,
             "get_runner_connection_manager",
@@ -912,37 +841,23 @@ def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
             api_app.dependency_overrides = {}
 
         payload = response.json()
-        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
-        runtime_state = (
-            db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == payload["session_id"]).one()
-        )
-
-    async def _next_timeline_message():
-        with get_pubsub().subscribe(TOPIC_TIMELINE, since_seq=timeline_seq) as subscription:
-            return await subscription.next_message(timeout=0.1)
-
-    timeline_message = asyncio.run(_next_timeline_message())
 
     assert response.status_code == 200, response.text
     assert payload["managed_transport"] == "codex_app_server"
-    assert payload["source_runner_id"] is None
+    assert payload["source_runner_id"] == _runner.id
     assert '"$engine" codex-bridge attach --session-id' in payload["attach_command"]
-    capabilities, control = _project_control(db, session)
-    assert capabilities.managed_transport.value == "codex_app_server"
-    assert control.source_runner_id is None
-    assert runtime_state.phase == "idle"
-    assert timeline_message is not None
-    assert timeline_message.payload["session_id"] == payload["session_id"]
-    assert timeline_message.payload["kind"] == "runtime"
-    assert timeline_message.payload["source"] == "managed_local_launch"
-    reset_pubsub_for_test()
+    assert db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).count() == 0
+    with managed_launch_live_store() as live_db:
+        readiness = live_db.get(LiveLaunchReadiness, payload["session_id"])
+        assert readiness is not None
+        assert readiness.state == "pending"
+        outbox = live_db.query(LiveArchiveOutbox).one()
+        assert outbox.kind == MANAGED_LOCAL_LAUNCH_KIND
 
 
-def test_this_device_launch_creates_native_antigravity_session(monkeypatch, tmp_path):
-    from zerg.models.agents import SessionConnection
+def test_this_device_launch_returns_native_antigravity_hot_launch(monkeypatch, tmp_path):
     from zerg.services import managed_local_launcher
 
-    reset_pubsub_for_test()
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
@@ -968,23 +883,10 @@ def test_this_device_launch_creates_native_antigravity_session(monkeypatch, tmp_
             api_app.dependency_overrides = {}
 
         payload = response.json()
-        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
-        runtime_state = (
-            db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == payload["session_id"]).one()
-        )
-        connection = db.query(SessionConnection).one()
 
     assert response.status_code == 200, response.text
     assert payload["managed_transport"] == "antigravity_hook_inbox"
-    assert payload["source_runner_id"] is None
+    assert payload["source_runner_id"] == runner.id
     assert payload["attach_command"] == ""
-    assert session.provider == "antigravity"
-    capabilities, control = _project_control(db, session)
-    assert capabilities.managed_transport.value == "antigravity_hook_inbox"
-    assert control.source_runner_id is None
-    assert runtime_state.phase == "idle"
-    assert connection.control_plane == "antigravity_hook_inbox"
-    assert connection.can_tail_output == 1
-    assert connection.can_send_input == 1
-    assert connection.can_interrupt == 0
-    reset_pubsub_for_test()
+    assert payload["provider"] == "antigravity"
+    assert db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).count() == 0

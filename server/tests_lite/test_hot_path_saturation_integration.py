@@ -192,9 +192,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
     monkeypatch.setattr(heartbeat_router, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(heartbeat_router, "get_live_write_serializer", lambda: live_serializer)
     monkeypatch.setattr(remote_session_launch_module, "get_live_write_serializer", lambda: live_serializer)
-    monkeypatch.setattr(session_chat_router, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(session_chat_router, "get_live_write_serializer", lambda: live_serializer)
-    monkeypatch.setattr(session_chat_router, "_MANAGED_LOCAL_STALE_WRITER_MS", 1.0)
     monkeypatch.setattr(write_serializer_module, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(write_serializer_module, "get_live_write_serializer", lambda: live_serializer)
 

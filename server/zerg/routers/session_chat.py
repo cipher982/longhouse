@@ -34,7 +34,6 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import SessionInput
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
@@ -50,7 +49,7 @@ from zerg.services.managed_local_control import answer_pause_request_on_managed_
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import build_managed_local_launch_plan
-from zerg.services.managed_local_launcher import launch_managed_local_session_sync
+from zerg.services.managed_local_launcher import resolve_managed_local_launch_runner
 from zerg.services.remote_session_launch import RemoteContinueParams
 from zerg.services.remote_session_launch import RemoteLaunchError
 from zerg.services.remote_session_launch import RemoteLaunchParams
@@ -66,7 +65,6 @@ from zerg.services.session_chat_impl import _build_managed_local_chat_response
 from zerg.services.session_chat_impl import _build_managed_local_draft_reply_response
 from zerg.services.session_chat_impl import _load_session_for_continuation
 from zerg.services.session_chat_impl import _lock_scope_id_for_session
-from zerg.services.session_chat_impl import _managed_local_launch_response
 from zerg.services.session_chat_impl import _managed_local_launch_response_from_plan
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_current_control import current_session_capabilities
@@ -107,7 +105,6 @@ from zerg.services.session_pause_requests import serialize_pause_request_project
 from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_views import SessionPauseRequestProjectionResponse
 from zerg.services.write_serializer import get_live_write_serializer
-from zerg.services.write_serializer import get_write_serializer
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 
@@ -116,8 +113,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sessions", tags=["session-chat"])
 agents_router = APIRouter(prefix="/agents/sessions", tags=["agents"])
 _STEER_ACTIVE_PRESENCE_STATES = frozenset({"thinking", "running"})
-_MANAGED_LOCAL_STALE_WRITER_MS = 15_000.0
-_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS = 120
+_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS = 300
 
 
 # ---------------------------------------------------------------------------
@@ -174,58 +170,16 @@ async def _launch_managed_local_session_serialized(
     db: Session,
     params: ManagedLocalLaunchParams,
 ) -> tuple[Any, ManagedLocalSessionLaunchResponse]:
-    ws = get_write_serializer()
-    if ws.is_configured:
-        repair_idle_queue = getattr(ws, "repair_idle_queue", None)
-        if callable(repair_idle_queue):
-            await repair_idle_queue()
-        if bool(getattr(ws, "writer_active", False)):
-            active_age_ms = float(getattr(ws, "active_age_ms", 0.0) or 0.0)
-            if active_age_ms >= _MANAGED_LOCAL_STALE_WRITER_MS:
-                active_label = str(getattr(ws, "active_label", "") or "")
-                logger.warning(
-                    "Managed local launch using hot readiness while archive writer is stale",
-                    extra={
-                        "active_label": active_label,
-                        "active_age_ms": round(active_age_ms, 1),
-                        "provider": params.provider,
-                        "runner_target": params.runner_target,
-                    },
-                )
-                plan = build_managed_local_launch_plan(params)
-                await _write_hot_managed_local_launch_readiness(
-                    plan,
-                    owner_id=params.owner_id,
-                    git_repo=params.git_repo,
-                    git_branch=params.git_branch,
-                )
-                launch_response = _managed_local_launch_response_from_plan(plan, owner_id=params.owner_id)
-                return None, launch_response
-
-    def _write_launch(write_db: Session) -> tuple[Any, ManagedLocalSessionLaunchResponse]:
-        result = launch_managed_local_session_sync(write_db, params)
-        try:
-            launch_response = _managed_local_launch_response(write_db, result, owner_id=params.owner_id)
-        except Exception:
-            logger.exception("Managed local launch response contract failed; discarding session")
-            try:
-                write_db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == result.session.id).delete(
-                    synchronize_session=False
-                )
-                write_db.delete(result.session)
-                write_db.commit()
-            except Exception:
-                write_db.rollback()
-                logger.exception("Failed to discard invalid managed local launch session %s", getattr(result.session, "id", None))
-            raise
-        return result, launch_response
-
-    return await ws.execute_or_direct(
-        _write_launch,
-        db,
-        label="managed-launch",
-        auto_commit=False,
+    runner = resolve_managed_local_launch_runner(db, params)
+    plan = build_managed_local_launch_plan(params, runner=runner)
+    launch_response = _managed_local_launch_response_from_plan(plan, owner_id=params.owner_id)
+    await _write_hot_managed_local_launch_readiness(
+        plan,
+        owner_id=params.owner_id,
+        git_repo=params.git_repo,
+        git_branch=params.git_branch,
     )
+    return None, launch_response
 
 
 async def _write_hot_managed_local_launch_readiness(
@@ -237,13 +191,13 @@ async def _write_hot_managed_local_launch_readiness(
 ) -> None:
     if not database_module.live_store_configured():
         raise ManagedLocalLaunchError(
-            "Managed local launch is blocked because archive is degraded and Live Store is unavailable; retry shortly.",
+            "Managed local launch is blocked because Live Store is unavailable; retry shortly.",
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     live_ws = get_live_write_serializer()
     if not live_ws.is_configured:
         raise ManagedLocalLaunchError(
-            "Managed local launch is blocked because archive is degraded and Live Store writer is unavailable; retry shortly.",
+            "Managed local launch is blocked because Live Store writer is unavailable; retry shortly.",
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     now = datetime.now(timezone.utc)
@@ -1367,9 +1321,8 @@ async def launch_managed_local_this_device(
             claude_launch_env=body.claude_launch_env,
             permission_mode=body.permission_mode,
         )
-        # Managed-local launch is a tiny user-facing write. Route it through the
-        # process writer at the highest priority instead of racing SQLite with a
-        # request-scoped session; the launcher owns the successful commit.
+        # Managed-local launch is user-facing and hot-path critical. Claim live
+        # readiness first; the archive row converges through LiveArchiveOutbox.
         result, launch_response = await _launch_managed_local_session_serialized(db, params)
     except ManagedLocalLaunchError as exc:
         db.rollback()

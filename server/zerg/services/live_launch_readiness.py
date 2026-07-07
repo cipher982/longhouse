@@ -11,6 +11,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
@@ -21,6 +22,7 @@ from zerg.services.session_launch_lifecycle import normalize_remote_launch_error
 from zerg.utils.time import normalize_utc
 
 LiveLaunchReadinessState = Literal["pending", "dispatched", "adopted", "failed", "abandoned"]
+MANAGED_LOCAL_LAUNCH_OUTBOX_KIND = "managed_local_launch.v1"
 
 
 @dataclass(frozen=True)
@@ -203,6 +205,22 @@ def reap_expired_live_launch_readiness(
         .limit(limit)
         .all()
     )
+    removed = 0
     for row in rows:
+        if _has_pending_managed_local_launch_outbox(db, session_id=str(row.session_id)):
+            continue
         db.delete(row)
-    return len(rows)
+        removed += 1
+    return removed
+
+
+def _has_pending_managed_local_launch_outbox(db: Session, *, session_id: str) -> bool:
+    key = f"{MANAGED_LOCAL_LAUNCH_OUTBOX_KIND}:{session_id}"
+    return (
+        db.query(LiveArchiveOutbox.id)
+        .filter(LiveArchiveOutbox.kind == MANAGED_LOCAL_LAUNCH_OUTBOX_KIND)
+        .filter(LiveArchiveOutbox.idempotency_key == key)
+        .filter(LiveArchiveOutbox.drained_at.is_(None))
+        .first()
+        is not None
+    )

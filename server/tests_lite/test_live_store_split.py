@@ -1259,6 +1259,76 @@ def test_live_launch_readiness_projects_and_reaps(tmp_path):
         live_engine.dispose()
 
 
+def test_live_launch_readiness_reap_keeps_pending_managed_launch_outbox(tmp_path):
+    now = datetime.now(timezone.utc)
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-managed-launch-reap.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    session_id = uuid4()
+    ordinary_expired_session_id = uuid4()
+    plan = build_managed_local_launch_plan(
+        ManagedLocalLaunchParams(
+            owner_id=42,
+            runner_target="cinder",
+            cwd="/tmp/demo",
+            provider="codex",
+            project="demo",
+            machine_name="cinder",
+        ),
+        session_id=session_id,
+    )
+
+    try:
+        with LiveSession() as live_db:
+            upsert_live_launch_readiness(
+                live_db,
+                session_id=session_id,
+                owner_id=42,
+                device_id="cinder",
+                provider="codex",
+                execution_lifetime="live_control",
+                state="pending",
+                command_id=f"managed-local-{session_id}",
+                client_request_id=None,
+                machine_id="cinder",
+                project="demo",
+                expires_at=now - timedelta(seconds=1),
+                now=now - timedelta(minutes=1),
+            )
+            enqueue_managed_local_launch_outbox(
+                live_db,
+                plan=plan,
+                owner_id=42,
+                git_repo=None,
+                git_branch=None,
+                started_at=now - timedelta(minutes=1),
+            )
+            upsert_live_launch_readiness(
+                live_db,
+                session_id=ordinary_expired_session_id,
+                owner_id=42,
+                device_id="cinder",
+                provider="codex",
+                execution_lifetime="live_control",
+                state="pending",
+                command_id=f"launch-{ordinary_expired_session_id}",
+                client_request_id=None,
+                machine_id="cinder",
+                project="demo",
+                expires_at=now - timedelta(seconds=1),
+                now=now - timedelta(minutes=1),
+            )
+            removed = reap_expired_live_launch_readiness(live_db, now=now, limit=10)
+            live_db.commit()
+
+        assert removed == 1
+        with LiveSession() as live_db:
+            assert live_db.get(LiveLaunchReadiness, str(session_id)) is not None
+            assert live_db.get(LiveLaunchReadiness, str(ordinary_expired_session_id)) is None
+    finally:
+        live_engine.dispose()
+
+
 def test_live_launch_readiness_session_map_ignores_expired_rows(tmp_path):
     now = datetime.now(timezone.utc)
     live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
