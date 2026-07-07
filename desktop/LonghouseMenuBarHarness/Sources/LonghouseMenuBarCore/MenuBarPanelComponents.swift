@@ -638,17 +638,24 @@ private struct BulkStopActionRow: View {
 
 private struct ManagedSessionRow: View {
     let entry: ManagedSessionEntry
+    @State private var isOpenHovered = false
 
     var body: some View {
         HStack(alignment: .center, spacing: 6) {
             if let openAction = entry.openAction {
                 Button(action: openAction) {
-                    rowMainContent
+                    rowMainContent(isOpenable: true)
+                        .background {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.primary.opacity(isOpenHovered ? 0.06 : 0))
+                        }
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(Text("Open \(entry.title) in Longhouse"))
+                .onHover(perform: updateOpenHover)
+                .onDisappear(perform: resetOpenHover)
             } else {
-                rowMainContent
+                rowMainContent(isOpenable: false)
             }
 
             if let stopAction = entry.stopAction {
@@ -664,7 +671,7 @@ private struct ManagedSessionRow: View {
         .padding(.vertical, 8)
     }
 
-    private var rowMainContent: some View {
+    private func rowMainContent(isOpenable: Bool) -> some View {
         HStack(alignment: .center, spacing: 8) {
             ProviderGlyph(provider: entry.provider, size: 16, variant: .chip)
 
@@ -692,8 +699,38 @@ private struct ManagedSessionRow: View {
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
                 .monospacedDigit()
+
+            if isOpenable {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Color.secondary.opacity(isOpenHovered ? 0.9 : 0.55))
+                    .frame(width: 10, height: 16)
+                    .offset(x: isOpenHovered ? 1 : 0)
+                    .accessibilityHidden(true)
+            }
         }
         .contentShape(Rectangle())
+        .animation(.easeOut(duration: 0.12), value: isOpenHovered)
+    }
+
+    private func updateOpenHover(_ hovering: Bool) {
+        guard hovering != isOpenHovered else {
+            return
+        }
+
+        isOpenHovered = hovering
+        if hovering {
+            NSCursor.pointingHand.push()
+        } else {
+            NSCursor.pop()
+        }
+    }
+
+    private func resetOpenHover() {
+        if isOpenHovered {
+            NSCursor.pop()
+            isOpenHovered = false
+        }
     }
 }
 
