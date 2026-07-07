@@ -11,6 +11,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from hashlib import blake2b
 from typing import Any
@@ -37,6 +38,7 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
+from zerg.services.live_launch_readiness import upsert_live_launch_readiness
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.live_session_inputs import cancel_live_queued_receipt
 from zerg.services.live_session_inputs import count_live_queued_receipts
@@ -46,6 +48,7 @@ from zerg.services.live_session_inputs import record_live_input_receipt_best_eff
 from zerg.services.managed_local_control import answer_pause_request_on_managed_local_session
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
+from zerg.services.managed_local_launcher import build_managed_local_launch_plan
 from zerg.services.managed_local_launcher import launch_managed_local_session_sync
 from zerg.services.remote_session_launch import RemoteContinueParams
 from zerg.services.remote_session_launch import RemoteLaunchError
@@ -63,6 +66,7 @@ from zerg.services.session_chat_impl import _build_managed_local_draft_reply_res
 from zerg.services.session_chat_impl import _load_session_for_continuation
 from zerg.services.session_chat_impl import _lock_scope_id_for_session
 from zerg.services.session_chat_impl import _managed_local_launch_response
+from zerg.services.session_chat_impl import _managed_local_launch_response_from_plan
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
@@ -112,6 +116,7 @@ router = APIRouter(prefix="/sessions", tags=["session-chat"])
 agents_router = APIRouter(prefix="/agents/sessions", tags=["agents"])
 _STEER_ACTIVE_PRESENCE_STATES = frozenset({"thinking", "running"})
 _MANAGED_LOCAL_STALE_WRITER_MS = 15_000.0
+_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS = 120
 
 
 # ---------------------------------------------------------------------------
@@ -178,7 +183,7 @@ async def _launch_managed_local_session_serialized(
             if active_age_ms >= _MANAGED_LOCAL_STALE_WRITER_MS:
                 active_label = str(getattr(ws, "active_label", "") or "")
                 logger.warning(
-                    "Managed local launch blocked by stale database writer",
+                    "Managed local launch using hot readiness while archive writer is stale",
                     extra={
                         "active_label": active_label,
                         "active_age_ms": round(active_age_ms, 1),
@@ -186,10 +191,10 @@ async def _launch_managed_local_session_serialized(
                         "runner_target": params.runner_target,
                     },
                 )
-                raise ManagedLocalLaunchError(
-                    "Managed local launch is blocked because the Longhouse database writer is stalled; retry shortly.",
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
+                plan = build_managed_local_launch_plan(params)
+                await _write_hot_managed_local_launch_readiness(plan, owner_id=params.owner_id)
+                launch_response = _managed_local_launch_response_from_plan(plan, owner_id=params.owner_id)
+                return None, launch_response
 
     def _write_launch(write_db: Session) -> tuple[Any, ManagedLocalSessionLaunchResponse]:
         result = launch_managed_local_session_sync(write_db, params)
@@ -215,6 +220,48 @@ async def _launch_managed_local_session_serialized(
         label="managed-launch",
         auto_commit=False,
     )
+
+
+async def _write_hot_managed_local_launch_readiness(plan, *, owner_id: int) -> None:
+    if not database_module.live_store_configured():
+        raise ManagedLocalLaunchError(
+            "Managed local launch is blocked because archive is degraded and Live Store is unavailable; retry shortly.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    live_ws = get_live_write_serializer()
+    if not live_ws.is_configured:
+        raise ManagedLocalLaunchError(
+            "Managed local launch is blocked because archive is degraded and Live Store writer is unavailable; retry shortly.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS)
+
+    def _write(live_db: Session):
+        return upsert_live_launch_readiness(
+            live_db,
+            session_id=plan.session_id,
+            owner_id=owner_id,
+            device_id=plan.source_name,
+            provider=plan.provider,
+            execution_lifetime="live_control",
+            state="pending",
+            command_id=f"managed-local-{plan.session_id}",
+            client_request_id=None,
+            machine_id=plan.source_name,
+            project=plan.project,
+            expires_at=expires_at,
+            now=now,
+        )
+
+    try:
+        await live_ws.execute(_write, label="managed-launch-readiness")
+    except Exception as exc:
+        logger.exception("Managed local hot launch readiness write failed")
+        raise ManagedLocalLaunchError(
+            "Managed local launch is blocked because Live Store writer failed; retry shortly.",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
 
 
 class RemoteSessionContinueRequest(BaseModel):
@@ -1314,13 +1361,14 @@ async def launch_managed_local_this_device(
             detail="Managed local launch failed",
         )
 
-    from zerg.services.session_pubsub import publish_session_runtime_update
+    if result is not None:
+        from zerg.services.session_pubsub import publish_session_runtime_update
 
-    publish_session_runtime_update(
-        session_id=str(result.session.id),
-        provider=str(result.session.provider or body.provider or ""),
-        source="managed_local_launch",
-    )
+        publish_session_runtime_update(
+            session_id=str(result.session.id),
+            provider=str(result.session.provider or body.provider or ""),
+            source="managed_local_launch",
+        )
 
     return launch_response
 

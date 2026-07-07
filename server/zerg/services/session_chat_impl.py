@@ -291,6 +291,40 @@ def _managed_local_launch_response(db: Session, result, *, owner_id: int | None 
     return response
 
 
+def _managed_local_launch_response_from_plan(plan, *, owner_id: int | None = None) -> ManagedLocalSessionLaunchResponse:
+    """Build a managed-local launch response before archive projection exists."""
+
+    hook_token: str | None = None
+    if plan.permission_mode == "remote_approve" and owner_id is not None:
+        from zerg.auth.managed_local_hook_tokens import issue_managed_local_hook_token
+
+        hook_token = issue_managed_local_hook_token(
+            owner_id=owner_id,
+            session_id=str(plan.session_id),
+            project=plan.project,
+            device_id=plan.source_name,
+        )
+    response = ManagedLocalSessionLaunchResponse(
+        session_id=str(plan.session_id),
+        provider=plan.provider,
+        provider_session_id=plan.provider_session_id,
+        execution_home=SessionExecutionHome.MANAGED_LOCAL,
+        managed_transport=ManagedSessionTransport(plan.managed_transport),
+        loop_mode=coerce_session_loop_mode(plan.loop_mode),
+        source_runner_id=plan.source_runner_id,
+        source_runner_name=plan.source_name,
+        managed_session_name=plan.managed_session_name,
+        attach_command=plan.attach_command,
+        permission_mode=plan.permission_mode,
+        hook_token=hook_token,
+    )
+    _validate_managed_local_launch_response_contract(
+        session_id=str(plan.session_id),
+        response=response,
+    )
+    return response
+
+
 def _event_content_for_draft(event: AgentEvent) -> str:
     if event.tool_name:
         payload = event.content_text or event.tool_output_text or ""

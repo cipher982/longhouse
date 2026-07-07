@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
+from types import SimpleNamespace
+from uuid import UUID
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -76,6 +79,23 @@ class ManagedLocalLaunchParams:
 @dataclass(frozen=True)
 class ManagedLocalLaunchResult:
     session: AgentSession
+    attach_command: str
+
+
+@dataclass(frozen=True)
+class ManagedLocalLaunchPlan:
+    session_id: UUID
+    provider: str
+    provider_session_id: str | None
+    source_name: str
+    source_runner_id: int | None
+    cwd: str
+    project: str
+    display_name: str
+    managed_session_name: str
+    loop_mode: str
+    permission_mode: str
+    managed_transport: str
     attach_command: str
 
 
@@ -161,7 +181,23 @@ def _initial_provider_session_id_for_spawn(provider: str) -> str | None:
     return None
 
 
-def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
+def _build_attach_command_for_plan(plan: ManagedLocalLaunchPlan) -> str:
+    session_fixture = SimpleNamespace(
+        id=plan.session_id,
+        managed_transport=plan.managed_transport,
+        provider_session_id=plan.provider_session_id,
+        cwd=plan.cwd,
+        permission_mode=plan.permission_mode,
+    )
+    return str(build_managed_local_attach_command(session=session_fixture) or "")
+
+
+def build_managed_local_launch_plan(
+    params: ManagedLocalLaunchParams,
+    *,
+    runner=None,
+    session_id: UUID | None = None,
+) -> ManagedLocalLaunchPlan:
     provider = params.provider or "claude"
     if provider not in _VALID_PROVIDERS:
         raise ManagedLocalLaunchError(f"Unsupported provider '{provider}' for managed local", status_code=400)
@@ -183,24 +219,47 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
     if not cwd:
         raise ManagedLocalLaunchError("cwd is required", status_code=400)
 
-    runner = _resolve_runner(db, params.owner_id, params.runner_target, required=params.require_runner_ready)
-    if params.require_runner_ready:
-        _require_runner_ready(runner, owner_id=params.owner_id)
     source_name = str(getattr(runner, "name", "") or params.runner_target).strip()
-    session_uuid = uuid4()
+    plan_session_id = session_id or uuid4()
     provider_session_id = _initial_provider_session_id_for_spawn(provider)
     project = _derive_project(cwd, params.project)
     display_name = (params.display_name or project).strip() or project
     contract = require_contract_for_provider(provider)
-    managed_session_name = _build_managed_session_name(display_name, fallback=f"{provider}-{session_uuid.hex[:8]}")
+    managed_session_name = _build_managed_session_name(display_name, fallback=f"{provider}-{plan_session_id.hex[:8]}")
+    permission_mode = "remote_approve" if str(params.permission_mode).strip() == "remote_approve" else "bypass"
+    loop_mode = coerce_session_loop_mode(params.loop_mode).value
+    plan = ManagedLocalLaunchPlan(
+        session_id=plan_session_id,
+        provider=provider,
+        provider_session_id=provider_session_id,
+        source_name=source_name,
+        source_runner_id=_runner_remote_control_id(runner),
+        cwd=cwd,
+        project=project,
+        display_name=display_name,
+        managed_session_name=managed_session_name,
+        loop_mode=loop_mode,
+        permission_mode=permission_mode,
+        managed_transport=contract.managed_transport.value,
+        attach_command="",
+    )
+    return replace(plan, attach_command=_build_attach_command_for_plan(plan))
+
+
+def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
+    runner = _resolve_runner(db, params.owner_id, params.runner_target, required=params.require_runner_ready)
+    if params.require_runner_ready:
+        _require_runner_ready(runner, owner_id=params.owner_id)
+    plan = build_managed_local_launch_plan(params, runner=runner)
+    contract = require_contract_for_provider(plan.provider)
 
     session = AgentSession(
-        id=session_uuid,
-        provider=provider,
+        id=plan.session_id,
+        provider=plan.provider,
         environment="development",
-        project=project,
-        device_id=source_name,
-        cwd=cwd,
+        project=plan.project,
+        device_id=plan.source_name,
+        cwd=plan.cwd,
         git_repo=params.git_repo,
         git_branch=params.git_branch,
         started_at=datetime.now(timezone.utc),
@@ -208,28 +267,28 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         user_messages=0,
         assistant_messages=0,
         tool_calls=0,
-        loop_mode=coerce_session_loop_mode(params.loop_mode).value,
-        permission_mode="remote_approve" if str(params.permission_mode).strip() == "remote_approve" else "bypass",
+        loop_mode=plan.loop_mode,
+        permission_mode=plan.permission_mode,
     )
     db.add(session)
     db.flush()
 
     # Phase 2 dual-write: materialize kernel rows alongside legacy launch path.
     primary_thread = ensure_primary_thread(db, session)
-    if provider_session_id:
+    if plan.provider_session_id:
         record_thread_alias(
             db,
             thread=primary_thread,
-            provider=provider,
+            provider=plan.provider,
             alias_kind="provider_session_id",
-            alias_value=provider_session_id,
+            alias_value=plan.provider_session_id,
         )
     run = record_run(
         db,
         thread=primary_thread,
-        provider=provider,
-        host_id=source_name,
-        cwd=cwd,
+        provider=plan.provider,
+        host_id=plan.source_name,
+        cwd=plan.cwd,
         launch_origin="longhouse_spawned",
     )
     connection_capabilities = contract.connection_capabilities
@@ -253,7 +312,7 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
     # heartbeat reconciler uses) so both promotion and
     # ``mark_missing_managed_control_leases`` target this row instead of
     # leaving a NULL-device, durably-false-live orphan.
-    lease_observed = provider in _HEARTBEAT_LEASE_OBSERVED_PROVIDERS
+    lease_observed = plan.provider in _HEARTBEAT_LEASE_OBSERVED_PROVIDERS
     birth_state = "detached" if lease_observed else "attached"
     connection = record_connection(
         db,
@@ -261,8 +320,8 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         control_plane=contract.control_plane,
         acquisition_kind="spawned_control",
         state=birth_state,
-        external_name=managed_session_name,
-        device_id=source_name or None,
+        external_name=plan.managed_session_name,
+        device_id=plan.source_name or None,
         can_send_input=connection_capabilities["can_send_input"],
         can_interrupt=connection_capabilities["can_interrupt"],
         can_terminate=connection_capabilities["can_terminate"],
@@ -273,10 +332,9 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         connection.last_health_at = datetime.now(timezone.utc)
 
     mark_managed_local_session_launched(db, session=session)
-    attach_command = str(build_managed_local_attach_command(session=session) or "")
     db.commit()
     db.refresh(session)
-    return ManagedLocalLaunchResult(session=session, attach_command=attach_command)
+    return ManagedLocalLaunchResult(session=session, attach_command=plan.attach_command)
 
 
 async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
@@ -286,7 +344,9 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
 __all__ = [
     "ManagedLocalLaunchError",
     "ManagedLocalLaunchParams",
+    "ManagedLocalLaunchPlan",
     "ManagedLocalLaunchResult",
+    "build_managed_local_launch_plan",
     "launch_managed_local_session",
     "launch_managed_local_session_sync",
 ]
