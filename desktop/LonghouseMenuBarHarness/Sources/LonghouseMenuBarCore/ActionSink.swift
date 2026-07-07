@@ -61,6 +61,13 @@ public protocol HealthActionSink {
         label: String,
         snapshot: HealthSnapshot
     ) -> HealthActionFeedback?
+
+    @discardableResult
+    func handleOpenManagedSession(
+        sessionID: String,
+        title: String?,
+        snapshot: HealthSnapshot
+    ) -> HealthActionFeedback?
 }
 
 /// A managed session to stop, with the provider needed to pick the stop
@@ -90,6 +97,15 @@ public extension HealthActionSink {
     func handleStopManagedBridges(
         targets: [ManagedStopTarget],
         label: String,
+        snapshot: HealthSnapshot
+    ) -> HealthActionFeedback? {
+        nil
+    }
+
+    @discardableResult
+    func handleOpenManagedSession(
+        sessionID: String,
+        title: String?,
         snapshot: HealthSnapshot
     ) -> HealthActionFeedback? {
         nil
@@ -326,6 +342,62 @@ public struct SpyHealthActionSink: HealthActionSink {
         )
     }
 
+    public func handleOpenManagedSession(
+        sessionID: String,
+        title: String?,
+        snapshot: HealthSnapshot
+    ) -> HealthActionFeedback? {
+        let normalizedSessionID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedTitle = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        appendActionRecord(
+            action: HarnessAction.openLonghouse.rawValue,
+            snapshot: snapshot,
+            target: normalizedSessionID
+        )
+
+        guard !normalizedSessionID.isEmpty else {
+            return feedback(
+                for: .openLonghouse,
+                style: .failure,
+                title: "Session URL is missing",
+                detail: "Longhouse did not report a session id for this row."
+            )
+        }
+
+        guard effectMode == .live else {
+            return feedback(
+                for: .openLonghouse,
+                style: .info,
+                title: "Open session dry run recorded",
+                detail: "The harness logged \(normalizedTitle.isEmpty ? normalizedSessionID : normalizedTitle) without opening the browser."
+            )
+        }
+
+        if let resolvedURL = resolveLonghouseURL(snapshot: snapshot, sessionID: normalizedSessionID) {
+            if NSWorkspace.shared.open(resolvedURL) {
+                return feedback(
+                    for: .openLonghouse,
+                    style: .success,
+                    title: "Opened session",
+                    detail: resolvedURL.absoluteString
+                )
+            }
+            return feedback(
+                for: .openLonghouse,
+                style: .failure,
+                title: "Session could not open",
+                detail: resolvedURL.absoluteString
+            )
+        }
+
+        return feedback(
+            for: .openLonghouse,
+            style: .failure,
+            title: "Longhouse URL is missing",
+            detail: "Set a stored Longhouse URL before trying to open the session."
+        )
+    }
+
     func resolveLonghouseURL(snapshot: HealthSnapshot) -> URL? {
         if let uiURL {
             return uiURL
@@ -335,6 +407,15 @@ public struct SpyHealthActionSink: HealthActionSink {
             return parsedURL
         }
         return URL(string: Self.defaultLonghouseURL)
+    }
+
+    func resolveLonghouseURL(snapshot: HealthSnapshot, sessionID: String) -> URL? {
+        guard let baseURL = resolveLonghouseURL(snapshot: snapshot) else {
+            return nil
+        }
+        return baseURL
+            .appendingPathComponent("timeline", isDirectory: true)
+            .appendingPathComponent(sessionID, isDirectory: false)
     }
 
     private func append(record: ActionRecord) {

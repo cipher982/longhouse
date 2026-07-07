@@ -227,6 +227,44 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func spyActionSinkBuildsManagedSessionURLs() throws {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Longhouse shipping healthy",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: LaunchReadinessSnapshot(
+                state: "ready",
+                headline: nil,
+                reasons: nil,
+                suggestedActions: nil,
+                storedURL: "https://demo.longhouse.test",
+                machineName: nil,
+                serviceMachineName: nil,
+                runner: nil
+            )
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+
+        #expect(
+            sink.resolveLonghouseURL(snapshot: snapshot, sessionID: "session-123")?.absoluteString ==
+                "https://demo.longhouse.test/timeline/session-123"
+        )
+
+        let feedback = sink.handleOpenManagedSession(sessionID: "session-123", title: "Menu title", snapshot: snapshot)
+        #expect(feedback?.title == "Open session dry run recorded")
+        #expect(feedback?.detail.contains("Menu title") == true)
+    }
+
+    @Test
     func spyActionSinkPersistsActions() throws {
         let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -1454,6 +1492,39 @@ struct LonghouseMenuBarCoreTests {
         #expect(background.normalizedUIPresence == "background")
         #expect(background.isBackgroundManagedSession == true)
         #expect(background.canStopFromMenuBar == true)
+    }
+
+    @Test
+    func decodesManagedSessionTitles() throws {
+        let data = Data("""
+        {
+          "health_state": "healthy",
+          "severity": "green",
+          "headline": "Longhouse shipping healthy",
+          "reasons": [],
+          "suggested_actions": [],
+          "managed_sessions": [
+            {
+              "session_id": "sess-title",
+              "provider": "codex",
+              "workspace_label": "zerg",
+              "timeline_title": "Fix menu bar links",
+              "summary_title": "Fix menu bar links",
+              "first_user_message": "Can we open rows?",
+              "state": "attached",
+              "phase": "idle",
+              "last_activity_at": "2026-05-13T23:59:39Z"
+            }
+          ]
+        }
+        """.utf8)
+
+        let snapshot = try HealthSnapshotDecoder.decode(data: data)
+        let session = try #require(snapshot.currentManagedSessions.first)
+
+        #expect(session.timelineTitle == "Fix menu bar links")
+        #expect(session.summaryTitle == "Fix menu bar links")
+        #expect(session.firstUserMessage == "Can we open rows?")
     }
 
     @Test

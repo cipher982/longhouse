@@ -5472,6 +5472,87 @@ def test_merge_returns_none_summary_when_nothing_present():
     assert orphans == []
 
 
+def test_enrich_managed_session_titles_uses_existing_session_title_payload(monkeypatch, tmp_path: Path):
+    rows = [
+        {"session_id": "session-title", "provider": "codex", "workspace_label": "zerg"},
+        {"session_id": "session-empty", "provider": "codex", "workspace_label": "zeta"},
+    ]
+
+    def fake_fetch(runtime_url: str, token: str, session_id: str):
+        assert runtime_url == "https://demo.longhouse.test"
+        assert token == "token-123"
+        if session_id == "session-title":
+            return {
+                "timeline_title": "Fix menu bar links",
+                "summary_title": "Fix menu bar links",
+                "first_user_message": "Can we open rows?",
+            }
+        return {}
+
+    monkeypatch.setattr(local_health_service, "_fetch_managed_session_title", fake_fetch)
+
+    local_health_service._enrich_managed_session_titles(
+        tmp_path,
+        rows,
+        runtime_url="https://demo.longhouse.test",
+        token="token-123",
+    )
+
+    assert rows[0]["timeline_title"] == "Fix menu bar links"
+    assert rows[0]["summary_title"] == "Fix menu bar links"
+    assert rows[0]["first_user_message"] == "Can we open rows?"
+    assert "timeline_title" not in rows[1]
+
+
+def test_enrich_managed_session_titles_reuses_fetch_for_duplicate_session_ids(monkeypatch, tmp_path: Path):
+    rows = [
+        {"session_id": "same-session", "provider": "codex", "workspace_label": "zerg"},
+        {"session_id": "same-session", "provider": "codex", "workspace_label": "zerg"},
+    ]
+    fetches: list[str] = []
+
+    def fake_fetch(runtime_url: str, token: str, session_id: str):
+        fetches.append(session_id)
+        return {"timeline_title": "Shared managed session"}
+
+    monkeypatch.setattr(local_health_service, "_fetch_managed_session_title", fake_fetch)
+
+    local_health_service._enrich_managed_session_titles(
+        tmp_path,
+        rows,
+        runtime_url="https://demo.longhouse.test",
+        token="token-123",
+    )
+
+    assert fetches == ["same-session"]
+    assert rows[0]["timeline_title"] == "Shared managed session"
+    assert rows[1]["timeline_title"] == "Shared managed session"
+
+
+def test_enrich_managed_session_titles_skips_fetch_errors(monkeypatch, tmp_path: Path):
+    rows = [
+        {"session_id": "good-session", "provider": "codex", "workspace_label": "zerg"},
+        {"session_id": "bad-session", "provider": "codex", "workspace_label": "zeta"},
+    ]
+
+    def fake_fetch(runtime_url: str, token: str, session_id: str):
+        if session_id == "bad-session":
+            raise TimeoutError("slow remote")
+        return {"timeline_title": "Good managed session"}
+
+    monkeypatch.setattr(local_health_service, "_fetch_managed_session_title", fake_fetch)
+
+    local_health_service._enrich_managed_session_titles(
+        tmp_path,
+        rows,
+        runtime_url="https://demo.longhouse.test",
+        token="token-123",
+    )
+
+    assert rows[0]["timeline_title"] == "Good managed session"
+    assert "timeline_title" not in rows[1]
+
+
 def test_collect_local_health_reports_claude_managed_session_via_process_scan(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

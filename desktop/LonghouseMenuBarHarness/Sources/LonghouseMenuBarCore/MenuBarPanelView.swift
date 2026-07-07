@@ -564,18 +564,17 @@ public struct MenuBarPanelView: View {
     }
 
     private func managedSessionEntry(for session: ManagedSessionSnapshot) -> ManagedSessionEntry {
-        let workspace = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let provider = (session.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
         return ManagedSessionEntry(
             id: session.id,
             sessionID: session.sessionId,
             provider: provider.isEmpty ? "unknown" : provider,
-            workspace: workspace.isEmpty ? HealthSnapshot.providerDisplayName(provider.isEmpty ? "unknown" : provider) : workspace,
-            branch: (session.branch ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : session.branch,
+            title: managedSessionTitle(session, fallbackProvider: provider),
             attention: session.menuBarAttentionKind,
             ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
             detail: managedSessionDetail(session),
+            openAction: managedOpenAction(for: session),
             stopAction: managedStopAction(for: session)
         )
     }
@@ -646,6 +645,25 @@ public struct MenuBarPanelView: View {
         }
     }
 
+    private func managedOpenAction(for session: ManagedSessionSnapshot) -> (() -> Void)? {
+        guard let sessionID = session.sessionId?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !sessionID.isEmpty
+        else {
+            return nil
+        }
+
+        let title = managedSessionTitle(session, fallbackProvider: session.provider)
+        return {
+            setFeedback(
+                actionSink.handleOpenManagedSession(
+                    sessionID: sessionID,
+                    title: title,
+                    snapshot: snapshot
+                )
+            )
+        }
+    }
+
     private func orphanBridgeStopAction(for bridge: OrphanBridgeSnapshot) -> (() -> Void)? {
         guard let sessionID = bridge.sessionId,
               !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -710,58 +728,113 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    /// The secondary line under the workspace should only explain abnormal
-    /// control-path state. Healthy attached rows already communicate the
-    /// session name, branch, attention pill, and recent activity age; adding a
-    /// second timestamp from a lower-level bridge file just creates two clocks
-    /// that disagree for no user-visible reason.
+    /// The secondary line keeps workspace/branch context and only adds
+    /// control-path detail when it is useful. The primary line is the stable
+    /// session headline; repeating workspace as the headline is too low-signal
+    /// when several rows come from the same repo.
     private func managedSessionDetail(_ session: ManagedSessionSnapshot) -> String {
+        let workspaceContext = managedSessionWorkspaceContext(session)
         if session.normalizedState == "attached",
            case .unknown = session.menuBarAttentionKind {
             if let rawPhase = session.rawPhase?.trimmingCharacters(in: .whitespacesAndNewlines),
                !rawPhase.isEmpty {
-                return "Unexpected local phase: \(rawPhase)"
+                return compactDetailParts([workspaceContext, "Unexpected local phase: \(rawPhase)"])
             }
             if let phase = session.phase?.trimmingCharacters(in: .whitespacesAndNewlines),
                !phase.isEmpty {
-                return "Unexpected local phase label: \(phase)"
+                return compactDetailParts([workspaceContext, "Unexpected local phase label: \(phase)"])
             }
-            return "Longhouse cannot classify this managed phase yet."
+            return compactDetailParts([workspaceContext, "Longhouse cannot classify this managed phase yet."])
         }
 
+        let presenceDetail: String?
         switch session.normalizedUIPresence {
         case "foreground_tui":
-            return "Terminal attached."
+            presenceDetail = "Terminal attached."
         case "background":
-            return "Running in background."
+            presenceDetail = "Running in background."
         default:
-            break
+            presenceDetail = nil
+        }
+        if let presenceDetail {
+            return compactDetailParts([workspaceContext, presenceDetail])
         }
 
         switch session.normalizedState {
         case "attached":
-            return ""
+            return workspaceContext
         case "detached":
-            return "Window closed. Session still running in background."
+            return compactDetailParts([workspaceContext, "Window closed. Session still running in background."])
         case "degraded":
             let reasons = (session.reasonCodes ?? []).prefix(2).map { HealthSnapshot.humanizeManagedReason($0) }
             if reasons.isEmpty {
-                return "Control path degraded."
+                return compactDetailParts([workspaceContext, "Control path degraded."])
             }
-            return reasons.joined(separator: " · ")
+            return compactDetailParts([workspaceContext] + reasons)
         case "unknown":
-            return "Longhouse cannot classify this managed session yet."
+            return compactDetailParts([workspaceContext, "Longhouse cannot classify this managed session yet."])
         default:
             let reasons = (session.reasonCodes ?? []).prefix(2).map { HealthSnapshot.humanizeManagedReason($0) }
             if !reasons.isEmpty {
-                return reasons.joined(separator: " · ")
+                return compactDetailParts([workspaceContext] + reasons)
             }
             let normalized = session.normalizedState.trimmingCharacters(in: .whitespacesAndNewlines)
             if normalized.isEmpty {
-                return ""
+                return workspaceContext
             }
-            return normalized.replacingOccurrences(of: "_", with: " ").capitalized
+            return compactDetailParts([workspaceContext, normalized.replacingOccurrences(of: "_", with: " ").capitalized])
         }
+    }
+
+    private func managedSessionTitle(_ session: ManagedSessionSnapshot, fallbackProvider: String?) -> String {
+        for raw in [session.timelineTitle, session.summaryTitle, session.firstUserMessage] {
+            if let title = compactSessionText(raw, maxCharacters: 72) {
+                return title
+            }
+        }
+
+        let workspace = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !workspace.isEmpty {
+            return workspace
+        }
+        let provider = (fallbackProvider ?? session.provider ?? "unknown").trimmingCharacters(in: .whitespacesAndNewlines)
+        return HealthSnapshot.providerDisplayName(provider.isEmpty ? "unknown" : provider)
+    }
+
+    private func managedSessionWorkspaceContext(_ session: ManagedSessionSnapshot) -> String {
+        let workspace = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let branch = (session.branch ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if workspace.isEmpty {
+            return ""
+        }
+        if branch.isEmpty {
+            return workspace
+        }
+        return "\(workspace) / \(branch)"
+    }
+
+    private func compactDetailParts(_ parts: [String]) -> String {
+        parts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+    }
+
+    private func compactSessionText(_ value: String?, maxCharacters: Int) -> String? {
+        guard let value else {
+            return nil
+        }
+        let compact = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+        guard !compact.isEmpty else {
+            return nil
+        }
+        if compact.count <= maxCharacters {
+            return compact
+        }
+        return String(compact.prefix(max(1, maxCharacters - 1))).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
     }
 
     private func orphanBridgeDetail(_ bridge: OrphanBridgeSnapshot) -> String {

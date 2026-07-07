@@ -518,32 +518,32 @@ struct ManagedSessionEntry: Identifiable {
     let id: String
     let sessionID: String?
     let provider: String
-    let workspace: String
-    let branch: String?
+    let title: String
     let attention: ManagedAttentionKind
     let ageLabel: String
     let detail: String
+    let openAction: (() -> Void)?
     let stopAction: (() -> Void)?
 
     init(
         id: String,
         sessionID: String?,
         provider: String,
-        workspace: String,
-        branch: String?,
+        title: String,
         attention: ManagedAttentionKind,
         ageLabel: String,
         detail: String,
+        openAction: (() -> Void)? = nil,
         stopAction: (() -> Void)? = nil
     ) {
         self.id = id
         self.sessionID = sessionID
         self.provider = provider
-        self.workspace = workspace
-        self.branch = branch
+        self.title = title
         self.attention = attention
         self.ageLabel = ageLabel
         self.detail = detail
+        self.openAction = openAction
         self.stopAction = stopAction
     }
 }
@@ -640,26 +640,40 @@ private struct ManagedSessionRow: View {
     let entry: ManagedSessionEntry
 
     var body: some View {
+        HStack(alignment: .center, spacing: 6) {
+            if let openAction = entry.openAction {
+                Button(action: openAction) {
+                    rowMainContent
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(Text("Open \(entry.title) in Longhouse"))
+            } else {
+                rowMainContent
+            }
+
+            if let stopAction = entry.stopAction {
+                inlineActionButton(
+                    systemImage: "xmark.circle",
+                    tint: attentionColor(entry.attention),
+                    accessibilityLabel: "Stop managed session"
+                ) {
+                    stopAction()
+                }
+            }
+        }
+        .padding(.vertical, 8)
+    }
+
+    private var rowMainContent: some View {
         HStack(alignment: .center, spacing: 8) {
             ProviderGlyph(provider: entry.provider, size: 16, variant: .chip)
 
             VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(entry.workspace)
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(Color.primary)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-
-                    if let branch = entry.branch,
-                       !branch.isEmpty {
-                        Text("/ \(branch)")
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(Color.secondary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                    }
-                }
+                Text(entry.title)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
 
                 if !entry.detail.isEmpty {
                     Text(entry.detail)
@@ -678,18 +692,8 @@ private struct ManagedSessionRow: View {
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.primary)
                 .monospacedDigit()
-
-            if let stopAction = entry.stopAction {
-                inlineActionButton(
-                    systemImage: "xmark.circle",
-                    tint: attentionColor(entry.attention),
-                    accessibilityLabel: "Stop managed session"
-                ) {
-                    stopAction()
-                }
-            }
         }
-        .padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 }
 
