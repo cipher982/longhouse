@@ -1681,6 +1681,31 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func backgroundPresenceStaysConsoleEvenWithUnknownState() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "sess-future-console",
+            provider: "codex",
+            workspaceLabel: "assistants-service",
+            branch: nil,
+            state: "future_state",
+            phase: nil,
+            phaseObservedAt: "2026-04-22T02:43:47Z",
+            lastActivityAt: "2026-04-22T02:43:47Z",
+            bridgeStatus: "ready",
+            bridgePid: 95434,
+            bridgeHeartbeatAt: "2026-04-22T02:43:47Z",
+            launchMode: "detached_ui",
+            uiAttached: false,
+            uiPresence: "background",
+            reasonCodes: []
+        )
+
+        #expect(session.isConsoleManagedSession == true)
+        #expect(session.needsManagedSessionAttention == false)
+        #expect(session.menuBarAttentionKind == .unknown("future_state"))
+    }
+
+    @Test
     func detachedManagedSessionNeedsAttentionEvenWithoutBackgroundPresence() {
         let session = ManagedSessionSnapshot(
             sessionId: "sess-detached",

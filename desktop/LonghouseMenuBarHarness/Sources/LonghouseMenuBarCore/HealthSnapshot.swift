@@ -1428,7 +1428,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     }
 
     public var isConsoleManagedSession: Bool {
-        normalizedUIPresence == "background" && normalizedState == "attached"
+        normalizedUIPresence == "background" && !needsManagedSessionAttention
     }
 
     public var needsManagedSessionAttention: Bool {
@@ -1440,6 +1440,8 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     }
 
     public var canStopFromMenuBar: Bool {
+        // Console sessions are healthy enough to avoid bulk cleanup, but still
+        // stoppable per item because they may own a detached-ui provider runtime.
         normalizedUIPresence == "background" || normalizedState == "detached" || normalizedState == "degraded"
     }
 
