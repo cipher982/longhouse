@@ -19,6 +19,7 @@ os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", Fernet.generate_key().decode())
 
+import zerg.services.remote_session_launch as remote_session_launch_module
 from zerg.database import Base
 from zerg.database import get_pool_status
 from zerg.database import initialize_live_database
@@ -29,14 +30,18 @@ from zerg.database import make_sessionmaker
 from zerg.models import User
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
+from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.routers import agents_sessions as agents_sessions_router
 from zerg.routers import health as health_router
 from zerg.routers import heartbeat as heartbeat_router
-import zerg.services.remote_session_launch as remote_session_launch_module
+from zerg.routers import session_chat as session_chat_router
+from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
+from zerg.services.live_archive_outbox import drain_live_archive_outbox
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
+from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.remote_session_launch import RemoteLaunchParams
 from zerg.services.remote_session_launch import launch_remote_session
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
@@ -187,6 +192,9 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
     monkeypatch.setattr(heartbeat_router, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(heartbeat_router, "get_live_write_serializer", lambda: live_serializer)
     monkeypatch.setattr(remote_session_launch_module, "get_live_write_serializer", lambda: live_serializer)
+    monkeypatch.setattr(session_chat_router, "get_write_serializer", lambda: serializer)
+    monkeypatch.setattr(session_chat_router, "get_live_write_serializer", lambda: live_serializer)
+    monkeypatch.setattr(session_chat_router, "_MANAGED_LOCAL_STALE_WRITER_MS", 1.0)
     monkeypatch.setattr(write_serializer_module, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(write_serializer_module, "get_live_write_serializer", lambda: live_serializer)
 
@@ -300,9 +308,49 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
             assert readiness.device_id == "cinder"
             assert readiness.provider == "codex"
 
+        await asyncio.sleep(0.01)
+        with request_factory() as managed_launch_db:
+            managed_result, managed_response = await asyncio.wait_for(
+                session_chat_router._launch_managed_local_session_serialized(
+                    managed_launch_db,
+                    ManagedLocalLaunchParams(
+                        owner_id=OWNER_ID,
+                        runner_target="cinder",
+                        cwd="/Users/me/repo",
+                        provider="codex",
+                        project="repo",
+                        git_branch="main",
+                        machine_name="cinder",
+                    ),
+                ),
+                timeout=ROUTE_TIMEOUT_SECONDS,
+            )
+        assert managed_result is None
+        assert managed_response.provider == "codex"
+        assert "codex-bridge attach --session-id" in managed_response.attach_command
+        with live_factory() as live_db:
+            managed_readiness = live_db.get(LiveLaunchReadiness, managed_response.session_id)
+            assert managed_readiness is not None
+            assert managed_readiness.state == "pending"
+            managed_outbox = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == MANAGED_LOCAL_LAUNCH_KIND).one()
+            assert managed_outbox.drained_at is None
+
         release_writer.set()
         await asyncio.wait_for(blocker, timeout=ROUTE_TIMEOUT_SECONDS)
         await _wait_until(lambda: serializer.queue_depth == 0 and not serializer.writer_active)
+        with live_factory() as live_db, request_factory() as archive_db:
+            drain_result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+        assert drain_result.drained >= 1
+        with request_factory() as archive_db:
+            managed_session = archive_db.get(AgentSession, managed_response.session_id)
+            assert managed_session is not None
+            assert managed_session.provider == "codex"
+            assert managed_session.device_id == "cinder"
+            assert managed_session.git_branch == "main"
+        with live_factory() as live_db:
+            managed_readiness = live_db.get(LiveLaunchReadiness, managed_response.session_id)
+            assert managed_readiness is not None
+            assert managed_readiness.state == "adopted"
     finally:
         release_writer.set()
         if heartbeat_task is not None and not heartbeat_task.done():
