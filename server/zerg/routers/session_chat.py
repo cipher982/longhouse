@@ -37,6 +37,7 @@ from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
 from zerg.services.live_launch_readiness import upsert_live_launch_readiness
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
@@ -192,7 +193,12 @@ async def _launch_managed_local_session_serialized(
                     },
                 )
                 plan = build_managed_local_launch_plan(params)
-                await _write_hot_managed_local_launch_readiness(plan, owner_id=params.owner_id)
+                await _write_hot_managed_local_launch_readiness(
+                    plan,
+                    owner_id=params.owner_id,
+                    git_repo=params.git_repo,
+                    git_branch=params.git_branch,
+                )
                 launch_response = _managed_local_launch_response_from_plan(plan, owner_id=params.owner_id)
                 return None, launch_response
 
@@ -222,7 +228,13 @@ async def _launch_managed_local_session_serialized(
     )
 
 
-async def _write_hot_managed_local_launch_readiness(plan, *, owner_id: int) -> None:
+async def _write_hot_managed_local_launch_readiness(
+    plan,
+    *,
+    owner_id: int,
+    git_repo: str | None,
+    git_branch: str | None,
+) -> None:
     if not database_module.live_store_configured():
         raise ManagedLocalLaunchError(
             "Managed local launch is blocked because archive is degraded and Live Store is unavailable; retry shortly.",
@@ -238,7 +250,7 @@ async def _write_hot_managed_local_launch_readiness(plan, *, owner_id: int) -> N
     expires_at = now + timedelta(seconds=_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS)
 
     def _write(live_db: Session):
-        return upsert_live_launch_readiness(
+        readiness = upsert_live_launch_readiness(
             live_db,
             session_id=plan.session_id,
             owner_id=owner_id,
@@ -253,6 +265,15 @@ async def _write_hot_managed_local_launch_readiness(plan, *, owner_id: int) -> N
             expires_at=expires_at,
             now=now,
         )
+        enqueue_managed_local_launch_outbox(
+            live_db,
+            plan=plan,
+            owner_id=owner_id,
+            git_repo=git_repo,
+            git_branch=git_branch,
+            started_at=now,
+        )
+        return readiness
 
     try:
         await live_ws.execute(_write, label="managed-launch-readiness")

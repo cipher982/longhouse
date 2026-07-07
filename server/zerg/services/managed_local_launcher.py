@@ -246,12 +246,20 @@ def build_managed_local_launch_plan(
     return replace(plan, attach_command=_build_attach_command_for_plan(plan))
 
 
-def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
-    runner = _resolve_runner(db, params.owner_id, params.runner_target, required=params.require_runner_ready)
-    if params.require_runner_ready:
-        _require_runner_ready(runner, owner_id=params.owner_id)
-    plan = build_managed_local_launch_plan(params, runner=runner)
+def materialize_managed_local_launch_plan_sync(
+    db: Session,
+    plan: ManagedLocalLaunchPlan,
+    *,
+    git_repo: str | None = None,
+    git_branch: str | None = None,
+    started_at: datetime | None = None,
+) -> AgentSession:
+    existing = db.get(AgentSession, plan.session_id)
+    if existing is not None:
+        return existing
+
     contract = require_contract_for_provider(plan.provider)
+    launched_at = started_at or datetime.now(timezone.utc)
 
     session = AgentSession(
         id=plan.session_id,
@@ -260,9 +268,9 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         project=plan.project,
         device_id=plan.source_name,
         cwd=plan.cwd,
-        git_repo=params.git_repo,
-        git_branch=params.git_branch,
-        started_at=datetime.now(timezone.utc),
+        git_repo=git_repo,
+        git_branch=git_branch,
+        started_at=launched_at,
         ended_at=None,
         user_messages=0,
         assistant_messages=0,
@@ -332,6 +340,20 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         connection.last_health_at = datetime.now(timezone.utc)
 
     mark_managed_local_session_launched(db, session=session)
+    return session
+
+
+def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
+    runner = _resolve_runner(db, params.owner_id, params.runner_target, required=params.require_runner_ready)
+    if params.require_runner_ready:
+        _require_runner_ready(runner, owner_id=params.owner_id)
+    plan = build_managed_local_launch_plan(params, runner=runner)
+    session = materialize_managed_local_launch_plan_sync(
+        db,
+        plan,
+        git_repo=params.git_repo,
+        git_branch=params.git_branch,
+    )
     db.commit()
     db.refresh(session)
     return ManagedLocalLaunchResult(session=session, attach_command=plan.attach_command)
@@ -349,4 +371,5 @@ __all__ = [
     "build_managed_local_launch_plan",
     "launch_managed_local_session",
     "launch_managed_local_session_sync",
+    "materialize_managed_local_launch_plan_sync",
 ]

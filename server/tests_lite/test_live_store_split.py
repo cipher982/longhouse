@@ -27,32 +27,33 @@ from zerg.database import make_engine
 from zerg.database import make_live_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionLaunchAttempt
+from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionObservation
+from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveLaunchReadiness
-from zerg.models.live_store import LiveSessionLivePreview
-from zerg.models.live_store import LiveSessionInputReceipt
-from zerg.models.live_store import LiveSession as LiveSessionRow
 from zerg.models.live_store import LiveRuntimeState
-from zerg.services.provisional_events import load_active_provisional_preview_map
+from zerg.models.live_store import LiveSession as LiveSessionRow
+from zerg.models.live_store import LiveSessionInputReceipt
+from zerg.models.live_store import LiveSessionLivePreview
 from zerg.services.agents import AgentsStore
 from zerg.services.live_archive_outbox import HEARTBEAT_STAMP_KIND
+from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
 from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
 from zerg.services.live_archive_outbox import SESSION_INPUT_RECEIPT_KIND
 from zerg.services.live_archive_outbox import drain_live_archive_outbox
 from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
+from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
 from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
 from zerg.services.live_archive_outbox import enqueue_session_input_receipt_outbox
-from zerg.services.live_session_state import list_active_live_session_ids
-from zerg.services.live_session_state import mark_missing_live_sessions
-from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
 from zerg.services.live_launch_readiness import get_live_launch_readiness_by_client_request
 from zerg.services.live_launch_readiness import get_live_launch_readiness_by_session_id
 from zerg.services.live_launch_readiness import latest_live_launch_readiness_map
@@ -60,9 +61,15 @@ from zerg.services.live_launch_readiness import reap_expired_live_launch_readine
 from zerg.services.live_launch_readiness import update_live_launch_readiness_state
 from zerg.services.live_launch_readiness import upsert_live_launch_readiness
 from zerg.services.live_session_inputs import upsert_live_input_receipt
+from zerg.services.live_session_state import list_active_live_session_ids
+from zerg.services.live_session_state import mark_missing_live_sessions
+from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import upsert_live_control_leases
+from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
+from zerg.services.managed_local_launcher import build_managed_local_launch_plan
+from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_live_runtime_events
 from zerg.services.session_runtime import ingest_runtime_events
@@ -318,6 +325,212 @@ def test_live_archive_outbox_drains_heartbeat_to_archive_idempotently(tmp_path):
         assert result.processed == 0
         with ArchiveSession() as archive_db:
             assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "live-drain").count() == 1
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_live_archive_outbox_drains_managed_local_launch_to_archive_idempotently(tmp_path):
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    plan = build_managed_local_launch_plan(
+        ManagedLocalLaunchParams(
+            owner_id=42,
+            runner_target="cinder",
+            cwd="/tmp/demo",
+            provider="claude",
+            project="demo",
+            git_repo="git@example.com:demo/repo.git",
+            git_branch="main",
+            machine_name="cinder",
+            native_claude_channels_available=True,
+        )
+    )
+
+    try:
+        with LiveSession() as live_db:
+            upsert_live_launch_readiness(
+                live_db,
+                session_id=plan.session_id,
+                owner_id=42,
+                device_id=plan.source_name,
+                provider=plan.provider,
+                execution_lifetime="live_control",
+                state="pending",
+                command_id=f"managed-local-{plan.session_id}",
+                client_request_id=None,
+                machine_id=plan.source_name,
+                project=plan.project,
+                expires_at=now + timedelta(minutes=2),
+                now=now,
+            )
+            assert (
+                enqueue_managed_local_launch_outbox(
+                    live_db,
+                    plan=plan,
+                    owner_id=42,
+                    git_repo="git@example.com:demo/repo.git",
+                    git_branch="main",
+                    started_at=now,
+                )
+                is True
+            )
+            assert (
+                enqueue_managed_local_launch_outbox(
+                    live_db,
+                    plan=plan,
+                    owner_id=42,
+                    git_repo="git@example.com:demo/repo.git",
+                    git_branch="main",
+                    started_at=now,
+                )
+                is False
+            )
+            live_db.commit()
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            result = drain_live_archive_outbox(live_db, archive_db, limit=10, now=now + timedelta(seconds=1))
+
+        assert result.processed == 1
+        assert result.drained == 1
+        assert result.failed == 0
+
+        with ArchiveSession() as archive_db:
+            session = archive_db.get(AgentSession, plan.session_id)
+            assert session is not None
+            assert session.provider == "claude"
+            assert session.device_id == "cinder"
+            assert session.cwd == "/tmp/demo"
+            assert session.git_repo == "git@example.com:demo/repo.git"
+            assert session.git_branch == "main"
+            assert normalize_utc(session.started_at) == now
+            assert session.primary_thread_id is not None
+            alias = archive_db.query(SessionThreadAlias).one()
+            assert alias.alias_kind == "provider_session_id"
+            assert alias.alias_value == plan.provider_session_id
+            run = archive_db.query(SessionRun).one()
+            assert run.cwd == "/tmp/demo"
+            connection = archive_db.query(SessionConnection).one()
+            assert connection.external_name == plan.managed_session_name
+            assert connection.state == "detached"
+            runtime = archive_db.query(SessionRuntimeState).one()
+            assert runtime.session_id == plan.session_id
+            assert runtime.phase == "idle"
+
+        with LiveSession() as live_db:
+            outbox = live_db.query(LiveArchiveOutbox).one()
+            assert outbox.kind == MANAGED_LOCAL_LAUNCH_KIND
+            assert outbox.drained_at is not None
+            readiness = live_db.get(LiveLaunchReadiness, str(plan.session_id))
+            assert readiness is not None
+            assert readiness.state == "adopted"
+            assert readiness.expires_at is None
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+
+        assert result.processed == 0
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(AgentSession).filter(AgentSession.id == plan.session_id).count() == 1
+            assert archive_db.query(SessionRun).count() == 1
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_managed_local_launch_outbox_retries_after_live_mark_drained_commit_failure(tmp_path, monkeypatch):
+    now = datetime.now(timezone.utc)
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    plan = build_managed_local_launch_plan(
+        ManagedLocalLaunchParams(
+            owner_id=42,
+            runner_target="cinder",
+            cwd="/tmp/demo",
+            provider="codex",
+            project="demo",
+            git_repo="git@example.com:demo/repo.git",
+            git_branch="main",
+            machine_name="cinder",
+        )
+    )
+
+    try:
+        with LiveSession() as live_db:
+            upsert_live_launch_readiness(
+                live_db,
+                session_id=plan.session_id,
+                owner_id=42,
+                device_id=plan.source_name,
+                provider=plan.provider,
+                execution_lifetime="live_control",
+                state="pending",
+                command_id=f"managed-local-{plan.session_id}",
+                client_request_id=None,
+                machine_id=plan.source_name,
+                project=plan.project,
+                expires_at=now + timedelta(minutes=2),
+                now=now,
+            )
+            enqueue_managed_local_launch_outbox(
+                live_db,
+                plan=plan,
+                owner_id=42,
+                git_repo="git@example.com:demo/repo.git",
+                git_branch="main",
+                started_at=now,
+            )
+            live_db.commit()
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            def fail_live_commit_once():
+                raise RuntimeError("live commit failed")
+
+            with monkeypatch.context() as commit_patch:
+                commit_patch.setattr(live_db, "commit", fail_live_commit_once)
+                result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+
+        assert result.processed == 1
+        assert result.drained == 0
+        assert result.failed == 1
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(AgentSession).filter(AgentSession.id == plan.session_id).count() == 1
+            assert archive_db.query(SessionRun).count() == 1
+        with LiveSession() as live_db:
+            outbox = live_db.query(LiveArchiveOutbox).one()
+            assert outbox.drained_at is None
+            readiness = live_db.get(LiveLaunchReadiness, str(plan.session_id))
+            assert readiness is not None
+            assert readiness.state == "pending"
+
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            result = drain_live_archive_outbox(live_db, archive_db, limit=10)
+
+        assert result.processed == 1
+        assert result.drained == 1
+        assert result.failed == 0
+        with ArchiveSession() as archive_db:
+            assert archive_db.query(AgentSession).filter(AgentSession.id == plan.session_id).count() == 1
+            assert archive_db.query(SessionRun).count() == 1
+        with LiveSession() as live_db:
+            outbox = live_db.query(LiveArchiveOutbox).one()
+            assert outbox.drained_at is not None
+            readiness = live_db.get(LiveLaunchReadiness, str(plan.session_id))
+            assert readiness is not None
+            assert readiness.state == "adopted"
     finally:
         archive_engine.dispose()
         live_engine.dispose()

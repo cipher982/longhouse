@@ -17,6 +17,9 @@ from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveSessionInputReceipt
+from zerg.services.live_launch_readiness import update_live_launch_readiness_state
+from zerg.services.managed_local_launcher import ManagedLocalLaunchPlan
+from zerg.services.managed_local_launcher import materialize_managed_local_launch_plan_sync
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import create_session_input
@@ -25,6 +28,7 @@ from zerg.services.session_runtime import ingest_runtime_events
 from zerg.utils.time import normalize_utc
 
 HEARTBEAT_STAMP_KIND = "heartbeat_stamp.v1"
+MANAGED_LOCAL_LAUNCH_KIND = "managed_local_launch.v1"
 RUNTIME_EVENT_KIND = "runtime_event.v1"
 SESSION_INPUT_RECEIPT_KIND = "session_input_receipt.v1"
 
@@ -120,6 +124,63 @@ def enqueue_runtime_events_outbox(db: Session, events: list[RuntimeEventIngest])
         if enqueue_runtime_event_outbox(db, event):
             queued += 1
     return queued
+
+
+def managed_local_launch_idempotency_key(*, session_id: UUID | str) -> str:
+    return f"{MANAGED_LOCAL_LAUNCH_KIND}:{str(session_id).strip()}"
+
+
+def enqueue_managed_local_launch_outbox(
+    db: Session,
+    *,
+    plan: ManagedLocalLaunchPlan,
+    owner_id: int,
+    git_repo: str | None,
+    git_branch: str | None,
+    started_at: datetime,
+    idempotency_key: str | None = None,
+) -> bool:
+    """Queue a hot managed-local launch for async archive materialization."""
+
+    key = idempotency_key or managed_local_launch_idempotency_key(session_id=plan.session_id)
+    existing = db.query(LiveArchiveOutbox.id).filter(LiveArchiveOutbox.idempotency_key == key).first()
+    if existing is not None:
+        return False
+    db.add(
+        LiveArchiveOutbox(
+            idempotency_key=key,
+            kind=MANAGED_LOCAL_LAUNCH_KIND,
+            payload_json=json.dumps(
+                {
+                    "launch": _jsonable(
+                        {
+                            "owner_id": int(owner_id),
+                            "git_repo": git_repo,
+                            "git_branch": git_branch,
+                            "started_at": started_at,
+                            "plan": {
+                                "session_id": plan.session_id,
+                                "provider": plan.provider,
+                                "provider_session_id": plan.provider_session_id,
+                                "source_name": plan.source_name,
+                                "source_runner_id": plan.source_runner_id,
+                                "cwd": plan.cwd,
+                                "project": plan.project,
+                                "display_name": plan.display_name,
+                                "managed_session_name": plan.managed_session_name,
+                                "loop_mode": plan.loop_mode,
+                                "permission_mode": plan.permission_mode,
+                                "managed_transport": plan.managed_transport,
+                                "attach_command": plan.attach_command,
+                            },
+                        }
+                    )
+                },
+                sort_keys=True,
+            ),
+        )
+    )
+    return True
 
 
 def session_input_receipt_idempotency_key(*, receipt_id: str) -> str:
@@ -246,6 +307,7 @@ def drain_live_archive_outbox(
             failed += 1
             continue
 
+        _mark_live_side_effects_after_archive_commit(row, live_db)
         row.drained_at = drained_at
         row.last_error = None
         drained += 1
@@ -265,6 +327,9 @@ def _drain_row(row: LiveArchiveOutbox, archive_db: Session, live_db: Session) ->
         return
     if row.kind == RUNTIME_EVENT_KIND:
         _drain_runtime_event(row, archive_db)
+        return
+    if row.kind == MANAGED_LOCAL_LAUNCH_KIND:
+        _drain_managed_local_launch(row, archive_db)
         return
     if row.kind == SESSION_INPUT_RECEIPT_KIND:
         _drain_session_input_receipt(row, archive_db, live_db)
@@ -299,6 +364,54 @@ def _drain_runtime_event(row: LiveArchiveOutbox, archive_db: Session) -> None:
     event_payload = _restore_jsonable(payload.get("event") or {})
     event = RuntimeEventIngest.model_validate(event_payload)
     ingest_runtime_events(archive_db, [event])
+
+
+def _drain_managed_local_launch(row: LiveArchiveOutbox, archive_db: Session) -> None:
+    payload = json.loads(row.payload_json or "{}")
+    launch = _restore_jsonable(payload.get("launch") or {})
+    plan = _restore_managed_local_launch_plan(launch.get("plan") or {})
+    started_at = normalize_utc(launch.get("started_at")) or datetime.now(timezone.utc)
+    materialize_managed_local_launch_plan_sync(
+        archive_db,
+        plan,
+        git_repo=str(launch.get("git_repo") or "").strip() or None,
+        git_branch=str(launch.get("git_branch") or "").strip() or None,
+        started_at=started_at,
+    )
+
+
+def _mark_live_side_effects_after_archive_commit(row: LiveArchiveOutbox, live_db: Session) -> None:
+    if row.kind != MANAGED_LOCAL_LAUNCH_KIND:
+        return
+    payload = json.loads(row.payload_json or "{}")
+    launch = _restore_jsonable(payload.get("launch") or {})
+    plan = _restore_managed_local_launch_plan(launch.get("plan") or {})
+    update_live_launch_readiness_state(
+        live_db,
+        session_id=plan.session_id,
+        state="adopted",
+        clear_expires=True,
+        now=datetime.now(timezone.utc),
+    )
+
+
+def _restore_managed_local_launch_plan(plan_payload: dict[str, Any]) -> ManagedLocalLaunchPlan:
+    session_id = UUID(str(plan_payload.get("session_id") or ""))
+    return ManagedLocalLaunchPlan(
+        session_id=session_id,
+        provider=str(plan_payload.get("provider") or ""),
+        provider_session_id=str(plan_payload.get("provider_session_id") or "").strip() or None,
+        source_name=str(plan_payload.get("source_name") or ""),
+        source_runner_id=plan_payload.get("source_runner_id"),
+        cwd=str(plan_payload.get("cwd") or ""),
+        project=str(plan_payload.get("project") or ""),
+        display_name=str(plan_payload.get("display_name") or ""),
+        managed_session_name=str(plan_payload.get("managed_session_name") or ""),
+        loop_mode=str(plan_payload.get("loop_mode") or "assist"),
+        permission_mode=str(plan_payload.get("permission_mode") or "bypass"),
+        managed_transport=str(plan_payload.get("managed_transport") or ""),
+        attach_command=str(plan_payload.get("attach_command") or ""),
+    )
 
 
 def _drain_session_input_receipt(row: LiveArchiveOutbox, archive_db: Session, live_db: Session) -> None:

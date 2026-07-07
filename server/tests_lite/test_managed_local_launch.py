@@ -27,10 +27,12 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
+from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import _derive_project
 from zerg.services.managed_local_launcher import _initial_provider_session_id_for_spawn
@@ -466,6 +468,9 @@ def test_this_device_launch_returns_hot_readiness_when_archive_writer_is_stale(m
         assert row.state == "pending"
         assert row.provider == "codex"
         assert row.device_id == "cinder"
+        outbox = live_db.query(LiveArchiveOutbox).one()
+        assert outbox.kind == MANAGED_LOCAL_LAUNCH_KIND
+        assert response.session_id in outbox.idempotency_key
 
 
 def test_this_device_launch_skips_runtime_pubsub_for_hot_readiness(monkeypatch, tmp_path):
