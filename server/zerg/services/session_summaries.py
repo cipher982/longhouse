@@ -340,6 +340,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
                 .filter(AgentEvent.session_id == session_id)
                 .filter(AgentEvent.role == "user")
                 .filter(AgentEvent.content_text.isnot(None))
+                .filter(func.trim(AgentEvent.content_text) != "")
                 .filter(func.lower(func.trim(AgentEvent.content_text)) != "warmup")
                 .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
                 .limit(1)
@@ -396,7 +397,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
             return 1
 
         if ws.is_configured:
-            updated = await ws.execute_with_session_factory(factory, _persist, label="session-title")
+            updated = await ws.execute(_persist, label="session-title")
         else:
             fallback_db = factory()
             try:

@@ -171,11 +171,11 @@ async def test_generate_summary_impl_marks_summary_current_when_llm_misconfigure
 
 @pytest.mark.asyncio
 async def test_generate_initial_title_impl_persists_stable_title(tmp_path, monkeypatch):
-    from zerg.services.session_summaries import generate_initial_title_impl
     from zerg.services.session_pubsub import TOPIC_TIMELINE
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import reset_pubsub_for_test
     from zerg.services.session_pubsub import topic_session
+    from zerg.services.session_summaries import generate_initial_title_impl
 
     reset_pubsub_for_test()
     factory = _make_db(tmp_path, "initial_title.db")
@@ -241,7 +241,10 @@ async def test_generate_initial_title_impl_persists_stable_title(tmp_path, monke
         verify.close()
 
     bus = get_pubsub()
-    with bus.subscribe(topic_session(session_id), since_seq=0) as session_sub, bus.subscribe(TOPIC_TIMELINE, since_seq=0) as timeline_sub:
+    with (
+        bus.subscribe(topic_session(session_id), since_seq=0) as session_sub,
+        bus.subscribe(TOPIC_TIMELINE, since_seq=0) as timeline_sub,
+    ):
         session_msg = await session_sub.next_message(timeout=0.1)
         timeline_msg = await timeline_sub.next_message(timeout=0.1)
 
@@ -257,11 +260,11 @@ async def test_generate_initial_title_impl_persists_stable_title(tmp_path, monke
 
 @pytest.mark.asyncio
 async def test_generate_initial_title_impl_does_not_publish_when_title_empty(tmp_path, monkeypatch):
-    from zerg.services.session_summaries import generate_initial_title_impl
     from zerg.services.session_pubsub import TOPIC_TIMELINE
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import reset_pubsub_for_test
     from zerg.services.session_pubsub import topic_session
+    from zerg.services.session_summaries import generate_initial_title_impl
 
     reset_pubsub_for_test()
     factory = _make_db(tmp_path, "initial_title_empty.db")
@@ -313,11 +316,11 @@ async def test_generate_initial_title_impl_does_not_publish_when_title_empty(tmp
 
 @pytest.mark.asyncio
 async def test_generate_initial_title_impl_does_not_publish_without_first_user_message(tmp_path):
-    from zerg.services.session_summaries import generate_initial_title_impl
     from zerg.services.session_pubsub import TOPIC_TIMELINE
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import reset_pubsub_for_test
     from zerg.services.session_pubsub import topic_session
+    from zerg.services.session_summaries import generate_initial_title_impl
 
     reset_pubsub_for_test()
     factory = _make_db(tmp_path, "initial_title_no_first_user.db")
@@ -358,12 +361,91 @@ async def test_generate_initial_title_impl_does_not_publish_without_first_user_m
 
 
 @pytest.mark.asyncio
-async def test_generate_initial_title_impl_does_not_overwrite_existing_title(tmp_path):
+async def test_generate_initial_title_impl_skips_blank_user_event(tmp_path, monkeypatch):
+    from zerg.services.session_pubsub import reset_pubsub_for_test
     from zerg.services.session_summaries import generate_initial_title_impl
+
+    reset_pubsub_for_test()
+    factory = _make_db(tmp_path, "initial_title_blank_user_event.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="cursor",
+        environment="test",
+        project="zeta",
+        started_at=datetime.now(timezone.utc),
+        user_messages=2,
+        assistant_messages=0,
+        transcript_revision=2,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.add(
+        AgentEvent(
+            session_id=session_id,
+            role="user",
+            content_text="",
+            timestamp=datetime.now(timezone.utc),
+        )
+    )
+    db.add(
+        AgentEvent(
+            session_id=session_id,
+            role="user",
+            content_text="Fix the Docker Rosetta emulation warning.",
+            timestamp=datetime.now(timezone.utc) + timedelta(seconds=1),
+        )
+    )
+    db.commit()
+    db.close()
+
+    captured: dict[str, object] = {}
+
+    async def _fake_generate_initial_session_title(**kwargs):
+        captured.update(kwargs)
+        return "Fix Docker Rosetta Emulation"
+
+    client = SimpleNamespace(close=AsyncMock())
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    monkeypatch.setattr(
+        "zerg.services.title_generator.generate_initial_session_title",
+        _fake_generate_initial_session_title,
+    )
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(client, "deepseek/deepseek-v4-flash", "openrouter"),
+        ),
+    ):
+        updated = await generate_initial_title_impl(session_id)
+
+    assert updated is True
+    assert captured["first_user_message"] == "Fix the Docker Rosetta emulation warning."
+
+    verify = factory()
+    try:
+        refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert refreshed.summary_title == "Fix Docker Rosetta Emulation"
+        assert refreshed.anchor_title == "Fix Docker Rosetta Emulation"
+    finally:
+        verify.close()
+    reset_pubsub_for_test()
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_title_impl_does_not_overwrite_existing_title(tmp_path):
     from zerg.services.session_pubsub import TOPIC_TIMELINE
     from zerg.services.session_pubsub import get_pubsub
     from zerg.services.session_pubsub import reset_pubsub_for_test
     from zerg.services.session_pubsub import topic_session
+    from zerg.services.session_summaries import generate_initial_title_impl
 
     reset_pubsub_for_test()
     factory = _make_db(tmp_path, "initial_title_existing.db")
