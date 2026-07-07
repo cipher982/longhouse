@@ -204,7 +204,7 @@ async def test_generate_initial_title_impl_persists_stable_title(tmp_path, monke
     settings = SimpleNamespace(testing=False, llm_disabled=False)
 
     monkeypatch.setattr(
-        "zerg.services.session_processing.summarize.generate_initial_session_title",
+        "zerg.services.title_generator.generate_initial_session_title",
         _fake_generate_initial_session_title,
     )
 

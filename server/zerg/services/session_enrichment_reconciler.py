@@ -122,17 +122,27 @@ def select_initial_title_session_ids(
     return [str(row[0]) for row in query.all() if str(row[0]) not in excluded][:limit]
 
 
-def fast_forward_low_content_summary_revisions(db: Session, *, limit: int) -> int:
+def fast_forward_low_content_summary_revisions(
+    db: Session,
+    *,
+    limit: int,
+    exclude_session_ids: Collection[str] = (),
+) -> int:
     """Advance stale low-content sessions without calling an LLM provider."""
     if limit <= 0:
         return 0
 
     meaningful_count = _meaningful_count_expr()
-    rows = (
+    query = (
         db.query(AgentSession.id, AgentSession.transcript_revision)
         .filter(*_revision_lag_filter())
         .filter(meaningful_count < SUMMARY_MIN_MEANINGFUL_MESSAGES)
-        .order_by(
+    )
+    excluded = {str(session_id) for session_id in exclude_session_ids}
+    if excluded:
+        query = query.filter(AgentSession.id.notin_(excluded))
+    rows = (
+        query.order_by(
             AgentSession.last_activity_at.desc().nullslast(),
             AgentSession.started_at.desc().nullslast(),
             AgentSession.id,
@@ -260,7 +270,11 @@ async def reconcile_summaries_once(
 
     fast_forwarded = await ws.execute_with_session_factory(
         factory,
-        lambda db: fast_forward_low_content_summary_revisions(db, limit=limit),
+        lambda db: fast_forward_low_content_summary_revisions(
+            db,
+            limit=limit,
+            exclude_session_ids=initial_claimed_ids,
+        ),
         label="summary",
     )
 

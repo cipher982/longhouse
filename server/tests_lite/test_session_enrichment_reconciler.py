@@ -191,6 +191,54 @@ async def test_low_content_sessions_try_initial_title_before_fast_forward(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_failed_initial_title_attempt_is_not_fast_forwarded(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            first_user_message_preview="Make the menu bar row affordance obvious.",
+            user_messages=1,
+            assistant_messages=0,
+            transcript_revision=4,
+            summary_revision=0,
+        )
+        session_id = str(session.id)
+    finally:
+        db.close()
+
+    async def _generate_initial_title(selected_session_id: str) -> bool:
+        assert selected_session_id == session_id
+        return False
+
+    async def _generate_summary(_session_id: str) -> None:
+        raise AssertionError("low-content session should not call full summary provider")
+
+    result = await reconcile_summaries_once(
+        session_factory=factory,
+        limit=10,
+        concurrency=2,
+        generate_summary=_generate_summary,
+        generate_initial_title=_generate_initial_title,
+    )
+
+    assert result.initial_selected == 1
+    assert result.initial_started == 1
+    assert result.initial_titled == 0
+    assert result.fast_forwarded == 0
+    assert result.started == 0
+
+    verify = factory()
+    try:
+        refreshed = verify.get(AgentSession, session_id)
+        assert refreshed is not None
+        assert refreshed.summary_title is None
+        assert refreshed.summary_revision == 0
+    finally:
+        verify.close()
+
+
+@pytest.mark.asyncio
 async def test_concurrent_scans_do_not_duplicate_provider_calls(tmp_path):
     _, factory = _make_db(tmp_path)
     db = factory()

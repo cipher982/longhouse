@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import socket
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -315,7 +316,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
     """Generate and persist a fast stable title from the first user message."""
     from zerg.database import get_session_factory
     from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-    from zerg.services.session_processing.summarize import generate_initial_session_title
+    from zerg.services.title_generator import generate_initial_session_title
     from zerg.services.write_serializer import get_write_serializer
 
     settings = get_settings()
@@ -366,15 +367,17 @@ async def generate_initial_title_impl(session_id: str) -> bool:
         db.close()
         db = None
 
+        started = time.perf_counter()
         raw_title = await generate_initial_session_title(
-            session_id=session_id,
             first_user_message=first_user_message,
             client=client,
             model=model,
             metadata=metadata,
         )
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
         title = sanitize_title(raw_title, max_words=6)
         if not title:
+            logger.info("Initial title generation returned no title for session %s in %dms", session_id, elapsed_ms)
             return False
 
         ws = get_write_serializer()
@@ -401,7 +404,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
             finally:
                 fallback_db.close()
         if updated:
-            logger.info("Generated initial title for session %s: %s", session_id, title)
+            logger.info("Generated initial title for session %s in %dms: %s", session_id, elapsed_ms, title)
         return bool(updated)
     except Exception:
         if db is not None:

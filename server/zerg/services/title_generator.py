@@ -6,11 +6,17 @@ using the configured summarization model.
 
 from __future__ import annotations
 
+import asyncio
+import re
 from typing import Any
+
+from openai import AsyncOpenAI
 
 from zerg.config import get_settings
 from zerg.models_config import get_llm_client_for_use_case
 from zerg.services.session_processing import safe_parse_json
+from zerg.services.session_processing.content import redact_secrets
+from zerg.services.session_processing.content import strip_noise
 
 # System prompt for title generation
 TITLE_SYSTEM_PROMPT = (
@@ -19,6 +25,23 @@ TITLE_SYSTEM_PROMPT = (
     "No quotes, no trailing punctuation, no dates/times. "
     "Avoid generic titles like 'Conversation' or 'Chat'."
 )
+
+INITIAL_SESSION_TITLE_SYSTEM_PROMPT = (
+    "You name AI coding-assistant sessions from the user's first message. "
+    'Return JSON with one key: "title".\n'
+    "Rules:\n"
+    "- 3-5 words, maximum 42 characters.\n"
+    "- Name the user's goal or work area, not the fact that they asked for help.\n"
+    "- Prefer the product feature, bug, file, or system being discussed.\n"
+    "- If the message debates how title naming should work, title the session-title feature itself.\n"
+    '- Ignore boilerplate like pasted status recaps, "done and shipped", commit SHAs, logs, and salutations.\n'
+    "- If the message is a pasted recap, name the underlying feature, bug, or decision.\n"
+    "- No quotes, emojis, markdown, or trailing punctuation inside the title.\n"
+    "JSON only, no markdown fences."
+)
+
+_FENCE_MARKER_RE = re.compile(r"^\s*```[a-zA-Z0-9_-]*\s*$", re.MULTILINE)
+_IMAGE_MARKER_RE = re.compile(r"\[Image\s+#?\d+[^\]]*\]", re.IGNORECASE)
 
 
 def _normalize_title_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -90,7 +113,7 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
         response = await client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": TITLE_SYSTEM_PROMPT + " Return JSON only: {\"title\":\"...\"}"},
+                {"role": "system", "content": TITLE_SYSTEM_PROMPT + ' Return JSON only: {"title":"..."}'},
                 {"role": "user", "content": transcript},
             ],
         )
@@ -103,3 +126,68 @@ async def generate_conversation_title(messages: list[dict[str, Any]]) -> str | N
         return parsed["title"].strip() or None
 
     return None
+
+
+def _build_initial_session_title_prompt(
+    first_user_message: str,
+    *,
+    metadata: dict | None = None,
+) -> str | None:
+    message = redact_secrets(strip_noise(first_user_message or "")).strip()
+    message = _FENCE_MARKER_RE.sub("", message)
+    message = _IMAGE_MARKER_RE.sub("", message)
+    message = re.sub(r"\n{3,}", "\n\n", message).strip()
+    if not message:
+        return None
+
+    parts: list[str] = []
+    if metadata:
+        ctx = []
+        if metadata.get("project"):
+            ctx.append(f"Project: {metadata['project']}")
+        if metadata.get("provider"):
+            ctx.append(f"Provider: {metadata['provider']}")
+        if metadata.get("git_branch"):
+            ctx.append(f"Branch: {metadata['git_branch']}")
+        if ctx:
+            parts.append("Context: " + ", ".join(ctx))
+
+    parts.append("First user message:\n" + message[:1200])
+    return "\n\n".join(parts)
+
+
+async def generate_initial_session_title(
+    *,
+    first_user_message: str,
+    client: AsyncOpenAI,
+    model: str,
+    metadata: dict | None = None,
+    timeout_seconds: float = 8,
+) -> str | None:
+    """Generate a stable, glanceable title from the first user message."""
+    user_prompt = _build_initial_session_title_prompt(first_user_message, metadata=metadata)
+    if not user_prompt:
+        return None
+
+    response = await asyncio.wait_for(
+        client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": INITIAL_SESSION_TITLE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        ),
+        timeout=timeout_seconds,
+    )
+    if not response.choices:
+        return None
+
+    raw = response.choices[0].message.content or ""
+    parsed = safe_parse_json(raw)
+    if isinstance(parsed, dict):
+        title = parsed.get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
+
+    stripped = raw.strip().strip('"')
+    return stripped or None
