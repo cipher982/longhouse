@@ -32,6 +32,18 @@
           "reasoning": true,
           "reasoningNone": true
         }
+      },
+      "google/gemini-2.5-flash-lite": {
+        "displayName": "Gemini 2.5 Flash Lite (OpenRouter)",
+        "provider": "openrouter",
+        "tier": "TIER_3",
+        "description": "Gemini 2.5 Flash Lite via OpenRouter - low-latency first-message session title lane",
+        "baseUrl": "https://openrouter.ai/api/v1",
+        "apiKeyEnvVar": "OPENROUTER_API_KEY",
+        "capabilities": {
+          "reasoning": false,
+          "reasoningNone": true
+        }
       }
     }
   },
@@ -66,7 +78,7 @@
   "useCases": {
     "$comment": "Maps active text use cases to the two standard Longhouse lanes.",
     "text": {
-      "session_title": "TIER_3",
+      "session_title": "google/gemini-2.5-flash-lite",
       "summarization": "TIER_2",
       "summary_update": "TIER_3"
     },
