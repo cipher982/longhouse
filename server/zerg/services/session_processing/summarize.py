@@ -53,6 +53,19 @@ _QUICK_SYSTEM = (
     "Be specific about files, features, or bugs. JSON only, no markdown fences."
 )
 
+_INITIAL_TITLE_SYSTEM = (
+    "You name AI coding-assistant sessions from the user's first message. "
+    'Return JSON with one key: "title".\n'
+    "Rules:\n"
+    "- 3-5 words, maximum 42 characters.\n"
+    "- Name the user's goal or work area, not the fact that they asked for help.\n"
+    '- Ignore boilerplate like pasted status recaps, "done and shipped", commit SHAs, logs, and salutations.\n'
+    "- If the message is a pasted recap, name the underlying feature, bug, or decision.\n"
+    "- Prefer concrete product nouns, files, or systems over generic words.\n"
+    "- No quotes, emojis, markdown, or trailing punctuation inside the title.\n"
+    "JSON only, no markdown fences."
+)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -212,6 +225,59 @@ async def quick_summary(
 
     raw = response.choices[0].message.content or ""
     return _parse_quick_summary_raw(raw, transcript.session_id)
+
+
+async def generate_initial_session_title(
+    *,
+    session_id: str,
+    first_user_message: str,
+    client: AsyncOpenAI,
+    model: str,
+    metadata: dict | None = None,
+    timeout_seconds: float = 8,
+) -> str | None:
+    """Generate a stable, glanceable title from the initial user message."""
+    message = redact_secrets(strip_noise(first_user_message or "")).strip()
+    if not message:
+        return None
+
+    parts: list[str] = []
+    if metadata:
+        ctx = []
+        if metadata.get("project"):
+            ctx.append(f"Project: {metadata['project']}")
+        if metadata.get("provider"):
+            ctx.append(f"Provider: {metadata['provider']}")
+        if metadata.get("git_branch"):
+            ctx.append(f"Branch: {metadata['git_branch']}")
+        if ctx:
+            parts.append("Context: " + ", ".join(ctx))
+
+    parts.append("First user message:\n" + message[:1200])
+    user_prompt = "\n\n".join(parts)
+
+    response = await asyncio.wait_for(
+        client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _INITIAL_TITLE_SYSTEM},
+                {"role": "user", "content": user_prompt},
+            ],
+        ),
+        timeout=timeout_seconds,
+    )
+    if not response.choices:
+        return None
+
+    raw = response.choices[0].message.content or ""
+    parsed = safe_parse_json(raw)
+    if isinstance(parsed, dict):
+        title = parsed.get("title")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
+
+    stripped = raw.strip().strip('"')
+    return stripped or None
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ import { useAuth } from "../lib/auth";
 import { config } from "../lib/config";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { getRuntimeElapsedLabel } from "../lib/sessionTiming";
+import { getSessionCardText } from "../lib/sessionUtils";
 import { buildSessionShareUrl, copyToClipboard } from "../lib/clipboard";
 import {
   createSessionShare,
@@ -305,10 +306,7 @@ function SessionDetailWorkspaceRoute({
     );
   }
 
-  const title =
-    session.summary_title && session.summary_title !== "Untitled Session"
-      ? session.summary_title
-      : session.project || session.git_branch || "Session";
+  const title = getSessionCardText(session, { titleMaxChars: 96 }).title;
   const displaySession =
     effectiveLoopMode === session.loop_mode
       ? session

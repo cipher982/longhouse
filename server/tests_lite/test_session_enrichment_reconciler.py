@@ -34,6 +34,7 @@ def _seed_session(
     project: str = "zerg",
     summary: str | None = None,
     summary_title: str | None = None,
+    first_user_message_preview: str | None = None,
     user_messages: int = 2,
     assistant_messages: int = 2,
     transcript_revision: int = 3,
@@ -52,6 +53,7 @@ def _seed_session(
         tool_calls=0,
         summary=summary,
         summary_title=summary_title,
+        first_user_message_preview=first_user_message_preview,
         transcript_revision=transcript_revision,
         summary_revision=summary_revision,
     )
@@ -124,6 +126,65 @@ async def test_low_content_stale_sessions_fast_forward_without_provider_call(tmp
     try:
         refreshed = verify.get(AgentSession, session_id)
         assert refreshed is not None
+        assert refreshed.summary_revision == 4
+    finally:
+        verify.close()
+
+
+@pytest.mark.asyncio
+async def test_low_content_sessions_try_initial_title_before_fast_forward(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            first_user_message_preview="Make the menu bar row affordance obvious.",
+            user_messages=1,
+            assistant_messages=0,
+            transcript_revision=4,
+            summary_revision=0,
+        )
+        session_id = str(session.id)
+    finally:
+        db.close()
+
+    titled: list[str] = []
+
+    async def _generate_initial_title(selected_session_id: str) -> bool:
+        titled.append(selected_session_id)
+        write_db = factory()
+        try:
+            target = write_db.get(AgentSession, selected_session_id)
+            target.summary_title = "Menu Bar Row Affordance"
+            target.summary_revision = target.transcript_revision
+            write_db.commit()
+        finally:
+            write_db.close()
+        return True
+
+    async def _generate_summary(_session_id: str) -> None:
+        raise AssertionError("low-content session should not call full summary provider")
+
+    result = await reconcile_summaries_once(
+        session_factory=factory,
+        limit=10,
+        concurrency=2,
+        generate_summary=_generate_summary,
+        generate_initial_title=_generate_initial_title,
+    )
+
+    assert titled == [session_id]
+    assert result.initial_selected == 1
+    assert result.initial_started == 1
+    assert result.initial_titled == 1
+    assert result.fast_forwarded == 0
+    assert result.started == 0
+
+    verify = factory()
+    try:
+        refreshed = verify.get(AgentSession, session_id)
+        assert refreshed is not None
+        assert refreshed.summary_title == "Menu Bar Row Affordance"
         assert refreshed.summary_revision == 4
     finally:
         verify.close()

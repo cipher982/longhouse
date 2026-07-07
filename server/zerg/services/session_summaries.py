@@ -25,6 +25,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_title import freeze_anchor_title
+from zerg.services.session_title import sanitize_title
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +309,113 @@ async def set_structured_title_if_empty(session_id: str) -> None:
         db.rollback()
     finally:
         db.close()
+
+
+async def generate_initial_title_impl(session_id: str) -> bool:
+    """Generate and persist a fast stable title from the first user message."""
+    from zerg.database import get_session_factory
+    from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+    from zerg.services.session_processing.summarize import generate_initial_session_title
+    from zerg.services.write_serializer import get_write_serializer
+
+    settings = get_settings()
+    if settings.testing or settings.llm_disabled:
+        return False
+
+    factory = get_session_factory()
+    db = factory()
+    client = None
+    try:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        if not session:
+            return False
+        if sanitize_title(session.anchor_title) or sanitize_title(session.summary_title):
+            return False
+
+        first_user_message = (session.first_user_message_preview or "").strip()
+        if not first_user_message:
+            first_user_message = (
+                db.query(AgentEvent.content_text)
+                .filter(AgentEvent.session_id == session_id)
+                .filter(AgentEvent.role == "user")
+                .filter(AgentEvent.content_text.isnot(None))
+                .filter(func.lower(func.trim(AgentEvent.content_text)) != "warmup")
+                .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+                .limit(1)
+                .scalar()
+                or ""
+            ).strip()
+        if not first_user_message:
+            return False
+
+        metadata = {
+            "project": session.project,
+            "provider": session.provider,
+            "git_branch": session.git_branch,
+        }
+        transcript_revision = int(getattr(session, "transcript_revision", 0) or 0)
+
+        from zerg.models_config import get_llm_client_for_use_case
+
+        try:
+            client, model, _provider = get_llm_client_for_use_case("session_title")
+        except ValueError as exc:
+            logger.warning("Initial title generation misconfigured for session %s: %s", session_id, exc)
+            return False
+
+        db.close()
+        db = None
+
+        raw_title = await generate_initial_session_title(
+            session_id=session_id,
+            first_user_message=first_user_message,
+            client=client,
+            model=model,
+            metadata=metadata,
+        )
+        title = sanitize_title(raw_title, max_words=6)
+        if not title:
+            return False
+
+        ws = get_write_serializer()
+
+        def _persist(write_db: Session) -> int:
+            target = write_db.query(AgentSession).filter(AgentSession.id == session_id).first()
+            if not target:
+                return 0
+            if sanitize_title(target.anchor_title) or sanitize_title(target.summary_title):
+                return 0
+            target.summary_title = title
+            target.anchor_title = freeze_anchor_title(title)
+            if transcript_revision > 0:
+                target.summary_revision = max(int(target.summary_revision or 0), transcript_revision)
+            upsert_timeline_card_from_session(write_db, target)
+            return 1
+
+        if ws.is_configured:
+            updated = await ws.execute_with_session_factory(factory, _persist, label="session-title")
+        else:
+            fallback_db = factory()
+            try:
+                updated = await ws.execute_or_direct(_persist, fallback_db, label="session-title")
+            finally:
+                fallback_db.close()
+        if updated:
+            logger.info("Generated initial title for session %s: %s", session_id, title)
+        return bool(updated)
+    except Exception:
+        if db is not None:
+            db.rollback()
+        logger.exception("Failed to generate initial title for session %s", session_id)
+        return False
+    finally:
+        if db is not None:
+            db.close()
+        if client is not None:
+            try:
+                await client.close()
+            except Exception as exc:
+                logger.warning("Failed to close initial title client for session %s: %s", session_id, exc)
 
 
 async def generate_summary_impl(session_id: str) -> None:

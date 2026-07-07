@@ -19,6 +19,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import TimelineCard
 
 
 def _make_db(tmp_path, name: str) -> make_sessionmaker:
@@ -166,6 +167,111 @@ async def test_generate_summary_impl_marks_summary_current_when_llm_misconfigure
         assert select_stale_summary_session_ids(verify, limit=10) == []
     finally:
         verify.close()
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_title_impl_persists_stable_title(tmp_path, monkeypatch):
+    from zerg.services.session_summaries import generate_initial_title_impl
+
+    factory = _make_db(tmp_path, "initial_title.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="codex",
+        environment="test",
+        project="zerg",
+        git_branch="main",
+        started_at=datetime.now(timezone.utc),
+        first_user_message_preview="Can we make menu bar rows clearly clickable?",
+        user_messages=1,
+        assistant_messages=0,
+        transcript_revision=1,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.close()
+
+    captured: dict[str, object] = {}
+
+    async def _fake_generate_initial_session_title(**kwargs):
+        captured.update(kwargs)
+        return "Menu Bar Row Affordance"
+
+    client = SimpleNamespace(close=AsyncMock())
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    monkeypatch.setattr(
+        "zerg.services.session_processing.summarize.generate_initial_session_title",
+        _fake_generate_initial_session_title,
+    )
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(client, "deepseek/deepseek-v4-flash", "openrouter"),
+        ) as get_client,
+    ):
+        updated = await generate_initial_title_impl(session_id)
+
+    assert updated is True
+    get_client.assert_called_once_with("session_title")
+    client.close.assert_awaited_once()
+    assert captured["first_user_message"] == "Can we make menu bar rows clearly clickable?"
+    assert captured["model"] == "deepseek/deepseek-v4-flash"
+
+    verify = factory()
+    try:
+        refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
+        card = verify.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+        assert refreshed.summary_title == "Menu Bar Row Affordance"
+        assert refreshed.anchor_title == "Menu Bar Row Affordance"
+        assert refreshed.summary_revision == 1
+        assert card.summary_title == "Menu Bar Row Affordance"
+    finally:
+        verify.close()
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_title_impl_does_not_overwrite_existing_title(tmp_path):
+    from zerg.services.session_summaries import generate_initial_title_impl
+
+    factory = _make_db(tmp_path, "initial_title_existing.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="codex",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        first_user_message_preview="Rename should not happen.",
+        summary_title="Existing Title",
+        transcript_revision=1,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.close()
+
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            side_effect=AssertionError("provider should not be fetched when title already exists"),
+        ),
+    ):
+        updated = await generate_initial_title_impl(session_id)
+
+    assert updated is False
 
 
 @pytest.mark.asyncio
