@@ -63,8 +63,8 @@ async def test_live_archive_drain_uses_archive_writer_lane(tmp_path, monkeypatch
     calls = []
 
     class FakeSerializer:
-        async def execute(self, fn, *, auto_commit, label):
-            calls.append((label, auto_commit))
+        async def execute(self, fn, **kwargs):
+            calls.append(kwargs)
             with ArchiveSession() as archive_db:
                 return fn(archive_db)
 
@@ -76,7 +76,10 @@ async def test_live_archive_drain_uses_archive_writer_lane(tmp_path, monkeypatch
         result = await _drain_live_archive_outbox_once()
 
         assert result == {"processed": 1, "drained": 1, "failed": 0, "cleaned": 0}
-        assert calls == [("live-archive-drain", False)]
+        assert calls[0]["label"] == "live-archive-drain"
+        assert calls[0]["auto_commit"] is False
+        assert "timeout_seconds" in calls[0]
+        assert "queue_timeout_seconds" in calls[0]
         with ArchiveSession() as archive_db:
             row = archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "maintenance-drain").one()
             assert row.spool_pending == 4
@@ -85,6 +88,121 @@ async def test_live_archive_drain_uses_archive_writer_lane(tmp_path, monkeypatch
             assert outbox.drained_at is not None
     finally:
         archive_engine.dispose()
+        live_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_archive_drain_passes_bounded_writer_timeouts(tmp_path, monkeypatch):
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    Base.metadata.create_all(bind=archive_engine)
+    ArchiveSession = sessionmaker(bind=archive_engine)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    with LiveSession() as live_db:
+        enqueue_heartbeat_stamp_outbox(
+            live_db,
+            {
+                "device_id": "maintenance-timeouts",
+                "received_at": datetime.now(timezone.utc),
+                "version": "0.5.0",
+                "spool_pending": 0,
+                "spool_dead": 0,
+                "parse_errors_1h": 0,
+                "consecutive_failures": 0,
+                "ship_attempts_1h": 1,
+                "ship_successes_1h": 1,
+                "ship_rate_limited_1h": 0,
+                "ship_server_errors_1h": 0,
+                "ship_payload_rejections_1h": 0,
+                "ship_payload_too_large_1h": 0,
+                "ship_retryable_client_errors_1h": 0,
+                "ship_connect_errors_1h": 0,
+                "disk_free_bytes": 1,
+                "is_offline": 0,
+                "raw_json": "{}",
+            },
+        )
+        live_db.commit()
+
+    calls = []
+
+    class FakeSerializer:
+        async def execute(self, fn, **kwargs):
+            calls.append(kwargs)
+            with ArchiveSession() as archive_db:
+                return fn(archive_db)
+
+    monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
+    monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: FakeSerializer())
+    monkeypatch.setattr("zerg.services.maintenance.LIVE_ARCHIVE_OUTBOX_DRAIN_TIMEOUT_SECONDS", 4.0)
+    monkeypatch.setattr("zerg.services.maintenance.LIVE_ARCHIVE_OUTBOX_DRAIN_QUEUE_TIMEOUT_SECONDS", 0.5)
+
+    try:
+        result = await _drain_live_archive_outbox_once()
+
+        assert result == {"processed": 1, "drained": 1, "failed": 0, "cleaned": 0}
+        assert calls[0]["label"] == "live-archive-drain"
+        assert calls[0]["auto_commit"] is False
+        assert calls[0]["timeout_seconds"] == 4.0
+        assert calls[0]["queue_timeout_seconds"] == 0.5
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_archive_drain_timeout_defers_pending_rows(tmp_path, monkeypatch):
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    with LiveSession() as live_db:
+        enqueue_heartbeat_stamp_outbox(
+            live_db,
+            {
+                "device_id": "maintenance-timeout",
+                "received_at": datetime.now(timezone.utc),
+                "version": "0.5.0",
+                "spool_pending": 0,
+                "spool_dead": 0,
+                "parse_errors_1h": 0,
+                "consecutive_failures": 0,
+                "ship_attempts_1h": 1,
+                "ship_successes_1h": 1,
+                "ship_rate_limited_1h": 0,
+                "ship_server_errors_1h": 0,
+                "ship_payload_rejections_1h": 0,
+                "ship_payload_too_large_1h": 0,
+                "ship_retryable_client_errors_1h": 0,
+                "ship_connect_errors_1h": 0,
+                "disk_free_bytes": 1,
+                "is_offline": 0,
+                "raw_json": "{}",
+            },
+        )
+        live_db.commit()
+
+    class TimeoutSerializer:
+        async def execute(self, *_args, **_kwargs):
+            raise TimeoutError("archive writer saturated")
+
+    monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
+    monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: TimeoutSerializer())
+
+    try:
+        result = await _drain_live_archive_outbox_once()
+
+        assert result == {"processed": 0, "drained": 0, "failed": 0, "cleaned": 0, "deferred": 1}
+        with LiveSession() as live_db:
+            outbox = live_db.query(LiveArchiveOutbox).one()
+            assert outbox.drained_at is None
+            assert outbox.attempts == 0
+    finally:
         live_engine.dispose()
 
 
@@ -147,8 +265,8 @@ async def test_live_archive_drain_catches_up_multiple_batches_per_tick(
     calls = []
 
     class FakeSerializer:
-        async def execute(self, fn, *, auto_commit, label):
-            calls.append((label, auto_commit))
+        async def execute(self, fn, **kwargs):
+            calls.append(kwargs)
             with ArchiveSession() as archive_db:
                 return fn(archive_db)
 
@@ -162,7 +280,8 @@ async def test_live_archive_drain_catches_up_multiple_batches_per_tick(
         result = await _drain_live_archive_outbox_once()
 
         assert result == {"processed": expected_processed, "drained": expected_processed, "failed": 0, "cleaned": 0}
-        assert calls == [("live-archive-drain", False)]
+        assert calls[0]["label"] == "live-archive-drain"
+        assert calls[0]["auto_commit"] is False
         with ArchiveSession() as archive_db:
             assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "maintenance-catchup").count() == expected_processed
         with LiveSession() as live_db:

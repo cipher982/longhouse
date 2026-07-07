@@ -25,6 +25,8 @@ RUNNER_HEALTH_RECONCILE_INTERVAL = 120
 LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_INTERVAL_SECONDS", "10"))
 LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_BATCH_SIZE", "100"))
 LIVE_ARCHIVE_OUTBOX_DRAIN_MAX_BATCHES_PER_TICK = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_MAX_BATCHES_PER_TICK", "3"))
+LIVE_ARCHIVE_OUTBOX_DRAIN_TIMEOUT_SECONDS = float(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_TIMEOUT_SECONDS", "8"))
+LIVE_ARCHIVE_OUTBOX_DRAIN_QUEUE_TIMEOUT_SECONDS = float(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_QUEUE_TIMEOUT_SECONDS", "2"))
 LIVE_ARCHIVE_OUTBOX_CLEANUP_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_OUTBOX_CLEANUP_BATCH_SIZE", "1000"))
 LIVE_ARCHIVE_OUTBOX_RETENTION_DAYS = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_OUTBOX_RETENTION_DAYS", "7"))
 
@@ -99,11 +101,17 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
                 break
         return totals
 
-    result = await get_write_serializer().execute(
-        _drain,
-        auto_commit=False,
-        label="live-archive-drain",
-    )
+    try:
+        result = await get_write_serializer().execute(
+            _drain,
+            auto_commit=False,
+            label="live-archive-drain",
+            timeout_seconds=max(0.1, LIVE_ARCHIVE_OUTBOX_DRAIN_TIMEOUT_SECONDS),
+            queue_timeout_seconds=max(0.1, LIVE_ARCHIVE_OUTBOX_DRAIN_QUEUE_TIMEOUT_SECONDS),
+        )
+    except TimeoutError:
+        logger.warning("Live archive outbox drain deferred because archive writer is saturated", exc_info=True)
+        return {"processed": 0, "drained": 0, "failed": 0, "cleaned": 0, "deferred": 1}
     result["cleaned"] = _cleanup_drained()
     return result
 
