@@ -50,4 +50,8 @@ def test_build_openai_smoke_request_keeps_non_gpt5_plain():
 def test_active_model_scope_returns_configured_text_models():
     active_models = {model_id for model_id, _ in get_active_text_models(load_config())}
 
-    assert active_models == {"deepseek/deepseek-v4-pro", "deepseek/deepseek-v4-flash"}
+    assert active_models == {
+        "deepseek/deepseek-v4-pro",
+        "deepseek/deepseek-v4-flash",
+        "google/gemini-3.1-flash-lite:nitro",
+    }
