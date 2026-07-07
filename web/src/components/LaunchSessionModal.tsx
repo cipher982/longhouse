@@ -347,39 +347,9 @@ export default function LaunchSessionModal({
                 <small>Must be an existing absolute directory on the target machine.</small>
               </label>
 
-              <div className="form-field">
-                <span>Mode</span>
-                <div className="launch-mode-segment" role="radiogroup" aria-label="Launch mode">
-                  <button
-                    type="button"
-                    className={`launch-mode-option${executionLifetime === "one_shot" ? " is-selected" : ""}`}
-                    aria-pressed={executionLifetime === "one_shot"}
-                    disabled={!selectedCanRunOnce}
-                    onClick={() => {
-                      setExecutionLifetime("one_shot");
-                      setError(null);
-                    }}
-                  >
-                    Run once
-                  </button>
-                  <button
-                    type="button"
-                    className={`launch-mode-option${executionLifetime === "live_control" ? " is-selected" : ""}`}
-                    aria-pressed={executionLifetime === "live_control"}
-                    disabled={!selectedCanLiveControl}
-                    onClick={() => {
-                      setExecutionLifetime("live_control");
-                      setError(null);
-                    }}
-                  >
-                    Keep live
-                  </button>
-                </div>
-              </div>
-
               {executionLifetime === "one_shot" && (
                 <label className="form-field">
-                  <span>Prompt</span>
+                  <span>First message</span>
                   <textarea
                     value={initialPrompt}
                     onChange={(e) => {
@@ -403,6 +373,39 @@ export default function LaunchSessionModal({
                   data-testid="launch-display-name"
                 />
               </label>
+
+              <details className="launch-advanced">
+                <summary>Advanced</summary>
+                <div className="form-field">
+                  <span>Runtime</span>
+                  <div className="launch-mode-segment" role="radiogroup" aria-label="Runtime">
+                    <button
+                      type="button"
+                      className={`launch-mode-option${executionLifetime === "one_shot" ? " is-selected" : ""}`}
+                      aria-pressed={executionLifetime === "one_shot"}
+                      disabled={!selectedCanRunOnce}
+                      onClick={() => {
+                        setExecutionLifetime("one_shot");
+                        setError(null);
+                      }}
+                    >
+                      Default
+                    </button>
+                    <button
+                      type="button"
+                      className={`launch-mode-option${executionLifetime === "live_control" ? " is-selected" : ""}`}
+                      aria-pressed={executionLifetime === "live_control"}
+                      disabled={!selectedCanLiveControl}
+                      onClick={() => {
+                        setExecutionLifetime("live_control");
+                        setError(null);
+                      }}
+                    >
+                      Keep runtime open
+                    </button>
+                  </div>
+                </div>
+              </details>
 
               {error && (
                 <p className="text-danger" data-testid="launch-error">

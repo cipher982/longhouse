@@ -213,6 +213,7 @@ describe("LaunchSessionModal", () => {
 
     const cwdInput = await screen.findByTestId("launch-cwd-input");
     await user.type(cwdInput, "/Users/me/repo");
+    expect(screen.getByText("Advanced").closest("details")).not.toHaveAttribute("open");
     expect(screen.getByTestId("launch-submit")).toBeDisabled();
     await user.type(screen.getByTestId("launch-initial-prompt"), "Fix the telemetry test");
     await user.click(screen.getByTestId("launch-submit"));
@@ -254,7 +255,8 @@ describe("LaunchSessionModal", () => {
 
     await user.type(await screen.findByTestId("launch-cwd-input"), "/Users/me/repo");
     expect(screen.queryByTestId("launch-initial-prompt")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Keep live" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByText("Advanced"));
+    expect(screen.getByRole("button", { name: "Keep runtime open" })).toHaveAttribute("aria-pressed", "true");
     await user.click(screen.getByTestId("launch-submit"));
 
     await waitFor(() => expect(apiMocks.launchRemoteSession).toHaveBeenCalled());
@@ -267,6 +269,49 @@ describe("LaunchSessionModal", () => {
       }),
     );
     expect(apiMocks.launchRemoteSession.mock.calls[0][0]).not.toHaveProperty("initial_prompt");
+  });
+
+  it("keeps live-control launch behind the advanced runtime picker", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "cinder",
+          machine_name: "cinder",
+          online: true,
+          control_channel_status: "connected",
+          supports: ["codex.launch", "codex.run_once"],
+          control_operations_by_provider: { codex: ["launch", "run_once"] },
+          can_launch_codex: true,
+          launch_blocked_by: null,
+        }),
+      ],
+    });
+    apiMocks.launchRemoteSession.mockResolvedValue({
+      session_id: "live-session-id",
+      launch_state: "live",
+      execution_lifetime: "live_control",
+      launch_error_code: null,
+      launch_error_message: null,
+    });
+
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.type(await screen.findByTestId("launch-cwd-input"), "/Users/me/repo");
+    await user.click(screen.getByText("Advanced"));
+    await user.click(screen.getByRole("button", { name: "Keep runtime open" }));
+    expect(screen.queryByTestId("launch-initial-prompt")).not.toBeInTheDocument();
+    await user.click(screen.getByTestId("launch-submit"));
+
+    await waitFor(() => expect(apiMocks.launchRemoteSession).toHaveBeenCalled());
+    expect(apiMocks.launchRemoteSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        device_id: "cinder",
+        provider: "codex",
+        cwd: "/Users/me/repo",
+        execution_lifetime: "live_control",
+      }),
+    );
   });
 
   it("prefills the top-ranked workspace and lets you pick another by label", async () => {

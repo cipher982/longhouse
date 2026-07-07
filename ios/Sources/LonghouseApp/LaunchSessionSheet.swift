@@ -26,6 +26,7 @@ struct LaunchSessionSheet: View {
     @State private var cwd: String = ""
     @State private var displayName: String = ""
     @State private var showManualPath = false
+    @State private var showAdvanced = false
 
     init(
         previewMachines: [MachineDirectoryEntry]? = nil,
@@ -194,18 +195,8 @@ struct LaunchSessionSheet: View {
                     }
                 }
 
-                Section("Mode") {
-                    Picker("Mode", selection: $executionLifetime) {
-                        Text("Run once").tag(RemoteExecutionLifetime.oneShot)
-                            .disabled(!selectedCanRunOnce)
-                        Text("Keep live").tag(RemoteExecutionLifetime.liveControl)
-                            .disabled(!selectedCanLiveControl)
-                    }
-                    .pickerStyle(.segmented)
-                }
-
                 if executionLifetime == .oneShot {
-                    Section("Prompt") {
+                    Section("First message") {
                         TextField("What should the agent do?", text: $initialPrompt, axis: .vertical)
                             .lineLimit(3...8)
                             .textInputAutocapitalization(.sentences)
@@ -270,6 +261,20 @@ struct LaunchSessionSheet: View {
                     TextField("Display name", text: $displayName)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled(true)
+                }
+
+                Section("Advanced") {
+                    DisclosureGroup(isExpanded: $showAdvanced) {
+                        Picker("Runtime", selection: $executionLifetime) {
+                            Text("Default").tag(RemoteExecutionLifetime.oneShot)
+                                .disabled(!selectedCanRunOnce)
+                            Text("Keep runtime open").tag(RemoteExecutionLifetime.liveControl)
+                                .disabled(!selectedCanLiveControl)
+                        }
+                        .pickerStyle(.segmented)
+                    } label: {
+                        Label("Runtime", systemImage: "slider.horizontal.3")
+                    }
                 }
             }
 
