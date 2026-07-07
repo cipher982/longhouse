@@ -6,6 +6,7 @@ only, not assistant_messages, so the UI shows accurate conversation turns.
 
 from datetime import datetime
 from datetime import timezone
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -103,6 +104,125 @@ def test_tool_call_events_count_as_tools_not_turns(tmp_path):
     card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
     assert card.last_user_message_preview == "hi"
     assert card.last_assistant_message_preview == "Done."
+
+
+def test_first_user_event_triggers_initial_title_generation(tmp_path):
+    store, _db, _ = _make_store(tmp_path)
+    ts = _ts()
+    session_id = uuid4()
+
+    with patch("zerg.services.session_title_trigger.maybe_start_initial_title_generation") as trigger:
+        result = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="test",
+                device_id="dev",
+                cwd="/tmp",
+                started_at=ts,
+                events=[
+                    EventIngest(role="user", content_text="name this session", timestamp=ts, source_path="/s.jsonl", source_offset=0),
+                ],
+            )
+        )
+
+    assert result.events_inserted == 1
+    trigger.assert_called_once_with(str(session_id), reason="first_user_event")
+
+
+def test_followup_user_event_does_not_retrigger_initial_title_generation(tmp_path):
+    store, _db, _ = _make_store(tmp_path)
+    ts = _ts()
+    session_id = uuid4()
+
+    with patch("zerg.services.session_title_trigger.maybe_start_initial_title_generation") as trigger:
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="test",
+                device_id="dev",
+                cwd="/tmp",
+                started_at=ts,
+                events=[
+                    EventIngest(role="user", content_text="first prompt", timestamp=ts, source_path="/s.jsonl", source_offset=0),
+                ],
+            )
+        )
+        trigger.assert_called_once_with(str(session_id), reason="first_user_event")
+        trigger.reset_mock()
+
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="test",
+                device_id="dev",
+                cwd="/tmp",
+                started_at=ts,
+                events=[
+                    EventIngest(role="user", content_text="second prompt", timestamp=ts, source_path="/s.jsonl", source_offset=1),
+                ],
+            )
+        )
+
+    trigger.assert_not_called()
+
+
+def test_warmup_user_event_does_not_trigger_initial_title_generation(tmp_path):
+    store, _db, _ = _make_store(tmp_path)
+    ts = _ts()
+    session_id = uuid4()
+
+    with patch("zerg.services.session_title_trigger.maybe_start_initial_title_generation") as trigger:
+        result = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="test",
+                device_id="dev",
+                cwd="/tmp",
+                started_at=ts,
+                events=[
+                    EventIngest(role="user", content_text="warmup", timestamp=ts, source_path="/s.jsonl", source_offset=0),
+                ],
+            )
+        )
+
+    assert result.events_inserted == 1
+    trigger.assert_not_called()
+
+
+def test_incremental_count_ingest_triggers_initial_title_generation(tmp_path):
+    store, _db, _ = _make_store(tmp_path)
+    ts = _ts()
+    session_id = uuid4()
+
+    with patch("zerg.services.session_title_trigger.maybe_start_initial_title_generation") as trigger:
+        result = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="test",
+                device_id="dev",
+                cwd="/tmp",
+                started_at=ts,
+                events=[
+                    EventIngest(role="user", content_text="incremental prompt", timestamp=ts, source_path="/s.jsonl", source_offset=0),
+                ],
+            ),
+            synchronous_projections=False,
+            synchronous_session_counts=False,
+            incremental_session_counts=True,
+        )
+
+    assert result.events_inserted == 1
+    trigger.assert_called_once_with(str(session_id), reason="first_user_event")
 
 
 def test_multiple_tool_calls_per_turn(tmp_path):

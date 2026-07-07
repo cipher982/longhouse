@@ -2208,6 +2208,7 @@ class AgentsStore:
                     thread = conflict_thread
                     thread_id = conflict_thread.id
         self.db.flush()
+        user_messages_before_ingest = int(existing.user_messages or 0)
         _record_stage("session_setup", stage_started)
 
         stage_started = time.monotonic()
@@ -2626,6 +2627,11 @@ class AgentsStore:
             stage_started = time.monotonic()
             _commit_with_telemetry()
             _record_stage("commit_after_turns", stage_started)
+
+        if user_count_delta > 0 and user_messages_before_ingest == 0:
+            from zerg.services.session_title_trigger import maybe_start_initial_title_generation
+
+            maybe_start_initial_title_generation(str(session_id), reason="first_user_event")
 
         logger.info(
             "Ingested session %s branch=%s rewind=%s events inserted=%s skipped=%s source_lines_inserted=%s",
