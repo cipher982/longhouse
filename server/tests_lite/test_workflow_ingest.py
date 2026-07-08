@@ -26,9 +26,11 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("TESTING", "1")
 
+from sqlalchemy import event
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import Base
+from zerg.database import _ensure_agents_fts
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
@@ -473,6 +475,31 @@ def test_relink_failure_does_not_corrupt_committed_parent(tmp_path, monkeypatch)
         # Parent persisted; orphan untouched (relink rolled back, not half-applied).
         assert db.query(AgentSession).filter(AgentSession.id == PARENT_ID).first() is not None
         assert db.query(AgentSession).filter(AgentSession.id == AGENT_ID).first() is not None
+
+
+def test_relink_does_not_rebuild_entire_fts_index(tmp_path):
+    engine = make_engine(f"sqlite:///{tmp_path / 'workflow-ingest-fts.db'}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    Base.metadata.create_all(bind=engine)
+    _ensure_agents_fts(engine)
+    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+    rebuild_statements: list[str] = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _capture_rebuild(_conn, _cursor, statement, _parameters, _context, _executemany):
+        sql = str(statement).strip()
+        if sql.startswith("INSERT INTO events_fts(events_fts) VALUES('rebuild')"):
+            rebuild_statements.append(sql)
+
+    try:
+        with SessionLocal() as db:
+            store = AgentsStore(db)
+            store.ingest_session(_agent_payload())
+            store.ingest_session(_parent_payload())
+            assert db.query(AgentSession).filter(AgentSession.id == AGENT_ID).first() is None
+            assert not rebuild_statements
+    finally:
+        event.remove(engine, "before_cursor_execute", _capture_rebuild)
 
 
 def test_list_workflow_runs_for_session(tmp_path):

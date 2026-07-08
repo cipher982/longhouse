@@ -523,16 +523,6 @@ def _refresh_parent_counts(db: Session, parent_session_ids: set[UUID]) -> int:
     return refreshed
 
 
-def _rebuild_fts_if_sqlite(db: Session, touched: set[UUID]) -> int:
-    bind = db.get_bind()
-    if getattr(getattr(bind, "dialect", None), "name", None) == "sqlite" and touched:
-        fts_exists = db.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).first()
-        if fts_exists is not None:
-            db.execute(text("INSERT INTO events_fts(events_fts) VALUES('rebuild')"))
-            return 1
-    return 0
-
-
 def relink_orphan_subagents_for_parent(
     db: Session,
     *,
@@ -617,7 +607,6 @@ def relink_orphan_subagents_for_parent(
 
     if touched:
         _refresh_parent_counts(db, touched)
-        _rebuild_fts_if_sqlite(db, touched)
         db.flush()
     return summary
 
@@ -689,14 +678,13 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
         parent_sessions_touched.add(parent_thread.session_id)
 
     parent_counts_refreshed = _refresh_parent_counts(db, parent_sessions_touched)
-    fts_rebuilt = _rebuild_fts_if_sqlite(db, parent_sessions_touched)
 
     db.flush()
     return {
         "candidates_seen": candidates_seen,
         **totals,
         "parent_counts_refreshed": parent_counts_refreshed,
-        "fts_rebuilt": fts_rebuilt,
+        "fts_rebuilt": 0,
     }
 
 
