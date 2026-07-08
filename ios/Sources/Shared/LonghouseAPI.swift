@@ -138,18 +138,40 @@ private struct APIPauseRequestResponsePayload: Decodable {
     let pauseRequest: APISessionPauseRequestProjectionResponse
 }
 
+private actor RuntimeTokenRefreshCoordinator {
+    private var inFlight: [String: Task<Void, Error>] = [:]
+
+    func run(key: String, operation: @escaping @Sendable () async throws -> Void) async throws {
+        if let task = inFlight[key] {
+            return try await task.value
+        }
+
+        let task = Task {
+            try await operation()
+        }
+        inFlight[key] = task
+        defer {
+            inFlight[key] = nil
+        }
+        return try await task.value
+    }
+}
+
 struct LonghouseAPI: Sendable {
     private static let logger = Logger(subsystem: "ai.longhouse.ios", category: "SessionOpen")
+    private static let authRefreshCoordinator = RuntimeTokenRefreshCoordinator()
 
     let baseURL: URL
+    let allowsAuthRefresh: Bool
 
-    init(baseURL: URL) {
+    init(baseURL: URL, allowsAuthRefresh: Bool = true) {
         self.baseURL = baseURL
+        self.allowsAuthRefresh = allowsAuthRefresh
     }
 
-    init?(host: String) {
+    init?(host: String, allowsAuthRefresh: Bool = true) {
         guard let url = URL(string: host) else { return nil }
-        self.init(baseURL: url)
+        self.init(baseURL: url, allowsAuthRefresh: allowsAuthRefresh)
     }
 
     func sessionsNeedingAttention() async throws -> [SessionSummary] {
@@ -653,17 +675,37 @@ struct LonghouseAPI: Sendable {
         }
     }
 
-    /// Refresh a hosted CP runtime bearer token via the longhouse proxy. The
-    /// current bearer is forwarded to the CP, which re-mints within its refresh
-    /// leeway window. The new token + expiry are persisted to ``SharedAuthStore``
-    /// so the next request picks them up automatically.
+    /// Refresh a hosted CP runtime bearer token via the Longhouse proxy.
+    ///
+    /// Native refresh tokens are preferred. The legacy bearer-refresh endpoint
+    /// remains as a migration path and can upgrade old installs by returning
+    /// native refresh fields. Persist refresh before access so a process crash
+    /// after response receipt does not strand the session on a consumed token.
     func refreshRuntimeToken() async throws {
+        try await Self.authRefreshCoordinator.run(key: baseURL.absoluteString) {
+            try await self.performRefreshRuntimeToken()
+        }
+    }
+
+    private func performRefreshRuntimeToken() async throws {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/auth/refresh-runtime-token"))
+        var requestBody: [String: Any]?
+        if let refreshToken = SharedAuthStore.nativeRefreshToken(for: baseURL.absoluteString) {
+            request = URLRequest(url: baseURL.appendingPathComponent("/api/auth/refresh-native-session"))
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            requestBody = ["refresh_token": refreshToken]
+        }
         request.httpMethod = "POST"
         request.timeoutInterval = 15
+        if let requestBody {
+            request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
+        }
 
         let (data, httpResponse) = try await data(for: request, allowRetry: false)
         guard httpResponse.statusCode == 200 else {
+            if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
+                throw LonghouseAPIError.notAuthenticated
+            }
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -672,7 +714,15 @@ struct LonghouseAPI: Sendable {
         }
         let expiresIn = json["expires_in"] as? Int
         let expiresAt = expiresIn.map { Date().addingTimeInterval(TimeInterval($0)) }
-        SharedAuthStore.saveRuntimeToken(token, expiresAt: expiresAt, for: baseURL.absoluteString)
+        let refreshToken = json["refresh_token"] as? String
+        let refreshExpiresAt = Self.parseServerDate(json["refresh_token_expires_at"] as? String)
+        SharedAuthStore.saveHostedTokens(
+            runtimeToken: token,
+            runtimeExpiresAt: expiresAt,
+            refreshToken: refreshToken,
+            refreshExpiresAt: refreshExpiresAt,
+            for: baseURL.absoluteString
+        )
     }
 
     private func data(for request: URLRequest, allowRetry: Bool = true) async throws -> (Data, HTTPURLResponse) {
@@ -693,7 +743,7 @@ struct LonghouseAPI: Sendable {
         }
         persistResponseCookies(from: httpResponse, requestURL: request.url)
 
-        if httpResponse.statusCode == 401 && allowRetry {
+        if httpResponse.statusCode == 401 && allowRetry && allowsAuthRefresh {
             do {
                 if authorizationHeader != nil {
                     try await refreshRuntimeToken()
@@ -711,6 +761,17 @@ struct LonghouseAPI: Sendable {
             }
         }
         return (data, httpResponse)
+    }
+
+    static func parseServerDate(_ rawValue: String?) -> Date? {
+        guard let rawValue, !rawValue.isEmpty else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: rawValue) {
+            return date
+        }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: rawValue)
     }
 
     private func persistResponseCookies(from response: HTTPURLResponse, requestURL: URL?) {

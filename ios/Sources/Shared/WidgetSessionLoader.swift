@@ -109,16 +109,16 @@ enum WidgetSessionLoader {
         }
 
         let debugState = SharedAuthStore.debugState(for: serverURL)
-        guard debugState.cookieCount > 0 else {
-            logger.error("Widget auth unavailable: no shared cookies for \(serverURL, privacy: .public)")
+        guard debugState.hasCredentials else {
+            logger.error("Widget auth unavailable: no shared credentials for \(serverURL, privacy: .public)")
             return .unavailable(
                 title: "No shared session",
-                message: "Open Longhouse to refresh widget auth.",
+                message: "Open Longhouse to sign in.",
                 debugState: debugState
             )
         }
 
-        guard let api = LonghouseAPI(host: serverURL) else {
+        guard let api = LonghouseAPI(host: serverURL, allowsAuthRefresh: false) else {
             logger.error("Widget auth unavailable: invalid server URL \(serverURL, privacy: .public)")
             return .unavailable(
                 title: "Invalid server URL",
@@ -133,25 +133,8 @@ enum WidgetSessionLoader {
             logger.log("Widget loaded \(sessions.count, privacy: .public) sessions")
             return .loaded(sessions: sessions, debugState: SharedAuthStore.debugState(for: serverURL))
         } catch LonghouseAPIError.notAuthenticated {
-            logger.log("Widget session expired, attempting refresh")
-            do {
-                try await api.refreshSession()
-                let sessions = try await api.recentActiveSessions(limit: 8)
-                WidgetSessionSnapshotStore.save(sessions: sessions)
-                logger.log("Widget refresh succeeded with \(sessions.count, privacy: .public) sessions")
-                return .loaded(sessions: sessions, debugState: SharedAuthStore.debugState(for: serverURL))
-            } catch LonghouseAPIError.notAuthenticated {
-                SharedAuthStore.clearManagedCookies(for: serverURL)
-                logger.error("Widget refresh failed: unauthenticated")
-                return .unavailable(
-                    title: "Session expired",
-                    message: "Open Longhouse to sign in again.",
-                    debugState: SharedAuthStore.debugState(for: serverURL)
-                )
-            } catch {
-                logger.error("Widget refresh failed: \(error.localizedDescription, privacy: .public)")
-                return cachedResult(debugState: SharedAuthStore.debugState(for: serverURL))
-            }
+            logger.log("Widget session unavailable: app refresh required")
+            return cachedResult(debugState: SharedAuthStore.debugState(for: serverURL))
         } catch {
             logger.error("Widget fetch failed: \(error.localizedDescription, privacy: .public)")
             return cachedResult(debugState: SharedAuthStore.debugState(for: serverURL))
@@ -169,7 +152,7 @@ enum WidgetSessionLoader {
         let serverURL = result.debugState.serverURL ?? "nil"
         let title = result.statusTitle ?? "nil"
         let message = result.statusMessage ?? "nil"
-        let summary = "\(source): appGroup=\(result.debugState.appGroupAvailable) server=\(serverURL) cookies=\(result.debugState.cookieCount) signedIn=\(result.isSignedIn) title=\(title) message=\(message)"
+        let summary = "\(source): appGroup=\(result.debugState.appGroupAvailable) server=\(serverURL) cookies=\(result.debugState.cookieCount) runtime=\(result.debugState.hasRuntimeToken) nativeRefresh=\(result.debugState.hasNativeRefreshToken) signedIn=\(result.isSignedIn) title=\(title) message=\(message)"
         logger.log("\(summary, privacy: .public)")
     }
 }

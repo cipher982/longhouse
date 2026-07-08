@@ -144,6 +144,7 @@ final class AppState: ObservableObject {
             SharedAuthStore.primeSharedCookieStorage(for: trimmedServerURL)
             hasCandidate = SharedAuthStore.hasManagedCookies(for: trimmedServerURL)
                 || SharedAuthStore.hasRuntimeToken(for: trimmedServerURL)
+                || SharedAuthStore.hasNativeRefreshToken(for: trimmedServerURL)
         } else {
             hasCandidate = false
         }
@@ -180,7 +181,8 @@ final class AppState: ObservableObject {
         let hasRefresh = cookies.contains(where: { $0.name == SharedAuthStore.refreshCookieName })
         let hasSession = cookies.contains(where: { $0.name == SharedAuthStore.sessionCookieName })
         let hasRuntimeToken = SharedAuthStore.hasRuntimeToken(for: serverURL)
-        hasLocalSessionCandidate = hasRuntimeToken || hasSession || hasRefresh
+        let hasNativeRefreshToken = SharedAuthStore.hasNativeRefreshToken(for: serverURL)
+        hasLocalSessionCandidate = hasRuntimeToken || hasNativeRefreshToken || hasSession || hasRefresh
 
         var result: SessionRestoreResult
         if hasRuntimeToken {
@@ -199,6 +201,15 @@ final class AppState: ObservableObject {
                     result = .indeterminate
                 }
             }
+        } else if hasNativeRefreshToken {
+            switch await refreshRuntimeTokenProactively(requireExistingRuntimeToken: false) {
+            case .refreshed:
+                result = await verifyBrowserSession()
+            case .rejected:
+                result = .unauthenticated
+            case .deferred:
+                result = .indeterminate
+            }
         } else if hasRefresh {
             result = await refreshBrowserSession()
         } else if hasSession {
@@ -212,15 +223,15 @@ final class AppState: ObservableObject {
             isAuthenticated = true
             hasLocalSessionCandidate = true
             authError = nil
-            if hasRuntimeToken {
+            if SharedAuthStore.hasRuntimeToken(for: serverURL) {
                 scheduleRuntimeTokenRefresh()
             }
             Task { [weak self] in
                 await self?.syncStoredAPNSTokenIfPossible()
             }
         case .indeterminate:
-            isAuthenticated = hasRuntimeToken || hasSession || hasRefresh
-            hasLocalSessionCandidate = hasRuntimeToken || hasSession || hasRefresh
+            isAuthenticated = hasRuntimeToken || hasNativeRefreshToken || hasSession || hasRefresh
+            hasLocalSessionCandidate = hasRuntimeToken || hasNativeRefreshToken || hasSession || hasRefresh
         case .unauthenticated:
             await clearLocalSession()
         }
@@ -279,6 +290,7 @@ final class AppState: ObservableObject {
             TranscriptSnapshotStore.shared.clear(serverURL: previousURL)
             PushNotificationStore.clearAPNSDeviceSyncState()
             SharedAuthStore.clearRuntimeToken(for: previousURL)
+            SharedAuthStore.clearNativeRefreshToken(for: previousURL)
             KeychainHelper.deleteAuthToken()
         }
         SharedAuthStore.primeSharedCookieStorage(for: trimmed)
@@ -321,14 +333,26 @@ final class AppState: ObservableObject {
             }
             let expiresIn = json["expires_in"] as? Int
             let expiresAt = expiresIn.map { Date().addingTimeInterval(TimeInterval($0)) }
-            return await finishHostedRuntimeToken(runtimeToken, expiresAt: expiresAt)
+            let refreshToken = json["refresh_token"] as? String
+            let refreshExpiresAt = LonghouseAPI.parseServerDate(json["refresh_token_expires_at"] as? String)
+            return await finishHostedRuntimeToken(
+                runtimeToken,
+                expiresAt: expiresAt,
+                refreshToken: refreshToken,
+                refreshExpiresAt: refreshExpiresAt
+            )
         } catch {
             authError = "Network error: \(error.localizedDescription)"
             return false
         }
     }
 
-    func finishHostedRuntimeToken(_ runtimeToken: String, expiresAt: Date? = nil) async -> Bool {
+    func finishHostedRuntimeToken(
+        _ runtimeToken: String,
+        expiresAt: Date? = nil,
+        refreshToken: String? = nil,
+        refreshExpiresAt: Date? = nil
+    ) async -> Bool {
         let token = runtimeToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else {
             authError = "Hosted sign-in returned without a session token"
@@ -341,11 +365,18 @@ final class AppState: ObservableObject {
 
         SharedAuthStore.clearManagedCookies(for: serverURL)
         SharedAuthStore.removeSharedCookieStorage(for: serverURL)
-        SharedAuthStore.saveRuntimeToken(token, expiresAt: expiresAt, for: serverURL)
+        SharedAuthStore.saveHostedTokens(
+            runtimeToken: token,
+            runtimeExpiresAt: expiresAt,
+            refreshToken: refreshToken,
+            refreshExpiresAt: refreshExpiresAt,
+            for: serverURL
+        )
 
         let result = await verifyBrowserSession()
         guard result == .authenticated else {
             SharedAuthStore.clearRuntimeToken(for: serverURL)
+            SharedAuthStore.clearNativeRefreshToken(for: serverURL)
             authError = "Hosted sign-in failed"
             isAuthenticated = false
             hasLocalSessionCandidate = false
@@ -390,6 +421,8 @@ final class AppState: ObservableObject {
         if !previousURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             SharedAuthStore.clearManagedCookies(for: previousURL)
             SharedAuthStore.removeSharedCookieStorage(for: previousURL)
+            SharedAuthStore.clearRuntimeToken(for: previousURL)
+            SharedAuthStore.clearNativeRefreshToken(for: previousURL)
         }
 
         KeychainHelper.deleteAuthToken()
@@ -430,6 +463,7 @@ final class AppState: ObservableObject {
                 TranscriptSnapshotStore.shared.clear(serverURL: previousURL)
                 PushNotificationStore.clearAPNSDeviceSyncState()
                 SharedAuthStore.clearRuntimeToken(for: previousURL)
+                SharedAuthStore.clearNativeRefreshToken(for: previousURL)
                 KeychainHelper.deleteAuthToken()
             }
             SharedAuthStore.primeSharedCookieStorage(for: trimmed)
@@ -585,19 +619,23 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func refreshRuntimeTokenProactively() async -> RuntimeTokenRefreshResult {
+    private func refreshRuntimeTokenProactively(requireExistingRuntimeToken: Bool = true) async -> RuntimeTokenRefreshResult {
         // Snapshot the server URL: signout/server-switch may land during the
         // await and we must not write a refreshed token back into a cleared or
         // switched keychain slot.
         let capturedServerURL = serverURL
+        guard let api = LonghouseAPI(host: capturedServerURL) else {
+            return .rejected
+        }
         do {
-            let (token, expiresAt) = try await callRefreshRuntimeTokenRoute(serverURL: capturedServerURL)
-            guard serverURL == capturedServerURL,
-                  SharedAuthStore.hasRuntimeToken(for: capturedServerURL) else {
+            try await api.refreshRuntimeToken()
+            guard serverURL == capturedServerURL else {
                 // Session was cleared or server switched while we were refreshing.
                 return .deferred
             }
-            SharedAuthStore.saveRuntimeToken(token, expiresAt: expiresAt, for: capturedServerURL)
+            guard !requireExistingRuntimeToken || SharedAuthStore.hasRuntimeToken(for: capturedServerURL) else {
+                return .deferred
+            }
             scheduleRuntimeTokenRefresh()
             return .refreshed
         } catch LonghouseAPIError.notAuthenticated {
@@ -612,48 +650,25 @@ final class AppState: ObservableObject {
         }
     }
 
-    private func callRefreshRuntimeTokenRoute(serverURL: String) async throws -> (String, Date?) {
-        guard let url = URL(string: "\(serverURL)/api/auth/refresh-runtime-token") else {
-            throw URLError(.badURL)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 10
-        if let authorizationHeader = SharedAuthStore.authorizationHeader(for: serverURL) {
-            request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
-        }
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw URLError(.badServerResponse)
-        }
-        guard http.statusCode == 200 else {
-            switch http.statusCode {
-            case 401, 403:
-                throw LonghouseAPIError.notAuthenticated
-            case 502:
-                throw LonghouseAPIError.upstreamFailed
-            case 503:
-                throw LonghouseAPIError.serviceUnavailable
-            default:
-                throw LonghouseAPIError.requestFailed
-            }
-        }
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let token = json["runtime_token"] as? String else {
-            throw URLError(.cannotDecodeContentData)
-        }
-        let expiresIn = json["expires_in"] as? Int
-        let expiresAt = expiresIn.map { Date().addingTimeInterval(TimeInterval($0)) }
-        return (token, expiresAt)
-    }
-
     private func signOutLocallyAndRemotely() async {
-        // Fire-and-forget the server logout while cookies are still present.
-        if let url = URL(string: "\(serverURL)/api/auth/logout") {
+        let capturedServerURL = serverURL
+        let nativeRefreshToken = SharedAuthStore.nativeRefreshToken(for: capturedServerURL)
+
+        if let nativeRefreshToken, let url = URL(string: "\(capturedServerURL)/api/auth/revoke-native-session") {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.timeoutInterval = 5
-            if let authorizationHeader = SharedAuthStore.authorizationHeader(for: serverURL) {
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try? JSONSerialization.data(withJSONObject: ["refresh_token": nativeRefreshToken])
+            _ = try? await URLSession.shared.data(for: request)
+        }
+
+        // Fire-and-forget the server logout while cookies are still present.
+        if let url = URL(string: "\(capturedServerURL)/api/auth/logout") {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 5
+            if let authorizationHeader = SharedAuthStore.authorizationHeader(for: capturedServerURL) {
                 request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
             }
             _ = try? await URLSession.shared.data(for: request)
@@ -672,6 +687,7 @@ final class AppState: ObservableObject {
         SharedAuthStore.clearManagedCookies(for: serverURL)
         SharedAuthStore.removeSharedCookieStorage(for: serverURL)
         SharedAuthStore.clearRuntimeToken(for: serverURL)
+        SharedAuthStore.clearNativeRefreshToken(for: serverURL)
         WidgetSessionSnapshotStore.clear()
         TimelineCacheStore.clear(serverURL: serverURL)
         TranscriptSnapshotStore.shared.clear(serverURL: serverURL)
