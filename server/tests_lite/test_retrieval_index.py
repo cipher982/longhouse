@@ -356,6 +356,43 @@ def test_recall_fast_path_uses_retrieval_db_without_embedding_cache(monkeypatch,
     assert match.diagnostics == {"mode": "lexical", "source": "retrieval_db"}
 
 
+def test_recall_auto_ready_index_miss_does_not_fall_back_to_embeddings(monkeypatch, tmp_path):
+    main_path = tmp_path / "longhouse.db"
+    engine = make_engine(f"sqlite:///{main_path}")
+    initialize_database(engine)
+    SessionLocal = make_sessionmaker(engine)
+
+    retrieval_path = resolve_retrieval_db_path(f"sqlite:///{main_path}")
+    with connect_retrieval_db(retrieval_path) as conn:
+        initialize_retrieval_db(conn)
+        replace_session_chunks(conn, "session-1", [_chunk("child", content="specific timeout evidence")])
+
+    def fail_embedding_config():
+        raise AssertionError("ready retrieval index misses must not fall back to embeddings in auto mode")
+
+    monkeypatch.setattr("zerg.models_config.get_embedding_config", fail_embedding_config)
+
+    with SessionLocal() as db:
+        response = asyncio.run(
+            recall_sessions(
+                query="semantic-only-miss",
+                project=None,
+                provider=None,
+                since_days=90,
+                max_results=5,
+                context_turns=2,
+                context_mode="forensic",
+                mode="auto",
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+        )
+
+    assert response.total == 0
+    assert response.matches == []
+
+
 def test_recall_index_endpoint_projects_recent_sessions(monkeypatch, tmp_path):
     main_path = tmp_path / "longhouse.db"
     engine = make_engine(f"sqlite:///{main_path}")

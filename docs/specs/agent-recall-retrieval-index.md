@@ -77,13 +77,13 @@ In scope:
 - parent hydration without raw event reads in the default response;
 - diagnostics and status primitives enough to profile and debug.
 
-The initial API default may use lexical retrieval only when the index is ready,
-but that is a product decision with a quality gate, not just a performance
-shortcut. Before replacing legacy semantic recall as the default for hosted
-dogfood, run a small labeled query set and compare legacy semantic recall,
-lexical chunk recall, and hybrid once embeddings land. If lexical misses common
-conceptual queries, keep semantic/hybrid as the user-visible default while still
-using lexical as a fast exact/code/path lane.
+`mode=auto` is retrieval-first once the index is ready. A ready lexical index
+returns lexical results, including empty misses, without falling through to the
+legacy embedding path. This is intentional: the performance fix must not reload
+the whole embedding corpus on common misses. `mode=semantic` remains the
+explicit compatibility/quality escape hatch. Before removing the legacy path,
+run a small labeled query set and compare legacy semantic recall, lexical chunk
+recall, and hybrid once embeddings land.
 
 Out of scope for the first commit series:
 
@@ -359,8 +359,10 @@ Add a one-off script under `scripts/dev/` that can:
 - report p50, p95, max, row counts, and DB file sizes;
 - compare legacy recall cost with the matrix load preserved and only the network
   query-embedding call mocked;
-- measure archive DB write latency during concurrent recall load to prove the
-  `retrieval.db` isolation win, not just recall latency.
+- run a main-DB write probe during concurrent retrieval load as a sanity check
+  that the new path uses a separate SQLite file. This demonstrates the
+  isolation design, but real relief versus the old path still requires profiling
+  against a read-only copy of a large hosted DB.
 
 Initial profiles:
 

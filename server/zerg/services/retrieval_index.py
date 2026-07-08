@@ -239,6 +239,20 @@ def initialize_retrieval_db(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def retrieval_schema_ready(conn: sqlite3.Connection) -> bool:
+    """Return True when retrieval.db has the expected serving tables."""
+
+    rows = conn.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type IN ('table', 'virtual')
+          AND name IN ('recall_chunks', 'recall_chunks_fts', 'recall_index_state')
+        """
+    ).fetchall()
+    return {str(row["name"]) for row in rows} == {"recall_chunks", "recall_chunks_fts", "recall_index_state"}
+
+
 def set_index_state(conn: sqlite3.Connection, key: str, value: dict) -> None:
     """Write a small JSON state value."""
 
