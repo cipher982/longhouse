@@ -183,6 +183,7 @@ async def execute_session_turn_write(
             fn,
             label=label,
             timeout_seconds=timeout_seconds,
+            queue_timeout_seconds=timeout_seconds,
         )
     if timeout_seconds is None:
         return await asyncio.to_thread(run_session_turn_write, db_bind=db_bind, fn=fn)

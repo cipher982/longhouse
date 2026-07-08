@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from datetime import datetime
 from datetime import timezone
@@ -9,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi import Response
 from sqlalchemy import text
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -19,7 +21,12 @@ os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", Fernet.generate_key().decode())
 
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+import zerg.services.managed_control_dispatcher as managed_control_dispatcher_module
 import zerg.services.remote_session_launch as remote_session_launch_module
+import zerg.services.session_chat_impl as session_chat_impl_module
+import zerg.services.session_turns as session_turns_module
 from zerg.database import Base
 from zerg.database import get_pool_status
 from zerg.database import initialize_live_database
@@ -33,18 +40,27 @@ from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveLaunchReadiness
+from zerg.models.live_store import LiveMachineControlOperation
+from zerg.models.live_store import LiveRuntimeState
+from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.routers import agents_sessions as agents_sessions_router
 from zerg.routers import health as health_router
 from zerg.routers import heartbeat as heartbeat_router
+from zerg.routers import runtime as runtime_router
 from zerg.routers import session_chat as session_chat_router
 from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
+from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
+from zerg.services.live_archive_outbox import SESSION_INPUT_RECEIPT_KIND
 from zerg.services.live_archive_outbox import drain_live_archive_outbox
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.remote_session_launch import RemoteLaunchParams
 from zerg.services.remote_session_launch import launch_remote_session
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
+from zerg.services.session_locks import session_lock_manager
 from zerg.services.write_serializer import WriteSerializer
 
 OWNER_ID = 77
@@ -65,6 +81,27 @@ class _FakeRequest:
 class _FakeWebSocket:
     async def send_json(self, _message):  # pragma: no cover - send_command is scripted
         pass
+
+
+class _AutoCompletingMachineWebSocket:
+    def __init__(self) -> None:
+        self.sent: list[dict[str, object]] = []
+
+    async def send_json(self, message):
+        self.sent.append(message)
+        await get_machine_control_channel_registry().complete_command(
+            {
+                "type": "command_result",
+                "command_id": message["command_id"],
+                "ok": True,
+                "result": {
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "turn_id": "hot-path-machine-control-turn-1",
+                },
+            }
+        )
 
 
 class _StubRegistry(MachineControlChannelRegistry):
@@ -104,7 +141,20 @@ async def _register_online(registry: MachineControlChannelRegistry) -> None:
     )
 
 
-def _seed_hot_path_rows(session_factory) -> None:
+async def _register_managed_control_channel() -> _AutoCompletingMachineWebSocket:
+    websocket = _AutoCompletingMachineWebSocket()
+    await get_machine_control_channel_registry().register(
+        owner_id=OWNER_ID,
+        device_id="cinder",
+        machine_name="cinder",
+        engine_build="test-engine",
+        supports=["codex.send"],
+        websocket=websocket,
+    )
+    return websocket
+
+
+def _seed_hot_path_rows(session_factory):
     now = datetime.now(timezone.utc)
     with session_factory() as db:
         db.add(User(id=OWNER_ID, email="owner@example.test", role="ADMIN"))
@@ -135,8 +185,11 @@ def _seed_hot_path_rows(session_factory) -> None:
         )
         db.add(session)
         db.flush()
+        seed_managed_kernel_rows(db, session, control_plane="codex_bridge", host_id="cinder")
         upsert_timeline_card_from_session(db, session)
+        session_id = session.id
         db.commit()
+        return session_id
 
 
 @pytest.mark.asyncio
@@ -155,7 +208,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
     initialize_live_database(live_engine)
     with request_engine.begin() as conn:
         conn.execute(text("CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(content_text)"))
-    _seed_hot_path_rows(request_factory)
+    seeded_session_id = _seed_hot_path_rows(request_factory)
 
     serializer = WriteSerializer()
     serializer.configure(write_factory)
@@ -164,6 +217,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
 
     import zerg.data_plane as data_plane_module
     import zerg.database as database_module
+    import zerg.services.live_session_inputs as live_session_inputs_module
     import zerg.services.write_serializer as write_serializer_module
 
     def _cold_store_unavailable(*_args, **_kwargs):
@@ -191,10 +245,20 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
     monkeypatch.setattr(heartbeat_router, "live_store_configured", lambda: True)
     monkeypatch.setattr(heartbeat_router, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(heartbeat_router, "get_live_write_serializer", lambda: live_serializer)
+    monkeypatch.setattr(runtime_router, "live_store_configured", lambda: True)
+    monkeypatch.setattr(runtime_router, "get_write_serializer", lambda: serializer)
+    monkeypatch.setattr(runtime_router, "get_live_write_serializer", lambda: live_serializer)
     monkeypatch.setattr(remote_session_launch_module, "get_live_write_serializer", lambda: live_serializer)
     monkeypatch.setattr(session_chat_router, "get_live_write_serializer", lambda: live_serializer)
+    monkeypatch.setattr(managed_control_dispatcher_module, "get_live_write_serializer", lambda: live_serializer)
+    monkeypatch.setattr(session_turns_module, "get_write_serializer", lambda: serializer)
+    monkeypatch.setattr(live_session_inputs_module, "get_live_write_serializer", lambda: live_serializer)
     monkeypatch.setattr(write_serializer_module, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(write_serializer_module, "get_live_write_serializer", lambda: live_serializer)
+    monkeypatch.setattr(session_chat_impl_module, "_schedule_managed_local_lock_release", lambda **_kwargs: None)
+    monkeypatch.setattr(session_chat_impl_module, "_schedule_managed_local_active_phase_observation", lambda **_kwargs: None)
+
+    await get_machine_control_channel_registry().clear_for_tests()
 
     writer_entered = Event()
     release_writer = Event()
@@ -275,8 +339,107 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
                     _single=None,
                 ),
                 timeout=ROUTE_TIMEOUT_SECONDS,
-            )
+        )
         assert sessions.sessions
+
+        managed_control_websocket = await _register_managed_control_channel()
+        with request_factory() as input_db:
+            source_session = input_db.get(AgentSession, seeded_session_id)
+            assert source_session is not None
+            input_response = await asyncio.wait_for(
+                session_chat_router._create_session_input_response(
+                    source_session=source_session,
+                    owner_id=OWNER_ID,
+                    body=session_chat_router.SessionInputRequest(
+                        text="hot input while archive is stalled",
+                        intent="auto",
+                        client_request_id="hot-input-stall-1",
+                    ),
+                    db=input_db,
+                ),
+                timeout=ROUTE_TIMEOUT_SECONDS,
+            )
+        assert input_response.outcome == "sent"
+        assert input_response.input_id is None
+        assert input_response.live_input_id is not None
+        assert len(managed_control_websocket.sent) == 1
+        control_frame = managed_control_websocket.sent[0]
+        assert control_frame["command_type"] == "session.send_text"
+        assert control_frame["session_id"] == str(seeded_session_id)
+        assert str(control_frame["command_id"]).startswith(f"managed-control:{seeded_session_id}:session.send_text:")
+        assert control_frame["payload"] == {
+            "provider": "codex",
+            "text": "hot input while archive is stalled",
+        }
+        delivery_request_id = None
+        with live_factory() as live_db:
+            receipt = live_db.get(LiveSessionInputReceipt, input_response.live_input_id)
+            assert receipt is not None
+            assert receipt.status == INPUT_STATUS_DELIVERED
+            assert receipt.client_request_id == "hot-input-stall-1"
+            delivery_request_id = receipt.delivery_request_id
+            input_outbox = (
+                live_db.query(LiveArchiveOutbox)
+                .filter(LiveArchiveOutbox.kind == SESSION_INPUT_RECEIPT_KIND)
+                .one()
+            )
+            assert input_outbox.drained_at is None
+            control_operation = (
+                live_db.query(LiveMachineControlOperation)
+                .filter(LiveMachineControlOperation.command_id == control_frame["command_id"])
+                .one()
+            )
+            assert control_operation.status == "succeeded"
+            assert control_operation.command_type == "session.send_text"
+            assert control_operation.device_id == "cinder"
+            assert control_operation.provider == "codex"
+            assert json.loads(control_operation.result_json or "{}")["turn_id"] == "hot-path-machine-control-turn-1"
+        assert delivery_request_id
+        await session_lock_manager.release(str(seeded_session_id), delivery_request_id)
+
+        runtime_payload = runtime_router.RuntimeEventBatchIngest(
+            events=[
+                {
+                    "runtime_key": f"codex:{seeded_session_id}",
+                    "session_id": seeded_session_id,
+                    "provider": "codex",
+                    "device_id": "cinder",
+                    "source": "codex_bridge",
+                    "kind": "phase_signal",
+                    "phase": "running",
+                    "tool_name": "Shell",
+                    "occurred_at": datetime.now(timezone.utc),
+                    "freshness_ms": 60_000,
+                    "dedupe_key": "hot-runtime-stall-1",
+                    "payload": {},
+                }
+            ]
+        )
+        with request_factory() as runtime_db:
+            runtime_db.execute(text("SELECT 1"))
+            runtime_result = await asyncio.wait_for(
+                runtime_router.ingest_runtime_observation_batch(
+                    runtime_payload,
+                    Response(),
+                    runtime_db,
+                    SimpleNamespace(device_id="cinder", id="token-1", owner_id=OWNER_ID),
+                    None,
+                ),
+                timeout=ROUTE_TIMEOUT_SECONDS,
+            )
+        assert runtime_result.accepted == 1
+        assert runtime_result.updated_runtime_keys == [f"codex:{seeded_session_id}"]
+        with live_factory() as live_db:
+            live_runtime = live_db.get(LiveRuntimeState, f"codex:{seeded_session_id}")
+            assert live_runtime is not None
+            assert live_runtime.phase == "running"
+            assert live_runtime.active_tool == "Shell"
+            runtime_outbox = (
+                live_db.query(LiveArchiveOutbox)
+                .filter(LiveArchiveOutbox.kind == RUNTIME_EVENT_KIND)
+                .one()
+            )
+            assert runtime_outbox.drained_at is None
 
         registry = _StubRegistry()
         await _register_online(registry)
@@ -351,6 +514,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
             assert managed_readiness.state == "adopted"
     finally:
         release_writer.set()
+        await get_machine_control_channel_registry().clear_for_tests()
         if heartbeat_task is not None and not heartbeat_task.done():
             await asyncio.gather(heartbeat_task, return_exceptions=True)
         if not blocker.done():
