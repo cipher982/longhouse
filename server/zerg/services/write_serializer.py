@@ -34,11 +34,16 @@ import contextvars
 import heapq
 import logging
 import os
+import sys
+import threading
 import time
+import traceback
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field
+from datetime import datetime
+from datetime import timezone
 from typing import Any
 from typing import Callable
 from typing import Deque
@@ -153,6 +158,22 @@ class _QueuedWrite:
 
 
 _HISTOGRAM_WINDOW = 256
+_DEFAULT_STACK_DUMP_AFTER_MS = 30_000.0
+_DEFAULT_STACK_DUMP_RATE_LIMIT_MS = 30_000.0
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @dataclass
@@ -310,8 +331,16 @@ class WriteSerializer:
         self._writer_active = False
         self._active_label: str | None = None
         self._active_priority: int | None = None
+        self._active_job_id: int | None = None
+        self._active_worker_thread_id: int | None = None
         self._active_stage: str | None = None
         self._active_started_at: float | None = None
+        self._active_stack_dump_count = 0
+        self._last_active_stack_dump_at: float | None = None
+        self._last_active_stack_dump_iso: str | None = None
+        self._last_active_stack_dump_age_ms: float | None = None
+        self._last_active_stack_dump_reason: str | None = None
+        self._last_active_stack_dump_text: str | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._change_event = asyncio.Event()
         self._change_seq = 0
@@ -361,6 +390,14 @@ class WriteSerializer:
         return self._active_priority
 
     @property
+    def active_job_id(self) -> int | None:
+        return self._active_job_id
+
+    @property
+    def active_worker_thread_id(self) -> int | None:
+        return self._active_worker_thread_id
+
+    @property
     def active_stage(self) -> str | None:
         return self._active_stage
 
@@ -404,10 +441,56 @@ class WriteSerializer:
             self._writer_active = True
             self._active_label = queued.label
             self._active_priority = queued.priority
+            self._active_job_id = queued.seq
+            self._active_worker_thread_id = None
             self._active_started_at = time.monotonic()
             if not queued.ready.done():
                 queued.ready.set_result(None)
             return
+
+    def capture_active_worker_stack_if_stale(self, *, reason: str = "watchdog", force: bool = False) -> bool:
+        """Log the active writer thread stack when it exceeds the evidence threshold."""
+
+        if not self._writer_active:
+            return False
+        active_age_ms = self.active_age_ms
+        threshold_ms = _env_float("LONGHOUSE_WRITE_SERIALIZER_STACK_DUMP_AFTER_MS", _DEFAULT_STACK_DUMP_AFTER_MS)
+        if not force and active_age_ms < threshold_ms:
+            return False
+
+        now = time.monotonic()
+        rate_limit_ms = _env_float(
+            "LONGHOUSE_WRITE_SERIALIZER_STACK_DUMP_RATE_LIMIT_MS",
+            _DEFAULT_STACK_DUMP_RATE_LIMIT_MS,
+        )
+        if not force and self._last_active_stack_dump_at is not None and (now - self._last_active_stack_dump_at) * 1000 < rate_limit_ms:
+            return False
+
+        thread_id = self._active_worker_thread_id
+        frame = sys._current_frames().get(thread_id) if thread_id is not None else None
+        if frame is None:
+            stack_text = "<active writer worker thread not yet visible>"
+        else:
+            stack_text = "".join(traceback.format_stack(frame, limit=80)).rstrip()
+
+        self._active_stack_dump_count += 1
+        self._last_active_stack_dump_at = now
+        self._last_active_stack_dump_iso = _utc_now_iso()
+        self._last_active_stack_dump_age_ms = active_age_ms
+        self._last_active_stack_dump_reason = reason
+        self._last_active_stack_dump_text = stack_text
+
+        logger.warning(
+            "WriteSerializer active writer stack dump reason=%s label=%s job_id=%s thread_id=%s " "age_ms=%.1f stage=%s\n%s",
+            reason,
+            self._active_label or "unlabeled",
+            self._active_job_id,
+            thread_id,
+            active_age_ms,
+            self._active_stage or "-",
+            stack_text,
+        )
+        return True
 
     async def execute(
         self,
@@ -585,6 +668,8 @@ class WriteSerializer:
                 self._writer_active = False
                 self._active_label = None
                 self._active_priority = None
+                self._active_job_id = None
+                self._active_worker_thread_id = None
                 self._active_stage = None
                 self._active_started_at = None
                 self._promote_next_locked()
@@ -769,6 +854,7 @@ class WriteSerializer:
     ) -> T:
         """Execute fn with a fresh session from the provided factory."""
         db = session_factory()
+        self._active_worker_thread_id = threading.get_ident()
         try:
             result = fn(db)
             if auto_commit:
@@ -791,6 +877,7 @@ class WriteSerializer:
 
     def get_metrics(self) -> dict[str, Any]:
         """Return serializer metrics for health/debug endpoints."""
+        self.capture_active_worker_stack_if_stale(reason="metrics")
         s = self._stats
         avg_wait = s.total_queue_wait_ms / s.total_writes if s.total_writes else 0
         avg_exec = s.total_exec_ms / s.total_writes if s.total_writes else 0
@@ -806,6 +893,8 @@ class WriteSerializer:
             "writer_active": self._writer_active,
             "active_label": self._active_label,
             "active_priority": self._active_priority,
+            "active_job_id": self._active_job_id,
+            "active_worker_thread_id": self._active_worker_thread_id,
             "active_stage": self._active_stage,
             "active_age_ms": round(self.active_age_ms, 1),
             "queue_depth": len(self._queue),
@@ -820,6 +909,12 @@ class WriteSerializer:
             "label_counts": dict(s._label_counts),
             "rolling_window": _HISTOGRAM_WINDOW,
             "rolling_by_label": rolling,
+            "active_stack_dump_count": self._active_stack_dump_count,
+            "last_active_stack_dump_at": self._last_active_stack_dump_iso,
+            "last_active_stack_dump_age_ms": (
+                round(self._last_active_stack_dump_age_ms, 1) if self._last_active_stack_dump_age_ms is not None else None
+            ),
+            "last_active_stack_dump_reason": self._last_active_stack_dump_reason,
         }
 
 

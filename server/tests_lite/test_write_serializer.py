@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 import os
 import subprocess
 import sys
@@ -664,6 +665,53 @@ async def test_active_writer_metrics_track_label_and_age(tmp_path):
     assert serializer.active_label is None
     assert serializer.active_stage is None
     assert serializer.active_age_ms == 0.0
+
+
+@pytest.mark.asyncio
+async def test_active_writer_stack_dump_logs_stale_worker(tmp_path, monkeypatch, caplog):
+    db_path = tmp_path / "write-serializer-active-stack.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_STACK_DUMP_AFTER_MS", "1")
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_STACK_DUMP_RATE_LIMIT_MS", "0")
+    caplog.set_level(logging.WARNING, logger="zerg.services.write_serializer")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _write(db):
+        started.set()
+        release.wait(1.0)
+        db.execute(sa_text("INSERT INTO writes(label) VALUES ('archive')"))
+
+    task = asyncio.create_task(serializer.execute(_write, label="ingest-live"))
+    await asyncio.to_thread(started.wait, 1.0)
+
+    for _ in range(50):
+        if serializer.active_worker_thread_id is not None and serializer.active_age_ms >= 1.0:
+            break
+        await asyncio.sleep(0.01)
+
+    metrics = serializer.get_metrics()
+
+    assert metrics["writer_active"] is True
+    assert metrics["active_label"] == "ingest-live"
+    assert metrics["active_job_id"] is not None
+    assert metrics["active_worker_thread_id"] is not None
+    assert metrics["active_stack_dump_count"] == 1
+    assert metrics["last_active_stack_dump_reason"] == "metrics"
+    assert "WriteSerializer active writer stack dump" in caplog.text
+    assert "_write" in caplog.text
+
+    release.set()
+    await task
 
 
 @pytest.mark.asyncio
