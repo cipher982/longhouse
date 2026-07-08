@@ -1,5 +1,7 @@
 """Agents API — semantic search and recall endpoints."""
 
+import logging
+import time
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -9,6 +11,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
+from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
@@ -50,6 +53,7 @@ from zerg.services.session_views import SemanticSearchResponse
 from zerg.services.session_views import build_session_response
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+logger = logging.getLogger(__name__)
 
 
 async def get_recall_database_url() -> str:
@@ -486,6 +490,7 @@ async def cancel_recall_index_job(
 
 @router.get("/recall", response_model=RecallResponse)
 async def recall_sessions(
+    request: Request,
     query: str = Query(..., description="What to search for"),
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
@@ -506,6 +511,10 @@ async def recall_sessions(
     from zerg.services.embedding_cache import EmbeddingCache
     from zerg.services.session_processing.embeddings import generate_embedding
 
+    handler_started = time.perf_counter()
+    request_started = getattr(request.state, "request_timeout_started_at", None)
+    pre_handler_ms = (handler_started - request_started) * 1000 if isinstance(request_started, float) else None
+
     if context_mode not in {"forensic", "active_context"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -518,6 +527,7 @@ async def recall_sessions(
         )
 
     if mode in {"auto", "lexical"}:
+        lexical_started = time.perf_counter()
         lexical_response = _try_retrieval_index_recall(
             database_url,
             query=query,
@@ -529,7 +539,17 @@ async def recall_sessions(
             context_mode=context_mode,
             explicit=mode == "lexical",
         )
+        lexical_ms = (time.perf_counter() - lexical_started) * 1000
         if lexical_response is not None:
+            handler_ms = (time.perf_counter() - handler_started) * 1000
+            if handler_ms > 1000 or (pre_handler_ms is not None and pre_handler_ms > 1000):
+                logger.warning(
+                    "Slow recall handler phase mode=lexical pre_handler_ms=%s handler_ms=%.1f lexical_ms=%.1f matches=%d",
+                    f"{pre_handler_ms:.1f}" if pre_handler_ms is not None else "-",
+                    handler_ms,
+                    lexical_ms,
+                    lexical_response.total,
+                )
             return lexical_response
 
     if mode == "lexical":

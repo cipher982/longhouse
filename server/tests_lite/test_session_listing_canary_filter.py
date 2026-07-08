@@ -36,6 +36,10 @@ def _database_url(factory) -> str:
     return str(factory.kw["bind"].url)
 
 
+def _request():
+    return SimpleNamespace(state=SimpleNamespace())
+
+
 def _seed_session(
     db,
     *,
@@ -280,6 +284,7 @@ def test_recall_hides_internal_canary_sessions(monkeypatch, tmp_path):
 
         response = asyncio.run(
             recall_sessions(
+                request=_request(),
                 query="launch review",
                 project=None,
                 provider=None,
@@ -341,6 +346,7 @@ def test_recall_allows_explicit_internal_canary_provider(monkeypatch, tmp_path, 
 
         response = asyncio.run(
             recall_sessions(
+                request=_request(),
                 query="launch review",
                 project=None,
                 provider=provider,

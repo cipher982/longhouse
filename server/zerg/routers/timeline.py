@@ -188,6 +188,7 @@ async def semantic_search_timeline_sessions(
 
 @router.get("/recall", response_model=RecallResponse)
 async def recall_timeline_sessions(
+    request: Request,
     query: str = Query(..., description="What to search for"),
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
@@ -199,6 +200,7 @@ async def recall_timeline_sessions(
     db: Session = Depends(get_db),
 ):
     return await _search_router.recall_sessions(
+        request=request,
         query=query,
         project=project,
         provider=provider,

@@ -42,6 +42,10 @@ def _open_index(tmp_path):
     return conn
 
 
+def _request():
+    return SimpleNamespace(state=SimpleNamespace())
+
+
 def _chunk(
     uid: str,
     *,
@@ -482,6 +486,7 @@ def test_recall_fast_path_uses_retrieval_db_without_embedding_cache(monkeypatch,
 
     response = asyncio.run(
         recall_sessions(
+            request=_request(),
             query="timeout",
             project=None,
             provider=None,
@@ -535,6 +540,7 @@ def test_recall_auto_ready_index_miss_does_not_fall_back_to_embeddings(monkeypat
 
     response = asyncio.run(
         recall_sessions(
+            request=_request(),
             query="semantic-only-miss",
             project=None,
             provider=None,
@@ -621,6 +627,7 @@ def test_recall_index_endpoint_projects_recent_sessions(monkeypatch, tmp_path):
         monkeypatch.setattr("zerg.models_config.get_embedding_config", fail_embedding_config)
         recall_response = asyncio.run(
             recall_sessions(
+                request=_request(),
                 query="whole-session hydration",
                 project=None,
                 provider=None,

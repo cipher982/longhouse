@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 
 from starlette.types import ASGIApp
 from starlette.types import Receive
@@ -74,6 +75,9 @@ class RequestTimeoutMiddleware:
         # still see the full path.  Normalise for the skip checks by looking
         # at the portion after /api.
         api_path = path[4:]  # "/api/health" -> "/health"
+        started_at = time.perf_counter()
+        if api_path == "/agents/recall":
+            scope.setdefault("state", {})["request_timeout_started_at"] = started_at
 
         # Skip health/readiness probes (they have their own timeout handling).
         if api_path in _SKIP_PATHS:
@@ -110,6 +114,13 @@ class RequestTimeoutMiddleware:
                 self.app(scope, receive, send_wrapper),
                 timeout=timeout,
             )
+            elapsed = time.perf_counter() - started_at
+            if api_path == "/agents/recall" and elapsed > 1.0:
+                logger.warning(
+                    "Slow recall HTTP request completed elapsed_ms=%.1f path=%s",
+                    elapsed * 1000,
+                    path,
+                )
         except asyncio.TimeoutError:
             method = scope.get("method", "?")
             logger.warning(
