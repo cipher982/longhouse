@@ -42,6 +42,7 @@ from zerg.models.agents import SessionThreadAlias  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
 from zerg.models.live_store import LiveArchiveOutbox  # noqa: E402
 from zerg.models.live_store import LiveLaunchReadiness  # noqa: E402
+from zerg.services.agents import AgentsStore  # noqa: E402
 from zerg.services.agents.kernel_capabilities import project_session_capabilities  # noqa: E402
 from zerg.services.agents.kernel_writes import ensure_primary_thread  # noqa: E402
 from zerg.services.agents.kernel_writes import record_run  # noqa: E402
@@ -62,6 +63,7 @@ from zerg.services.remote_session_launch import launch_remote_session  # noqa: E
 from zerg.services.remote_session_launch import reap_orphaned_launches  # noqa: E402
 from zerg.services.remote_session_launch import reconcile_launch_from_command_result  # noqa: E402
 from zerg.services.session_kernel_projection import project_session_control_fields  # noqa: E402
+from zerg.services.session_response_projection import build_session_response_list  # noqa: E402
 from zerg.services.session_runtime import RuntimeEventIngest  # noqa: E402
 from zerg.services.session_runtime import ingest_runtime_events  # noqa: E402
 from zerg.services.session_workspace import build_session_mobile_tail  # noqa: E402
@@ -1219,6 +1221,13 @@ def test_live_launch_detail_uses_durable_shell_before_archive_drain(tmp_path, mo
         assert body["runtime_source"] != "live_launch_readiness"
         assert body["runtime_display"]["detail"] != "Archive is catching up."
         assert body["capabilities"]["composer_enabled"] is True
+
+        with SessionLocal() as db:
+            session = db.get(AgentSession, result.session_id)
+            assert session is not None
+            [list_row] = build_session_response_list(db=db, store=AgentsStore(db), sessions=[session])
+        assert list_row.launch_state == "live"
+        assert list_row.runtime_source != "live_launch_readiness"
     finally:
         live_engine.dispose()
 

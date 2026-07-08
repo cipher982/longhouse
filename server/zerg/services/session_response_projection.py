@@ -25,7 +25,6 @@ from zerg.services.session_turns import load_pending_response_turn_map
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import latest_launch_attempts
-from zerg.services.session_views import latest_live_launch_readiness
 from zerg.services.session_views import normalize_utc_datetime
 
 # Mirrors zerg.services.session_summaries — fewer than this many user+assistant
@@ -107,7 +106,6 @@ def build_session_response_list(
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
     kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
     launch_attempt_map = latest_launch_attempts(db, session_ids)
-    live_launch_readiness_map = latest_live_launch_readiness(session_ids, now=now)
     match_map = match_map or {}
     semantic_snippet_map = semantic_snippet_map or {}
     sem_score_map = sem_score_map or {}
@@ -148,7 +146,6 @@ def build_session_response_list(
                 has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
                 pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
                 launch_attempt=launch_attempt_map.get(session.id),
-                launch_readiness=live_launch_readiness_map.get(session.id),
             )
         )
 
