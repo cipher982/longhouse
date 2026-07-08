@@ -2,10 +2,14 @@
 
 import asyncio
 import logging
+import os
 import time
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from functools import partial
+from multiprocessing import get_context
 from typing import Optional
 
 from fastapi import APIRouter
@@ -55,6 +59,48 @@ from zerg.services.session_views import build_session_response
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 logger = logging.getLogger(__name__)
+_retrieval_recall_executor: ProcessPoolExecutor | None = None
+
+
+def _get_retrieval_recall_executor() -> ProcessPoolExecutor:
+    """Return the isolated process used for retrieval.db FTS reads."""
+
+    global _retrieval_recall_executor
+    if _retrieval_recall_executor is None:
+        _retrieval_recall_executor = ProcessPoolExecutor(max_workers=1, mp_context=get_context("spawn"))
+    return _retrieval_recall_executor
+
+
+async def _run_retrieval_index_recall(
+    database_url: str,
+    *,
+    query: str,
+    project: str | None,
+    provider: str | None,
+    since_days: int,
+    max_results: int,
+    context_turns: int,
+    context_mode: str,
+    explicit: bool,
+) -> RecallResponse | None:
+    """Run retrieval.db recall without sharing the live server SQLite process."""
+
+    call = partial(
+        _try_retrieval_index_recall,
+        database_url,
+        query=query,
+        project=project,
+        provider=provider,
+        since_days=since_days,
+        max_results=max_results,
+        context_turns=context_turns,
+        context_mode=context_mode,
+        explicit=explicit,
+    )
+    if os.getenv("TESTING") == "1":
+        return await asyncio.to_thread(call)
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_get_retrieval_recall_executor(), call)
 
 
 async def get_recall_database_url() -> str:
@@ -560,8 +606,7 @@ async def recall_sessions(
 
     if mode in {"auto", "lexical"}:
         lexical_started = time.perf_counter()
-        lexical_response = await asyncio.to_thread(
-            _try_retrieval_index_recall,
+        lexical_response = await _run_retrieval_index_recall(
             database_url,
             query=query,
             project=project,
