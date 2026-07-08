@@ -372,6 +372,20 @@ Initial profiles:
 - miss query with no FTS hits.
 - read-only copy of a real large hosted DB when available.
 
+Local baseline on 2026-07-08 with `scripts/dev/profile_retrieval_index.py
+--sessions 1000 --events 20 --repetitions 10 --write-probe-seconds 1`:
+
+- 1,000 sessions, 20,000 synthetic events, 16,000 chunks, 12,000 child chunks;
+- projection p95: 0.853ms per session;
+- replace/index p95: 7.740ms per session;
+- representative query p95 range: 0.230ms miss, 7.998ms conceptual term,
+  18.631ms path query, 16.445ms flag query;
+- parent hydration p95: 0.078ms;
+- main DB write probe during retrieval load p95: 0.060ms, max 540.393ms.
+
+The max write outlier needs real-DB follow-up; the p95 result supports the core
+separation thesis on synthetic load, but does not replace david010 profiling.
+
 ## Test Plan
 
 Use `make test` targets, with focused tests in `server/tests_lite/`.
