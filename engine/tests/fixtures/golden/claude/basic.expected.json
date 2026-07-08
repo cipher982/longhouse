@@ -3,11 +3,13 @@
   "event_count": 2,
   "events": [
     {
+      "kind": "event",
       "role": "user",
       "raw_type": "user",
       "content_text": "List all MCP tools you have access to that contain 'agent' or 'mesh' in their name."
     },
     {
+      "kind": "event",
       "role": "assistant",
       "raw_type": "assistant",
       "content_text": "I don't have any MCP tools containing 'agent' or 'mesh' in their names in this session."

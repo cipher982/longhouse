@@ -1,0 +1,6 @@
+{"timestamp":"2026-07-08T20:00:00.000Z","type":"session_meta","payload":{"id":"019c638d-0000-0000-0000-00000000ab10","cwd":"/tmp/longhouse-test","cli_version":"0.133.0"}}
+{"timestamp":"2026-07-08T20:00:01.000Z","type":"event_msg","payload":{"type":"token_count","count":42}}
+{"timestamp":"2026-07-08T20:00:02.000Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn_1","reason":"interrupted"}}
+{"timestamp":"2026-07-08T20:00:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>"}]}}
+{"timestamp":"2026-07-08T20:00:04.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<turn_aborted>\nMarker-only legacy row.\n</turn_aborted>"}]}}
+{"timestamp":"2026-07-08T20:00:05.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"resume with a real user prompt"}]}}

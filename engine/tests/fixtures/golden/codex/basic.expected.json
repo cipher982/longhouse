@@ -3,11 +3,13 @@
   "event_count": 2,
   "events": [
     {
+      "kind": "event",
       "role": "user",
       "raw_type": "codex_user",
       "content_text": "What is 1+1?"
     },
     {
+      "kind": "event",
       "role": "assistant",
       "raw_type": "codex_assistant",
       "content_text": "1+1 equals 2."

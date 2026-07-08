@@ -3,11 +3,13 @@
   "event_count": 2,
   "events": [
     {
+      "kind": "event",
       "role": "user",
       "raw_type": "gemini_user",
       "content_text": "Reply with exactly: \"gemini ok\"\n\n-"
     },
     {
+      "kind": "event",
       "role": "assistant",
       "raw_type": "gemini_assistant",
       "content_text": "gemini ok"

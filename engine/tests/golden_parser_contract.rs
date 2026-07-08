@@ -25,8 +25,11 @@ use serde_json::Value;
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 struct SnapshotEvent {
+    kind: String,
     role: String,
     raw_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     content_text: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,10 +104,18 @@ fn parse_to_snapshot(input_path: &Path) -> Snapshot {
         }
         let v: Value = serde_json::from_str(line)
             .unwrap_or_else(|e| panic!("Invalid event JSON: {}\nLine: {}", e, line));
+        let raw_type = v["raw_type"].as_str().unwrap_or("").to_string();
+        let action_kind = action_kind_for_raw_type(&raw_type);
 
         events.push(SnapshotEvent {
+            kind: if action_kind.is_some() {
+                "action".to_string()
+            } else {
+                "event".to_string()
+            },
             role: v["role"].as_str().unwrap_or("").to_string(),
-            raw_type: v["raw_type"].as_str().unwrap_or("").to_string(),
+            raw_type,
+            action_kind,
             content_text: v["content_text"].as_str().map(|s| s.to_string()),
             tool_name: v["tool_name"].as_str().map(|s| s.to_string()),
             tool_input_json: if v["tool_input_json"].is_null() {
@@ -118,6 +129,15 @@ fn parse_to_snapshot(input_path: &Path) -> Snapshot {
     Snapshot {
         event_count: events.len(),
         events,
+    }
+}
+
+fn action_kind_for_raw_type(raw_type: &str) -> Option<String> {
+    match raw_type {
+        "codex_turn_interrupted" | "codex_turn_interrupted_marker" => {
+            Some("turn_interrupted".to_string())
+        }
+        _ => None,
     }
 }
 
@@ -157,6 +177,15 @@ fn golden_claude_basic() {
 fn golden_codex_basic() {
     let base = fixtures_dir().join("golden").join("codex");
     run_golden_test(&base.join("basic.jsonl"), &base.join("basic.expected.json"));
+}
+
+#[test]
+fn golden_codex_turn_interrupted() {
+    let base = fixtures_dir().join("golden").join("codex");
+    run_golden_test(
+        &base.join("turn_interrupted.jsonl"),
+        &base.join("turn_interrupted.expected.json"),
+    );
 }
 
 #[test]

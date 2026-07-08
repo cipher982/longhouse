@@ -235,6 +235,8 @@ struct CodexPayload {
     arguments: Option<String>,
     /// function_call / function_call_output: call correlation ID
     call_id: Option<String>,
+    /// event_msg: provider reason for lifecycle/control artifacts.
+    reason: Option<String>,
     /// function_call_output: result. Codex emits a plain string for text tool
     /// results, but an array of content items for image-bearing results (e.g.
     /// `view_image` -> [{type: input_image, image_url: data:...}]). Accept both
@@ -1621,9 +1623,11 @@ fn extract_events(
         return;
     }
 
-    // Skip non-compaction metadata-only types (Claude + Codex).
+    // Skip non-compaction metadata-only types (Claude + Codex). Codex
+    // `event_msg.turn_aborted` is the one allowlisted lifecycle/control record
+    // we preserve as an action source.
     match event_type {
-        "progress" | "session_meta" | "turn_context" | "event_msg" => return,
+        "progress" | "session_meta" | "turn_context" => return,
         _ => {}
     }
 
@@ -1639,6 +1643,22 @@ fn extract_events(
     } else {
         msg_uuid
     };
+
+    // Codex lifecycle/control event: {type: "event_msg", payload: {...}}
+    if event_type == "event_msg" {
+        if let Some(ref payload) = obj.payload {
+            extract_codex_event_msg(
+                payload,
+                session_id,
+                &msg_uuid,
+                timestamp,
+                line_offset,
+                raw_line,
+                events,
+            );
+        }
+        return;
+    }
 
     // Codex format: {type: "response_item", payload: {...}}
     if event_type == "response_item" {
@@ -2063,6 +2083,62 @@ fn compact_metadata_hint(raw: Option<&RawValue>) -> Option<String> {
 // Codex extraction
 // ---------------------------------------------------------------------------
 
+const CODEX_TURN_ABORTED_PREFIX: &str = "<turn_aborted>";
+const CODEX_TURN_INTERRUPTED_TEXT: &str = "User interrupted the turn";
+const CODEX_TURN_INTERRUPTED_RAW_TYPE: &str = "codex_turn_interrupted";
+const CODEX_TURN_INTERRUPTED_MARKER_RAW_TYPE: &str = "codex_turn_interrupted_marker";
+
+fn extract_codex_event_msg(
+    payload: &CodexPayload,
+    session_id: &str,
+    msg_uuid: &str,
+    timestamp: DateTime<Utc>,
+    line_offset: u64,
+    raw_line: &str,
+    events: &mut Vec<ParsedEvent>,
+) {
+    let payload_type = payload.r#type.as_deref().unwrap_or("");
+    if payload_type != "turn_aborted" {
+        return;
+    }
+
+    let reason = payload.reason.as_deref().unwrap_or("");
+    if reason != "interrupted" {
+        return;
+    }
+
+    events.push(ParsedEvent {
+        uuid: format!("{}-action-turn-interrupted", msg_uuid),
+        session_id: session_id.to_string(),
+        timestamp,
+        role: Role::System,
+        content_text: Some(CODEX_TURN_INTERRUPTED_TEXT.to_string()),
+        tool_name: None,
+        tool_input_json: None,
+        tool_output_text: None,
+        tool_call_id: None,
+        source_offset: line_offset,
+        raw_type: CODEX_TURN_INTERRUPTED_RAW_TYPE.to_string(),
+        raw_line: Some(raw_line.to_string()),
+    });
+}
+
+fn codex_text_is_turn_aborted_marker(text: &str) -> bool {
+    text.trim_start().starts_with(CODEX_TURN_ABORTED_PREFIX)
+}
+
+fn codex_last_event_is_adjacent_turn_interrupted(events: &[ParsedEvent], line_offset: u64) -> bool {
+    events.last().is_some_and(|event| {
+        if event.role != Role::System || event.raw_type != CODEX_TURN_INTERRUPTED_RAW_TYPE {
+            return false;
+        }
+        let Some(raw_line) = event.raw_line.as_deref() else {
+            return false;
+        };
+        event.source_offset + raw_line.len() as u64 + 1 == line_offset
+    })
+}
+
 fn extract_codex_events(
     payload: &CodexPayload,
     session_id: &str,
@@ -2114,6 +2190,25 @@ fn extract_codex_events(
                         }
                     })
                     .unwrap_or("");
+                if codex_text_is_turn_aborted_marker(first_text) {
+                    if !codex_last_event_is_adjacent_turn_interrupted(events, line_offset) {
+                        events.push(ParsedEvent {
+                            uuid: format!("{}-action-turn-interrupted-marker", msg_uuid),
+                            session_id: session_id.to_string(),
+                            timestamp,
+                            role: Role::System,
+                            content_text: Some(CODEX_TURN_INTERRUPTED_TEXT.to_string()),
+                            tool_name: None,
+                            tool_input_json: None,
+                            tool_output_text: None,
+                            tool_call_id: None,
+                            source_offset: line_offset,
+                            raw_type: CODEX_TURN_INTERRUPTED_MARKER_RAW_TYPE.to_string(),
+                            raw_line: Some(raw_line.to_string()),
+                        });
+                    }
+                    return;
+                }
                 if injected_prefixes.iter().any(|p| first_text.starts_with(p)) {
                     return;
                 }
@@ -3165,6 +3260,97 @@ mod tests {
             result.events[0].content_text.as_deref(),
             Some("real user message")
         );
+    }
+
+    #[test]
+    fn test_codex_turn_aborted_event_msg_becomes_system_action_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-00000000ab01.jsonl",
+            &[
+                r#"{"type":"event_msg","timestamp":"2026-02-15T17:06:10Z","payload":{"type":"turn_aborted","turn_id":"turn_123","reason":"interrupted"}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:12Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"next real prompt"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 2);
+        assert_eq!(result.events[0].role, Role::System);
+        assert_eq!(result.events[0].raw_type, CODEX_TURN_INTERRUPTED_RAW_TYPE);
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some(CODEX_TURN_INTERRUPTED_TEXT)
+        );
+        assert_eq!(result.events[1].role, Role::User);
+        assert_eq!(
+            result.events[1].content_text.as_deref(),
+            Some("next real prompt")
+        );
+    }
+
+    #[test]
+    fn test_codex_turn_aborted_marker_only_becomes_system_action_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker_text =
+            "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>";
+        let marker_line = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-02-15T17:06:11Z",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": marker_text}]
+            }
+        })
+        .to_string();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-00000000ab02.jsonl",
+            &[&marker_line],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, Role::System);
+        assert_eq!(
+            result.events[0].raw_type,
+            CODEX_TURN_INTERRUPTED_MARKER_RAW_TYPE
+        );
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some(CODEX_TURN_INTERRUPTED_TEXT)
+        );
+    }
+
+    #[test]
+    fn test_codex_turn_aborted_paired_marker_dedupes_to_one_action_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker_text =
+            "<turn_aborted>\nThe user interrupted the previous turn on purpose.\n</turn_aborted>";
+        let marker_line = serde_json::json!({
+            "type": "response_item",
+            "timestamp": "2026-02-15T17:06:11Z",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": marker_text}]
+            }
+        })
+        .to_string();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-00000000ab03.jsonl",
+            &[
+                r#"{"type":"event_msg","timestamp":"2026-02-15T17:06:10Z","payload":{"type":"turn_aborted","turn_id":"turn_123","reason":"interrupted"}}"#,
+                &marker_line,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, Role::System);
+        assert_eq!(result.events[0].raw_type, CODEX_TURN_INTERRUPTED_RAW_TYPE);
     }
 
     #[test]

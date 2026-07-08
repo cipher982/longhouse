@@ -1,0 +1,25 @@
+{
+  "event_count": 3,
+  "events": [
+    {
+      "kind": "action",
+      "role": "system",
+      "raw_type": "codex_turn_interrupted",
+      "action_kind": "turn_interrupted",
+      "content_text": "User interrupted the turn"
+    },
+    {
+      "kind": "action",
+      "role": "system",
+      "raw_type": "codex_turn_interrupted_marker",
+      "action_kind": "turn_interrupted",
+      "content_text": "User interrupted the turn"
+    },
+    {
+      "kind": "event",
+      "role": "user",
+      "raw_type": "codex_user",
+      "content_text": "resume with a real user prompt"
+    }
+  ]
+}
