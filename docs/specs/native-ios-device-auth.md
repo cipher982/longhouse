@@ -12,7 +12,7 @@ The current hosted iOS flow stores a CP-issued runtime bearer in Keychain and re
 
 - Short-lived runtime access token: signed CP JWT, used as `Authorization: Bearer`.
 - Long-lived native refresh token: opaque random credential, stored in iOS Keychain, hashed in the control-plane database.
-- Rotation on refresh: every refresh returns a new access token and a new refresh token; the previous refresh token is consumed.
+- Rotation on refresh: every refresh returns a new access token and a new refresh token; the previous refresh token remains accepted only inside a short crash/race grace window.
 - Clear error semantics: only explicit rejection clears local auth; network, deploy, and 5xx failures defer and keep the local shell.
 - Backward compatibility: existing bearer-only refresh remains as a temporary migration path and is removed after dogfood stabilizes.
 
@@ -66,9 +66,9 @@ Control Plane
 ### Token Lifetimes
 
 - Runtime access token: 1 hour for now, still configurable by constant.
-- Native refresh token idle lifetime: 90 days.
+- Native refresh token idle lifetime: 90 days, sliding on each successful refresh.
 - Native refresh token absolute lifetime: 180 days.
-- Refresh response includes `runtime_token`, `expires_in`, `refresh_token`, `refresh_expires_in`, and `refresh_token_expires_at`.
+- Refresh response includes `runtime_token`, `expires_in`, `refresh_token`, and `refresh_token_expires_at`.
 
 The product behavior is "you should not think about login." The security behavior is "a stolen refresh credential cannot live forever, can be revoked per device, and rotates on every use."
 
@@ -96,7 +96,6 @@ Response adds native-session fields:
   "token_type": "bearer",
   "expires_in": 3600,
   "refresh_token": "opaque",
-  "refresh_token_expires_in": 15552000,
   "refresh_token_expires_at": "2027-01-04T18:00:00Z",
   "device_session_id": "nds_...",
   "claims": {}
@@ -140,8 +139,10 @@ Rules:
 
 - Missing/unknown/expired/revoked token returns `401`.
 - Tenant mismatch returns `403`.
-- Successful refresh rotates the token hash and updates `last_used_at`.
-- Refresh-token reuse returns `401` and revokes the session family if the row can be identified.
+- Successful refresh rotates the current token hash, records the just-replaced token hash as `previous_token_hash`, updates `rotated_at`, updates `last_used_at`, and slides `idle_expires_at`.
+- Presenting `previous_token_hash` inside the rotation grace window performs another successful rotation. This covers process crashes between response receipt and Keychain persistence, plus unavoidable app/widget races.
+- Presenting `previous_token_hash` outside the grace window revokes the device session and returns `401`.
+- Presenting an unknown token hash returns `401` without changing any row.
 
 ### Control Plane: Native Logout
 
@@ -163,6 +164,7 @@ Rules:
 
 - Best effort and idempotent.
 - Revokes the matching device session if present.
+- Unknown tokens still return success; logout must not fail because the CP already forgot the session.
 
 ### Tenant Runtime Proxy
 
@@ -173,7 +175,15 @@ Tenant routes:
 
 These proxy to CP with `X-Internal-Token`. iOS never talks directly to `control.longhouse.ai` after handoff, which preserves the tenant-runtime boundary and keeps CORS/network policy simple.
 
+Proxy error mapping is part of the auth contract:
+
+- CP-originated `401` and `403` pass through so iOS can clear explicitly rejected credentials.
+- CP network failures, timeouts, and malformed CP responses return `502` or `503`, never `401` or `403`.
+- Missing local refresh token returns `401`; CP-unreachable does not.
+
 `POST /api/auth/refresh-runtime-token` remains temporarily for already-installed iOS builds that only have a runtime bearer.
+
+For migration, the legacy bearer refresh response also returns native-session fields when CP can verify the bearer. New iOS builds that already have only a runtime token silently upgrade on their next proactive refresh or 401 retry. Old iOS builds ignore the extra fields.
 
 ## Data Model
 
@@ -187,7 +197,8 @@ cp_native_device_sessions
   instance_id: FK cp_instances.id
   tenant_subdomain: string
   token_hash: string unique
-  token_family_id: string
+  previous_token_hash: string nullable indexed
+  rotated_at: datetime nullable
   device_label: string nullable
   platform: string default "ios"
   app_build: string nullable
@@ -201,6 +212,19 @@ cp_native_device_sessions
 
 Only `token_hash` is persisted. The raw refresh token is shown exactly once in the exchange/refresh response.
 
+The row is the session family. There is no separate `token_family_id` in this phase.
+
+Reuse handling:
+
+- `token_hash` match: normal refresh.
+- `previous_token_hash` match and `rotated_at` is within 120 seconds: normal refresh.
+- `previous_token_hash` match outside 120 seconds: revoke row with `revoke_reason="refresh_reuse"`.
+
+Pruning:
+
+- Startup and successful refresh opportunistically delete rows revoked or expired more than 30 days ago.
+- Active rows are capped later when signed-in device UI exists; no hard cap in this phase.
+
 Migration is additive:
 
 - `Base.metadata.create_all()` creates the table for new installs.
@@ -212,11 +236,11 @@ Migration is additive:
 `SharedAuthStore` stores a native session bundle per host:
 
 - runtime token in Keychain.
-- refresh token in Keychain.
+- refresh token in Keychain with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`.
 - runtime expiry in app-group defaults.
 - refresh expiry in app-group defaults.
 
-Keychain accessibility remains `kSecAttrAccessibleAfterFirstUnlock` because widgets/background refresh need shared access after first unlock. This is a product/security tradeoff: the credential survives normal use and app updates, and background surfaces work; explicit logout deletes it.
+The runtime token may remain on the current shared Keychain accessibility because it is short-lived. The refresh token must be `ThisDeviceOnly`: it still supports widgets/background access after first unlock, but it does not migrate through encrypted backup restore to a different device. This makes the product phrase "device session" true.
 
 ## iOS Refresh Behavior
 
@@ -224,10 +248,18 @@ Introduce a single refresh authority instead of ad hoc refresh calls:
 
 - On app launch, if runtime token verifies, schedule proactive refresh.
 - If runtime token fails with 401 and refresh token exists, call `/api/auth/refresh-native-session`.
-- If refresh succeeds, save both new tokens and retry once.
+- If refresh succeeds, persist the new refresh token first, then the runtime token, then resolve the in-flight refresh and retry once.
 - If refresh returns 401/403, clear auth.
 - If refresh fails due to network, timeout, 5xx, or bad gateway, keep local session candidate and show cached shell.
 - Concurrent requests share one in-flight refresh task per host.
+- Local expiry timestamps only schedule refresh attempts. They never hard-clear auth; the server decides whether credentials are invalid.
+- The refresh token, not the access token, drives whether the app has a durable signed-in candidate.
+
+Widget behavior:
+
+- Widgets never initiate native refresh.
+- Widgets read the latest Keychain tokens and fetch normally.
+- On 401, widgets show cached data silently and do not clear auth. The main app owns refresh and logout decisions.
 
 ## Compatibility & Rollout
 
@@ -273,9 +305,9 @@ Revisit if: We add a first-class public OAuth/OIDC issuer URL and universal app 
 
 Context: Native clients are public clients and cannot keep a client secret.
 
-Choice: Refresh token rotation is mandatory.
+Choice: Refresh token rotation is mandatory, with a 120-second previous-token grace window.
 
-Rationale: Rotation limits replay and gives us reuse detection. It is the simple modern baseline before more complex sender-constrained schemes.
+Rationale: Rotation limits replay and gives us reuse detection. The grace window prevents false logout when iOS kills the app between receiving and persisting a refresh response, or when the widget observes a token during rotation.
 
 Revisit if: Rotation causes concurrency failures that single-flight cannot solve.
 
@@ -288,6 +320,36 @@ Choice: Only explicit auth rejection clears credentials. Ambiguous failures keep
 Rationale: Product trust is destroyed by false logout. A 5xx does not prove the credential is invalid.
 
 Revisit if: We add a server-pushed account-disabled signal.
+
+### Decision: Legacy Bearer Refresh Upgrades Existing Installs
+
+Context: Dogfood phones may already be signed in with only a runtime token.
+
+Choice: Keep the legacy `/refresh-runtime-token` path and add native-session fields to its successful response.
+
+Rationale: New app builds can silently upgrade without forcing a fresh login. Old app builds ignore the extra fields.
+
+Revisit if: We are willing to force one explicit re-login at launch.
+
+### Decision: Control Plane Tenant Identity For This Phase
+
+Context: Current hosted tenants share `CONTROL_PLANE_INSTANCE_INTERNAL_API_SECRET`, so CP cannot derive a unique tenant identity from the internal token yet.
+
+Choice: In this phase, CP validates the internal token and enforces that the requested tenant matches the native device session's `tenant_subdomain` and `instance_id`. Per-instance internal identity is a follow-up hardening item.
+
+Rationale: This removes user-facing churn now without blocking on a broader hosted secret model. It does not make the current shared internal secret a stronger boundary than it is.
+
+Revisit if: We provision per-instance CP credentials or sign tenant proxy requests with instance-specific keys.
+
+### Decision: Widgets Are Read-Only Auth Consumers
+
+Context: Widgets run in a separate process and cannot share a simple in-memory refresh lock with the app.
+
+Choice: Widgets read tokens and cached snapshots, but never refresh or clear auth.
+
+Rationale: This avoids widget/app refresh races. The main app remains the only process that mutates auth credentials.
+
+Revisit if: We add a cross-process refresh lock with durable compare-and-swap semantics.
 
 ## Implementation Phases
 
@@ -306,9 +368,10 @@ Acceptance criteria:
 - `NativeDeviceSession` model exists.
 - Startup creates/migrates `cp_native_device_sessions`.
 - Handoff exchange returns refresh-token fields.
-- `refresh-native-session` rotates token hashes and mints runtime token.
+- `refresh-native-session` rotates token hashes, honors previous-token grace, slides idle expiry, and mints runtime token.
 - `revoke-native-session` revokes matching session idempotently.
-- Tests cover exchange, refresh rotation, tenant mismatch, expiry, revoked token, reuse detection, and logout.
+- Legacy `/refresh-runtime-token` upgrades bearer-only clients by returning native-session fields.
+- Tests cover exchange, refresh rotation, previous-token grace, previous-token reuse outside grace, tenant mismatch, expiry, revoked token, legacy upgrade, pruning, and logout.
 
 Test command:
 
@@ -325,6 +388,7 @@ Acceptance criteria:
 - `/api/auth/accept-native-handoff` returns native refresh fields.
 - `/api/auth/refresh-native-session` proxies refresh token to CP with internal token.
 - `/api/auth/revoke-native-session` proxies logout best-effort.
+- CP network failure maps to `502/503`, not auth rejection.
 - Existing `/api/auth/refresh-runtime-token` remains compatible.
 - Tests cover proxy success, CP rejection, CP network failure, and missing token.
 
@@ -344,7 +408,8 @@ Acceptance criteria:
 - Refresh is single-flight across concurrent API requests.
 - Explicit 401/403 clears auth; network/5xx preserves local session candidate.
 - Logout calls native revoke before clearing local Keychain state.
-- Legacy bearer refresh fallback works when no refresh token is present.
+- Legacy bearer refresh fallback works when no refresh token is present, and stores native refresh fields if returned.
+- Widget fetches remain read-only and do not mutate auth on 401.
 
 Test command:
 
@@ -376,7 +441,7 @@ make test-ios
 
 ## Open Risks
 
-- Refresh rotation plus concurrent requests can invalidate a session if the client does not single-flight correctly.
-- Widgets may refresh from a separate process. They need either read-only access to the latest Keychain token or a conservative no-refresh fallback.
+- Refresh rotation plus concurrent requests can invalidate a session if the client does not single-flight correctly and CP grace does not cover a race.
 - SQLite migration code must be explicit enough for existing control-plane deployments.
 - Older iOS builds will still use bearer refresh until replaced.
+- Current shared tenant internal secret means CP cannot cryptographically identify the tenant caller beyond the shared secret; this is pre-existing and should be hardened separately.
