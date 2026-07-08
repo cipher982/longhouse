@@ -763,6 +763,98 @@ async def test_sqlite_interrupt_releases_writer_slot_and_next_write_succeeds(tmp
 
 
 @pytest.mark.asyncio
+async def test_non_sqlite_stall_escalates_when_interrupt_cannot_unwind(tmp_path, monkeypatch):
+    db_path = tmp_path / "write-serializer-non-sqlite-stall.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_AFTER_SECONDS", "0.01")
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_GRACE_SECONDS", "0.01")
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", "0")
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_STACK_DUMP_AFTER_MS", "1")
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_STACK_DUMP_RATE_LIMIT_MS", "0")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocked_python(_db):
+        started.set()
+        release.wait(1.0)
+
+    task = asyncio.create_task(serializer.execute(_blocked_python, label="ingest-live"))
+    await asyncio.to_thread(started.wait, 1.0)
+
+    metrics = {}
+    for _ in range(100):
+        metrics = serializer.get_metrics()
+        if metrics["active_wedged_writer_count"] >= 1:
+            break
+        await asyncio.sleep(0.01)
+
+    assert serializer.writer_active is True
+    assert metrics["active_interrupt_count"] == 1
+    assert metrics["active_wedged_writer_count"] == 1
+    assert metrics["last_active_wedged_writer_label"] == "ingest-live"
+    assert metrics["last_active_wedged_writer_reason"] == "interrupt_wedged"
+    assert metrics["active_stack_dump_count"] >= 2
+
+    release.set()
+    await task
+    assert serializer.writer_active is False
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stuck_write_deadman_frees_slot_when_exit_disabled(tmp_path, monkeypatch):
+    db_path = tmp_path / "write-serializer-cancelled-stuck.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_AFTER_SECONDS", "0")
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_BACKGROUND_FINALIZE_GRACE_SECONDS", "0.02")
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", "0")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    started = threading.Event()
+    release = threading.Event()
+    run_order: list[str] = []
+
+    def _stuck_write(_db):
+        run_order.append("stuck")
+        started.set()
+        release.wait(1.0)
+
+    def _next_write(db):
+        run_order.append("next")
+        db.execute(sa_text("INSERT INTO writes(label) VALUES ('next')"))
+
+    stuck = asyncio.create_task(serializer.execute(_stuck_write, label="ingest-live"))
+    await asyncio.to_thread(started.wait, 1.0)
+
+    stuck.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await stuck
+
+    next_write = asyncio.create_task(serializer.execute(_next_write, label="refresh-session"))
+    await asyncio.wait_for(next_write, timeout=1.0)
+
+    metrics = serializer.get_metrics()
+    assert run_order == ["stuck", "next"]
+    assert metrics["active_wedged_writer_count"] == 1
+    assert metrics["last_active_wedged_writer_label"] == "ingest-live"
+    assert metrics["last_active_wedged_writer_reason"] == "background_finalize_deadman"
+
+    release.set()
+
+
+@pytest.mark.asyncio
 async def test_enqueue_wakes_sleeping_head_when_writer_is_idle(tmp_path):
     db_path = tmp_path / "write-serializer-idle-queue.db"
     engine = make_engine(f"sqlite:///{db_path}")

@@ -162,6 +162,9 @@ _HISTOGRAM_WINDOW = 256
 _DEFAULT_STACK_DUMP_AFTER_MS = 30_000.0
 _DEFAULT_STACK_DUMP_RATE_LIMIT_MS = 30_000.0
 _DEFAULT_INTERRUPT_AFTER_SECONDS = 120.0
+_DEFAULT_INTERRUPT_GRACE_SECONDS = 15.0
+_DEFAULT_TIMEOUT_INTERRUPT_GRACE_SECONDS = 2.0
+_DEFAULT_BACKGROUND_FINALIZE_GRACE_SECONDS = 10.0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -172,6 +175,13 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except ValueError:
         return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in _TRUTHY_ENV
 
 
 def _utc_now_iso() -> str:
@@ -205,7 +215,7 @@ def _looks_like_sqlite_interrupt(exc: BaseException) -> bool:
     orig = getattr(exc, "orig", None)
     if isinstance(orig, BaseException) and _looks_like_sqlite_interrupt(orig):
         return True
-    return "interrupted" in str(exc).lower()
+    return False
 
 
 @dataclass
@@ -383,9 +393,14 @@ class WriteSerializer:
         self._active_started_at: float | None = None
         self._active_stack_dump_count = 0
         self._active_interrupt_count = 0
+        self._active_wedged_writer_count = 0
         self._last_active_interrupt_at_iso: str | None = None
         self._last_active_interrupt_age_ms: float | None = None
         self._last_active_interrupt_label: str | None = None
+        self._last_active_wedged_writer_at_iso: str | None = None
+        self._last_active_wedged_writer_age_ms: float | None = None
+        self._last_active_wedged_writer_label: str | None = None
+        self._last_active_wedged_writer_reason: str | None = None
         self._last_active_stack_dump_at: float | None = None
         self._last_active_stack_dump_iso: str | None = None
         self._last_active_stack_dump_age_ms: float | None = None
@@ -550,10 +565,15 @@ class WriteSerializer:
             "LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_AFTER_SECONDS",
             _DEFAULT_INTERRUPT_AFTER_SECONDS,
         )
-        candidates = [value for value in (configured, timeout_seconds) if value is not None and value > 0]
-        if not candidates:
+        if configured <= 0:
             return None
-        return min(candidates)
+        if timeout_seconds is not None and timeout_seconds > 0 and configured >= timeout_seconds:
+            grace_seconds = _env_float(
+                "LONGHOUSE_WRITE_SERIALIZER_TIMEOUT_INTERRUPT_GRACE_SECONDS",
+                _DEFAULT_TIMEOUT_INTERRUPT_GRACE_SECONDS,
+            )
+            return timeout_seconds + max(0.0, grace_seconds)
+        return configured
 
     async def _interrupt_active_after(self, *, job_id: int, label: str, interrupt_after_seconds: float) -> None:
         try:
@@ -588,10 +608,64 @@ class WriteSerializer:
                 interrupt_after_seconds,
             )
             conn.interrupt()
+            await self._escalate_if_interrupt_did_not_unwind(
+                job_id=job_id,
+                label=label,
+                interrupt_after_seconds=interrupt_after_seconds,
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
             logger.warning("WriteSerializer interrupt watchdog failed for %s", label or "unlabeled", exc_info=True)
+
+    async def _escalate_if_interrupt_did_not_unwind(
+        self,
+        *,
+        job_id: int,
+        label: str,
+        interrupt_after_seconds: float,
+    ) -> None:
+        grace_seconds = _env_float(
+            "LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_GRACE_SECONDS",
+            _DEFAULT_INTERRUPT_GRACE_SECONDS,
+        )
+        await asyncio.sleep(max(0.0, grace_seconds))
+        if not self._writer_active or self._active_job_id != job_id:
+            return
+
+        self._mark_wedged_writer(
+            job_id=job_id,
+            label=label,
+            reason="interrupt_wedged",
+            detail=f"interrupt_after_s={interrupt_after_seconds:.1f} grace_s={grace_seconds:.1f}",
+        )
+        self._exit_if_wedged_writer_enabled()
+
+    def _mark_wedged_writer(self, *, job_id: int, label: str, reason: str, detail: str) -> None:
+        active_age_ms = self.active_age_ms
+        self.capture_active_worker_stack_if_stale(reason=reason, force=True)
+        self._active_wedged_writer_count += 1
+        self._last_active_wedged_writer_at_iso = _utc_now_iso()
+        self._last_active_wedged_writer_age_ms = active_age_ms
+        self._last_active_wedged_writer_label = label
+        self._last_active_wedged_writer_reason = reason
+        logger.critical(
+            "WriteSerializer active writer wedged reason=%s label=%s job_id=%s age_ms=%.1f %s",
+            reason,
+            label or "unlabeled",
+            job_id,
+            active_age_ms,
+            detail,
+        )
+
+    def _exit_if_wedged_writer_enabled(self) -> None:
+        if self._wedged_writer_exit_enabled():
+            logger.critical("WriteSerializer forcing process exit after wedged active writer")
+            os._exit(86)
+
+    def _wedged_writer_exit_enabled(self) -> bool:
+        default_exit = os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV
+        return _env_bool("LONGHOUSE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", default_exit)
 
     async def execute(
         self,
@@ -793,10 +867,39 @@ class WriteSerializer:
 
         def _schedule_background_finalize(done_task: asyncio.Task[T]) -> None:
             async def _runner() -> None:
+                deadline_seconds = _env_float(
+                    "LONGHOUSE_WRITE_SERIALIZER_BACKGROUND_FINALIZE_GRACE_SECONDS",
+                    _DEFAULT_BACKGROUND_FINALIZE_GRACE_SECONDS,
+                )
+                if interrupt_after_seconds is not None:
+                    deadline_seconds += interrupt_after_seconds
+                elif timeout_seconds is not None and timeout_seconds > 0:
+                    deadline_seconds += timeout_seconds
+
+                timed_out = False
                 try:
-                    await asyncio.shield(done_task)
+                    await asyncio.wait_for(asyncio.shield(done_task), timeout=max(0.0, deadline_seconds))
+                except asyncio.TimeoutError:
+                    timed_out = True
                 except BaseException:
                     pass
+
+                if timed_out and self._writer_active and self._active_job_id == queued.seq:
+                    self._mark_wedged_writer(
+                        job_id=queued.seq,
+                        label=label,
+                        reason="background_finalize_deadman",
+                        detail=f"deadline_s={deadline_seconds:.1f}",
+                    )
+                    if self._wedged_writer_exit_enabled():
+                        self._exit_if_wedged_writer_enabled()
+                    else:
+                        logger.critical(
+                            "WriteSerializer releasing wedged writer slot with forced exit disabled; "
+                            "stale worker thread may still be running label=%s job_id=%s",
+                            label or "unlabeled",
+                            queued.seq,
+                        )
                 await _finalize(was_cancelled=True)
 
             task = asyncio.create_task(_runner())
@@ -814,10 +917,10 @@ class WriteSerializer:
                 label or "unlabeled",
                 timeout_seconds,
             )
-            worker_task.add_done_callback(_schedule_background_finalize)
+            _schedule_background_finalize(worker_task)
             raise
         except asyncio.CancelledError:
-            worker_task.add_done_callback(_schedule_background_finalize)
+            _schedule_background_finalize(worker_task)
             raise
         except BaseException:
             await _finalize(was_cancelled=False)
@@ -1034,11 +1137,18 @@ class WriteSerializer:
             "rolling_by_label": rolling,
             "active_stack_dump_count": self._active_stack_dump_count,
             "active_interrupt_count": self._active_interrupt_count,
+            "active_wedged_writer_count": self._active_wedged_writer_count,
             "last_active_interrupt_at": self._last_active_interrupt_at_iso,
             "last_active_interrupt_age_ms": (
                 round(self._last_active_interrupt_age_ms, 1) if self._last_active_interrupt_age_ms is not None else None
             ),
             "last_active_interrupt_label": self._last_active_interrupt_label,
+            "last_active_wedged_writer_at": self._last_active_wedged_writer_at_iso,
+            "last_active_wedged_writer_age_ms": (
+                round(self._last_active_wedged_writer_age_ms, 1) if self._last_active_wedged_writer_age_ms is not None else None
+            ),
+            "last_active_wedged_writer_label": self._last_active_wedged_writer_label,
+            "last_active_wedged_writer_reason": self._last_active_wedged_writer_reason,
             "last_active_stack_dump_at": self._last_active_stack_dump_iso,
             "last_active_stack_dump_age_ms": (
                 round(self._last_active_stack_dump_age_ms, 1) if self._last_active_stack_dump_age_ms is not None else None
