@@ -2040,7 +2040,7 @@ final class SessionViewModel: ObservableObject {
             var ticks = 0
             while !Task.isCancelled {
                 guard let self = self else { break }
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                try? await Task.sleep(nanoseconds: Self.visiblePollDelayNanoseconds(completedTicks: ticks))
                 if Task.isCancelled { break }
                 ticks += 1
                 let (connected, hasRunningTool) = await MainActor.run {
@@ -2077,10 +2077,15 @@ final class SessionViewModel: ObservableObject {
         managed: Bool,
         ticks: Int
     ) -> Bool {
+        if ticks <= 3 { return true }
         if !connected { return true }
         if hasRunningTool, ticks % 12 == 0 { return true }
         if managed, ticks % 3 == 0 { return true }
         return false
+    }
+
+    static func visiblePollDelayNanoseconds(completedTicks: Int) -> UInt64 {
+        completedTicks < 3 ? 750_000_000 : 5_000_000_000
     }
 
     private func startStream(sessionId: String, appState: AppState) {

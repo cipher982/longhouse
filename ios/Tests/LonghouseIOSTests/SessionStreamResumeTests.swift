@@ -224,12 +224,16 @@ struct SessionStreamResumeTests {
 
     @Test
     func visiblePollPolicyCoversDisconnectedRunningToolAndManagedBackstop() {
+        #expect(SessionViewModel.visiblePollDelayNanoseconds(completedTicks: 0) == 750_000_000)
+        #expect(SessionViewModel.visiblePollDelayNanoseconds(completedTicks: 3) == 5_000_000_000)
+        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 1))
+        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 3))
         #expect(SessionViewModel.shouldPollVisibleSession(connected: false, hasRunningTool: false, managed: false, ticks: 1))
         #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: true, managed: false, ticks: 12))
-        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 3))
+        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 6))
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 30))
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: true, managed: false, ticks: 11))
-        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 2))
+        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 5))
     }
 
     private func waitForItemIds(_ model: SessionViewModel, _ expected: [String]) async {
