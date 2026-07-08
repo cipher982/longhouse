@@ -23,6 +23,12 @@ from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import load_active_provisional_preview_map
+from zerg.services.retrieval_index import child_chunk_count
+from zerg.services.retrieval_index import connect_retrieval_db
+from zerg.services.retrieval_index import get_chunks_by_ids
+from zerg.services.retrieval_index import initialize_retrieval_db
+from zerg.services.retrieval_index import resolve_retrieval_db_path
+from zerg.services.retrieval_index import search_lexical_chunks
 from zerg.services.session_pause_requests import load_active_pause_request_map
 from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_processing.embeddings import CleanTranscriptEvent
@@ -51,6 +57,111 @@ def _embedding_corpus_unavailable_response(kind: str) -> HTTPException:
             "embedding worker before using semantic search."
         ),
     )
+
+
+def _try_retrieval_index_recall(
+    db: Session,
+    *,
+    query: str,
+    project: str | None,
+    provider: str | None,
+    since_days: int,
+    max_results: int,
+    context_mode: str,
+    explicit: bool,
+) -> RecallResponse | None:
+    """Serve recall from retrieval.db when a ready lexical index exists."""
+
+    if context_mode != "forensic":
+        if explicit:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="mode=lexical supports context_mode=forensic only.",
+            )
+        return None
+
+    bind = db.get_bind()
+    database_url = str(getattr(bind, "url", "") or "")
+    retrieval_path = resolve_retrieval_db_path(database_url)
+    if retrieval_path is None or not retrieval_path.exists():
+        return None
+
+    since = datetime.now(timezone.utc) - timedelta(days=since_days)
+    with connect_retrieval_db(retrieval_path) as retrieval_db:
+        initialize_retrieval_db(retrieval_db)
+        if child_chunk_count(retrieval_db) <= 0:
+            return None
+
+        hits = search_lexical_chunks(
+            retrieval_db,
+            query,
+            project=project,
+            provider=provider,
+            since=since.isoformat(),
+            hide_internal_canary=not is_internal_canary_provider_filter(provider),
+            limit=max_results,
+        )
+        parent_ids = [hit.parent_chunk_id for hit in hits if hit.parent_chunk_id is not None]
+        parents = get_chunks_by_ids(retrieval_db, parent_ids)
+
+    matches = []
+    for hit in hits:
+        parent = parents.get(hit.parent_chunk_id or -1)
+        context_text = parent.content if parent is not None else hit.content
+        context_start = parent.event_index_start if parent is not None else hit.event_index_start
+        context_end = parent.event_index_end if parent is not None else hit.event_index_end
+        context = [
+            {
+                "index": context_start,
+                "role": parent.chunk_kind if parent is not None else hit.chunk_kind,
+                "content": _bounded_context_text(context_text),
+                "tool_name": None,
+                "is_match": False,
+            },
+            {
+                "index": hit.event_index_start,
+                "role": hit.chunk_kind,
+                "content": _bounded_context_text(hit.content),
+                "tool_name": None,
+                "is_match": True,
+            },
+        ]
+        matches.append(
+            RecallMatch(
+                session_id=hit.session_id,
+                chunk_index=hit.chunk_index,
+                score=hit.score,
+                chunk_id=hit.chunk_id,
+                chunk_uid=hit.chunk_uid,
+                parent_chunk_id=hit.parent_chunk_id,
+                context_chunk_id=parent.chunk_id if parent is not None else hit.chunk_id,
+                chunk_kind=hit.chunk_kind,
+                context_text=context_text,
+                intent=hit.intent_text,
+                evidence=hit.evidence_text,
+                structured_hits=_structured_hits(hit.structured_text),
+                diagnostics={"mode": "lexical", "source": "retrieval_db"},
+                event_index_start=hit.event_index_start,
+                event_index_end=hit.event_index_end,
+                total_events=max(0, context_end - context_start + 1),
+                context=context,
+                match_event_id=hit.first_event_id,
+            )
+        )
+
+    return RecallResponse(matches=matches, total=len(matches))
+
+
+def _bounded_context_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return value[:500] + ("..." if len(value) > 500 else "")
+
+
+def _structured_hits(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [part for part in value.split() if ":" in part][:20]
 
 
 @router.get("/sessions/semantic", response_model=SemanticSearchResponse)
@@ -218,6 +329,7 @@ async def recall_sessions(
     max_results: int = Query(5, ge=1, le=20, description="Max matches"),
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
+    mode: str = "auto",
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -232,6 +344,31 @@ async def recall_sessions(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="context_mode must be one of: forensic, active_context",
+        )
+    if mode not in {"auto", "lexical", "semantic"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="mode must be one of: auto, lexical, semantic",
+        )
+
+    if mode in {"auto", "lexical"}:
+        lexical_response = _try_retrieval_index_recall(
+            db,
+            query=query,
+            project=project,
+            provider=provider,
+            since_days=since_days,
+            max_results=max_results,
+            context_mode=context_mode,
+            explicit=mode == "lexical",
+        )
+        if lexical_response is not None:
+            return lexical_response
+
+    if mode == "lexical":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Retrieval index unavailable: no searchable recall chunks are ready.",
         )
 
     config = get_embedding_config()

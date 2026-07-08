@@ -82,6 +82,27 @@ class RetrievalHit:
 
 
 @dataclass(frozen=True)
+class StoredRetrievalChunk:
+    """A stored recall chunk hydrated from retrieval.db."""
+
+    chunk_id: int
+    chunk_uid: str
+    session_id: str
+    parent_chunk_id: int | None
+    chunk_index: int
+    chunk_kind: str
+    retrieval_role: str
+    event_index_start: int
+    event_index_end: int
+    first_event_id: int | None
+    last_event_id: int | None
+    content: str
+    intent_text: str | None
+    evidence_text: str | None
+    structured_text: str | None
+
+
+@dataclass(frozen=True)
 class _Trace:
     index: int
     events: list[CleanTranscriptEvent]
@@ -569,6 +590,13 @@ def check_fts_integrity(conn: sqlite3.Connection) -> bool:
     return ok
 
 
+def child_chunk_count(conn: sqlite3.Connection) -> int:
+    """Return the number of searchable child chunks."""
+
+    row = conn.execute("SELECT count(*) FROM recall_chunks WHERE retrieval_role = 'child'").fetchone()
+    return int(row[0] if row else 0)
+
+
 def build_fts_query(raw: str) -> str:
     """Build a safe FTS5 AND query while preserving code-shaped tokens."""
 
@@ -591,6 +619,7 @@ def search_lexical_chunks(
     provider: str | None = None,
     environment: str | None = None,
     since: str | None = None,
+    hide_internal_canary: bool = True,
     limit: int = 5,
     inner_limit: int | None = None,
 ) -> list[RetrievalHit]:
@@ -626,6 +655,18 @@ def search_lexical_chunks(
           AND (:provider IS NULL OR c.provider = :provider)
           AND (:environment IS NULL OR c.environment = :environment)
           AND (:since IS NULL OR c.started_at >= :since)
+          AND (
+            :hide_internal_canary = 0
+            OR (
+              lower(coalesce(c.provider, '')) NOT IN ('canary', 'cnary')
+              AND lower(coalesce(c.project, '')) NOT IN ('canary', 'cnary')
+              AND lower(coalesce(c.project, '')) NOT LIKE 'canary-%'
+              AND lower(coalesce(c.project, '')) NOT LIKE 'cnary-%'
+              AND lower(coalesce(c.device_id, '')) NOT IN ('canary', 'cnary')
+              AND lower(coalesce(c.device_id, '')) NOT LIKE '%-canary'
+              AND lower(coalesce(c.device_id, '')) NOT LIKE '%-cnary'
+            )
+          )
         ORDER BY score ASC
         LIMIT :limit
         """,
@@ -635,6 +676,7 @@ def search_lexical_chunks(
             "provider": provider,
             "environment": environment,
             "since": since,
+            "hide_internal_canary": 1 if hide_internal_canary else 0,
             "limit": max_rows,
         },
     ).fetchall()
@@ -672,3 +714,44 @@ def _diversify_hits_by_session(hits: list[RetrievalHit], *, limit: int) -> list[
         if len(diversified) >= limit:
             break
     return diversified
+
+
+def get_chunks_by_ids(conn: sqlite3.Connection, chunk_ids: Iterable[int]) -> dict[int, StoredRetrievalChunk]:
+    """Hydrate stored chunks by id."""
+
+    ids = list(dict.fromkeys(int(chunk_id) for chunk_id in chunk_ids if chunk_id is not None))
+    if not ids:
+        return {}
+    placeholders = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        f"""
+        SELECT
+          id, chunk_uid, session_id, parent_chunk_id, chunk_index, chunk_kind,
+          retrieval_role, event_index_start, event_index_end, first_event_id,
+          last_event_id, content, intent_text, evidence_text, structured_text
+        FROM recall_chunks
+        WHERE id IN ({placeholders})
+        """,
+        ids,
+    ).fetchall()
+    return {int(row["id"]): _stored_chunk_from_row(row) for row in rows}
+
+
+def _stored_chunk_from_row(row: sqlite3.Row) -> StoredRetrievalChunk:
+    return StoredRetrievalChunk(
+        chunk_id=int(row["id"]),
+        chunk_uid=str(row["chunk_uid"]),
+        session_id=str(row["session_id"]),
+        parent_chunk_id=int(row["parent_chunk_id"]) if row["parent_chunk_id"] is not None else None,
+        chunk_index=int(row["chunk_index"]),
+        chunk_kind=str(row["chunk_kind"]),
+        retrieval_role=str(row["retrieval_role"]),
+        event_index_start=int(row["event_index_start"]),
+        event_index_end=int(row["event_index_end"]),
+        first_event_id=int(row["first_event_id"]) if row["first_event_id"] is not None else None,
+        last_event_id=int(row["last_event_id"]) if row["last_event_id"] is not None else None,
+        content=str(row["content"]),
+        intent_text=row["intent_text"],
+        evidence_text=row["evidence_text"],
+        structured_text=row["structured_text"],
+    )

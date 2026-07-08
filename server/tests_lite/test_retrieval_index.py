@@ -1,13 +1,15 @@
+import asyncio
+import sqlite3
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
-
-import sqlite3
 
 from sqlalchemy import inspect
 
 from zerg.database import initialize_database
 from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.routers.agents_search import recall_sessions
 from zerg.services.retrieval_index import RetrievalChunk
 from zerg.services.retrieval_index import check_fts_integrity
 from zerg.services.retrieval_index import connect_retrieval_db
@@ -269,6 +271,75 @@ def test_filters_apply_before_results_return(tmp_path):
 
         assert [hit.chunk_uid for hit in search_lexical_chunks(conn, "needle", provider="codex")] == ["codex"]
         assert [hit.chunk_uid for hit in search_lexical_chunks(conn, "needle", project="other")] == ["claude"]
+
+
+def test_internal_canary_chunks_are_hidden_by_default(tmp_path):
+    with _open_index(tmp_path) as conn:
+        replace_session_chunks(
+            conn,
+            "visible",
+            [_chunk("visible", session_id="visible", content="needle", provider="codex", project="longhouse")],
+        )
+        replace_session_chunks(
+            conn,
+            "canary",
+            [_chunk("canary", session_id="canary", content="needle", provider="canary", project="canary")],
+        )
+
+        assert [hit.chunk_uid for hit in search_lexical_chunks(conn, "needle")] == ["visible"]
+        assert [hit.chunk_uid for hit in search_lexical_chunks(conn, "needle", hide_internal_canary=False, limit=2)] == [
+            "visible",
+            "canary",
+        ]
+
+
+def test_recall_fast_path_uses_retrieval_db_without_embedding_cache(monkeypatch, tmp_path):
+    main_path = tmp_path / "longhouse.db"
+    engine = make_engine(f"sqlite:///{main_path}")
+    initialize_database(engine)
+    SessionLocal = make_sessionmaker(engine)
+
+    retrieval_path = resolve_retrieval_db_path(f"sqlite:///{main_path}")
+    with connect_retrieval_db(retrieval_path) as conn:
+        initialize_retrieval_db(conn)
+        replace_session_chunks(
+            conn,
+            "session-1",
+            [
+                _chunk("parent", role="parent", kind="trace_parent", content="parent trace with timeout"),
+                _chunk("child", content="specific timeout evidence", parent_uid="parent"),
+            ],
+        )
+
+    def fail_embedding_config():
+        raise AssertionError("fast retrieval recall must not request embedding config")
+
+    monkeypatch.setattr("zerg.models_config.get_embedding_config", fail_embedding_config)
+
+    with SessionLocal() as db:
+        response = asyncio.run(
+            recall_sessions(
+                query="timeout",
+                project=None,
+                provider=None,
+                since_days=90,
+                max_results=5,
+                context_turns=2,
+                context_mode="forensic",
+                mode="auto",
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+        )
+
+    assert response.total == 1
+    match = response.matches[0]
+    assert match.session_id == "session-1"
+    assert match.chunk_uid == "child"
+    assert match.parent_chunk_id is not None
+    assert match.context_text == "parent trace with timeout"
+    assert match.diagnostics == {"mode": "lexical", "source": "retrieval_db"}
 
 
 def test_rebuild_fts_restores_child_rows_only(tmp_path):

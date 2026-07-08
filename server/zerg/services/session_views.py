@@ -1355,6 +1355,16 @@ class RecallMatch(BaseModel):
     session_id: str
     chunk_index: int
     score: float
+    chunk_id: Optional[int] = None
+    chunk_uid: Optional[str] = None
+    parent_chunk_id: Optional[int] = None
+    context_chunk_id: Optional[int] = None
+    chunk_kind: Optional[str] = None
+    context_text: Optional[str] = None
+    intent: Optional[str] = None
+    evidence: Optional[str] = None
+    structured_hits: List[str] = Field(default_factory=list)
+    diagnostics: Dict[str, Any] = Field(default_factory=dict)
     event_index_start: Optional[int] = None
     event_index_end: Optional[int] = None
     total_events: int = 0
