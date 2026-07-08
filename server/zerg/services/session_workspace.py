@@ -32,6 +32,7 @@ from zerg.services.session_views import build_event_input_origin_map
 from zerg.services.session_views import build_event_media_ref_map
 from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_live_launch_placeholder_response
+from zerg.services.session_views import build_session_action_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_tool_call_state_map
 from zerg.services.session_views import is_session_closed
@@ -485,6 +486,17 @@ def _build_projection_response(
     )
     for item in projection.items:
         if item.kind == "event" and item.event is not None:
+            action = build_session_action_response(item.event)
+            if action is not None:
+                projection_items.append(
+                    SessionProjectionItemResponse(
+                        kind="action",
+                        session_id=str(item.session.id),
+                        timestamp=item.event.timestamp,
+                        action=action,
+                    )
+                )
+                continue
             projection_items.append(
                 SessionProjectionItemResponse(
                     kind="event",

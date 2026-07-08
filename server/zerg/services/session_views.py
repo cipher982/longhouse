@@ -7,6 +7,7 @@ models.  Both the ``agents`` and ``timeline`` router families import from here
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from datetime import timedelta
@@ -42,6 +43,7 @@ from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.services.provisional_events import TranscriptPreview
+from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.send_affordance import OFFLINE_HOST_STATES
 from zerg.services.send_affordance import SendDisabledReason
 from zerg.services.send_affordance import project_send_affordance
@@ -88,10 +90,78 @@ PROVISIONAL_TRANSCRIPT_COMPLETE_FRESHNESS = timedelta(minutes=10)
 MOBILE_TOOL_OUTPUT_MAX_CHARS = 2000
 DROPPED_TOOL_AGE = timedelta(hours=1)
 _TRUSTED_NON_RUNNER_CONTROL_PLANES = trusted_non_runner_control_planes()
+_CODEX_TURN_ABORTED_PREFIX = "<turn_aborted>"
+_CODEX_TURN_INTERRUPTED_TEXT = "User interrupted the turn"
 
 # ---------------------------------------------------------------------------
 # Coercion helpers
 # ---------------------------------------------------------------------------
+
+
+def _json_obj(raw: str | None) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _codex_first_input_text(payload: dict[str, Any]) -> str | None:
+    content = payload.get("content")
+    if not isinstance(content, list):
+        return None
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") != "input_text":
+            continue
+        text = item.get("text")
+        return text if isinstance(text, str) else None
+    return None
+
+
+def _classify_codex_turn_interrupted(event: AgentEvent) -> str | None:
+    raw = _json_obj(decode_raw_json(event))
+    if raw is None:
+        role = str(getattr(event, "role", "") or "").lower()
+        if role == "system" and event.content_text == _CODEX_TURN_INTERRUPTED_TEXT:
+            return "interrupted"
+        return None
+
+    payload = raw.get("payload")
+    if not isinstance(payload, dict):
+        return None
+
+    if raw.get("type") == "event_msg" and payload.get("type") == "turn_aborted":
+        reason = payload.get("reason")
+        return "interrupted" if reason == "interrupted" else None
+
+    if raw.get("type") != "response_item":
+        return None
+    if payload.get("type") != "message" or payload.get("role") != "user":
+        return None
+    first_text = _codex_first_input_text(payload)
+    if isinstance(first_text, str) and first_text.lstrip().startswith(_CODEX_TURN_ABORTED_PREFIX):
+        return "marker_only"
+    return None
+
+
+def build_session_action_response(event: AgentEvent) -> TranscriptActionResponse | None:
+    """Project provider lifecycle/control evidence as a transcript action."""
+    provider_reason = _classify_codex_turn_interrupted(event)
+    if provider_reason is None:
+        return None
+
+    return TranscriptActionResponse(
+        id=f"event:{event.id}:turn_interrupted",
+        kind="turn_interrupted",
+        provider="codex",
+        source="user",
+        provider_reason=provider_reason,
+        event_id=event.id,
+    )
 
 
 def _coerce_session_loop_mode(value: str | None) -> SessionLoopMode:
@@ -1076,6 +1146,17 @@ class EventResponse(UTCBaseModel):
     )
 
 
+class TranscriptActionResponse(UTCBaseModel):
+    """Provider-neutral lifecycle/control action projected into a transcript."""
+
+    id: str = Field(..., description="Stable action id within the projection")
+    kind: str = Field(..., description="Action kind, e.g. turn_interrupted")
+    provider: Optional[str] = Field(None, description="Provider that emitted the action evidence")
+    source: str = Field("unknown", description="Action source: user|remote_control|provider|system|unknown")
+    provider_reason: Optional[str] = Field(None, description="Provider-specific reason or compatibility marker")
+    event_id: Optional[int] = Field(None, description="Backing event id when the action projects from an event row")
+
+
 class EventsListResponse(BaseModel):
     """Response for events list."""
 
@@ -1148,10 +1229,11 @@ class SessionTurnEnvelopeResponse(BaseModel):
 class SessionProjectionItemResponse(UTCBaseModel):
     """One stitched item in a selected session's projected lineage path."""
 
-    kind: str = Field(..., description="Projection item kind: event|seam")
+    kind: str = Field(..., description="Projection item kind: event|seam|action")
     session_id: str = Field(..., description="Concrete session UUID for this item")
     timestamp: datetime = Field(..., description="Timestamp used for item ordering and display")
     event: Optional[EventResponse] = Field(None, description="Present when kind=event")
+    action: Optional[TranscriptActionResponse] = Field(None, description="Present when kind=action")
     continued_from_session_id: Optional[str] = Field(None, description="Parent continuation session UUID for seams")
     continuation_kind: Optional[str] = Field(None, description="Kernel branch kind for seam items")
     origin_label: Optional[str] = Field(None, description="Origin label for seam items")

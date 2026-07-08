@@ -91,6 +91,7 @@ from zerg.services.session_views import build_event_input_origin_map
 from zerg.services.session_views import build_event_media_ref_map
 from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_live_launch_placeholder_response
+from zerg.services.session_views import build_session_action_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_session_turn_response
 from zerg.services.session_views import build_tool_call_state_map
@@ -1306,6 +1307,17 @@ def get_session_projection(
         )
         for item in projection.items:
             if item.kind == "event" and item.event is not None:
+                action = build_session_action_response(item.event)
+                if action is not None:
+                    items.append(
+                        SessionProjectionItemResponse(
+                            kind="action",
+                            session_id=str(item.session.id),
+                            timestamp=item.event.timestamp,
+                            action=action,
+                        )
+                    )
+                    continue
                 items.append(
                     SessionProjectionItemResponse(
                         kind="event",
