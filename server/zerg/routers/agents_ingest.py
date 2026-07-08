@@ -41,6 +41,7 @@ from zerg.services.agents import SessionIngest
 from zerg.services.agents.store import is_workflow_journal_only_payload
 from zerg.services.session_views import IngestResponse
 from zerg.services.write_serializer import InterruptedWriteError
+from zerg.services.write_serializer import WriteQueueTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,16 @@ _TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 def _unix_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
 
 
 def _ship_trace_from_request(request: Request) -> dict | None:
@@ -115,7 +126,10 @@ _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 1000.0
 _LIVE_INGEST_WRITER_QUEUE_HARD_LIMIT = 10
 _LIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 5_000.0
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
-_ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS = 64
+_ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS = 16
+_ARCHIVE_INGEST_QUEUE_TIMEOUT_SECONDS = 6.0
+_ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS = 6.0
+_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS = 24.0
 _INGEST_STAGE_HEADER_LIMIT = 8
 _UNTRACED_INGEST_MAX_EVENTS = 200
 _UNTRACED_INGEST_MAX_SOURCE_LINES = 200
@@ -134,6 +148,33 @@ def _ingest_lane_for_label(label: str) -> str:
     if label in _ARCHIVE_INGEST_LABELS:
         return "archive"
     return "default"
+
+
+def _ingest_write_timeout_for_label(label: str) -> float | None:
+    if label not in _ARCHIVE_INGEST_LABELS:
+        return None
+    timeout = _env_float("LONGHOUSE_ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS", _ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS)
+    return timeout if timeout > 0 else None
+
+
+def _ingest_queue_timeout_for_label(label: str) -> float | None:
+    if label not in _ARCHIVE_INGEST_LABELS:
+        return None
+    timeout = _env_float("LONGHOUSE_ARCHIVE_INGEST_QUEUE_TIMEOUT_SECONDS", _ARCHIVE_INGEST_QUEUE_TIMEOUT_SECONDS)
+    return timeout if timeout > 0 else None
+
+
+def _ingest_request_budget_for_label(label: str) -> float | None:
+    if label not in _ARCHIVE_INGEST_LABELS:
+        return None
+    budget = _env_float("LONGHOUSE_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS", _ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS)
+    return budget if budget > 0 else None
+
+
+def _cap_timeout_to_remaining(timeout: float | None, remaining_seconds: float) -> float | None:
+    if timeout is None:
+        return None
+    return min(timeout, max(0.1, remaining_seconds / 2.0))
 
 
 def _copy_session_ingest(
@@ -892,6 +933,7 @@ async def ingest_session(
     validate_finished_at_ms: int | None = None
     ship_trace = _ship_trace_from_request(request)
     write_label = _write_serializer_label_for_ship_trace(ship_trace)
+    request_budget_started = time.monotonic()
     archive_slot_acquired = False
     with tracer.start_as_current_span("longhouse.ingest") as span:
         set_span_attributes(
@@ -1149,6 +1191,9 @@ async def ingest_session(
 
             with tracer.start_as_current_span("longhouse.ingest.write") as write_span:
                 write_started = time.monotonic()
+                request_budget_seconds = _ingest_request_budget_for_label(write_label)
+                write_timeout_seconds = _ingest_write_timeout_for_label(write_label)
+                queue_timeout_seconds = _ingest_queue_timeout_for_label(write_label)
                 ingest_batches = (
                     _archive_ingest_batches(data, max_items=min(ingest_chunk, _ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS))
                     if write_label in _COOPERATIVE_INGEST_LABELS
@@ -1158,6 +1203,23 @@ async def ingest_session(
                 archive_primary_states: list[str] = []
                 legacy_raw_states: list[bool] = []
                 for batch_index, ingest_batch in enumerate(ingest_batches):
+                    batch_write_timeout_seconds = write_timeout_seconds
+                    batch_queue_timeout_seconds = queue_timeout_seconds
+                    if request_budget_seconds is not None:
+                        elapsed_seconds = time.monotonic() - request_budget_started
+                        remaining_seconds = request_budget_seconds - elapsed_seconds
+                        if remaining_seconds <= 0:
+                            response.headers["X-Ingest-Request-Budget-Seconds"] = f"{request_budget_seconds:.1f}"
+                            response.headers["X-Ingest-Request-Elapsed-Seconds"] = f"{elapsed_seconds:.1f}"
+                            response.headers["X-Ingest-Completed-Sub-Batches"] = str(len(write_results))
+                            request_status_label = "archive_backpressure"
+                            _raise_archive_ingest_backpressure(
+                                response,
+                                admission_state="request_budget_exhausted",
+                                retry_after_seconds=_ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
+                            )
+                        batch_write_timeout_seconds = _cap_timeout_to_remaining(write_timeout_seconds, remaining_seconds)
+                        batch_queue_timeout_seconds = _cap_timeout_to_remaining(queue_timeout_seconds, remaining_seconds)
                     if batch_index > 0 and write_label in _COOPERATIVE_INGEST_LABELS:
                         await asyncio.sleep(0)
                         await _check_ingest_writer_pressure(write_label, response)
@@ -1167,11 +1229,27 @@ async def ingest_session(
                     archive_primary_records_written = 0
                     legacy_raw_effective = settings.legacy_raw_write_enabled
                     if settings.archive_primary_write_enabled:
-                        archive_primary_prepared = await _prepare_archive_primary_before_ingest(
+                        prepare_coro = _prepare_archive_primary_before_ingest(
                             data=ingest_batch,
                             fallback_db=db,
                             settings=settings,
                         )
+                        try:
+                            if request_budget_seconds is not None:
+                                prepare_timeout_seconds = max(
+                                    0.1,
+                                    request_budget_seconds - (time.monotonic() - request_budget_started),
+                                )
+                                archive_primary_prepared = await asyncio.wait_for(
+                                    prepare_coro,
+                                    timeout=prepare_timeout_seconds,
+                                )
+                            else:
+                                archive_primary_prepared = await prepare_coro
+                        except asyncio.TimeoutError:
+                            from zerg.services.archive_shadow import PreparedArchiveShadow
+
+                            archive_primary_prepared = PreparedArchiveShadow(enabled=True, error="prepare_timeout")
                         if archive_primary_prepared.error:
                             if not settings.legacy_raw_write_enabled:
                                 request_status_label = "archive_primary_failed"
@@ -1210,6 +1288,8 @@ async def ingest_session(
                         ),
                         db,
                         label=write_label,
+                        timeout_seconds=batch_write_timeout_seconds,
+                        queue_timeout_seconds=batch_queue_timeout_seconds,
                     )
                     write_results.append(batch_result)
                     archive_primary_states.append(batch_archive_primary_state)
@@ -1345,6 +1425,37 @@ async def ingest_session(
                 _raise_archive_ingest_backpressure(
                     response,
                     admission_state="writer_interrupted",
+                    retry_after_seconds=_ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS,
+                )
+        except WriteQueueTimeoutError as exc:
+            response.headers["X-Ingest-Queue-Timeout-Label"] = exc.label
+            response.headers["X-Ingest-Queue-Timeout-Seconds"] = f"{exc.queue_timeout_seconds:.1f}"
+            request_status_label = "archive_backpressure" if write_label in _ARCHIVE_INGEST_LABELS else "live_backpressure"
+            if write_label == "ingest-live":
+                _raise_live_ingest_backpressure(
+                    response,
+                    admission_state="writer_queue_timeout",
+                    retry_after_seconds=_ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
+                )
+            else:
+                _raise_archive_ingest_backpressure(
+                    response,
+                    admission_state="writer_queue_timeout",
+                    retry_after_seconds=_ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
+                )
+        except asyncio.TimeoutError:
+            if write_label == "ingest-live":
+                request_status_label = "live_backpressure"
+                _raise_live_ingest_backpressure(
+                    response,
+                    admission_state="writer_timeout",
+                    retry_after_seconds=_ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
+                )
+            else:
+                request_status_label = "archive_backpressure"
+                _raise_archive_ingest_backpressure(
+                    response,
+                    admission_state="writer_timeout",
                     retry_after_seconds=_ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS,
                 )
         except Exception:

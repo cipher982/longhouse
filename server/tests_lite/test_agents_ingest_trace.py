@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from types import SimpleNamespace
@@ -36,12 +37,15 @@ from zerg.routers.agents_ingest import _archive_retry_after_for_queue_depth
 from zerg.routers.agents_ingest import _check_live_ingest_writer_pressure
 from zerg.routers.agents_ingest import _incremental_session_counts_for_label
 from zerg.routers.agents_ingest import _ingest_lane_for_label
+from zerg.routers.agents_ingest import _ingest_queue_timeout_for_label
+from zerg.routers.agents_ingest import _ingest_write_timeout_for_label
 from zerg.routers.agents_ingest import _release_archive_ingest_slot
 from zerg.routers.agents_ingest import _stage_timing_header_value
 from zerg.routers.agents_ingest import _sync_derived_projections_for_label
 from zerg.routers.agents_ingest import _sync_session_counts_for_label
 from zerg.routers.agents_ingest import _write_serializer_label_for_ship_trace
 from zerg.services.write_serializer import InterruptedWriteError
+from zerg.services.write_serializer import WriteQueueTimeoutError
 
 
 def _make_client(tmp_path):
@@ -548,7 +552,7 @@ def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_archive_ingest_does_not_pass_serializer_timeout(tmp_path, monkeypatch):
+def test_archive_ingest_passes_bounded_serializer_timeout(tmp_path, monkeypatch):
     calls: list[dict] = []
 
     class RecordingSerializer:
@@ -561,7 +565,8 @@ def test_archive_ingest_does_not_pass_serializer_timeout(tmp_path, monkeypatch):
         async def execute_after_closing_request_session(self, fn, fallback_db, **kwargs):
             calls.append(kwargs)
             assert kwargs["label"] == "ingest-replay"
-            assert "timeout_seconds" not in kwargs
+            assert kwargs["timeout_seconds"] == _ingest_write_timeout_for_label("ingest-replay")
+            assert kwargs["queue_timeout_seconds"] == _ingest_queue_timeout_for_label("ingest-replay")
             return fn(fallback_db)
 
     client, _ = _make_client(tmp_path)
@@ -611,6 +616,180 @@ def test_archive_ingest_does_not_pass_serializer_timeout(tmp_path, monkeypatch):
         assert response.headers["X-Ingest-Lane"] == "archive"
         assert response.headers["X-Ingest-Admission-State"] == "archive_slot_acquired"
         assert response.headers["X-Ingest-Sub-Batches"] == "1"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_archive_ingest_queue_timeout_returns_retryable_backpressure(tmp_path, monkeypatch):
+    class QueueTimingOutSerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+        queue_depth = 8
+
+        async def execute_after_closing_request_session(self, _fn, _fallback_db, **kwargs):
+            raise WriteQueueTimeoutError(
+                label=kwargs["label"],
+                queue_timeout_seconds=kwargs["queue_timeout_seconds"],
+            )
+
+    client, _ = _make_client(tmp_path)
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: QueueTimingOutSerializer(),
+    )
+    try:
+        session_id = "24111111-2222-3333-4444-555555555555"
+        payload = {
+            "id": session_id,
+            "provider": "codex",
+            "environment": "test",
+            "project": "zerg",
+            "started_at": "2026-01-01T00:00:00Z",
+            "events": [
+                {
+                    "role": "assistant",
+                    "content_text": "hi",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "source_path": "/tmp/queue-timeout-ingest.jsonl",
+                    "source_offset": 0,
+                    "raw_json": '{"type":"assistant","text":"hi"}',
+                }
+            ],
+        }
+        response = client.post(
+            "/agents/ingest",
+            json=payload,
+            headers=_spool_replay_trace_header(session_id),
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert response.headers["Retry-After"] == "5"
+        assert response.headers["X-Ingest-Lane"] == "archive"
+        assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
+        assert response.headers["X-Ingest-Error-Kind"] == "archive_ingest_backpressure"
+        assert response.headers["X-Ingest-Admission-State"] == "writer_queue_timeout"
+        assert response.headers["X-Ingest-Queue-Timeout-Label"] == "ingest-replay"
+        assert response.headers["X-Ingest-Queue-Timeout-Seconds"] == "6.0"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_archive_ingest_request_budget_exhaustion_returns_retryable_backpressure(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS", "0.05")
+
+    class SlowSuccessfulSerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+        queue_depth = 0
+
+        async def execute_after_closing_request_session(self, fn, fallback_db, **_kwargs):
+            result = fn(fallback_db)
+            await asyncio.sleep(0.08)
+            return result
+
+    client, SessionLocal = _make_client(tmp_path)
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: SlowSuccessfulSerializer(),
+    )
+    try:
+        session_id = "24511111-2222-3333-4444-555555555555"
+        response = client.post(
+            "/agents/ingest",
+            json=_batched_archive_primary_payload(session_id, 17),
+            headers=_spool_replay_trace_header(session_id),
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert response.headers["Retry-After"] == "5"
+        assert response.headers["X-Ingest-Lane"] == "archive"
+        assert response.headers["X-Ingest-Admission-State"] == "request_budget_exhausted"
+        assert response.headers["X-Ingest-Completed-Sub-Batches"] == "1"
+        assert response.headers["X-Ingest-Request-Budget-Seconds"] == "0.1"
+        assert float(response.headers["X-Ingest-Request-Elapsed-Seconds"]) >= 0.05
+        with SessionLocal() as db:
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 16
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    ("work_context", "expected_lane", "expected_kind", "expected_retry_after"),
+    [
+        ("live_transcript", "live", "live_ingest_backpressure", "5"),
+        ("spool_replay", "archive", "archive_ingest_backpressure", "15"),
+    ],
+)
+def test_timed_out_ingest_write_returns_retryable_backpressure(
+    tmp_path,
+    monkeypatch,
+    work_context,
+    expected_lane,
+    expected_kind,
+    expected_retry_after,
+):
+    class TimingOutSerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+        queue_depth = 0
+
+        async def execute_after_closing_request_session(self, _fn, _fallback_db, **_kwargs):
+            raise asyncio.TimeoutError()
+
+    client, _ = _make_client(tmp_path)
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: TimingOutSerializer(),
+    )
+    try:
+        session_id = "25111111-2222-3333-4444-555555555555"
+        payload = {
+            "id": session_id,
+            "provider": "codex",
+            "environment": "test",
+            "project": "zerg",
+            "started_at": "2026-01-01T00:00:00Z",
+            "events": [
+                {
+                    "role": "assistant",
+                    "content_text": "hi",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "source_path": "/tmp/timed-out-ingest.jsonl",
+                    "source_offset": 0,
+                    "raw_json": '{"type":"assistant","text":"hi"}',
+                }
+            ],
+        }
+        response = client.post(
+            "/agents/ingest",
+            json=payload,
+            headers={
+                "X-Agents-Token": "dev",
+                "X-Longhouse-Ship-Trace": json.dumps(
+                    {
+                        "schema": "ship_trace.v1",
+                        "trace_id": f"{session_id}:0:64:1778220000000",
+                        "provider": "codex",
+                        "session_id": session_id,
+                        "work_context": work_context,
+                    },
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert response.headers["Retry-After"] == expected_retry_after
+        assert response.headers["X-Ingest-Lane"] == expected_lane
+        assert response.headers["X-Ingest-Backpressure"] == expected_kind
+        assert response.headers["X-Ingest-Error-Kind"] == expected_kind
+        assert response.headers["X-Ingest-Admission-State"] == "writer_timeout"
     finally:
         api_app.dependency_overrides.clear()
 
@@ -756,9 +935,9 @@ def test_archive_primary_prepare_is_bounded_to_archive_sub_batches(tmp_path, mon
         )
 
         assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.headers["X-Ingest-Sub-Batches"] == "3"
+        assert response.headers["X-Ingest-Sub-Batches"] == "9"
         assert response.headers["X-Ingest-Archive-Primary"] == "written"
-        assert prepared_sizes == [64, 64, 2]
+        assert prepared_sizes == [16, 16, 16, 16, 16, 16, 16, 16, 2]
     finally:
         api_app.dependency_overrides.clear()
 
@@ -837,7 +1016,7 @@ def test_live_transcript_ingest_uses_cooperative_sub_batches(tmp_path):
         assert response.status_code == status.HTTP_200_OK, response.text
         assert response.headers["X-Ingest-Lane"] == "live"
         assert response.headers["X-Ingest-Label"] == "ingest-live"
-        assert response.headers["X-Ingest-Sub-Batches"] == "3"
+        assert response.headers["X-Ingest-Sub-Batches"] == "9"
         with SessionLocal() as db:
             assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 130
     finally:
@@ -871,10 +1050,41 @@ def test_archive_primary_later_batch_prepare_failure_falls_back_when_legacy_raw_
         assert response.status_code == status.HTTP_200_OK, response.text
         assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
         assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
-        assert response.headers["X-Ingest-Sub-Batches"] == "2"
-        assert prepared_sizes == [64, 1]
+        assert response.headers["X-Ingest-Sub-Batches"] == "5"
+        assert prepared_sizes == [16, 16, 16, 16, 1]
         with SessionLocal() as db:
             assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 65
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_archive_primary_prepare_timeout_falls_back_when_legacy_raw_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS", "0.01")
+
+    async def slow_prepare(*, data, fallback_db, settings):  # noqa: ARG001
+        await asyncio.sleep(0.2)
+        return SimpleNamespace(error=None, chunks=(), records_written=0)
+
+    monkeypatch.setattr(
+        "zerg.routers.agents_ingest._prepare_archive_primary_before_ingest",
+        slow_prepare,
+    )
+    client, SessionLocal = _make_client(tmp_path)
+    try:
+        session_id = "59111111-2222-3333-4444-555555555555"
+        response = client.post(
+            "/agents/ingest",
+            json=_batched_archive_primary_payload(session_id, 1),
+            headers=_spool_replay_trace_header(session_id),
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
+        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
+        with SessionLocal() as db:
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 1
     finally:
         api_app.dependency_overrides.clear()
 
@@ -906,9 +1116,9 @@ def test_archive_primary_later_batch_prepare_failure_fails_closed_without_legacy
 
         assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
         assert response.headers["X-Ingest-Archive-Primary"] == "failed"
-        assert prepared_sizes == [64, 1]
+        assert prepared_sizes == [16, 16]
         with SessionLocal() as db:
-            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 64
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 16
     finally:
         api_app.dependency_overrides.clear()
 
