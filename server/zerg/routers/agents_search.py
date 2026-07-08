@@ -51,11 +51,11 @@ from zerg.services.session_views import build_session_response
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
-def get_recall_database_url() -> str:
+async def get_recall_database_url() -> str:
     return get_settings().database_url
 
 
-def get_recall_session_factory() -> sessionmaker:
+async def get_recall_session_factory() -> sessionmaker:
     return get_session_factory()
 
 
