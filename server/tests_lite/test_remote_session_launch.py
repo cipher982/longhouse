@@ -1171,6 +1171,204 @@ def test_remote_launch_dispatches_before_archive_materialization(tmp_path, monke
         live_engine.dispose()
 
 
+def test_live_launch_detail_placeholder_before_archive_drain(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-detail-placeholder.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    live_serializer = _LiveReadinessSerializer(LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module.database_module, "get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+
+    try:
+        with SessionLocal() as db:
+            result = asyncio.run(
+                launch_remote_session(
+                    db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="codex",
+                        cwd="/Users/me/repo",
+                        project="repo",
+                    ),
+                    registry=registry,
+                )
+            )
+            assert db.get(AgentSession, result.session_id) is None
+
+        client, api_app = _make_agents_client(SessionLocal)
+        try:
+            resp = client.get(f"/api/agents/sessions/{result.session_id}", headers={"X-Agents-Token": "dev"})
+        finally:
+            api_app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["id"] == str(result.session_id)
+        assert body["provider"] == "codex"
+        assert body["project"] == "repo"
+        assert body["launch_state"] == "live"
+        assert body["runtime_source"] == "live_launch_readiness"
+        assert body["runtime_display"]["detail"] == "Archive is catching up."
+        assert body["capabilities"]["composer_enabled"] is False
+    finally:
+        live_engine.dispose()
+
+
+def test_live_launch_detail_placeholder_requires_owner_match(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-detail-owner.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    live_serializer = _LiveReadinessSerializer(LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module.database_module, "get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+
+    try:
+        with SessionLocal() as db:
+            result = asyncio.run(
+                launch_remote_session(
+                    db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="codex",
+                        cwd="/Users/me/repo",
+                        project="repo",
+                    ),
+                    registry=registry,
+                )
+            )
+
+        monkeypatch.setattr("zerg.routers.agents_sessions._owner_id_from_agents_auth", lambda _db, _auth: OWNER_ID + 1)
+        client, api_app = _make_agents_client(SessionLocal, owner_id=OWNER_ID + 1)
+        try:
+            resp = client.get(f"/api/agents/sessions/{result.session_id}", headers={"X-Agents-Token": "dev"})
+        finally:
+            api_app.dependency_overrides.clear()
+
+        assert resp.status_code == 404
+    finally:
+        live_engine.dispose()
+
+
+def test_failed_live_launch_detail_placeholder_is_not_live(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    class FailingRegistry(_StubRegistry):
+        async def send_command(self, **kwargs):  # type: ignore[override]
+            self.sent.append(kwargs)
+            return MachineControlCommandResponse(
+                transport_ok=True,
+                message={
+                    "type": "command_result",
+                    "ok": False,
+                    "error": {"code": "cwd_not_found", "message": "missing cwd"},
+                },
+            )
+
+    registry = FailingRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-detail-failed.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    live_serializer = _LiveReadinessSerializer(LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module.database_module, "get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+
+    try:
+        with SessionLocal() as db:
+            result = asyncio.run(
+                launch_remote_session(
+                    db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="codex",
+                        cwd="/Users/me/missing",
+                        project="repo",
+                    ),
+                    registry=registry,
+                )
+            )
+            assert db.get(AgentSession, result.session_id) is None
+
+        client, api_app = _make_agents_client(SessionLocal)
+        try:
+            resp = client.get(f"/api/agents/sessions/{result.session_id}", headers={"X-Agents-Token": "dev"})
+        finally:
+            api_app.dependency_overrides.clear()
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["launch_state"] == "launch_failed"
+        assert body["confidence"] is None
+        assert body["user_state"] == "archived"
+        assert body["capabilities"]["display_label"] == "Launch failed"
+        assert body["capabilities"]["composer_disabled_reason"] == "Launch failed."
+    finally:
+        live_engine.dispose()
+
+
+def test_live_launch_workspace_placeholder_before_archive_drain(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-workspace-placeholder.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    live_serializer = _LiveReadinessSerializer(LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module.database_module, "get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+
+    try:
+        with SessionLocal() as db:
+            result = asyncio.run(
+                launch_remote_session(
+                    db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="codex",
+                        cwd="/Users/me/repo",
+                        project="repo",
+                    ),
+                    registry=registry,
+                )
+            )
+            workspace = build_session_workspace(
+                db=db,
+                session_id=result.session_id,
+                owner_id=OWNER_ID,
+            )
+
+        assert workspace.session.id == str(result.session_id)
+        assert workspace.session.launch_state == "live"
+        assert workspace.thread.root_session_id == str(result.session_id)
+        assert workspace.projection.items == []
+        assert workspace.projection.total == 0
+        assert workspace.workspace_revision.fingerprint.startswith("live-launch:")
+    finally:
+        live_engine.dispose()
+
+
 def test_late_launch_result_reconciles_through_live_outbox_before_archive_drain(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)

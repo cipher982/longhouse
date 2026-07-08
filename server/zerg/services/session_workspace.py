@@ -31,9 +31,11 @@ from zerg.services.session_views import SessionWorkspaceRevisionResponse
 from zerg.services.session_views import build_event_input_origin_map
 from zerg.services.session_views import build_event_media_ref_map
 from zerg.services.session_views import build_event_response
+from zerg.services.session_views import build_live_launch_placeholder_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_tool_call_state_map
 from zerg.services.session_views import is_session_closed
+from zerg.services.session_views import latest_live_launch_readiness
 from zerg.services.session_workspace_revision import SessionWorkspaceRevision
 from zerg.services.session_workspace_revision import load_session_workspace_revision
 from zerg.utils.server_timing import ServerTimingRecorder
@@ -68,18 +70,56 @@ def build_session_workspace(
     store = AgentsStore(db)
     timing = timing or ServerTimingRecorder()
 
-    with timing.span("load_session"):
-        session = store.get_session(session_id)
-    if not session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
-        )
-
     if branch_mode not in {"head", "all"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="branch_mode must be one of: head, all",
+        )
+
+    with timing.span("load_session"):
+        session = store.get_session(session_id)
+    if not session:
+        live_readiness = latest_live_launch_readiness([session_id]).get(session_id)
+        if live_readiness is not None and (owner_id is None or live_readiness.owner_id == str(owner_id)):
+            session_response = build_live_launch_placeholder_response(
+                live_readiness,
+                sharer=sharer,
+            )
+            return SessionWorkspaceResponse(
+                session=session_response,
+                thread=SessionThreadResponse(
+                    root_session_id=str(session_id),
+                    head_session_id=str(session_id),
+                    sessions=[session_response],
+                ),
+                projection=SessionProjectionResponse(
+                    root_session_id=str(session_id),
+                    focus_session_id=str(session_id),
+                    head_session_id=str(session_id),
+                    path_session_ids=[str(session_id)],
+                    items=[],
+                    total=0,
+                    page_offset=0,
+                    branch_mode=branch_mode,
+                    abandoned_events=0,
+                ),
+                workspace_revision=SessionWorkspaceRevisionResponse(
+                    latest_event_id=0,
+                    latest_session_updated_at=None,
+                    latest_runtime_signal_at=live_readiness.updated_at,
+                    runtime_version_sum=0,
+                    pause_request_count=0,
+                    pause_request_fingerprint=None,
+                    managed_control_count=0,
+                    managed_control_fingerprint=None,
+                    live_preview_updated_at=None,
+                    thread_session_count=1,
+                    fingerprint=f"live-launch:{session_id}:{live_readiness.updated_at or live_readiness.created_at}",
+                ),
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
         )
 
     with timing.span("load_thread"):

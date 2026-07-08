@@ -34,6 +34,13 @@ class LiveLaunchReadinessView:
     execution_lifetime: RemoteExecutionLifetime
     launch_error_code: RemoteLaunchErrorCode | None
     launch_error_message: str | None
+    owner_id: str | None = None
+    provider: str | None = None
+    device_id: str | None = None
+    machine_id: str | None = None
+    project: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 def _now() -> datetime:
@@ -67,6 +74,13 @@ def _project_live_launch_state(row: LiveLaunchReadiness) -> LiveLaunchReadinessV
         execution_lifetime=execution_lifetime,
         launch_error_code=error_code,
         launch_error_message=format_remote_launch_error_message(error_code, row.error_message),
+        owner_id=row.owner_id,
+        provider=row.provider,
+        device_id=row.device_id,
+        machine_id=row.machine_id,
+        project=row.project,
+        created_at=normalize_utc(row.created_at),
+        updated_at=normalize_utc(row.updated_at),
     )
 
 

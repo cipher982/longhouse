@@ -88,6 +88,7 @@ from zerg.services.session_views import build_active_session_response
 from zerg.services.session_views import build_event_input_origin_map
 from zerg.services.session_views import build_event_media_ref_map
 from zerg.services.session_views import build_event_response
+from zerg.services.session_views import build_live_launch_placeholder_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_session_turn_response
 from zerg.services.session_views import build_tool_call_state_map
@@ -117,6 +118,20 @@ _ACTIVE_LIVE_SESSION_CANDIDATE_MAX = 1000
 
 def _no_viewer_owner_id() -> int | None:
     return None
+
+
+def _live_launch_placeholder_for_owner(
+    session_id: UUID,
+    *,
+    owner_id: int | None,
+    now: datetime | None = None,
+) -> SessionResponse | None:
+    live_launch_readiness = latest_live_launch_readiness([session_id], now=now).get(session_id)
+    if live_launch_readiness is None:
+        return None
+    if owner_id is not None and live_launch_readiness.owner_id != str(owner_id):
+        return None
+    return build_live_launch_placeholder_response(live_launch_readiness, now=now)
 
 
 def _owner_id_from_agents_auth(db: Session, auth: object) -> int | None:
@@ -916,6 +931,17 @@ def get_session(
         session = store.get_session(session_id)
 
     if not session:
+        effective_owner_id = owner_id
+        if effective_owner_id is None:
+            effective_owner_id = _owner_id_from_agents_auth(db, _auth)
+        placeholder = _live_launch_placeholder_for_owner(
+            session_id,
+            owner_id=effective_owner_id,
+            now=datetime.now(timezone.utc),
+        )
+        if placeholder is not None:
+            timing.apply(response)
+            return placeholder
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id} not found",

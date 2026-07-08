@@ -1710,6 +1710,166 @@ def latest_live_launch_readiness(session_ids, *, now: datetime | None = None) ->
         return query_live_launch_readiness_map(live_db, session_ids, now=now)
 
 
+def build_live_launch_placeholder_response(
+    launch_readiness: LiveLaunchReadinessView,
+    *,
+    now: datetime | None = None,
+    sharer: SessionSharerResponse | None = None,
+) -> SessionResponse:
+    """Build a read-only first-paint session response before archive convergence."""
+
+    current_now = normalize_utc(now) or datetime.now(timezone.utc)
+    started_at = normalize_utc(launch_readiness.created_at) or normalize_utc(launch_readiness.updated_at) or current_now
+    provider = (launch_readiness.provider or "unknown").strip() or "unknown"
+    project = (launch_readiness.project or "").strip() or None
+    title = project or f"{provider} launch"
+    session_id = str(launch_readiness.session_id)
+    display_state = PresenceState.SYNCING_TRANSCRIPT
+    phase_label = "Launching"
+    headline = "Launching"
+    detail = "Waiting for the machine to start the session."
+    capability_label = "Launching"
+    capability_detail = "Live launch state is available; archive details are catching up."
+    composer_disabled_reason = "Session is still starting."
+    confidence = "live"
+    user_state = "active"
+    if launch_readiness.launch_state == "live":
+        phase_label = "Live"
+        headline = "Session launched"
+        detail = "Archive is catching up."
+    elif launch_readiness.launch_state == "launching_unknown":
+        phase_label = "Dispatching"
+        headline = "Launch dispatched"
+        detail = "Waiting for the machine to report back."
+    elif launch_readiness.launch_state in {"launch_failed", "launch_orphaned"}:
+        display_state = None
+        phase_label = "Launch failed"
+        headline = "Launch failed"
+        detail = launch_readiness.launch_error_message
+        capability_label = "Launch failed"
+        capability_detail = launch_readiness.launch_error_message or "The session did not start."
+        composer_disabled_reason = "Launch failed."
+        confidence = None
+        user_state = "archived"
+
+    runtime_display = SessionRuntimeDisplayResponse(
+        truth_tier=TruthTier.FRESH if display_state is not None else TruthTier.NONE,
+        signal_tier=SignalTier.NONE,
+        state=display_state,
+        tone=Tone.ACTIVE if display_state is not None else Tone.INACTIVE,
+        headline=headline,
+        detail=detail,
+        phase_label=phase_label,
+        compact_tool_label=None,
+        is_live=launch_readiness.launch_state == "live",
+        is_executing=launch_readiness.launch_state in {"launching", "launching_unknown"},
+        needs_attention=False,
+        is_idle=launch_readiness.launch_state == "live",
+        is_stalled=False,
+        is_managed_local_truth=False,
+        has_signal=True,
+        control_path=ControlPath.MANAGED,
+        activity_recency=ActivityRecency.RECENT,
+        lifecycle=Lifecycle.OPEN,
+        host_state=HostState.ONLINE if launch_readiness.device_id else HostState.UNKNOWN,
+        terminal_reason=None,
+        pause_request=None,
+    )
+    capabilities = SessionCapabilitiesResponse(
+        live_control_available=False,
+        host_reattach_available=False,
+        reply_to_live_session_available=False,
+        can_queue_next_input=False,
+        can_steer_active_turn=False,
+        display_label=capability_label,
+        display_detail=capability_detail,
+        display_tone="accent",
+        input_mode="read_only",
+        default_input_intent="none",
+        composer_enabled=False,
+        composer_disabled_reason=composer_disabled_reason,
+        send_disabled_reason="read_only",
+        control_label="search-only",
+        observe_only=True,
+        search_only=False,
+        staleness_reason="archive_catching_up",
+        can_send_input=False,
+        can_interrupt=False,
+        can_terminate=False,
+        can_tail_output=False,
+        can_resume=False,
+        attach_images=False,
+        can_continue=False,
+        continue_targets=[],
+    )
+    return SessionResponse(
+        id=session_id,
+        provider=provider,
+        project=project,
+        device_id=launch_readiness.device_id,
+        environment="development",
+        cwd=None,
+        git_repo=None,
+        git_branch=None,
+        started_at=started_at,
+        ended_at=None,
+        user_messages=0,
+        assistant_messages=0,
+        tool_calls=0,
+        last_activity_at=started_at,
+        timeline_anchor_at=normalize_utc(launch_readiness.updated_at) or started_at,
+        runtime_phase=display_state.value if display_state is not None else None,
+        phase_started_at=started_at,
+        last_progress_at=normalize_utc(launch_readiness.updated_at) or started_at,
+        runtime_source="live_launch_readiness",
+        terminal_state=None,
+        runtime_version=None,
+        status="active" if display_state is not None else None,
+        presence_state=display_state.value if display_state is not None else None,
+        presence_tool=None,
+        presence_updated_at=normalize_utc(launch_readiness.updated_at) or started_at,
+        last_live_at=normalize_utc(launch_readiness.updated_at) or started_at,
+        display_phase=phase_label,
+        active_tool=None,
+        confidence=confidence,
+        summary=None,
+        summary_title=None,
+        anchor_title=None,
+        timeline_title=title,
+        summary_status="unavailable",
+        first_user_message=None,
+        match_event_id=None,
+        match_snippet=None,
+        match_role=None,
+        match_score=None,
+        thread_root_session_id=session_id,
+        thread_head_session_id=session_id,
+        thread_continuation_count=0,
+        continued_from_session_id=None,
+        continuation_kind=None,
+        origin_label="Longhouse launch",
+        home_label=launch_readiness.machine_id or launch_readiness.device_id,
+        branched_from_event_id=None,
+        is_writable_head=True,
+        is_sidechain=False,
+        control=SessionControlResponse(),
+        capabilities=capabilities,
+        runtime_display=runtime_display,
+        transcript_preview=None,
+        timeline_card=build_session_timeline_card_response(
+            runtime_view=None,
+            runtime_display=runtime_display,
+        ),
+        loop_mode=SessionLoopMode.ASSIST,
+        user_state=user_state,
+        launch_state=launch_readiness.launch_state,
+        execution_lifetime=launch_readiness.execution_lifetime,
+        launch_error_code=launch_readiness.launch_error_code,
+        launch_error_message=launch_readiness.launch_error_message,
+        sharer=sharer,
+    )
+
+
 def build_active_session_response(
     store: AgentsStore,
     session: AgentSession,
