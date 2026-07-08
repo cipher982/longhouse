@@ -1435,7 +1435,13 @@ def export_session_archive_bundle(
             detail="branch_mode must be 'head' for archive bundle export",
         )
 
-    result = build_session_archive_bundle(db, session_id, branch_mode=branch_mode)
+    try:
+        result = build_session_archive_bundle(db, session_id, branch_mode=branch_mode)
+    except ArchiveTranscriptUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Transcript raw bytes unavailable for session {session_id}: {exc}",
+        )
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -274,6 +274,25 @@ def test_archive_bundle_rejects_non_head_branch_mode(tmp_path):
         api_app.dependency_overrides.clear()
 
 
+def test_archive_bundle_missing_raw_returns_service_unavailable(tmp_path, monkeypatch):
+    from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
+
+    client = _make_client(tmp_path)
+    session_id = "f8a24cc2-b864-4433-a79f-dc3996520c36"
+
+    def raise_missing_raw(db, requested_session_id, *, branch_mode):  # noqa: ARG001
+        raise ArchiveTranscriptUnavailable("synthetic missing raw")
+
+    monkeypatch.setattr("zerg.routers.agents_sessions.build_session_archive_bundle", raise_missing_raw)
+    try:
+        response = client.get(f"/agents/sessions/{session_id}/archive-bundle", headers={"X-Agents-Token": "dev"})
+
+        assert response.status_code == 503
+        assert "Transcript raw bytes unavailable" in response.text
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_archive_manifest_lists_sessions_beyond_90_days(tmp_path):
     client = _make_client(tmp_path)
     try:
