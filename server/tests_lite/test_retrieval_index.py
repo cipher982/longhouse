@@ -203,6 +203,22 @@ def test_canceled_recall_index_job_finishes_canceled_without_indexing(tmp_path):
     assert result.sessions_indexed == 0
 
 
+def test_recall_index_worker_idle_tick_does_not_create_retrieval_db(tmp_path):
+    main_path = tmp_path / "longhouse.db"
+    database_url = f"sqlite:///{main_path}"
+    engine = make_engine(database_url)
+    initialize_database(engine)
+    SessionLocal = make_sessionmaker(engine)
+    retrieval_path = resolve_retrieval_db_path(database_url)
+    assert retrieval_path is not None
+    assert not retrieval_path.exists()
+
+    result = run_recall_index_job_once(database_url=database_url, session_factory=SessionLocal)
+
+    assert result is None
+    assert not retrieval_path.exists()
+
+
 def test_project_session_chunks_creates_parent_and_child_evidence():
     chunks = project_session_chunks(
         _session(),

@@ -36,6 +36,7 @@ from zerg.services.retrieval_index import search_lexical_chunks
 from zerg.services.retrieval_index_jobs import enqueue_recall_index_job
 from zerg.services.retrieval_index_jobs import get_latest_recall_index_job
 from zerg.services.retrieval_index_jobs import get_recall_index_job
+from zerg.services.retrieval_index_jobs import recall_index_jobs_table_ready
 from zerg.services.retrieval_index_jobs import request_recall_index_cancel
 from zerg.services.retrieval_index_jobs import wake_recall_index_worker
 from zerg.services.session_pause_requests import load_active_pause_request_map
@@ -224,18 +225,6 @@ def _structured_hits(value: str | None) -> list[str]:
     return [part for part in value.split() if ":" in part][:20]
 
 
-def _recall_index_jobs_ready(retrieval_db) -> bool:
-    row = retrieval_db.execute(
-        """
-        SELECT 1
-        FROM sqlite_master
-        WHERE type = 'table' AND name = 'recall_index_jobs'
-        LIMIT 1
-        """
-    ).fetchone()
-    return row is not None
-
-
 @router.get("/sessions/semantic", response_model=SemanticSearchResponse)
 async def semantic_search_sessions(
     query: str = Query(..., description="Search query"),
@@ -409,7 +398,7 @@ async def recall_index_status(
             return {"status": "uninitialized", "path": str(retrieval_path), "chunk_count": 0, "child_chunk_count": 0}
         chunk_count = int(retrieval_db.execute("SELECT count(*) FROM recall_chunks").fetchone()[0])
         searchable_count = child_chunk_count(retrieval_db)
-        latest_job = get_latest_recall_index_job(retrieval_db) if _recall_index_jobs_ready(retrieval_db) else None
+        latest_job = get_latest_recall_index_job(retrieval_db) if recall_index_jobs_table_ready(retrieval_db) else None
         return {
             "status": "ready" if searchable_count > 0 else "empty",
             "path": str(retrieval_path),

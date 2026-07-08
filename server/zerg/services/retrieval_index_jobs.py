@@ -222,6 +222,18 @@ def requeue_stale_recall_index_jobs(conn: sqlite3.Connection, *, stale_after_sec
     return int(cursor.rowcount or 0)
 
 
+def recall_index_jobs_table_ready(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM sqlite_master
+        WHERE type = 'table' AND name = 'recall_index_jobs'
+        LIMIT 1
+        """
+    ).fetchone()
+    return row is not None
+
+
 def claim_next_recall_index_job(conn: sqlite3.Connection, *, tenant: str = DEFAULT_TENANT) -> RecallIndexJob | None:
     now = _utc_now_iso()
     transaction_open = False
@@ -334,11 +346,13 @@ def _index_one_job(
     tenant: str = DEFAULT_TENANT,
 ) -> RecallIndexJob | None:
     with connect_retrieval_db(retrieval_path) as retrieval_db:
-        initialize_retrieval_db(retrieval_db)
+        if not recall_index_jobs_table_ready(retrieval_db):
+            return None
         requeue_stale_recall_index_jobs(retrieval_db)
         job = claim_next_recall_index_job(retrieval_db, tenant=tenant)
         if job is None:
             return None
+        initialize_retrieval_db(retrieval_db)
 
         sessions_indexed = job.sessions_indexed
         chunks_indexed = job.chunks_indexed
@@ -440,7 +454,7 @@ def run_recall_index_job_once(
 
     resolved_database_url = database_url or get_settings().database_url
     retrieval_path = resolve_retrieval_db_path(resolved_database_url)
-    if retrieval_path is None:
+    if retrieval_path is None or not retrieval_path.exists():
         return None
     return _index_one_job(
         retrieval_path=retrieval_path,
