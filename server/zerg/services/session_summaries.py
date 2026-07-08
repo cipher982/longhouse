@@ -68,6 +68,7 @@ def _claim_summary_lock(db: Session, session_id: str) -> bool:
 _PLACEHOLDER_SUMMARY = "No summary generated."
 SUMMARY_EVENT_LOAD_LIMIT = int(os.getenv("SESSION_SUMMARY_EVENT_LOAD_LIMIT", "200"))
 SUMMARY_EVENT_TEXT_MAX_CHARS = int(os.getenv("SESSION_SUMMARY_EVENT_TEXT_MAX_CHARS", "4000"))
+INITIAL_TITLE_WRITE_TIMEOUT_SECONDS = float(os.getenv("SESSION_INITIAL_TITLE_WRITE_TIMEOUT_SECONDS", "5"))
 
 
 @dataclass(frozen=True)
@@ -318,7 +319,6 @@ async def generate_initial_title_impl(session_id: str) -> bool:
     from zerg.database import get_session_factory
     from zerg.services.session_hot_cards import upsert_timeline_card_from_session
     from zerg.services.title_generator import generate_initial_session_title
-    from zerg.services.write_serializer import get_write_serializer
 
     settings = get_settings()
     if settings.testing or settings.llm_disabled:
@@ -389,29 +389,39 @@ async def generate_initial_title_impl(session_id: str) -> bool:
             logger.info("Initial title generation returned no title for session %s in %dms", session_id, elapsed_ms)
             return False
 
-        ws = get_write_serializer()
-
-        def _persist(write_db: Session) -> int:
-            target = write_db.query(AgentSession).filter(AgentSession.id == session_id).first()
-            if not target:
-                return 0
-            if sanitize_title(target.anchor_title) or sanitize_title(target.summary_title):
-                return 0
-            target.summary_title = title
-            target.anchor_title = freeze_anchor_title(title)
-            if transcript_revision > 0:
-                target.summary_revision = max(int(target.summary_revision or 0), transcript_revision)
-            upsert_timeline_card_from_session(write_db, target)
-            return 1
-
-        if ws.is_configured:
-            updated = await ws.execute(_persist, label="session-title")
-        else:
-            fallback_db = factory()
+        def _persist_direct() -> int:
+            write_db = factory()
             try:
-                updated = await ws.execute_or_direct(_persist, fallback_db, label="session-title")
+                target = write_db.query(AgentSession).filter(AgentSession.id == session_id).first()
+                if not target:
+                    return 0
+                if sanitize_title(target.anchor_title) or sanitize_title(target.summary_title):
+                    return 0
+                target.summary_title = title
+                target.anchor_title = freeze_anchor_title(title)
+                if transcript_revision > 0:
+                    target.summary_revision = max(int(target.summary_revision or 0), transcript_revision)
+                upsert_timeline_card_from_session(write_db, target)
+                write_db.commit()
+                return 1
+            except Exception:
+                write_db.rollback()
+                raise
             finally:
-                fallback_db.close()
+                write_db.close()
+
+        try:
+            updated = await asyncio.wait_for(
+                asyncio.to_thread(_persist_direct),
+                timeout=INITIAL_TITLE_WRITE_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            logger.warning(
+                "Initial title write timed out for session %s after %.1fs",
+                session_id,
+                INITIAL_TITLE_WRITE_TIMEOUT_SECONDS,
+            )
+            return False
         if updated:
             from zerg.services.session_pubsub import publish_session_title_update
 

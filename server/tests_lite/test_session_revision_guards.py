@@ -1,5 +1,6 @@
 """Tests for replay-safe transcript revision guards on summary/embed work."""
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -359,6 +360,78 @@ async def test_generate_initial_title_impl_does_not_publish_when_title_empty(tmp
     assert updated is False
     assert get_pubsub().peek_latest_seq(topic_session(session_id)) == 0
     assert get_pubsub().peek_latest_seq(TOPIC_TIMELINE) == 0
+    reset_pubsub_for_test()
+
+
+@pytest.mark.asyncio
+async def test_generate_initial_title_impl_times_out_optional_persist(tmp_path, monkeypatch):
+    from zerg.services import session_summaries
+    from zerg.services.session_pubsub import TOPIC_TIMELINE
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+    from zerg.services.session_pubsub import topic_session
+
+    reset_pubsub_for_test()
+    factory = _make_db(tmp_path, "initial_title_timeout.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="codex",
+        environment="cinder",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        first_user_message_preview="Please make optional title writes unable to wedge readiness.",
+        user_messages=1,
+        assistant_messages=0,
+        transcript_revision=1,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.close()
+
+    async def _fake_generate_initial_session_title(**_kwargs):
+        return "Optional Title Write Timeout"
+
+    async def _slow_to_thread(_fn):
+        await asyncio.sleep(1)
+        return 1
+
+    client = SimpleNamespace(close=AsyncMock())
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    monkeypatch.setattr(
+        "zerg.services.title_generator.generate_initial_session_title",
+        _fake_generate_initial_session_title,
+    )
+    monkeypatch.setattr(session_summaries, "INITIAL_TITLE_WRITE_TIMEOUT_SECONDS", 0.001)
+    monkeypatch.setattr(session_summaries.asyncio, "to_thread", _slow_to_thread)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(client, "deepseek/deepseek-v4-flash", "openrouter"),
+        ),
+    ):
+        updated = await session_summaries.generate_initial_title_impl(session_id)
+
+    assert updated is False
+    client.close.assert_awaited_once()
+    assert get_pubsub().peek_latest_seq(topic_session(session_id)) == 0
+    assert get_pubsub().peek_latest_seq(TOPIC_TIMELINE) == 0
+
+    verify = factory()
+    try:
+        refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert refreshed.summary_title is None
+        assert refreshed.anchor_title is None
+        assert refreshed.summary_revision == 0
+    finally:
+        verify.close()
     reset_pubsub_for_test()
 
 
