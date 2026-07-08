@@ -1,15 +1,14 @@
 """Agents API — semantic search and recall endpoints."""
 
 import asyncio
+import json
 import logging
 import os
+import sys
 import time
-from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
-from functools import partial
-from multiprocessing import get_context
 from typing import Optional
 
 from fastapi import APIRouter
@@ -59,16 +58,6 @@ from zerg.services.session_views import build_session_response
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 logger = logging.getLogger(__name__)
-_retrieval_recall_executor: ProcessPoolExecutor | None = None
-
-
-def _get_retrieval_recall_executor() -> ProcessPoolExecutor:
-    """Return the isolated process used for retrieval.db FTS reads."""
-
-    global _retrieval_recall_executor
-    if _retrieval_recall_executor is None:
-        _retrieval_recall_executor = ProcessPoolExecutor(max_workers=1, mp_context=get_context("spawn"))
-    return _retrieval_recall_executor
 
 
 async def _run_retrieval_index_recall(
@@ -85,22 +74,59 @@ async def _run_retrieval_index_recall(
 ) -> RecallResponse | None:
     """Run retrieval.db recall without sharing the live server SQLite process."""
 
-    call = partial(
-        _try_retrieval_index_recall,
-        database_url,
-        query=query,
-        project=project,
-        provider=provider,
-        since_days=since_days,
-        max_results=max_results,
-        context_turns=context_turns,
-        context_mode=context_mode,
-        explicit=explicit,
-    )
     if os.getenv("TESTING") == "1":
-        return await asyncio.to_thread(call)
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(_get_retrieval_recall_executor(), call)
+        return await asyncio.to_thread(
+            _try_retrieval_index_recall,
+            database_url,
+            query=query,
+            project=project,
+            provider=provider,
+            since_days=since_days,
+            max_results=max_results,
+            context_turns=context_turns,
+            context_mode=context_mode,
+            explicit=explicit,
+        )
+
+    if context_mode != "forensic":
+        return None
+
+    payload = {
+        "database_url": database_url,
+        "query": query,
+        "project": project,
+        "provider": provider,
+        "since_days": since_days,
+        "max_results": max_results,
+        "context_turns": context_turns,
+        "hide_internal_canary": not is_internal_canary_provider_filter(provider),
+    }
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-m",
+        "zerg.services.retrieval_recall_subprocess",
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await asyncio.wait_for(
+        proc.communicate(json.dumps(payload).encode("utf-8")),
+        timeout=6.0,
+    )
+    if proc.returncode != 0:
+        logger.warning(
+            "Retrieval recall subprocess failed returncode=%s stderr=%s",
+            proc.returncode,
+            stderr.decode("utf-8", errors="replace")[-1000:],
+        )
+        if explicit:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Retrieval recall worker failed.",
+            )
+        return None
+    data = json.loads(stdout.decode("utf-8") or "null")
+    return RecallResponse(**data) if data is not None else None
 
 
 async def get_recall_database_url() -> str:

@@ -16,6 +16,7 @@ from zerg.models.agents import AgentSession
 from zerg.routers.agents_search import index_recall_sessions
 from zerg.routers.agents_search import recall_sessions
 from zerg.routers.agents_search import recall_index_status
+from zerg.services.retrieval_recall_subprocess import retrieval_recall_payload
 from zerg.services.retrieval_index import RetrievalChunk
 from zerg.services.retrieval_index import check_fts_integrity
 from zerg.services.retrieval_index import connect_retrieval_db
@@ -518,6 +519,41 @@ def test_recall_fast_path_uses_retrieval_db_without_embedding_cache(monkeypatch,
         }
     ]
     assert match.diagnostics == {"mode": "lexical", "source": "retrieval_db"}
+
+
+def test_retrieval_recall_payload_projects_indexed_matches(monkeypatch, tmp_path):
+    main_path = tmp_path / "longhouse.db"
+    database_url = f"sqlite:///{main_path}"
+    retrieval_path = resolve_retrieval_db_path(database_url)
+    monkeypatch.setenv("LONGHOUSE_RETRIEVAL_DB_PATH", str(retrieval_path))
+    with connect_retrieval_db(retrieval_path) as conn:
+        initialize_retrieval_db(conn)
+        replace_session_chunks(
+            conn,
+            "session-1",
+            [
+                _chunk("parent", role="parent", kind="trace_parent", content="parent trace with timeout"),
+                _chunk("child", content="specific timeout evidence", parent_uid="parent"),
+            ],
+        )
+
+    payload = retrieval_recall_payload(
+        database_url,
+        query="timeout",
+        project=None,
+        provider=None,
+        since_days=90,
+        max_results=5,
+        context_turns=2,
+        hide_internal_canary=True,
+    )
+
+    assert payload is not None
+    assert payload["total"] == 1
+    assert payload["matches"][0]["session_id"] == "session-1"
+    assert payload["matches"][0]["chunk_uid"] == "child"
+    assert payload["matches"][0]["context_text"] == "parent trace with timeout"
+    assert payload["matches"][0]["diagnostics"] == {"mode": "lexical", "source": "retrieval_db"}
 
 
 def test_recall_auto_ready_index_miss_does_not_fall_back_to_embeddings(monkeypatch, tmp_path):
