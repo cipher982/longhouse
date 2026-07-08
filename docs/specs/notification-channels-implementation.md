@@ -2,9 +2,6 @@
 
 Living tracker for `docs/specs/notification-channels.md`.
 
-**Branch:** `notification-channels`
-**Worktree:** `~/git/_wt/longhouse-notification-channels`
-
 ## PM decisions (locked)
 
 - [x] Kill Telegram for user notifications; runner alerts **email-only**
@@ -40,6 +37,4 @@ Living tracker for `docs/specs/notification-channels.md`.
 
 - [x] `make test` (backend)
 - [x] `make test-frontend` (web)
-- [ ] Hatch DeepSeek review after Phases A–C
-- [ ] Hatch Codex final review
-- [ ] Merge to `main`, push, sync local main, `noteit`
+- [ ] Merge to `main` and push
