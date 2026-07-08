@@ -20,6 +20,8 @@ source-linked evidence fast and let the reading agent decide what it means.
 - Tests cover schema initialization, chunk projection, lexical query behavior,
   parent hydration, filtering, and degraded fallback to legacy semantic recall
   where required.
+- A labeled recall-quality fixture tracks recall@k/MRR for real agent queries so
+  lexical V1 does not silently trade correctness for speed.
 - A one-off profiling script can build a synthetic corpus and report p50/p95
   timings for projection, FTS query, hydration, and worst-case misses.
 - The design leaves a clean path for vector embeddings and a USearch HNSW
@@ -74,6 +76,14 @@ In scope:
 - `/api/agents/recall` fast lexical mode when the retrieval index is available;
 - parent hydration without raw event reads in the default response;
 - diagnostics and status primitives enough to profile and debug.
+
+The initial API default may use lexical retrieval only when the index is ready,
+but that is a product decision with a quality gate, not just a performance
+shortcut. Before replacing legacy semantic recall as the default for hosted
+dogfood, run a small labeled query set and compare legacy semantic recall,
+lexical chunk recall, and hybrid once embeddings land. If lexical misses common
+conceptual queries, keep semantic/hybrid as the user-visible default while still
+using lexical as a fast exact/code/path lane.
 
 Out of scope for the first commit series:
 
@@ -145,7 +155,14 @@ Important indexes:
 
 ### `recall_chunks_fts`
 
-FTS5 over child evidence rows by default:
+FTS5 over child evidence rows by default. The table is external-content, so the
+projector must maintain it explicitly:
+
+- delete old FTS rows before deleting/replacing projected chunks for a session;
+- insert FTS rows for new child chunks only;
+- provide a full `rebuild` path using `INSERT INTO recall_chunks_fts(recall_chunks_fts) VALUES('rebuild')`;
+- provide an integrity check that compares child chunk counts with FTS row
+  counts and records failures in `recall_index_state`.
 
 ```sql
 CREATE VIRTUAL TABLE recall_chunks_fts USING fts5(
@@ -158,13 +175,23 @@ CREATE VIRTUAL TABLE recall_chunks_fts USING fts5(
   git_branch,
   content='recall_chunks',
   content_rowid='id',
-  tokenize='porter unicode61'
+  tokenize='unicode61 tokenchars ''._/-:''
 );
 ```
 
 Parent rows can live in `recall_chunks`, but the default FTS and embedding
 serving path should only index child evidence rows. This keeps ranking sharp and
 lets hydration fetch a larger parent trace after ranking.
+
+Do not use Porter stemming for coding-agent recall. Agents search file paths,
+snake_case symbols, flags, branch names, and exact error strings. Tokenizer tests
+must cover:
+
+- `server/zerg/routers/agents_search.py`;
+- `--no-verify`;
+- `source_lines`;
+- `feature/recall-index`;
+- `OperationalError`.
 
 ### `recall_index_state`
 
@@ -181,7 +208,7 @@ CREATE TABLE recall_index_state (
 Required keys over time:
 
 - `schema_version`;
-- `projector_watermark`;
+- `projector_watermark`, based on max durable `AgentEvent.id` projected;
 - `last_projection_error`;
 - `last_integrity_check`;
 - `vector_index` later.
@@ -210,8 +237,11 @@ Chunk kinds:
 | `intent` | child | user prompt, redirect, or explicit task wording |
 | `assistant_conclusion` | child | final answer, decision, or next-step synthesis |
 | `tool_result` | child | capped command/tool output with unique searchable evidence |
-| `structured_fact` | child | deterministic file/cmd/tool/branch/error tokens |
-| `session_card` | child | title/cwd/branch metadata for navigation |
+
+V1 should stop there. `structured_fact` and `session_card` are useful later, but
+they add tuning surface before the core projector is proven. For V1, write
+deterministic file/cmd/tool/branch/error tokens into `structured_text` on the
+child chunks above.
 
 Avoid indexing full tool output. Prefer tool name, command/input, file path,
 first useful error/status line, capped output excerpt, and event ids.
@@ -237,10 +267,12 @@ V1 default behavior:
    child chunks.
 2. Normalize user text into a safe FTS5 query and structured prefix filters.
 3. Query child rows only with metadata filters.
-4. Diversify to one result per parent session by default.
-5. Hydrate selected child rows and their parent rows in one batch.
-6. Return compact match evidence, parent context, stable ids, and diagnostics.
-7. If the retrieval index is unavailable and the caller requested semantic
+4. Over-fetch at least `max(max_results * 20, 100)` rows so chatty sessions do
+   not starve diversified results.
+5. Diversify to one result per parent session by default.
+6. Hydrate selected child rows and their parent rows in one batch.
+7. Return compact match evidence, parent context, stable ids, and diagnostics.
+8. If the retrieval index is unavailable and the caller requested semantic
    legacy behavior, use the old path with explicit degraded diagnostics.
 
 Example lexical leg:
@@ -258,6 +290,9 @@ WHERE recall_chunks_fts MATCH :fts_query
 ORDER BY score
 LIMIT :inner_limit;
 ```
+
+`bm25()` returns lower scores for better matches. Keep `ORDER BY score` ascending
+and test that ranking direction explicitly.
 
 ## API Shape
 
@@ -279,6 +314,34 @@ The endpoint should keep returning the existing `context` list for old clients,
 but the fast path should build it from indexed child/parent rows rather than raw
 event hydration.
 
+Existing compatibility fields need fast-path definitions:
+
+- `total_events`: persist the parent trace clean-event count on the parent row,
+  or return the parent window count for indexed matches. Do not load every event
+  just to populate this field.
+- `match_event_id`: use `first_event_id` from the child row.
+- `event_index_start` / `event_index_end`: use the indexed clean-event bounds.
+- `context`: synthesize from parent/child content and indexed bounds. It is a
+  compact compatibility projection, not proof that the entire session was read.
+
+The fast path must check retrieval-index availability before importing or
+constructing `EmbeddingCache`.
+
+## Freshness
+
+V1 freshness is based on real durable event ids, not an abstract transcript
+revision:
+
+- each projected session records the max durable `AgentEvent.id` and durable
+  event count covered by its chunks;
+- the global `projector_watermark` records the highest durable event id fully
+  projected;
+- active sessions may be slightly stale, but `recall_status` and response
+  diagnostics must report staleness;
+- on-demand projection by session id is allowed when a recall query would
+  otherwise hit a stale or missing session, but it must use bounded work and
+  never block live ingest/control.
+
 ## Profiling Plan
 
 Add a one-off script under `scripts/dev/` that can:
@@ -288,8 +351,10 @@ Add a one-off script under `scripts/dev/` that can:
 - project it into a temporary `retrieval.db`;
 - run representative hit, miss, filtered, and worst-case broad queries;
 - report p50, p95, max, row counts, and DB file sizes;
-- optionally compare legacy recall hydration cost when embeddings are mocked or
-  skipped.
+- compare legacy recall cost with the matrix load preserved and only the network
+  query-embedding call mocked;
+- measure archive DB write latency during concurrent recall load to prove the
+  `retrieval.db` isolation win, not just recall latency.
 
 Initial profiles:
 
@@ -299,6 +364,7 @@ Initial profiles:
 - high-duplicate command output;
 - filtered project/provider queries;
 - miss query with no FTS hits.
+- read-only copy of a real large hosted DB when available.
 
 ## Test Plan
 
@@ -311,6 +377,10 @@ Planned coverage:
 - parent rows are not returned as primary hits;
 - projection creates parent/child chunks from clean transcript events;
 - tool output is capped and structured tokens are extracted;
+- FTS maintenance deletes old rows before reprojecting a session;
+- FTS tokenizer preserves code paths, flags, snake_case, branch names, and error
+  names;
+- BM25 ascending order ranks the better match first;
 - project/provider/environment/since filters apply before result hydration;
 - recall fast path avoids `EmbeddingCache.load_turn_embeddings`;
 - default hydration fetches parent context without querying all session events;
@@ -320,7 +390,7 @@ Planned coverage:
 ## Commit Plan
 
 1. Spec and plan.
-2. Retrieval DB schema/path/init service plus tests.
+2. Retrieval DB schema/path/init service plus FTS maintenance tests.
 3. Chunk projector plus tests.
 4. Lexical query service plus tests.
 5. Recall endpoint integration plus compatibility tests.
