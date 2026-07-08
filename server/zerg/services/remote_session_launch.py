@@ -45,6 +45,7 @@ from zerg.services.agents.kernel_writes import update_launch_attempt
 from zerg.services.agents.kernel_writes import upsert_connection_for_run
 from zerg.services.live_archive_outbox import ONE_SHOT_CONTROL_PLANE_BY_PROVIDER
 from zerg.services.live_archive_outbox import REMOTE_LAUNCH_KIND
+from zerg.services.live_archive_outbox import REMOTE_LAUNCH_OUTCOME_KIND
 from zerg.services.live_archive_outbox import enqueue_remote_launch_outbox
 from zerg.services.live_archive_outbox import enqueue_remote_launch_outcome_outbox
 from zerg.services.live_archive_outbox import remote_launch_idempotency_key
@@ -746,6 +747,244 @@ async def _launch_remote_session_hot(
     )
 
 
+def _remote_continue_outbox_key(*, session_id: UUID, client_request_id: str) -> str:
+    return f"{REMOTE_LAUNCH_KIND}:continue:{session_id}:{client_request_id}"
+
+
+def _remote_continue_outcome_outbox_key(*, session_id: UUID, client_request_id: str, state: str) -> str:
+    return f"{REMOTE_LAUNCH_OUTCOME_KIND}:continue:{session_id}:{client_request_id}:{state}"
+
+
+async def _continue_remote_session_hot(
+    *,
+    session: AgentSession,
+    params: RemoteContinueParams,
+    registry: MachineControlChannelRegistry,
+    info,
+    device_id: str,
+    cwd: str,
+    provider: str,
+    execution_lifetime: RemoteExecutionLifetime,
+    message: str,
+    client_request_id: str,
+    provider_thread_id: str,
+    thread_path: str | None,
+) -> RemoteLaunchResult:
+    existing = await _read_live_launch_idempotency(
+        owner_id=params.owner_id,
+        device_id=device_id,
+        provider=provider,
+        client_request_id=client_request_id,
+    )
+    if existing is not None:
+        return _remote_launch_result_from_live_view(existing)
+
+    session_uuid = UUID(str(session.id))
+    run_uuid = uuid4()
+    command_id = f"continue-{uuid4()}"
+    project = (session.project or _project_for(cwd, None)).strip() or "managed-local"
+    display_name = project
+    now = datetime.now(timezone.utc)
+    lease_until = now + timedelta(seconds=LAUNCH_LEASE_SECS)
+    launch_payload = {
+        "session_id": str(session_uuid),
+        "owner_id": int(params.owner_id),
+        "device_id": device_id,
+        "machine_id": info.machine_name or device_id,
+        "provider": provider,
+        "cwd": cwd,
+        "git_repo": session.git_repo,
+        "git_branch": session.git_branch,
+        "project": project,
+        "display_name": display_name,
+        "initial_prompt": message if execution_lifetime == "one_shot" else None,
+        "execution_lifetime": execution_lifetime,
+        "client_request_id": client_request_id,
+        "command_id": command_id,
+        "started_at": now,
+        "expires_at": lease_until,
+        "mode": "continue",
+        "launch_origin": "longhouse_continued",
+        "resume": {
+            "thread_id": provider_thread_id,
+            "thread_path": thread_path,
+        },
+    }
+    launch_payload["run_id"] = str(run_uuid)
+
+    await _execute_live_launch_write(
+        lambda live_db: (
+            upsert_live_launch_readiness(
+                live_db,
+                session_id=session_uuid,
+                owner_id=params.owner_id,
+                device_id=device_id,
+                provider=provider,
+                execution_lifetime=execution_lifetime,
+                state="pending",
+                command_id=command_id,
+                client_request_id=client_request_id,
+                machine_id=info.machine_name or device_id,
+                project=project,
+                expires_at=lease_until,
+                now=now,
+            ),
+            enqueue_remote_launch_outbox(
+                live_db,
+                launch=launch_payload,
+                idempotency_key=_remote_continue_outbox_key(
+                    session_id=session_uuid,
+                    client_request_id=client_request_id,
+                ),
+            ),
+        ),
+        label="remote-continue-intent",
+    )
+
+    payload = {
+        "provider": provider,
+        "cwd": cwd,
+        "git_repo": session.git_repo,
+        "git_branch": session.git_branch,
+        "project": project,
+        "display_name": display_name,
+        "mode": "continue",
+        "resume": {
+            "thread_id": provider_thread_id,
+            "thread_path": thread_path,
+        },
+    }
+    if execution_lifetime == "one_shot":
+        payload["execution_lifetime"] = execution_lifetime
+        payload["initial_prompt"] = message
+        if run_uuid is not None:
+            payload["run_id"] = str(run_uuid)
+
+    response: MachineControlCommandResponse = await registry.send_command(
+        owner_id=params.owner_id,
+        device_id=device_id,
+        session_id=str(session_uuid),
+        command_type="session.run_once" if execution_lifetime == "one_shot" else "session.launch",
+        payload=payload,
+        timeout_secs=LAUNCH_COMMAND_TIMEOUT_SECS,
+        command_id=command_id,
+    )
+
+    if not response.transport_ok:
+        error_message = response.error or "control channel transport failed"
+        outcome = {"state": "dispatched", "error_message": error_message}
+        await _write_live_launch_readiness(
+            lambda live_db: (
+                update_live_launch_readiness_state(
+                    live_db,
+                    session_id=session_uuid,
+                    state="dispatched",
+                    error_message=error_message,
+                ),
+                enqueue_remote_launch_outcome_outbox(
+                    live_db,
+                    launch=launch_payload,
+                    outcome=outcome,
+                    idempotency_key=_remote_continue_outcome_outbox_key(
+                        session_id=session_uuid,
+                        client_request_id=client_request_id,
+                        state="dispatched",
+                    ),
+                ),
+            )
+        )
+        return RemoteLaunchResult(
+            session_id=session_uuid,
+            launch_state="launching_unknown",
+            execution_lifetime=execution_lifetime,
+        )
+
+    response_message = response.message or {}
+    if response_message.get("ok"):
+        outcome = {
+            "state": "adopted",
+            "pid": _result_pid(response_message),
+            "argv": _result_argv(response_message),
+            "provider_thread_id": _result_resume_thread_id(response_message) or provider_thread_id,
+            "thread_path": _result_resume_thread_path(response_message) or thread_path,
+            "external_name": info.machine_name or device_id,
+        }
+        await _write_live_launch_readiness(
+            lambda live_db: (
+                update_live_launch_readiness_state(
+                    live_db,
+                    session_id=session_uuid,
+                    state="adopted",
+                    clear_expires=True,
+                ),
+                enqueue_remote_launch_outcome_outbox(
+                    live_db,
+                    launch=launch_payload,
+                    outcome=outcome,
+                    idempotency_key=_remote_continue_outcome_outbox_key(
+                        session_id=session_uuid,
+                        client_request_id=client_request_id,
+                        state="adopted",
+                    ),
+                ),
+            )
+        )
+        elapsed_ms = int((datetime.now(timezone.utc) - now).total_seconds() * 1000)
+        logger.info(
+            "remote_continue session=%s device=%s provider=%s state=live duration_ms=%s",
+            session_uuid,
+            device_id,
+            provider,
+            elapsed_ms,
+        )
+        return RemoteLaunchResult(
+            session_id=session_uuid,
+            launch_state="live",
+            execution_lifetime=execution_lifetime,
+        )
+
+    error = response_message.get("error") or {}
+    code = normalize_remote_launch_error_code(error.get("code"))
+    err_msg = str(error.get("message") or "unknown error")
+    outcome = {"state": "failed", "error_code": code, "error_message": err_msg}
+    await _write_live_launch_readiness(
+        lambda live_db: (
+            update_live_launch_readiness_state(
+                live_db,
+                session_id=session_uuid,
+                state="failed",
+                error_code=code,
+                error_message=err_msg,
+                clear_expires=True,
+            ),
+            enqueue_remote_launch_outcome_outbox(
+                live_db,
+                launch=launch_payload,
+                outcome=outcome,
+                idempotency_key=_remote_continue_outcome_outbox_key(
+                    session_id=session_uuid,
+                    client_request_id=client_request_id,
+                    state="failed",
+                ),
+            ),
+        )
+    )
+    logger.warning(
+        "remote_continue session=%s device=%s provider=%s state=launch_failed code=%s",
+        session_uuid,
+        device_id,
+        provider,
+        code,
+    )
+    return RemoteLaunchResult(
+        session_id=session_uuid,
+        launch_state="launch_failed",
+        execution_lifetime=execution_lifetime,
+        launch_error_code=code,
+        launch_error_message=err_msg,
+    )
+
+
 async def launch_remote_session(
     db: Session,
     params: RemoteLaunchParams,
@@ -1171,6 +1410,22 @@ async def continue_remote_session(
             f"Machine {device_id!r} does not support {continue_cap}",
             code="provider_unsupported",
             status_code=409,
+        )
+
+    if database_module.live_store_configured():
+        return await _continue_remote_session_hot(
+            session=session,
+            params=params,
+            registry=reg,
+            info=info,
+            device_id=device_id,
+            cwd=cwd,
+            provider=provider,
+            execution_lifetime=execution_lifetime,
+            message=message,
+            client_request_id=client_request_id,
+            provider_thread_id=provider_thread_id,
+            thread_path=thread_path,
         )
 
     now = datetime.now(timezone.utc)

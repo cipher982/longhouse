@@ -7,6 +7,7 @@ import logging
 import os
 from datetime import datetime
 from datetime import timezone
+from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -19,6 +20,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 from sqlalchemy.orm import sessionmaker  # noqa: E402
 
 import zerg.services.remote_session_launch as remote_launch_module  # noqa: E402
@@ -62,6 +64,7 @@ from zerg.services.session_kernel_projection import project_session_control_fiel
 from zerg.services.session_runtime import RuntimeEventIngest  # noqa: E402
 from zerg.services.session_runtime import ingest_runtime_events  # noqa: E402
 from zerg.services.session_workspace import build_session_workspace  # noqa: E402
+from zerg.services.write_serializer import WriteSerializer  # noqa: E402
 
 OWNER_ID = 77
 
@@ -2285,6 +2288,219 @@ def test_continue_session_dispatches_resume_payload_and_attaches_new_run(tmp_pat
         workspace = build_session_workspace(db=db, session_id=session_id, owner_id=OWNER_ID)
         assert workspace.session.capabilities.can_continue is True
         assert workspace.session.capabilities.continue_targets[0].carry_context == "native"
+
+
+def test_continue_session_uses_hot_outbox_when_archive_writer_is_stalled(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+        thread = ensure_primary_thread(db, db.get(AgentSession, session_id))
+        existing_run = record_run(db, thread=thread, provider="codex", host_id="cinder", cwd="/Users/me/repo")
+        existing_connection = upsert_connection_for_run(
+            db,
+            run=existing_run,
+            control_plane="codex_bridge",
+            acquisition_kind="spawned_control",
+            state="attached",
+            external_name="cinder",
+            can_send_input=0,
+            can_interrupt=1,
+            can_terminate=1,
+            can_tail_output=1,
+            can_resume=1,
+        )
+        existing_run_id = existing_run.id
+        existing_connection_id = existing_connection.id
+        db.commit()
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/continue-live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    live_serializer = _LiveReadinessSerializer(LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+
+    serializer = WriteSerializer()
+    serializer.configure(SessionLocal)
+    writer_entered = Event()
+    release_writer = Event()
+
+    def _block_writer(db):
+        db.execute(text("SELECT 1"))
+        writer_entered.set()
+        assert release_writer.wait(5), "blocked archive writer was not released"
+
+    async def _run_continue_while_blocked():
+        blocker = asyncio.create_task(serializer.execute(_block_writer, label="ingest-replay"))
+        try:
+            assert await asyncio.to_thread(writer_entered.wait, 1)
+            with SessionLocal() as db:
+                result = await asyncio.wait_for(
+                    continue_remote_session(
+                        db,
+                        RemoteContinueParams(
+                            owner_id=OWNER_ID,
+                            session_id=session_id,
+                            client_request_id="continue-hot-stall",
+                        ),
+                        registry=registry,
+                    ),
+                    timeout=2,
+                )
+            assert result.session_id == session_id
+            assert result.launch_state == "live"
+            with SessionLocal() as db:
+                assert db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.session_id == session_id).count() == 0
+                session = db.get(AgentSession, session_id)
+                assert session.device_id == "cinder"
+                assert session.ended_at is not None
+            with LiveSession() as live_db:
+                readiness = live_db.get(LiveLaunchReadiness, str(session_id))
+                assert readiness is not None
+                assert readiness.state == "adopted"
+                outbox = live_db.query(LiveArchiveOutbox).order_by(LiveArchiveOutbox.id.asc()).all()
+                assert [row.kind for row in outbox] == ["remote_launch.v1", "remote_launch_outcome.v1"]
+                assert all(row.drained_at is None for row in outbox)
+        finally:
+            release_writer.set()
+            await asyncio.wait_for(blocker, timeout=2)
+
+    try:
+        asyncio.run(_run_continue_while_blocked())
+
+        assert len(registry.sent) == 1
+        sent = registry.sent[0]
+        assert sent["command_type"] == "session.launch"
+        assert sent["session_id"] == str(session_id)
+        assert sent["payload"]["mode"] == "continue"
+        assert sent["payload"]["resume"] == {
+            "thread_id": "thread-abc",
+            "thread_path": "/Users/me/.codex/sessions/thread-abc.jsonl",
+        }
+
+        with LiveSession() as live_db, SessionLocal() as archive_db:
+            drained = drain_live_archive_outbox(live_db, archive_db)
+            drain_rows = [
+                (row.kind, row.last_error, row.payload_json)
+                for row in live_db.query(LiveArchiveOutbox).order_by(LiveArchiveOutbox.id.asc()).all()
+            ]
+        assert drained.drained == 2, (drained.as_dict(), drain_rows)
+
+        with SessionLocal() as db:
+            attempt = _latest_attempt(db, session_id)
+            assert attempt.state == "adopted"
+            assert attempt.run_id is not None
+            assert attempt.run_id != existing_run_id
+            assert db.get(SessionRun, attempt.run_id).launch_origin == "longhouse_continued"
+            released_run = db.get(SessionRun, existing_run_id)
+            assert released_run.ended_at is not None
+            released_connection = db.get(SessionConnection, existing_connection_id)
+            assert released_connection.state == "released"
+            live_connection = (
+                db.query(SessionConnection)
+                .join(SessionRun, SessionConnection.run_id == SessionRun.id)
+                .filter(SessionRun.thread_id == attempt.thread_id)
+                .filter(SessionConnection.state == "attached")
+                .one()
+            )
+            assert live_connection.can_send_input == 1
+    finally:
+        release_writer.set()
+        live_engine.dispose()
+
+
+def test_one_shot_continue_hot_outbox_releases_existing_runs(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.resume_run_once",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+        thread = ensure_primary_thread(db, db.get(AgentSession, session_id))
+        existing_run = record_run(db, thread=thread, provider="codex", host_id="cinder", cwd="/Users/me/repo")
+        existing_connection = upsert_connection_for_run(
+            db,
+            run=existing_run,
+            control_plane="codex_bridge",
+            acquisition_kind="spawned_control",
+            state="attached",
+            external_name="cinder",
+            can_send_input=0,
+            can_interrupt=1,
+            can_terminate=1,
+            can_tail_output=1,
+            can_resume=1,
+        )
+        existing_run_id = existing_run.id
+        existing_connection_id = existing_connection.id
+        db.commit()
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/one-shot-continue-live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    live_serializer = _LiveReadinessSerializer(LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+
+    try:
+        with SessionLocal() as db:
+            result = asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        client_request_id="continue-hot-one-shot",
+                        message="Please continue with one bounded step.",
+                        execution_lifetime="one_shot",
+                    ),
+                    registry=registry,
+                )
+            )
+
+        assert result.session_id == session_id
+        assert result.launch_state == "live"
+        assert result.execution_lifetime == "one_shot"
+        assert len(registry.sent) == 1
+        sent = registry.sent[0]
+        assert sent["command_type"] == "session.run_once"
+        assert sent["payload"]["mode"] == "continue"
+        assert sent["payload"]["execution_lifetime"] == "one_shot"
+        assert sent["payload"]["initial_prompt"] == "Please continue with one bounded step."
+        assert sent["payload"]["run_id"]
+
+        with LiveSession() as live_db, SessionLocal() as archive_db:
+            drained = drain_live_archive_outbox(live_db, archive_db)
+        assert drained.drained == 2
+
+        with SessionLocal() as db:
+            attempt = _latest_attempt(db, session_id)
+            assert attempt.execution_lifetime == "one_shot"
+            assert attempt.state == "adopted"
+            assert attempt.run_id is not None
+            new_run = db.get(SessionRun, attempt.run_id)
+            assert new_run is not None
+            assert new_run.launch_origin == "longhouse_continued"
+            assert new_run.id != existing_run_id
+            released_run = db.get(SessionRun, existing_run_id)
+            assert released_run.ended_at is not None
+            released_connection = db.get(SessionConnection, existing_connection_id)
+            assert released_connection.state == "released"
+            one_shot_connection = (
+                db.query(SessionConnection)
+                .filter(SessionConnection.run_id == new_run.id)
+                .one()
+            )
+            assert one_shot_connection.control_plane == "codex_exec"
+            assert one_shot_connection.can_send_input == 0
+            assert one_shot_connection.can_resume == 0
+    finally:
+        live_engine.dispose()
 
 
 def test_continue_claude_session_resumes_by_id_with_null_thread_path(tmp_path):

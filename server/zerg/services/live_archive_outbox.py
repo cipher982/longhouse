@@ -527,8 +527,36 @@ def _materialize_remote_launch(
         )
         db.add(session)
         db.flush()
+    else:
+        session.device_id = device_id or session.device_id
+        session.device_name = str(launch.get("machine_id") or "").strip() or device_id or session.device_name
+        session.cwd = cwd or session.cwd
+        session.git_repo = str(launch.get("git_repo") or "").strip() or session.git_repo
+        session.git_branch = str(launch.get("git_branch") or "").strip() or session.git_branch
+        session.project = project or session.project
 
     thread = ensure_primary_thread(db, session)
+    resume_payload = launch.get("resume") if isinstance(launch.get("resume"), dict) else {}
+    provider_thread_id = str(resume_payload.get("thread_id") or launch.get("provider_thread_id") or "").strip() or None
+    if provider_thread_id and not is_synthetic_provider_session_id(session, provider_thread_id):
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider=provider,
+            alias_kind="provider_session_id",
+            alias_value=provider_thread_id,
+        )
+    thread_path = str(resume_payload.get("thread_path") or launch.get("thread_path") or "").strip() or None
+    if thread_path:
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider=provider,
+            alias_kind="source_path",
+            alias_value=thread_path,
+        )
+    launch_origin = str(launch.get("launch_origin") or "longhouse_spawned").strip() or "longhouse_spawned"
+    is_continue = str(launch.get("mode") or "").strip() == "continue" or launch_origin == "longhouse_continued"
     attempt = _remote_launch_attempt_for_command(db, command_id=command_id)
     if attempt is None:
         attempt = SessionLaunchAttempt(
@@ -556,6 +584,8 @@ def _materialize_remote_launch(
         attempt.command_id = command_id or attempt.command_id
 
     if execution_lifetime == "one_shot":
+        if is_continue:
+            _release_open_runs_for_thread(db, thread=thread, now=datetime.now(timezone.utc))
         run = _ensure_one_shot_remote_run(db, launch=launch, thread_id=thread.id, provider=provider, device_id=device_id, cwd=cwd)
         attempt.run_id = run.id
 
@@ -629,7 +659,7 @@ def _ensure_one_shot_remote_run(
         provider=provider,
         host_id=device_id,
         cwd=cwd,
-        launch_origin="longhouse_spawned",
+        launch_origin=str(launch.get("launch_origin") or "longhouse_spawned").strip() or "longhouse_spawned",
         started_at=normalize_utc(launch.get("started_at")) or datetime.now(timezone.utc),
     )
     db.add(run)
@@ -647,6 +677,8 @@ def _attach_live_remote_launch(
     cwd: str,
 ) -> None:
     thread = ensure_primary_thread(db, session)
+    launch_origin = str(launch.get("launch_origin") or "longhouse_spawned").strip() or "longhouse_spawned"
+    is_continue = str(launch.get("mode") or "").strip() == "continue" or launch_origin == "longhouse_continued"
     provider_thread_id = str(outcome.get("provider_thread_id") or "").strip() or None
     if provider_thread_id and not is_synthetic_provider_session_id(session, provider_thread_id):
         record_thread_alias(
@@ -665,13 +697,31 @@ def _attach_live_remote_launch(
             alias_kind="source_path",
             alias_value=thread_path,
         )
-    run = ensure_open_run_for_session(
-        db,
-        session,
-        launch_origin="longhouse_spawned",
-        host_id=session.device_id,
-    )
-    run.cwd = cwd or run.cwd
+    if is_continue:
+        run_id_text = str(launch.get("run_id") or "").strip()
+        run_id = UUID(run_id_text) if run_id_text else None
+        run = db.get(SessionRun, run_id) if run_id is not None else None
+        if run is None:
+            _release_open_runs_for_thread(db, thread=thread, now=datetime.now(timezone.utc))
+            run = SessionRun(
+                id=run_id,
+                thread_id=thread.id,
+                provider=session.provider,
+                host_id=session.device_id,
+                cwd=cwd or session.cwd,
+                launch_origin=launch_origin,
+                started_at=normalize_utc(launch.get("started_at")) or datetime.now(timezone.utc),
+            )
+            db.add(run)
+            db.flush()
+    else:
+        run = ensure_open_run_for_session(
+            db,
+            session,
+            launch_origin=launch_origin,
+            host_id=session.device_id,
+        )
+        run.cwd = cwd or run.cwd
     contract = require_contract_for_provider(session.provider)
     caps = contract.connection_capabilities
     conn = upsert_connection_for_run(
@@ -695,6 +745,29 @@ def _attach_live_remote_launch(
     attempt.expires_at = None
     attempt.error_code = None
     attempt.error_message = None
+
+
+def _release_open_runs_for_thread(db: Session, *, thread, now: datetime) -> None:
+    open_runs = db.query(SessionRun).filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None)).all()
+    if not open_runs:
+        return
+    open_run_ids = [run.id for run in open_runs]
+    for run in open_runs:
+        run.ended_at = now
+    for conn in (
+        db.query(SessionConnection)
+        .filter(SessionConnection.run_id.in_(open_run_ids))
+        .filter(SessionConnection.state.in_(("attached", "degraded")))
+        .all()
+    ):
+        conn.state = "released"
+        conn.released_at = now
+        conn.last_health_at = now
+        conn.can_send_input = 0
+        conn.can_interrupt = 0
+        conn.can_terminate = 0
+        conn.can_tail_output = 0
+        conn.can_resume = 0
 
 
 def _attach_one_shot_remote_launch(
