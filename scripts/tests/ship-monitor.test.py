@@ -53,10 +53,18 @@ def with_fakes(
     job_conclusions: dict[int, dict[str, str]],
     *,
     latest_runtime_sha: str | None = "latest",
-    deploy_status_output: str | None = None,
+    deploy_status_output: str | list[str] | None = None,
     ancestry_path_shas: list[str] | None = None,
 ) -> None:
+    deploy_status_outputs = (
+        deploy_status_output
+        if isinstance(deploy_status_output, list)
+        else [deploy_status_output]
+    )
+    deploy_status_index = 0
+
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal deploy_status_index
         cmd = args[0] if args else []
         if isinstance(cmd, list) and cmd and cmd[0] == "git":
             if cmd[:3] == ["git", "rev-list", "--ancestry-path"]:
@@ -76,7 +84,10 @@ def with_fakes(
                 capture_output=True,
                 check=False,
             )
-        output = deploy_status_output if deploy_status_output is not None else deploy_status("latest", "latest")
+        output = deploy_status_outputs[min(deploy_status_index, len(deploy_status_outputs) - 1)]
+        deploy_status_index += 1
+        if output is None:
+            output = deploy_status("latest", "latest")
         return subprocess.CompletedProcess(args=args, returncode=0, stdout=output, stderr="")
 
     def fake_fetch_run_jobs(repo: str, run_id: int) -> list[dict[str, str]]:
@@ -214,6 +225,44 @@ def test_runtime_publish_accepts_deploy_stamped_target_sha() -> None:
     _surfaces, errors, _raw = ship_monitor.verify_live_state(ROOT, "cipher982/longhouse", "ac77b06d72", runs)
 
     assert errors == []
+
+
+def test_live_verify_retries_transient_canary_status_gap() -> None:
+    original_sleep = ship_monitor.time.sleep
+    sleeps: list[float] = []
+    ship_monitor.time.sleep = lambda seconds: sleeps.append(seconds)
+    try:
+        with_fakes(
+            {
+                1: {ship_monitor.DEPLOY_AND_VERIFY_JOB: "success"},
+                2: {ship_monitor.RUNTIME_IMAGE_JOB: "success"},
+            },
+            latest_runtime_sha="5c7933e0a4ee57329f03e23247bce26e311e3cdb",
+            deploy_status_output=[
+                deploy_status("41818df9fd", "-"),
+                deploy_status("41818df9fd", "41818df9fd"),
+            ],
+            ancestry_path_shas=[
+                "5329d01c9b5265189df9164a06b128bb47df8482",
+                "41818df9fd5e381bfb12f45f9c4a5a5618c28a3d",
+            ],
+        )
+        runs = [
+            run_info(ship_monitor.DEPLOY_AND_VERIFY, 1),
+            run_info(ship_monitor.RUNTIME_IMAGE_WORKFLOW, 2),
+        ]
+
+        _surfaces, errors, _raw = ship_monitor.verify_live_state(
+            ROOT,
+            "cipher982/longhouse",
+            "5329d01c9b5265189df9164a06b128bb47df8482",
+            runs,
+        )
+
+        assert errors == []
+        assert sleeps == [2]
+    finally:
+        ship_monitor.time.sleep = original_sleep
 
 
 def test_skipped_tip_still_requires_latest_runtime_affecting_sha() -> None:
@@ -363,6 +412,7 @@ if __name__ == "__main__":
     test_runtime_reuse_accepts_intermediate_sha_when_deploy_job_is_absent()
     test_runtime_publish_requires_exact_live_sha()
     test_runtime_publish_accepts_deploy_stamped_target_sha()
+    test_live_verify_retries_transient_canary_status_gap()
     test_skipped_tip_still_requires_latest_runtime_affecting_sha()
     test_gate_heartbeat_names_blocking_ci_job_and_step()
     test_core_e2e_gate_heartbeat_names_blocking_ci_job_and_step()

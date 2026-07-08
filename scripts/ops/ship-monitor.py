@@ -635,17 +635,6 @@ def runtime_reuse_accepted_shas(root: Path, latest_runtime_sha: str | None, targ
 
 
 def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> tuple[dict[str, SurfaceInfo], list[str], str]:
-    proc = run(
-        [str(root / "scripts" / "ops" / "deploy-status.sh")],
-        cwd=root,
-        env={
-            "CANARY_CONTAINER_NAME": os.environ.get("CANARY_CONTAINER_NAME") or DEFAULT_CANARY_CONTAINER_NAME,
-            "CANARY_HEALTH_URL": os.environ.get("CANARY_HEALTH_URL") or DEFAULT_CANARY_HEALTH_URL,
-        },
-    )
-    raw = proc.stdout
-    surfaces = parse_deploy_status(raw)
-    errors: list[str] = []
     jobs_by_run_id: dict[int, list[dict]] = {}
 
     def job_succeeded(run: RunInfo, expected_job_name: str) -> bool:
@@ -664,15 +653,34 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
         run.workflowName == RUNTIME_IMAGE_WORKFLOW and job_succeeded(run, RUNTIME_IMAGE_JOB)
         for run in runs
     )
-    if not runtime_image_published:
-        raw = "\n".join(
-            line for line in raw.splitlines() if not line.strip().startswith("⚠")
-        ).rstrip() + "\n"
 
     expected_runtime_sha = latest_runtime_affecting_sha(root, sha)
     expected_runtime_short = expected_runtime_sha[:10] if expected_runtime_sha else None
 
-    def require_surface(surface_name: str, allowed_health: set[str], *, expected_shas: set[str]) -> None:
+    def read_deploy_status() -> tuple[dict[str, SurfaceInfo], str]:
+        proc = run(
+            [str(root / "scripts" / "ops" / "deploy-status.sh")],
+            cwd=root,
+            env={
+                "CANARY_CONTAINER_NAME": os.environ.get("CANARY_CONTAINER_NAME") or DEFAULT_CANARY_CONTAINER_NAME,
+                "CANARY_HEALTH_URL": os.environ.get("CANARY_HEALTH_URL") or DEFAULT_CANARY_HEALTH_URL,
+            },
+        )
+        raw = proc.stdout
+        if not runtime_image_published:
+            raw = "\n".join(
+                line for line in raw.splitlines() if not line.strip().startswith("⚠")
+            ).rstrip() + "\n"
+        return parse_deploy_status(raw), raw
+
+    def require_surface(
+        errors: list[str],
+        surfaces: dict[str, SurfaceInfo],
+        surface_name: str,
+        allowed_health: set[str],
+        *,
+        expected_shas: set[str],
+    ) -> None:
         surface = surfaces.get(surface_name)
         if surface is None:
             errors.append(f"Missing {surface_name!r} in deploy-status output")
@@ -704,9 +712,25 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
     if deploy_job_succeeded or deploy_run_succeeded:
         expected_runtime_shas = runtime_reuse_accepted_shas(root, expected_runtime_sha, sha)
 
-    if deploy_run_completed or deploy_job_succeeded:
-        require_surface("Demo runtime", RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
-        require_surface(CANARY_SURFACE, RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
+    def live_status_retryable(surfaces: dict[str, SurfaceInfo]) -> bool:
+        for surface_name in ("Demo runtime", CANARY_SURFACE):
+            surface = surfaces.get(surface_name)
+            if surface is None or surface.sha == "-" or surface.health == "unreachable":
+                return True
+        return False
+
+    surfaces: dict[str, SurfaceInfo] = {}
+    raw = ""
+    errors: list[str] = []
+    for attempt in range(3):
+        surfaces, raw = read_deploy_status()
+        errors = []
+        if deploy_run_completed or deploy_job_succeeded:
+            require_surface(errors, surfaces, "Demo runtime", RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
+            require_surface(errors, surfaces, CANARY_SURFACE, RUNTIME_HEALTH, expected_shas=expected_runtime_shas)
+        if not errors or not live_status_retryable(surfaces) or attempt == 2:
+            break
+        time.sleep(2)
 
     return surfaces, errors, raw
 
