@@ -11,6 +11,8 @@ INTERNAL_CANARY_PROVIDER_ALIASES = {"canary", "cnary"}
 INTERNAL_CANARY_LABEL_PREFIXES = ("canary", "cnary")
 PROVIDER_LIVE_CANARY_CWD_SEGMENT = "/.longhouse/canaries/provider-live/"
 PROVIDER_NOREPLY_MARKER_RE = re.compile(r"^LONGHOUSE_[A-Za-z0-9_-]+_NOREPLY_")
+PROVIDER_NOREPLY_MARKER_SQL_LIKE = r"LONGHOUSE\_%\_NOREPLY\_%"
+SQL_LIKE_ESCAPE = "\\"
 
 
 def is_internal_canary_provider_filter(provider: str | None) -> bool:
@@ -43,7 +45,7 @@ def provider_proof_session_clause(model):
     first_user = func.trim(func.coalesce(model.first_user_message_preview, ""))
     return or_(
         cwd.like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%/workspace"),
-        first_user.like("LONGHOUSE_%_NOREPLY_%"),
+        first_user.like(PROVIDER_NOREPLY_MARKER_SQL_LIKE, escape=SQL_LIKE_ESCAPE),
     )
 
 

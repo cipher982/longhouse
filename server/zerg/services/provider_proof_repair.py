@@ -13,6 +13,8 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import TimelineCard
 from zerg.services.internal_sessions import PROVIDER_LIVE_CANARY_CWD_SEGMENT
+from zerg.services.internal_sessions import PROVIDER_NOREPLY_MARKER_SQL_LIKE
+from zerg.services.internal_sessions import SQL_LIKE_ESCAPE
 from zerg.services.internal_sessions import classify_provider_proof_environment
 
 
@@ -67,7 +69,10 @@ def repair_provider_proof_session_environments(
         .filter(
             or_(
                 func.coalesce(AgentSession.cwd, "").like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%/workspace"),
-                func.trim(func.coalesce(AgentSession.first_user_message_preview, "")).like("LONGHOUSE_%_NOREPLY_%"),
+                func.trim(func.coalesce(AgentSession.first_user_message_preview, "")).like(
+                    PROVIDER_NOREPLY_MARKER_SQL_LIKE,
+                    escape=SQL_LIKE_ESCAPE,
+                ),
             )
         )
         .order_by(AgentSession.last_activity_at.desc().nullslast(), AgentSession.started_at.desc())
@@ -81,7 +86,12 @@ def repair_provider_proof_session_environments(
             .join(AgentEvent, AgentEvent.session_id == AgentSession.id)
             .filter(AgentSession.environment.notin_(["test", "e2e"]))
             .filter(func.lower(func.coalesce(AgentEvent.role, "")) == "user")
-            .filter(func.trim(func.coalesce(AgentEvent.content_text, "")).like("LONGHOUSE_%_NOREPLY_%"))
+            .filter(
+                func.trim(func.coalesce(AgentEvent.content_text, "")).like(
+                    PROVIDER_NOREPLY_MARKER_SQL_LIKE,
+                    escape=SQL_LIKE_ESCAPE,
+                )
+            )
             .order_by(AgentSession.last_activity_at.desc().nullslast(), AgentSession.started_at.desc())
             .limit(limit)
             .all()
