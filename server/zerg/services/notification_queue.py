@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
 from zerg.models.notification_event import NotificationEvent
+from zerg.services.apns_sender import NOTIFICATION_CHANNEL_APNS_IOS
 from zerg.services.apns_sender import NOTIFICATION_EVENT_LONG_RUN_WAITING
 from zerg.services.apns_sender import NOTIFICATION_EVENT_SESSION_BLOCKED
 from zerg.services.apns_sender import NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER
@@ -20,6 +21,8 @@ from zerg.services.apns_sender import prepare_long_run_waiting_push
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_blocked_reminder_push
 from zerg.services.apns_sender import prepare_session_needs_answer_push
+from zerg.services.apns_sender import record_notification_delivery_result
+from zerg.services.apns_sender import rollback_session_attention_push_stamp
 from zerg.services.apns_sender import send_session_attention_push
 from zerg.services.session_pause_requests import load_active_pause_request_for_session
 from zerg.services.session_runtime import load_runtime_state_map
@@ -140,8 +143,26 @@ async def process_queued_notification_events(
             accepted = await send_session_attention_push(push)
         except Exception:
             logger.exception("Queued notification delivery failed for event %s", event.id)
+            record_notification_delivery_result(
+                db,
+                event_id=push.notification_event_id,
+                channel=NOTIFICATION_CHANNEL_APNS_IOS,
+                accepted=False,
+                occurred_at=now,
+            )
+            rollback_session_attention_push_stamp(db, notification=push)
             result["skipped"] += 1
             continue
+
+        record_notification_delivery_result(
+            db,
+            event_id=push.notification_event_id,
+            channel=NOTIFICATION_CHANNEL_APNS_IOS,
+            accepted=accepted,
+            occurred_at=now,
+        )
+        if not accepted:
+            rollback_session_attention_push_stamp(db, notification=push)
 
         if accepted:
             event.delivered_at = now

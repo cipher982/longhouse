@@ -436,6 +436,28 @@ def _tier2_policy_allows_delivery(
     return False
 
 
+def _record_no_ios_targets(
+    db: Session,
+    *,
+    owner_id: int,
+    session_id: str,
+    event_type: str,
+    state_key: str,
+    collapse_key: str,
+    occurred_at: datetime,
+) -> None:
+    _record_attention_policy_decision(
+        db,
+        owner_id=owner_id,
+        session_id=session_id,
+        event_type=event_type,
+        state_key=state_key,
+        collapse_key=collapse_key,
+        occurred_at=occurred_at,
+        reason="no_ios_targets",
+    )
+
+
 def _mark_attention_events_resolved(
     db: Session,
     *,
@@ -545,6 +567,15 @@ def prepare_session_attention_push(
     if targets is _TARGETS_SENTINEL:
         targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="attention push")
     if not targets:
+        _record_no_ios_targets(
+            db,
+            owner_id=owner_id,
+            session_id=str(session.id),
+            event_type=NOTIFICATION_EVENT_SESSION_BLOCKED,
+            state_key=state_key,
+            collapse_key=collapse_id,
+            occurred_at=occurred_at,
+        )
         return None
 
     if previous_state in RESOLVABLE_ATTENTION_PUSH_STATES and previous_state != current_state:
@@ -639,6 +670,15 @@ def prepare_session_needs_answer_push(
     if targets is _TARGETS_SENTINEL:
         targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="needs-answer push")
     if not targets:
+        _record_no_ios_targets(
+            db,
+            owner_id=owner_id,
+            session_id=str(session.id),
+            event_type=NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER,
+            state_key=stamp_state,
+            collapse_key=collapse_id,
+            occurred_at=occurred_at,
+        )
         return None
 
     replaces_previous_attention = previous_state != "needs_answer" or previous_stamp_state != stamp_state
@@ -735,6 +775,15 @@ def prepare_session_blocked_reminder_push(
     if targets is _TARGETS_SENTINEL:
         targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="blocked reminder push")
     if not targets:
+        _record_no_ios_targets(
+            db,
+            owner_id=owner_id,
+            session_id=str(session.id),
+            event_type=NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER,
+            state_key=state_key,
+            collapse_key=collapse_id,
+            occurred_at=occurred_at,
+        )
         return None
 
     provider = _clean_label(getattr(session, "provider", None))
@@ -926,6 +975,15 @@ def prepare_long_run_waiting_push(
     if targets is _TARGETS_SENTINEL:
         targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="long-run waiting push")
     if not targets:
+        _record_no_ios_targets(
+            db,
+            owner_id=owner_id,
+            session_id=str(session.id),
+            event_type=NOTIFICATION_EVENT_LONG_RUN_WAITING,
+            state_key=state_key,
+            collapse_key=collapse_id,
+            occurred_at=occurred_at,
+        )
         return None
 
     provider = _clean_label(getattr(session, "provider", None))
