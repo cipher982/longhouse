@@ -197,6 +197,25 @@ def test_runtime_publish_requires_exact_live_sha() -> None:
     assert "Canary is on latest, expected ac77b06d72" in errors
 
 
+def test_runtime_publish_accepts_deploy_stamped_target_sha() -> None:
+    with_fakes(
+        {
+            1: {ship_monitor.DEPLOY_AND_VERIFY_JOB: "success"},
+            2: {ship_monitor.RUNTIME_IMAGE_JOB: "success"},
+        },
+        latest_runtime_sha="7e917a42689f626ed83908f7ab0a6ab21c3aafc4",
+        deploy_status_output=deploy_status("ac77b06d72", "ac77b06d72"),
+    )
+    runs = [
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1),
+        run_info(ship_monitor.RUNTIME_IMAGE_WORKFLOW, 2),
+    ]
+
+    _surfaces, errors, _raw = ship_monitor.verify_live_state(ROOT, "cipher982/longhouse", "ac77b06d72", runs)
+
+    assert errors == []
+
+
 def test_skipped_tip_still_requires_latest_runtime_affecting_sha() -> None:
     with_fakes(
         {
@@ -343,6 +362,7 @@ if __name__ == "__main__":
     test_runtime_reuse_accepts_intermediate_deploy_sha()
     test_runtime_reuse_accepts_intermediate_sha_when_deploy_job_is_absent()
     test_runtime_publish_requires_exact_live_sha()
+    test_runtime_publish_accepts_deploy_stamped_target_sha()
     test_skipped_tip_still_requires_latest_runtime_affecting_sha()
     test_gate_heartbeat_names_blocking_ci_job_and_step()
     test_core_e2e_gate_heartbeat_names_blocking_ci_job_and_step()
