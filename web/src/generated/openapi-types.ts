@@ -2134,6 +2134,23 @@ export interface paths {
         patch: operations["set_timeline_session_loop_mode_timeline_sessions__session_id__loop_mode_patch"];
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/notification-watch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set Timeline Session Notification Watch */
+        patch: operations["set_timeline_session_notification_watch_timeline_sessions__session_id__notification_watch_patch"];
+        trace?: never;
+    };
     "/api/timeline/sessions/{session_id}": {
         parameters: {
             query?: never;
@@ -3122,6 +3139,26 @@ export interface paths {
          * @description Set the explicit loop mode for a coding session.
          */
         patch: operations["set_session_loop_mode_agents_sessions__session_id__loop_mode_patch"];
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/notification-watch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Set Session Notification Watch
+         * @description Mute or unmute session attention notifications.
+         */
+        patch: operations["set_session_notification_watch_agents_sessions__session_id__notification_watch_patch"];
         trace?: never;
     };
     "/api/agents/sessions/{session_id}": {
@@ -7980,6 +8017,21 @@ export interface components {
             /** @description Durable viewport freshness revision */
             workspace_revision: components["schemas"]["SessionWorkspaceRevisionResponse"];
         };
+        /** SessionNotificationWatchRequest */
+        SessionNotificationWatchRequest: {
+            /**
+             * Notification Muted
+             * @description When true, suppress Tier 1/2 pushes for this session.
+             */
+            notification_muted: boolean;
+        };
+        /** SessionNotificationWatchResponse */
+        SessionNotificationWatchResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Notification Muted */
+            notification_muted: boolean;
+        };
         /** SessionPauseQuestionOptionResponse */
         SessionPauseQuestionOptionResponse: {
             /**
@@ -9810,11 +9862,33 @@ export interface components {
         UserNotificationSettingsResponse: {
             /** Apns Enabled */
             apns_enabled: boolean;
+            /**
+             * Notify Only When Away
+             * @default false
+             */
+            notify_only_when_away: boolean;
+            /**
+             * Time Sensitive Blocked
+             * @default false
+             */
+            time_sensitive_blocked: boolean;
+            /** Quiet Hours Start */
+            quiet_hours_start?: string | null;
+            /** Quiet Hours End */
+            quiet_hours_end?: string | null;
         };
         /** UserNotificationSettingsUpdate */
         UserNotificationSettingsUpdate: {
             /** Apns Enabled */
-            apns_enabled: boolean;
+            apns_enabled?: boolean | null;
+            /** Notify Only When Away */
+            notify_only_when_away?: boolean | null;
+            /** Time Sensitive Blocked */
+            time_sensitive_blocked?: boolean | null;
+            /** Quiet Hours Start */
+            quiet_hours_start?: string | null;
+            /** Quiet Hours End */
+            quiet_hours_end?: string | null;
         };
         /** UserOut */
         UserOut: {
@@ -13648,6 +13722,41 @@ export interface operations {
             };
         };
     };
+    set_timeline_session_notification_watch_timeline_sessions__session_id__notification_watch_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionNotificationWatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionNotificationWatchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_timeline_session_timeline_sessions__session_id__get: {
         parameters: {
             query?: never;
@@ -15423,6 +15532,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionLoopModeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_session_notification_watch_agents_sessions__session_id__notification_watch_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionNotificationWatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionNotificationWatchResponse"];
                 };
             };
             /** @description Validation Error */
