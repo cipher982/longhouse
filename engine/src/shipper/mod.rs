@@ -2528,6 +2528,14 @@ fn ship_result_retry_after(result: &ShipResult) -> Option<Duration> {
     }
 }
 
+fn archive_backpressure_retry_delay(retry_after: Option<Duration>, jitter_seed: f64) -> Duration {
+    let retry_after = retry_after.unwrap_or(ARCHIVE_BACKPRESSURE_RETRY_DELAY);
+    let jitter_seed = jitter_seed.clamp(0.0, 1.0);
+    let retry_ms = retry_after.as_millis();
+    let jitter_window_ms = (retry_ms / 10).clamp(100, 5_000) as u64;
+    retry_after + Duration::from_millis((jitter_window_ms as f64 * jitter_seed) as u64)
+}
+
 pub async fn ship_prepared_file(
     prepared: PreparedFile,
     client: &ShipperClient,
@@ -3217,8 +3225,10 @@ async fn replay_spool_entries(
                             retry_after,
                         } => {
                             if is_backpressure {
-                                let retry_delay =
-                                    retry_after.unwrap_or(ARCHIVE_BACKPRESSURE_RETRY_DELAY);
+                                let retry_delay = archive_backpressure_retry_delay(
+                                    retry_after,
+                                    rand::random::<f64>(),
+                                );
                                 let deferred = spool.defer_pending_for_path(
                                     &entry.file_path,
                                     &error,
@@ -5929,6 +5939,26 @@ mod tests {
         assert_eq!(
             ship_result_retry_after(&result),
             Some(Duration::from_secs(5))
+        );
+    }
+
+    #[test]
+    fn test_archive_backpressure_retry_delay_keeps_retry_after_as_floor() {
+        assert_eq!(
+            archive_backpressure_retry_delay(Some(Duration::from_secs(120)), 0.0),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            archive_backpressure_retry_delay(Some(Duration::from_secs(120)), 1.0),
+            Duration::from_secs(125)
+        );
+        assert_eq!(
+            archive_backpressure_retry_delay(Some(Duration::from_secs(2)), 0.5),
+            Duration::from_millis(2_100)
+        );
+        assert_eq!(
+            archive_backpressure_retry_delay(None, 0.0),
+            ARCHIVE_BACKPRESSURE_RETRY_DELAY
         );
     }
 

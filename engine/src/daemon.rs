@@ -31,9 +31,9 @@ use crate::flight::FlightRecorder;
 use crate::heartbeat;
 use crate::managed_bridge_scan;
 use crate::managed_claude_scan;
+use crate::managed_cursor_helm_scan;
 use crate::managed_opencode_reaper::ManagedOpenCodeReaper;
 use crate::managed_opencode_scan;
-use crate::managed_cursor_helm_scan;
 use crate::managed_reaper::ManagedBridgeReaper;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
@@ -110,6 +110,8 @@ const PATH_SPOOL_REPLAY_LIMIT_FAST: usize = 8;
 const ARCHIVE_TRICKLE_TICK_BYTES: u64 = 512 * 1024 * 1024;
 const ARCHIVE_DRAIN_TICK_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const ARCHIVE_BACKPRESSURE_MAX_DEFER: Duration = Duration::from_secs(90);
+const ARCHIVE_STARTUP_REPLAY_WARMUP_MIN: Duration = Duration::from_secs(5);
+const ARCHIVE_STARTUP_REPLAY_WARMUP_MAX: Duration = Duration::from_secs(20);
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
@@ -400,6 +402,24 @@ fn archive_repair_is_paused(default_mode: ArchiveRepairMode) -> bool {
     read_archive_repair_control().is_paused(default_mode)
 }
 
+fn archive_startup_replay_warmup_delay(
+    mode: ArchiveRepairMode,
+    jitter_seed: f64,
+) -> Option<Duration> {
+    if mode.is_paused() {
+        return None;
+    }
+    let jitter_seed = jitter_seed.clamp(0.0, 1.0);
+    let window_ms = ARCHIVE_STARTUP_REPLAY_WARMUP_MAX
+        .as_millis()
+        .saturating_sub(ARCHIVE_STARTUP_REPLAY_WARMUP_MIN.as_millis())
+        .min(u128::from(u64::MAX)) as u64;
+    Some(
+        ARCHIVE_STARTUP_REPLAY_WARMUP_MIN
+            + Duration::from_millis((window_ms as f64 * jitter_seed) as u64),
+    )
+}
+
 /// Run the connect daemon. This function blocks until shutdown signal.
 pub async fn run(config: ConnectConfig) -> Result<()> {
     // 1. Open state DB
@@ -514,18 +534,22 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut discovery_tasks: JoinSet<DiscoveryTaskResult> = JoinSet::new();
     let mut managed_observation_scan_tasks: JoinSet<ManagedObservationScanResult> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
-
-    let initial_retry_paths = queue_failed_shipment_retry_paths(
-        &mut scheduler,
-        &conn,
-        INITIAL_SPOOL_PATH_LIMIT,
-        Some(adaptive_limiter.as_ref()),
-        config.archive_repair_mode,
-    )?;
+    let startup_archive_mode =
+        read_archive_repair_control().normalized_mode(config.archive_repair_mode);
+    let startup_archive_replay_delay =
+        archive_startup_replay_warmup_delay(startup_archive_mode, rand::random::<f64>());
     maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "startup");
+    if let Some(delay) = startup_archive_replay_delay {
+        tracing::info!(
+            mode = startup_archive_mode.as_str(),
+            warmup_ms = delay.as_millis() as u64,
+            "Deferred startup archive replay by jittered warmup; live lanes remain active"
+        );
+    } else {
+        tracing::info!("Startup archive replay paused by archive repair mode");
+    }
     tracing::info!(
-        "Queued startup catch-up: {} retry paths; startup reconciliation deferred by {:?} (max {} concurrent)",
-        initial_retry_paths,
+        "Startup reconciliation deferred by {:?} (max {} concurrent)",
         STARTUP_RECONCILIATION_SCAN_DELAY,
         max_in_flight
     );
@@ -567,9 +591,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     outbox_timer.tick().await; // consume first immediate tick
     let mut local_retry_timer = tokio::time::interval(LOCAL_WORK_TICK_INTERVAL);
     local_retry_timer.tick().await; // consume first immediate tick
+    let startup_archive_replay_timer =
+        tokio::time::sleep(startup_archive_replay_delay.unwrap_or(Duration::ZERO));
+    tokio::pin!(startup_archive_replay_timer);
+    let mut startup_archive_replay_pending = startup_archive_replay_delay.is_some();
     let startup_reconciliation_timer = tokio::time::sleep(STARTUP_RECONCILIATION_SCAN_DELAY);
     tokio::pin!(startup_reconciliation_timer);
-    let mut startup_reconciliation_pending = !archive_repair_is_paused(config.archive_repair_mode);
+    let mut startup_reconciliation_pending = !startup_archive_mode.is_paused();
 
     let mut offline = OfflineState::new();
     let mut last_ship_at: Option<String> = None;
@@ -616,25 +644,27 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     );
 
     loop {
-        match queue_failed_shipment_retries_if_idle(
-            &mut scheduler,
-            &conn,
-            offline.is_offline,
-            PERIODIC_SPOOL_PATH_LIMIT,
-            Some(adaptive_limiter.as_ref()),
-            config.archive_repair_mode,
-        ) {
-            Ok(queued) if queued > 0 => {
-                tracing::info!(
-                    queued,
-                    "Queued failed-shipment retry paths after local scheduler drained"
-                );
+        if !startup_archive_replay_pending {
+            match queue_failed_shipment_retries_if_idle(
+                &mut scheduler,
+                &conn,
+                offline.is_offline,
+                PERIODIC_SPOOL_PATH_LIMIT,
+                Some(adaptive_limiter.as_ref()),
+                config.archive_repair_mode,
+            ) {
+                Ok(queued) if queued > 0 => {
+                    tracing::info!(
+                        queued,
+                        "Queued failed-shipment retry paths after local scheduler drained"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(
+                    "Failed-shipment retry error while refilling idle scheduler: {}",
+                    e
+                ),
             }
-            Ok(_) => {}
-            Err(e) => tracing::warn!(
-                "Failed-shipment retry error while refilling idle scheduler: {}",
-                e
-            ),
         }
         pump_ready_local_work(
             &mut scheduler,
@@ -1180,6 +1210,28 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
+            _ = &mut startup_archive_replay_timer, if startup_archive_replay_pending && !offline.is_offline => {
+                startup_archive_replay_pending = false;
+                match queue_failed_shipment_retry_paths(
+                    &mut scheduler,
+                    &conn,
+                    INITIAL_SPOOL_PATH_LIMIT,
+                    Some(adaptive_limiter.as_ref()),
+                    config.archive_repair_mode,
+                ) {
+                    Ok(queued) => {
+                        tracing::info!(
+                            queued,
+                            "Queued startup archive replay after jittered warmup"
+                        );
+                    }
+                    Err(e) => tracing::warn!(
+                        "Failed-shipment retry error after startup archive warmup: {}",
+                        e
+                    ),
+                }
+            }
+
             _ = &mut startup_reconciliation_timer, if startup_reconciliation_pending && !offline.is_offline => {
                 startup_reconciliation_pending = false;
                 maybe_start_reconciliation_scan(
@@ -1244,7 +1296,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Retry/archive lane: replay failed or incomplete shipments from
             // the spool. This timer is never the primary live transcript lane.
-            _ = failed_ship_retry_timer.tick(), if !offline.is_offline => {
+            _ = failed_ship_retry_timer.tick(), if !offline.is_offline && !startup_archive_replay_pending => {
                 match queue_failed_shipment_retry_paths(
                     &mut scheduler,
                     &conn,
@@ -4249,6 +4301,73 @@ mod tests {
 
                 assert_eq!(queued, 0);
                 assert!(scheduler.pop_launchable().is_none());
+            },
+        );
+    }
+
+    #[test]
+    fn test_archive_startup_replay_warmup_delays_non_paused_modes() {
+        assert_eq!(
+            archive_startup_replay_warmup_delay(ArchiveRepairMode::Paused, 1.0),
+            None
+        );
+        assert_eq!(
+            archive_startup_replay_warmup_delay(ArchiveRepairMode::Trickle, 0.0),
+            Some(ARCHIVE_STARTUP_REPLAY_WARMUP_MIN)
+        );
+        assert_eq!(
+            archive_startup_replay_warmup_delay(ArchiveRepairMode::Drain, 1.0),
+            Some(ARCHIVE_STARTUP_REPLAY_WARMUP_MAX)
+        );
+    }
+
+    #[test]
+    fn test_running_control_file_can_resume_paused_archive_replay_as_trickle() {
+        let temp = tempfile::tempdir().unwrap();
+        temp_env::with_vars(
+            [
+                (
+                    "LONGHOUSE_HOME",
+                    Some(temp.path().join("lh").display().to_string()),
+                ),
+                ("HOME", Some(temp.path().join("home").display().to_string())),
+            ],
+            || {
+                let db = tempfile::NamedTempFile::new().unwrap();
+                let transcript = tempfile::NamedTempFile::new().unwrap();
+                let conn = open_db(Some(db.path())).unwrap();
+                let path = transcript.path().to_string_lossy().to_string();
+                Spool::new(&conn)
+                    .enqueue("codex", &path, 0, 100, Some("session-id"))
+                    .unwrap();
+
+                let mut scheduler = PathScheduler::new(4);
+                let queued = queue_failed_shipment_retry_paths(
+                    &mut scheduler,
+                    &conn,
+                    10,
+                    None,
+                    ArchiveRepairMode::Paused,
+                )
+                .unwrap();
+                assert_eq!(queued, 0);
+
+                let control_path = config::get_agent_archive_repair_control_path().unwrap();
+                std::fs::create_dir_all(control_path.parent().unwrap()).unwrap();
+                std::fs::write(&control_path, r#"{"mode":"trickle"}"#).unwrap();
+
+                let queued = queue_failed_shipment_retry_paths(
+                    &mut scheduler,
+                    &conn,
+                    10,
+                    None,
+                    ArchiveRepairMode::Paused,
+                )
+                .unwrap();
+                assert_eq!(queued, 1);
+                let job = scheduler.pop_launchable().expect("trickle queued replay");
+                assert_eq!(job.path, PathBuf::from(&path));
+                assert_eq!(job.priority, WorkPriority::Retry);
             },
         );
     }

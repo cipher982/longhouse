@@ -196,17 +196,12 @@ impl ShipperClient {
                                 return ShipResult::RateLimited;
                             }
 
-                            // Check Retry-After header
-                            let base_wait = response
-                                .headers()
-                                .get("Retry-After")
-                                .and_then(|v| v.to_str().ok())
-                                .and_then(|s| s.parse::<f64>().ok())
-                                .unwrap_or(backoff);
-
-                            // Add jitter (50%–100% of base_wait) and cap at 30s
-                            let jitter_factor = 0.5 + rand::thread_rng().gen::<f64>() * 0.5;
-                            let wait = (base_wait * jitter_factor).min(30.0);
+                            let retry_after_seconds = parse_retry_after_seconds(response.headers());
+                            let wait = rate_limit_retry_wait_seconds(
+                                retry_after_seconds,
+                                backoff,
+                                rand::thread_rng().gen::<f64>(),
+                            );
 
                             tracing::info!(
                                 "Rate limited (429), retry {}/{}, waiting {:.1}s",
@@ -280,7 +275,9 @@ impl ShipperClient {
         }
         let headers = resp.headers().clone();
         let body = resp.text().await.unwrap_or_default();
-        if let Some(detail) = parse_server_write_backpressure(status.as_u16(), &headers, body.clone()) {
+        if let Some(detail) =
+            parse_server_write_backpressure(status.as_u16(), &headers, body.clone())
+        {
             anyhow::bail!(
                 "POST returned Runtime Host write backpressure: kind={} lane={} retry_after_seconds={:?}: {}",
                 detail.kind,
@@ -447,6 +444,21 @@ fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<f64
         .filter(|v| v.is_finite() && *v > 0.0)
 }
 
+fn rate_limit_retry_wait_seconds(
+    retry_after_seconds: Option<f64>,
+    backoff_seconds: f64,
+    jitter_seed: f64,
+) -> f64 {
+    let jitter_seed = jitter_seed.clamp(0.0, 1.0);
+    if let Some(retry_after) = retry_after_seconds {
+        let jitter_window = (retry_after * 0.10).clamp(0.1, 5.0);
+        return retry_after + (jitter_window * jitter_seed);
+    }
+
+    let jitter_factor = 0.5 + jitter_seed * 0.5;
+    (backoff_seconds * jitter_factor).min(30.0)
+}
+
 fn parse_server_backpressure(
     status_code: u16,
     headers: &reqwest::header::HeaderMap,
@@ -558,7 +570,7 @@ mod tests {
 
     use super::{
         classify_connect_error_kind, parse_server_backpressure, parse_server_timing,
-        parse_server_write_backpressure, ShipResult,
+        parse_server_write_backpressure, rate_limit_retry_wait_seconds, ShipResult,
     };
 
     fn classify_status(status: u16, body: &str) -> ShipResult {
@@ -572,14 +584,12 @@ mod tests {
     }
 
     #[test]
-    fn test_429_jitter_in_range() {
-        // Verify the jitter formula produces values in [0.5 * base, base] and <= 30s
+    fn test_429_without_retry_after_keeps_legacy_bounded_jitter() {
         let base_wait = 20.0_f64;
         let mut rng = rand::thread_rng();
 
         for _ in 0..1000 {
-            let jitter_factor = 0.5 + rng.gen::<f64>() * 0.5;
-            let wait = (base_wait * jitter_factor).min(30.0);
+            let wait = rate_limit_retry_wait_seconds(None, base_wait, rng.gen::<f64>());
 
             assert!(
                 wait >= base_wait * 0.5,
@@ -590,11 +600,16 @@ mod tests {
             assert!(wait <= 30.0, "wait {:.2} should be capped at 30s", wait);
         }
 
-        // Also verify cap works for large base_wait
         let large_base = 100.0_f64;
-        let jitter_factor = 0.5 + rng.gen::<f64>() * 0.5;
-        let wait = (large_base * jitter_factor).min(30.0);
+        let wait = rate_limit_retry_wait_seconds(None, large_base, rng.gen::<f64>());
         assert_eq!(wait, 30.0, "Large base_wait should be capped at 30s");
+    }
+
+    #[test]
+    fn test_429_retry_after_is_floor_with_jitter_on_top() {
+        assert_eq!(rate_limit_retry_wait_seconds(Some(120.0), 1.0, 0.0), 120.0);
+        assert_eq!(rate_limit_retry_wait_seconds(Some(120.0), 1.0, 1.0), 125.0);
+        assert_eq!(rate_limit_retry_wait_seconds(Some(2.0), 1.0, 0.5), 2.1);
     }
 
     #[test]

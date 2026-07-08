@@ -50,13 +50,20 @@ Already present:
 - Engine status distinguishes archive backlog mode/state from machine liveness.
 - Runtime Host archive ingest sheds on writer pressure and now on archive WAL
   pressure.
-- Shipper already reads `Retry-After` on Runtime Host backpressure.
+- Hosted/dogfood service generation already defaults hosted `*.longhouse.ai`
+  Runtime Hosts to archive repair mode `paused`; direct CLI remains `drain`.
+- Shipper reads typed Runtime Host backpressure and persists archive retry floors
+  into the local spool.
 
-Known gap:
+Known gaps:
 
 - `longhouse-engine connect` still defaults `--archive-repair-mode` to `drain`.
   That is acceptable for direct self-host/dev usage, but not for hosted dogfood
   or hosted launch install paths.
+- Rate-limit and archive-backpressure retry math must treat `Retry-After` as a
+  floor and add jitter above it, not shrink it.
+- Non-paused restart replay must begin after a small jittered warmup rather than
+  immediately queueing archive work.
 
 ## Product Contract
 
@@ -132,7 +139,7 @@ When Runtime Host returns archive backpressure:
 
 - persist the failed path/range for later replay;
 - store the server-provided retry floor;
-- add full jitter before the next attempt;
+- add bounded jitter before the next attempt;
 - do not enqueue the same path/range repeatedly while it is deferred;
 - do not let deferred archive work consume live scheduler reservations.
 
@@ -157,17 +164,17 @@ Drain mode pacing:
 
 Use one mode enum everywhere: `paused | trickle | drain`.
 
-Operator controls should write the existing archive repair control file or the
-server-side equivalent, not invent parallel flags.
+Operator controls should write the existing archive repair control file. A
+server-command mode source is deferred until there is a real command channel that
+needs it.
 
 Minimum CLI/API operations:
 
-- show effective mode and source: startup default, control file, server command;
+- show effective mode and source: startup default or control file;
 - set mode to `paused`;
 - set mode to `trickle`;
 - set mode to `drain`;
 - show backlog count/oldest age/next retry time;
-- clear stale retry floors older than a configured max only when operator asks.
 
 Do not build a generic job ledger before launch. If a repair item is poisonous,
 the immediate prelaunch behavior is: preserve the path/range, record last error
@@ -249,10 +256,10 @@ Recreate the July 8 class:
 ## Implementation Order
 
 1. **Hosted default resolver**
-   - Add one resolver for effective startup archive mode.
+   - Already present in service generation and native service repair.
    - Hosted/dogfood install path uses `paused`.
    - Direct CLI default can remain `drain`.
-   - Tests prove the mode by launch path.
+   - Existing tests prove the mode by launch path.
 
 2. **Engine restart warmup**
    - In `trickle`/`drain`, delay first archive replay after restart by a small
@@ -260,8 +267,8 @@ Recreate the July 8 class:
    - Do not delay live watcher, runtime outbox, heartbeat, or control.
 
 3. **Backpressure retry floor**
-   - Persist server `Retry-After` per replay path/range.
-   - Add jitter on top.
+   - Server `Retry-After` is already persisted per replay path/range.
+   - Fix retry math so jitter is added on top of the floor.
    - Avoid duplicate scheduling while deferred.
 
 4. **Status surface**
@@ -271,6 +278,9 @@ Recreate the July 8 class:
 5. **Acceptance test**
    - Add a hosted restart regression that proves paused/trickle behavior under
      archive WAL pressure while live ingest succeeds.
+   - Prove paused mode holds across periodic retry/reconciliation ticks.
+   - Prove control-file `paused -> trickle` starts archive repair without a
+     process restart.
 
 ## Non-Goals
 
