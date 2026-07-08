@@ -350,6 +350,7 @@ class HostedCPAuthStrategy(AuthStrategy):
     def _resolve_claims_user(self, db: Session, claims: CPTokenClaims):
         from zerg.models.models import User
 
+        changed = False
         user = db.query(User).filter(User.cp_user_id == claims.cp_user_id).first()
         if user is None:
             existing = get_user_by_email(db, claims.email)
@@ -380,9 +381,16 @@ class HostedCPAuthStrategy(AuthStrategy):
                     skip_notification=True,
                 )
 
-            user.cp_user_id = claims.cp_user_id
-            user.provider = "control-plane"
-            user.provider_user_id = f"cp:{claims.cp_user_id}"
+            if user.cp_user_id != claims.cp_user_id:
+                user.cp_user_id = claims.cp_user_id
+                changed = True
+            if user.provider != "control-plane":
+                user.provider = "control-plane"
+                changed = True
+            provider_user_id = f"cp:{claims.cp_user_id}"
+            if user.provider_user_id != provider_user_id:
+                user.provider_user_id = provider_user_id
+                changed = True
 
         if user.email != claims.email:
             other = get_user_by_email(db, claims.email)
@@ -395,8 +403,8 @@ class HostedCPAuthStrategy(AuthStrategy):
                 )
             else:
                 user.email = claims.email
+                changed = True
 
-        changed = False
         display_name = claims.display_name or user.display_name
         if user.display_name != display_name:
             user.display_name = display_name

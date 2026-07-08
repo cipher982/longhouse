@@ -112,6 +112,77 @@ def test_resolved_hosted_user_does_not_commit_when_claims_are_unchanged(monkeypa
     assert commits == 0
 
 
+def test_verified_cp_email_link_commits_when_profile_fields_already_match(monkeypatch, db_session):
+    monkeypatch.setenv("INSTANCE_ID", "david010")
+    strategy = HostedCPAuthStrategy()
+    user = User(
+        email="david010@example.com",
+        display_name="CP User",
+        email_verified=True,
+        is_active=True,
+        last_login=datetime.now(timezone.utc),
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    commits = 0
+    original_commit = db_session.commit
+
+    def counting_commit():
+        nonlocal commits
+        commits += 1
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", counting_commit)
+
+    resolved = strategy._resolve_claims_user(  # noqa: SLF001
+        db_session,
+        _claims(cp_user_id=123, email="david010@example.com", email_verified=True),
+    )
+
+    assert resolved.id == user.id
+    assert resolved.cp_user_id == 123
+    assert resolved.provider == "control-plane"
+    assert resolved.provider_user_id == "cp:123"
+    assert commits == 1
+
+
+def test_cp_email_update_commits_when_profile_fields_already_match(monkeypatch, db_session):
+    monkeypatch.setenv("INSTANCE_ID", "david010")
+    strategy = HostedCPAuthStrategy()
+    user = User(
+        email="old@example.com",
+        cp_user_id=123,
+        provider="control-plane",
+        provider_user_id="cp:123",
+        display_name="CP User",
+        email_verified=True,
+        is_active=True,
+        last_login=datetime.now(timezone.utc),
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    commits = 0
+    original_commit = db_session.commit
+
+    def counting_commit():
+        nonlocal commits
+        commits += 1
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", counting_commit)
+
+    resolved = strategy._resolve_claims_user(  # noqa: SLF001
+        db_session,
+        _claims(cp_user_id=123, email="new@example.com", email_verified=True),
+    )
+
+    assert resolved.id == user.id
+    assert resolved.email == "new@example.com"
+    assert commits == 1
+
+
 def test_unverified_cp_email_cannot_link_existing_hosted_user(monkeypatch, db_session):
     monkeypatch.setenv("INSTANCE_ID", "david010")
     strategy = HostedCPAuthStrategy()
