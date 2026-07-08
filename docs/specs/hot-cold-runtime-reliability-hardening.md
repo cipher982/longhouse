@@ -1,9 +1,9 @@
 # Hot/Cold Runtime Reliability Hardening
 
-**Status:** Draft, revised after Hatch Fable first-principles review
+**Status:** Dogfood/canary implementation in progress
 **Owner:** Longhouse core
 **Created:** 2026-07-07
-**Review:** Hatch Fable architecture review, 2026-07-07
+**Review:** Hatch DeepSeek first-principles reviews, 2026-07-07
 **Related:** `docs/specs/hot-cold-ingest-isolation.md`,
 `docs/specs/reliability-data-plane.md`, `docs/specs/archive-backlog-repair.md`,
 `docs/specs/machine-control-truth.md`
@@ -25,6 +25,52 @@ launch promise is:
 
 If cold archival work can still block managed launch, remote control, runtime
 state, local health, or service readiness, then the hot/cold split is not done.
+
+## Implementation Status
+
+As of 2026-07-07 on branch `epic/hot-cold-runtime-hardening`, the branch is
+approved for dogfood/canary validation but not yet paid-launch complete.
+
+Protected from cold archive writer stalls:
+
+- `/readyz` separates hot readiness from archive degradation. A stale archive
+  writer on archive labels reports `ready_with_archive_degraded` instead of
+  taking the whole service down.
+- managed local launch writes hot `LiveLaunchReadiness` and archive outbox
+  records before returning; archive session/kernel projection is eventual.
+- remote Console launch writes hot readiness, dispatches the machine command,
+  and only then projects durable archive rows.
+- session detail and workspace reads can show a hot launch placeholder before
+  archive projection catches up.
+- live input dispatch writes hot receipts and projects archive provenance
+  later.
+- heartbeat request freshness is hot-first in production; cold bookkeeping runs
+  after the request path.
+- `LiveArchiveOutbox` drain is bounded by queue and execution timeouts and
+  defers instead of waiting indefinitely behind a saturated archive writer.
+- archive ingest and archive-primary preparation are split into bounded
+  cooperative sub-batches and re-check archive pressure between batches.
+
+Still launch-critical before paid GA:
+
+- There is no real cold-writer kill/preemption path. Python
+  `WriteSerializer.timeout_seconds` returns control to the caller while the
+  worker thread continues until SQLite returns.
+- WAL pressure thresholds and archive-shed/archive-pause policies are not yet
+  enforced.
+- Hosted archive repair must default to paused or trickle and prove startup
+  reconciliation cannot bypass that mode.
+- Live transcript durability still enters the cold archive writer after
+  publishing a provisional preview; the UI can wake, but durable transcript
+  catch-up can still lag behind archive pressure.
+- Outbox oldest-pending/row-count alerts and guaranteed drain-share semantics
+  are not yet implemented.
+
+Dogfood/canary acceptance for this branch is therefore: cold archive stalls no
+longer block launch/control/input/readiness, while archive lag remains explicit
+and recoverable. Paid launch acceptance additionally requires kill or strict
+prevention for wedged cold work, repair-mode defaults, WAL shed thresholds, and
+operator runbooks.
 
 ## Why This Exists
 
