@@ -41,6 +41,7 @@ from zerg.routers.agents_ingest import _stage_timing_header_value
 from zerg.routers.agents_ingest import _sync_derived_projections_for_label
 from zerg.routers.agents_ingest import _sync_session_counts_for_label
 from zerg.routers.agents_ingest import _write_serializer_label_for_ship_trace
+from zerg.services.write_serializer import InterruptedWriteError
 
 
 def _make_client(tmp_path):
@@ -610,6 +611,86 @@ def test_archive_ingest_does_not_pass_serializer_timeout(tmp_path, monkeypatch):
         assert response.headers["X-Ingest-Lane"] == "archive"
         assert response.headers["X-Ingest-Admission-State"] == "archive_slot_acquired"
         assert response.headers["X-Ingest-Sub-Batches"] == "1"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+@pytest.mark.parametrize(
+    ("work_context", "expected_lane", "expected_kind", "expected_retry_after"),
+    [
+        ("live_transcript", "live", "live_ingest_backpressure", "5"),
+        ("spool_replay", "archive", "archive_ingest_backpressure", "15"),
+    ],
+)
+def test_interrupted_ingest_write_returns_retryable_backpressure(
+    tmp_path,
+    monkeypatch,
+    work_context,
+    expected_lane,
+    expected_kind,
+    expected_retry_after,
+):
+    class InterruptingSerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+        queue_depth = 0
+
+        async def execute_after_closing_request_session(self, _fn, _fallback_db, **kwargs):
+            raise InterruptedWriteError(label=kwargs["label"], interrupt_after_seconds=0.05)
+
+    client, _ = _make_client(tmp_path)
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: InterruptingSerializer(),
+    )
+    try:
+        session_id = "31111111-2222-3333-4444-555555555555"
+        payload = {
+            "id": session_id,
+            "provider": "codex",
+            "environment": "test",
+            "project": "zerg",
+            "started_at": "2026-01-01T00:00:00Z",
+            "events": [
+                {
+                    "role": "assistant",
+                    "content_text": "hi",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "source_path": "/tmp/interrupted-ingest.jsonl",
+                    "source_offset": 0,
+                    "raw_json": '{"type":"assistant","text":"hi"}',
+                }
+            ],
+        }
+        response = client.post(
+            "/agents/ingest",
+            json=payload,
+            headers={
+                "X-Agents-Token": "dev",
+                "X-Longhouse-Ship-Trace": json.dumps(
+                    {
+                        "schema": "ship_trace.v1",
+                        "trace_id": f"{session_id}:0:64:1778220000000",
+                        "provider": "codex",
+                        "session_id": session_id,
+                        "work_context": work_context,
+                    },
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert response.headers["Retry-After"] == expected_retry_after
+        assert response.headers["X-Ingest-Lane"] == expected_lane
+        assert response.headers["X-Ingest-Backpressure"] == expected_kind
+        assert response.headers["X-Ingest-Error-Kind"] == expected_kind
+        assert response.headers["X-Ingest-Interrupted-Label"] == _write_serializer_label_for_ship_trace(
+            {"work_context": work_context}
+        )
+        assert response.headers["X-Ingest-Admission-State"] == "writer_interrupted"
     finally:
         api_app.dependency_overrides.clear()
 

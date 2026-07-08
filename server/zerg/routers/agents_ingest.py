@@ -40,6 +40,7 @@ from zerg.services.agents import IngestResult
 from zerg.services.agents import SessionIngest
 from zerg.services.agents.store import is_workflow_journal_only_payload
 from zerg.services.session_views import IngestResponse
+from zerg.services.write_serializer import InterruptedWriteError
 
 logger = logging.getLogger(__name__)
 
@@ -1329,6 +1330,22 @@ async def ingest_session(
                 else:
                     request_status_label = f"http_{exc.status_code}"
             raise
+        except InterruptedWriteError as exc:
+            response.headers["X-Ingest-Interrupted-Label"] = exc.label
+            response.headers["X-Ingest-Interrupted-After-Seconds"] = f"{exc.interrupt_after_seconds:.1f}"
+            if write_label == "ingest-live":
+                request_status_label = "live_backpressure"
+                _raise_live_ingest_backpressure(
+                    response,
+                    admission_state="writer_interrupted",
+                    retry_after_seconds=_ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
+                )
+            request_status_label = "archive_backpressure"
+            _raise_archive_ingest_backpressure(
+                response,
+                admission_state="writer_interrupted",
+                retry_after_seconds=_ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS,
+            )
         except Exception:
             logger.exception("Failed to ingest session")
             request_status_label = "internal_error"
