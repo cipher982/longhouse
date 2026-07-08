@@ -255,6 +255,8 @@ def _merge_archive_primary_states(states: list[str]) -> str:
         return "disabled"
     if any(state == "fallback" for state in states):
         return "fallback"
+    if any(state == "failed" for state in states):
+        return "failed"
     if any(state == "written" for state in states):
         return "written"
     if any(state == "prepared" for state in states):
@@ -1124,26 +1126,37 @@ async def ingest_session(
                         archive_primary_state = "written"
                     except Exception:
                         if not settings.legacy_raw_write_enabled:
-                            # Archive is the only raw store and the manifest write
-                            # failed: fail closed with the same 503 semantics as a
-                            # prepare failure, not a generic 500.
+                            if write_label == "ingest-live":
+                                archive_primary_state = "failed"
+                                legacy_raw_effective = False
+                                logger.warning(
+                                    "Archive-primary manifest insert failed for live session %s; continuing without raw archive",
+                                    data.id,
+                                    exc_info=True,
+                                )
+                            else:
+                                # Archive is the only raw store and the manifest
+                                # write failed: fail closed for archive/replay lanes
+                                # so the engine retries instead of silently losing
+                                # source fidelity.
+                                logger.warning(
+                                    "Archive-primary manifest insert failed for session %s " "and legacy raw fallback is disabled",
+                                    data.id,
+                                    exc_info=True,
+                                )
+                                raise HTTPException(
+                                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                    detail="Archive-primary write failed and legacy raw fallback is disabled",
+                                    headers={"X-Ingest-Archive-Primary": "failed"},
+                                )
+                        else:
+                            archive_primary_state = "fallback"
+                            legacy_raw_effective = True
                             logger.warning(
-                                "Archive-primary manifest insert failed for session %s " "and legacy raw fallback is disabled",
+                                "Archive-primary manifest insert failed for session %s; falling back to legacy raw writes",
                                 data.id,
                                 exc_info=True,
                             )
-                            raise HTTPException(
-                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                detail="Archive-primary write failed and legacy raw fallback is disabled",
-                                headers={"X-Ingest-Archive-Primary": "failed"},
-                            )
-                        archive_primary_state = "fallback"
-                        legacy_raw_effective = True
-                        logger.warning(
-                            "Archive-primary manifest insert failed for session %s; falling back to legacy raw writes",
-                            data.id,
-                            exc_info=True,
-                        )
                 elif archive_primary_state == "prepared":
                     archive_primary_state = "written"
 
@@ -1245,20 +1258,31 @@ async def ingest_session(
                             archive_primary_prepared = PreparedArchiveShadow(enabled=True, error="prepare_timeout")
                         if archive_primary_prepared.error:
                             if not settings.legacy_raw_write_enabled:
-                                request_status_label = "archive_primary_failed"
-                                raise HTTPException(
-                                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                    detail="Archive-primary write failed and legacy raw fallback is disabled",
-                                    headers={"X-Ingest-Archive-Primary": "failed"},
+                                if write_label == "ingest-live":
+                                    archive_primary_state = "failed"
+                                    legacy_raw_effective = False
+                                    logger.warning(
+                                        "Archive-primary prepare failed for live session %s batch=%s; continuing without raw archive: %s",
+                                        data.id,
+                                        batch_index + 1,
+                                        archive_primary_prepared.error,
+                                    )
+                                else:
+                                    request_status_label = "archive_primary_failed"
+                                    raise HTTPException(
+                                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                        detail="Archive-primary write failed and legacy raw fallback is disabled",
+                                        headers={"X-Ingest-Archive-Primary": "failed"},
+                                    )
+                            else:
+                                archive_primary_state = "fallback"
+                                legacy_raw_effective = True
+                                logger.warning(
+                                    "Archive-primary prepare failed for session %s batch=%s; falling back to legacy raw writes: %s",
+                                    data.id,
+                                    batch_index + 1,
+                                    archive_primary_prepared.error,
                                 )
-                            archive_primary_state = "fallback"
-                            legacy_raw_effective = True
-                            logger.warning(
-                                "Archive-primary prepare failed for session %s batch=%s; falling back to legacy raw writes: %s",
-                                data.id,
-                                batch_index + 1,
-                                archive_primary_prepared.error,
-                            )
                         else:
                             archive_primary_state = "prepared"
                             archive_primary_records_written = archive_primary_prepared.records_written
@@ -1384,9 +1408,12 @@ async def ingest_session(
                     "longhouse.ingest.events_inserted": result.events_inserted,
                     "longhouse.ingest.events_skipped": result.events_skipped,
                     "longhouse.ingest.session_created": result.session_created,
+                    "longhouse.ingest.archive_primary_state": archive_primary_state,
                 },
             )
-            request_status_label = "ok"
+            request_status_label = (
+                "ok_archive_primary_failed" if write_label == "ingest-live" and archive_primary_state == "failed" else "ok"
+            )
             return IngestResponse(
                 session_id=str(result.session_id),
                 events_inserted=result.events_inserted,

@@ -1124,6 +1124,41 @@ def test_archive_primary_later_batch_prepare_failure_fails_closed_without_legacy
         api_app.dependency_overrides.clear()
 
 
+def test_live_archive_primary_prepare_failure_continues_without_legacy_raw(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "0")
+    monkeypatch.delenv("LONGHOUSE_DISABLE_LEGACY_RAW_WRITES", raising=False)
+    prepared_sizes: list[int] = []
+
+    async def fake_prepare(*, data, fallback_db, settings):  # noqa: ARG001
+        prepared_sizes.append(max(len(data.events), len(data.source_lines or [])))
+        if len(prepared_sizes) == 2:
+            return SimpleNamespace(error="synthetic_prepare_failure", chunks=(), records_written=0)
+        return SimpleNamespace(error=None, chunks=(), records_written=0)
+
+    monkeypatch.setattr(
+        "zerg.routers.agents_ingest._prepare_archive_primary_before_ingest",
+        fake_prepare,
+    )
+    client, SessionLocal = _make_client(tmp_path)
+    try:
+        session_id = "62111111-2222-3333-4444-555555555555"
+        response = client.post(
+            "/agents/ingest",
+            json=_batched_archive_primary_payload(session_id, 65),
+            headers=_live_transcript_trace_header(session_id),
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        assert response.headers["X-Ingest-Archive-Primary"] == "failed"
+        assert response.headers["X-Ingest-Legacy-Raw"] == "disabled"
+        assert prepared_sizes == [16, 16, 16, 16, 1]
+        with SessionLocal() as db:
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 65
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_agents_ingest_releases_request_db_before_serialized_write(tmp_path, monkeypatch):
     engine = make_engine(f"sqlite:///{tmp_path}/ingest_release.db", pool_size=1, max_overflow=0)
     Base.metadata.create_all(bind=engine)

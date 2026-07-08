@@ -494,7 +494,7 @@ def test_ingest_route_archive_primary_falls_back_to_legacy_raw_on_archive_failur
         api_app.dependency_overrides.clear()
 
 
-def test_ingest_route_archive_primary_fails_closed_when_legacy_raw_disabled(tmp_path, monkeypatch):
+def test_live_ingest_archive_primary_failure_does_not_block_hot_ingest(tmp_path, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
     monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "0")
     bad_archive_root = tmp_path / "not-a-directory"
@@ -521,14 +521,27 @@ def test_ingest_route_archive_primary_fails_closed_when_legacy_raw_disabled(tmp_
                     }
                 ],
             },
-            headers={"X-Agents-Token": "dev"},
+            headers={
+                "X-Agents-Token": "dev",
+                "X-Longhouse-Ship-Trace": json.dumps(
+                    {
+                        "schema": "ship_trace.v1",
+                        "trace_id": f"{session_id}:0:8192:1778220000000",
+                        "provider": "codex",
+                        "session_id": str(session_id),
+                        "work_context": "live_transcript",
+                    },
+                    separators=(",", ":"),
+                ),
+            },
         )
 
-        assert response.status_code == 503
+        assert response.status_code == 200, response.text
         assert response.headers["X-Ingest-Archive-Primary"] == "failed"
+        assert response.headers["X-Ingest-Legacy-Raw"] == "disabled"
         with SessionLocal() as db:
             assert db.query(ArchiveChunk).count() == 0
-            assert db.query(AgentSourceLine).count() == 0
+            assert db.query(AgentSourceLine).count() == 1
             assert db.query(AgentEvent).count() == 0
     finally:
         api_app.dependency_overrides.clear()
