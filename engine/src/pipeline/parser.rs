@@ -1219,6 +1219,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     // preceding planner. On incremental resume (offset > 0) the planner may live in
     // the prior batch, so seed from the record before `offset`.
     let mut antigravity_pending = seed_antigravity_pending(path, offset);
+    let mut codex_pending = CodexPending::default();
 
     let mut pos: usize = 0;
     while pos < data.len() {
@@ -1286,6 +1287,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
             &redacted_line,
             &mut events,
             &mut antigravity_pending,
+            &mut codex_pending,
         );
     }
 
@@ -1340,6 +1342,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     let mut candidate_lines: usize = 0;
     // See parse_mmap: seed antigravity call/result pairing across the resume boundary.
     let mut antigravity_pending = seed_antigravity_pending(path, offset);
+    let mut codex_pending = CodexPending::default();
     let mut line = String::new();
 
     loop {
@@ -1406,6 +1409,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
             &redacted_line,
             &mut events,
             &mut antigravity_pending,
+            &mut codex_pending,
         );
     }
 
@@ -1600,6 +1604,7 @@ fn extract_events(
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
     antigravity_pending: &mut AntigravityPending,
+    codex_pending: &mut CodexPending,
 ) {
     let event_type = obj.r#type.as_deref().unwrap_or("");
 
@@ -1655,6 +1660,7 @@ fn extract_events(
                 line_offset,
                 raw_line,
                 events,
+                codex_pending,
             );
         }
         return;
@@ -1671,6 +1677,7 @@ fn extract_events(
                 line_offset,
                 raw_line,
                 events,
+                codex_pending,
             );
         }
         return;
@@ -2088,6 +2095,11 @@ const CODEX_TURN_INTERRUPTED_TEXT: &str = "User interrupted the turn";
 const CODEX_TURN_INTERRUPTED_RAW_TYPE: &str = "codex_turn_interrupted";
 const CODEX_TURN_INTERRUPTED_MARKER_RAW_TYPE: &str = "codex_turn_interrupted_marker";
 
+#[derive(Debug, Default)]
+struct CodexPending {
+    suppress_next_turn_aborted_marker: bool,
+}
+
 fn extract_codex_event_msg(
     payload: &CodexPayload,
     session_id: &str,
@@ -2096,6 +2108,7 @@ fn extract_codex_event_msg(
     line_offset: u64,
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
+    pending: &mut CodexPending,
 ) {
     let payload_type = payload.r#type.as_deref().unwrap_or("");
     if payload_type != "turn_aborted" {
@@ -2121,22 +2134,11 @@ fn extract_codex_event_msg(
         raw_type: CODEX_TURN_INTERRUPTED_RAW_TYPE.to_string(),
         raw_line: Some(raw_line.to_string()),
     });
+    pending.suppress_next_turn_aborted_marker = true;
 }
 
 fn codex_text_is_turn_aborted_marker(text: &str) -> bool {
     text.trim_start().starts_with(CODEX_TURN_ABORTED_PREFIX)
-}
-
-fn codex_last_event_is_adjacent_turn_interrupted(events: &[ParsedEvent], line_offset: u64) -> bool {
-    events.last().is_some_and(|event| {
-        if event.role != Role::System || event.raw_type != CODEX_TURN_INTERRUPTED_RAW_TYPE {
-            return false;
-        }
-        let Some(raw_line) = event.raw_line.as_deref() else {
-            return false;
-        };
-        event.source_offset + raw_line.len() as u64 + 1 == line_offset
-    })
 }
 
 fn extract_codex_events(
@@ -2147,6 +2149,7 @@ fn extract_codex_events(
     line_offset: u64,
     raw_line: &str,
     events: &mut Vec<ParsedEvent>,
+    pending: &mut CodexPending,
 ) {
     let payload_type = payload.r#type.as_deref().unwrap_or("");
 
@@ -2163,6 +2166,9 @@ fn extract_codex_events(
                 "assistant" => Role::Assistant,
                 _ => return,
             };
+            if role != Role::User {
+                pending.suppress_next_turn_aborted_marker = false;
+            }
 
             let content_items: &[CodexContentItem] = payload
                 .content
@@ -2191,7 +2197,9 @@ fn extract_codex_events(
                     })
                     .unwrap_or("");
                 if codex_text_is_turn_aborted_marker(first_text) {
-                    if !codex_last_event_is_adjacent_turn_interrupted(events, line_offset) {
+                    if pending.suppress_next_turn_aborted_marker {
+                        pending.suppress_next_turn_aborted_marker = false;
+                    } else {
                         events.push(ParsedEvent {
                             uuid: format!("{}-action-turn-interrupted-marker", msg_uuid),
                             session_id: session_id.to_string(),
@@ -2209,6 +2217,7 @@ fn extract_codex_events(
                     }
                     return;
                 }
+                pending.suppress_next_turn_aborted_marker = false;
                 if injected_prefixes.iter().any(|p| first_text.starts_with(p)) {
                     return;
                 }
@@ -2274,6 +2283,7 @@ fn extract_codex_events(
             });
         }
         "function_call" => {
+            pending.suppress_next_turn_aborted_marker = false;
             let tool_name = payload.name.as_deref().unwrap_or("").to_string();
             let call_id = payload.call_id.as_deref().unwrap_or("");
             let uuid_suffix = if call_id.is_empty() { "0" } else { call_id };
@@ -2308,6 +2318,7 @@ fn extract_codex_events(
             });
         }
         "function_call_output" => {
+            pending.suppress_next_turn_aborted_marker = false;
             let call_id = payload.call_id.as_deref().unwrap_or("");
             let uuid_suffix = if call_id.is_empty() { "0" } else { call_id };
 
@@ -3286,6 +3297,27 @@ mod tests {
         assert_eq!(
             result.events[1].content_text.as_deref(),
             Some("next real prompt")
+        );
+    }
+
+    #[test]
+    fn test_codex_turn_aborted_non_interrupted_reason_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-00000000ab11.jsonl",
+            &[
+                r#"{"type":"event_msg","timestamp":"2026-02-15T17:06:10Z","payload":{"type":"turn_aborted","turn_id":"turn_123","reason":"timeout"}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:12Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"real prompt"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, Role::User);
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("real prompt")
         );
     }
 
