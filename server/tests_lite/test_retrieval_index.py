@@ -135,7 +135,13 @@ def test_fts_tokenizer_preserves_code_shaped_terms(tmp_path):
     )
     with _open_index(tmp_path) as conn:
         replace_session_chunks(conn, "session-1", [_chunk("code", content=content)])
+        conn.execute("CREATE VIRTUAL TABLE recall_chunks_vocab USING fts5vocab(recall_chunks_fts, 'row')")
+        terms = {row[0] for row in conn.execute("SELECT term FROM recall_chunks_vocab")}
 
+        assert "server/zerg/routers/agents_search.py" in terms
+        assert "--no-verify" in terms
+        assert "source_lines" in terms
+        assert "feature/recall-index" in terms
         assert search_lexical_chunks(conn, "server/zerg/routers/agents_search.py")
         assert search_lexical_chunks(conn, "--no-verify")
         assert search_lexical_chunks(conn, "source_lines")
