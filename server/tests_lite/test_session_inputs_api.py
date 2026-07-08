@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -343,6 +344,27 @@ def _seed_codex_machine_control_session(session_local, *, phase: str = "idle"):
         device_id="codex-machine-control",
         phase=phase,
     )
+
+
+def _wait_for_turn_input_link(session_local, *, session_id, request_id: str, timeout_secs: float = 1.0):
+    deadline = time.monotonic() + timeout_secs
+    last_turn = None
+    while time.monotonic() < deadline:
+        with session_local() as db:
+            turn = (
+                db.query(SessionTurn)
+                .filter(SessionTurn.session_id == session_id, SessionTurn.request_id == request_id)
+                .one_or_none()
+            )
+            if turn is not None:
+                last_turn = SimpleNamespace(
+                    session_input_id=turn.session_input_id,
+                    user_event_id=turn.user_event_id,
+                )
+                if turn.user_event_id is not None:
+                    return last_turn
+        time.sleep(0.01)
+    return last_turn
 
 
 def test_session_input_api_schema_exposes_typed_lifecycle_contract():
@@ -1264,17 +1286,15 @@ def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
             assert row.delivery_request_id
             assert row.delivery_request_id.startswith("drain-")
 
-            turn = (
-                db.query(SessionTurn)
-                .filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id)
-                .one()
-            )
-            assert turn.session_input_id == input_id
-            assert turn.user_event_id is not None
             attempt = db.query(SessionInputDeliveryAttempt).filter(SessionInputDeliveryAttempt.session_input_id == input_id).one()
             assert attempt.status == "accepted"
             assert attempt.request_id == row.delivery_request_id
             assert attempt.lease_expires_at is not None
+            delivery_request_id = row.delivery_request_id
+        turn = _wait_for_turn_input_link(session_local, session_id=session_id, request_id=delivery_request_id)
+        assert turn is not None
+        assert turn.session_input_id == input_id
+        assert turn.user_event_id is not None
         assert result.dispatched is True
         assert result.input_id == input_id
     finally:
