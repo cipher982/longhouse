@@ -1125,9 +1125,9 @@ async def ingest_session(
                         insert_archive_chunk_manifests(write_db, archive_primary_prepared.chunks)
                         archive_primary_state = "written"
                     except Exception:
+                        write_db.rollback()
                         if not settings.legacy_raw_write_enabled:
                             if write_label == "ingest-live":
-                                write_db.rollback()
                                 archive_primary_state = "failed"
                                 legacy_raw_effective = False
                                 logger.warning(

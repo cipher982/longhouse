@@ -1223,6 +1223,68 @@ def test_live_archive_primary_manifest_failure_rolls_back_before_hot_ingest(tmp_
         api_app.dependency_overrides.clear()
 
 
+def test_live_archive_primary_manifest_failure_rolls_back_before_legacy_raw_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
+    rollbacks = 0
+
+    async def fake_prepare(*, data, fallback_db, settings):  # noqa: ARG001
+        chunk = SimpleNamespace(
+            tenant_id="tenant-test",
+            session_id=str(data.id),
+            stream="source_lines",
+            relative_path="tenants/tenant-test/sessions/test/chunks/source_lines-fallback.jsonl.zst",
+            first_source_seq=1,
+            last_source_seq=1,
+            record_count=1,
+            uncompressed_bytes=1,
+            compressed_bytes=1,
+            payload_sha256="2" * 64,
+            file_sha256="3" * 64,
+        )
+        return SimpleNamespace(error=None, chunks=(chunk,), records_written=1)
+
+    def fake_insert_archive_chunk_manifests(db, chunks):  # noqa: ARG001
+        db.execute(text("CREATE TABLE IF NOT EXISTS poisoned_archive_write (id integer primary key)"))
+        db.execute(text("INSERT INTO poisoned_archive_write (id) VALUES (1)"))
+        raise RuntimeError("synthetic_manifest_failure")
+
+    original_rollback = Session.rollback
+
+    def observed_rollback(self):
+        nonlocal rollbacks
+        rollbacks += 1
+        return original_rollback(self)
+
+    monkeypatch.setattr(
+        "zerg.routers.agents_ingest._prepare_archive_primary_before_ingest",
+        fake_prepare,
+    )
+    monkeypatch.setattr(
+        "zerg.services.archive_shadow.insert_archive_chunk_manifests",
+        fake_insert_archive_chunk_manifests,
+    )
+    monkeypatch.setattr(Session, "rollback", observed_rollback)
+    client, SessionLocal = _make_client(tmp_path)
+    try:
+        session_id = "64111111-2222-3333-4444-555555555555"
+        response = client.post(
+            "/agents/ingest",
+            json=_batched_archive_primary_payload(session_id, 1),
+            headers=_live_transcript_trace_header(session_id),
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
+        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
+        assert rollbacks >= 1
+        with SessionLocal() as db:
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 1
+            assert db.execute(text("SELECT count(*) FROM poisoned_archive_write")).scalar_one() == 0
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_agents_ingest_releases_request_db_before_serialized_write(tmp_path, monkeypatch):
     engine = make_engine(f"sqlite:///{tmp_path}/ingest_release.db", pool_size=1, max_overflow=0)
     Base.metadata.create_all(bind=engine)
