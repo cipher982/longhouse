@@ -61,7 +61,6 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
     """Drain one live archive outbox batch when the hot writer lane is idle."""
 
     from zerg.database import get_live_session_factory
-    from zerg.database import get_write_session_factory
     from zerg.database import live_store_configured
     from zerg.models.live_store import LiveArchiveOutbox
     from zerg.services.live_archive_outbox import cleanup_drained_live_archive_outbox
@@ -96,20 +95,17 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
         cleaned = _cleanup_drained()
         return {"processed": 0, "drained": 0, "failed": 0, "cleaned": cleaned}
 
-    writer_metrics = get_write_serializer().get_metrics()
+    ws = get_write_serializer()
+    writer_metrics = ws.get_metrics()
     if writer_metrics.get("writer_active") or int(writer_metrics.get("queue_depth") or 0) > 0:
         cleaned = _cleanup_drained()
         return {"processed": 0, "drained": 0, "failed": 0, "cleaned": cleaned, "deferred": 1}
 
-    archive_session_factory = get_write_session_factory()
-    if archive_session_factory is None:
-        return {"processed": 0, "drained": 0, "failed": 0, "cleaned": 0}
-
-    def _drain_direct():
+    def _drain_serialized(archive_db):
         totals = {"processed": 0, "drained": 0, "failed": 0}
         max_batches = max(1, LIVE_ARCHIVE_OUTBOX_DRAIN_MAX_BATCHES_PER_TICK)
         for _batch_index in range(max_batches):
-            with archive_session_factory() as archive_db, live_session_factory() as live_db:
+            with live_session_factory() as live_db:
                 result = drain_live_archive_outbox(live_db, archive_db, limit=LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE)
             batch = result.as_dict()
             for key in totals:
@@ -119,7 +115,13 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
         return totals
 
     try:
-        result = await asyncio.to_thread(_drain_direct)
+        result = await ws.execute(
+            _drain_serialized,
+            label="live-archive-drain",
+            auto_commit=False,
+            timeout_seconds=LIVE_ARCHIVE_OUTBOX_DRAIN_TIMEOUT_SECONDS,
+            queue_timeout_seconds=LIVE_ARCHIVE_OUTBOX_DRAIN_QUEUE_TIMEOUT_SECONDS,
+        )
     except Exception:
         logger.warning("Live archive outbox drain deferred because archive writer is saturated", exc_info=True)
         cleaned = _cleanup_drained()

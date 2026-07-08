@@ -64,6 +64,14 @@ async def test_live_archive_drain_uses_fresh_archive_session_when_writer_idle(tm
         def get_metrics(self):
             return {"writer_active": False, "queue_depth": 0}
 
+        async def execute(self, fn, **kwargs):
+            assert kwargs["label"] == "live-archive-drain"
+            assert kwargs["auto_commit"] is False
+            assert kwargs["timeout_seconds"] > 0
+            assert kwargs["queue_timeout_seconds"] > 0
+            with ArchiveSession() as archive_db:
+                return fn(archive_db)
+
     monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
     monkeypatch.setattr("zerg.database.get_write_session_factory", lambda: ArchiveSession)
@@ -310,6 +318,12 @@ async def test_live_archive_drain_catches_up_multiple_batches_per_tick(
     class FakeSerializer:
         def get_metrics(self):
             return {"writer_active": False, "queue_depth": 0}
+
+        async def execute(self, fn, **kwargs):
+            assert kwargs["label"] == "live-archive-drain"
+            assert kwargs["auto_commit"] is False
+            with ArchiveSession() as archive_db:
+                return fn(archive_db)
 
     monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
