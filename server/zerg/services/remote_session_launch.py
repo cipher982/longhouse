@@ -758,127 +758,70 @@ async def _launch_remote_session_hot(
         payload["initial_prompt"] = initial_prompt
         if shell.one_shot_run is not None:
             payload["run_id"] = str(shell.one_shot_run.id)
-    response: MachineControlCommandResponse = await registry.send_command(
+    response: MachineControlCommandResponse = await registry.send_command_nowait(
         owner_id=params.owner_id,
         device_id=device_id,
         session_id=str(shell.session_uuid),
         command_type="session.run_once" if execution_lifetime == "one_shot" else "session.launch",
         payload=payload,
-        timeout_secs=LAUNCH_COMMAND_TIMEOUT_SECS,
         command_id=shell.command_id,
     )
 
     if not response.transport_ok:
         error_message = response.error or "control channel transport failed"
+        shell.session.ended_at = datetime.now(timezone.utc)
+        if execution_lifetime == "one_shot":
+            _mark_one_shot_launch_run_failed(db, attempt=shell.launch_attempt, error_code="machine_offline")
         update_launch_attempt(
             db,
             shell.launch_attempt,
-            state="dispatched",
+            state="failed",
+            error_code="machine_offline",
             error_message=error_message,
+            clear_expires=True,
         )
         db.commit()
-        outcome = {"state": "dispatched", "error_message": error_message}
+        outcome = {"state": "failed", "error_code": "machine_offline", "error_message": error_message}
         await _write_live_launch_readiness(
             lambda live_db: (
                 update_live_launch_readiness_state(
                     live_db,
                     session_id=shell.session_uuid,
-                    state="dispatched",
+                    state="failed",
+                    error_code="machine_offline",
                     error_message=error_message,
-                ),
-                enqueue_remote_launch_outcome_outbox(live_db, launch=launch_payload, outcome=outcome),
-            )
-        )
-        return _launch_result_for_attempt(shell.launch_attempt)
-
-    message = response.message or {}
-    if message.get("ok"):
-        if execution_lifetime == "one_shot":
-            _attach_one_shot_launch_run(
-                db,
-                session=shell.session,
-                attempt=shell.launch_attempt,
-                external_name=machine_name or device_id,
-                pid=_result_pid(message),
-                argv=_result_argv(message),
-                cwd=cwd,
-            )
-        else:
-            _attach_live_launch_run(
-                db,
-                session=shell.session,
-                attempt=shell.launch_attempt,
-                external_name=machine_name or device_id,
-                provider_thread_id=_result_resume_thread_id(message),
-                thread_path=_result_resume_thread_path(message),
-                cwd=cwd,
-            )
-        db.commit()
-        outcome = {
-            "state": "adopted",
-            "pid": _result_pid(message),
-            "argv": _result_argv(message),
-            "provider_thread_id": _result_resume_thread_id(message),
-            "thread_path": _result_resume_thread_path(message),
-            "external_name": machine_name or device_id,
-        }
-        await _write_live_launch_readiness(
-            lambda live_db: (
-                update_live_launch_readiness_state(
-                    live_db,
-                    session_id=shell.session_uuid,
-                    state="adopted",
                     clear_expires=True,
                 ),
                 enqueue_remote_launch_outcome_outbox(live_db, launch=launch_payload, outcome=outcome),
             )
         )
-        elapsed_ms = int((datetime.now(timezone.utc) - shell.started_at).total_seconds() * 1000)
-        logger.info(
-            "remote_launch session=%s device=%s provider=%s lifetime=%s state=live duration_ms=%s",
-            shell.session_uuid,
-            device_id,
-            provider,
-            execution_lifetime,
-            elapsed_ms,
-        )
         return _launch_result_for_attempt(shell.launch_attempt)
 
-    error = message.get("error") or {}
-    code = normalize_remote_launch_error_code(error.get("code"))
-    err_msg = str(error.get("message") or "unknown error")
-    shell.session.ended_at = datetime.now(timezone.utc)
-    if execution_lifetime == "one_shot":
-        _mark_one_shot_launch_run_failed(db, attempt=shell.launch_attempt, error_code=code)
     update_launch_attempt(
         db,
         shell.launch_attempt,
-        state="failed",
-        error_code=code,
-        error_message=err_msg,
-        clear_expires=True,
+        state="dispatched",
     )
     db.commit()
-    outcome = {"state": "failed", "error_code": code, "error_message": err_msg}
+    outcome = {"state": "dispatched"}
     await _write_live_launch_readiness(
         lambda live_db: (
             update_live_launch_readiness_state(
                 live_db,
                 session_id=shell.session_uuid,
-                state="failed",
-                error_code=code,
-                error_message=err_msg,
-                clear_expires=True,
+                state="dispatched",
             ),
             enqueue_remote_launch_outcome_outbox(live_db, launch=launch_payload, outcome=outcome),
         )
     )
-    logger.warning(
-        "remote_launch session=%s device=%s provider=%s state=launch_failed code=%s",
+    elapsed_ms = int((datetime.now(timezone.utc) - shell.started_at).total_seconds() * 1000)
+    logger.info(
+        "remote_launch session=%s device=%s provider=%s lifetime=%s state=dispatched duration_ms=%s",
         shell.session_uuid,
         device_id,
         provider,
-        code,
+        execution_lifetime,
+        elapsed_ms,
     )
     return _launch_result_for_attempt(shell.launch_attempt)
 

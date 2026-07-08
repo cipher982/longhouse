@@ -377,6 +377,22 @@ class _StubRegistry(MachineControlChannelRegistry):
             message={"type": "command_result", "ok": True, "result": {"session_id": session_id}},
         )
 
+    async def send_command_nowait(self, **kwargs):  # type: ignore[override]
+        self.sent.append(kwargs)
+        session_id = kwargs.get("session_id", "")
+        if session_id in self._scripted:
+            return self._scripted[session_id]
+        return MachineControlCommandResponse(
+            transport_ok=True,
+            message={
+                "type": "command",
+                "command_id": kwargs.get("command_id"),
+                "command_type": kwargs.get("command_type"),
+                "session_id": session_id,
+                "payload": kwargs.get("payload") or {},
+            },
+        )
+
 
 class _LiveReadinessSerializer:
     is_configured = True
@@ -471,18 +487,18 @@ def test_launch_remote_session_writes_live_launch_readiness(tmp_path, monkeypatc
                 )
         )
 
-        assert result.launch_state == "live"
+        assert result.launch_state == "launching_unknown"
         assert live_serializer.labels == ["launch-readiness", "launch-readiness"]
         sent = registry.sent[0]
         with SessionLocal() as db:
             assert db.get(AgentSession, result.session_id) is not None
-            assert _latest_attempt(db, result.session_id).state == "adopted"
-            assert db.query(SessionConnection).count() == 1
+            assert _latest_attempt(db, result.session_id).state == "dispatched"
+            assert db.query(SessionConnection).count() == 0
         with LiveSession() as live_db:
             row = live_db.get(LiveLaunchReadiness, str(result.session_id))
             assert row is not None
-            assert row.state == "adopted"
-            assert row.expires_at is None
+            assert row.state == "dispatched"
+            assert row.expires_at is not None
             assert row.owner_id == str(OWNER_ID)
             assert row.device_id == "cinder"
             assert row.machine_id == "cinder"
@@ -501,8 +517,8 @@ def test_launch_remote_session_writes_live_launch_readiness(tmp_path, monkeypatc
         with SessionLocal() as db:
             session = db.get(AgentSession, result.session_id)
             assert session is not None
-            assert _latest_attempt(db, result.session_id).state == "adopted"
-            assert db.query(SessionConnection).count() == 1
+            assert _latest_attempt(db, result.session_id).state == "dispatched"
+            assert db.query(SessionConnection).count() == 0
     finally:
         live_engine.dispose()
 
@@ -544,7 +560,7 @@ def test_launch_client_request_id_replay_skips_live_launch_readiness_write(tmp_p
             assert rows[0].session_id == str(first.session_id)
             assert rows[0].command_id == registry.sent[0]["command_id"]
             assert rows[0].client_request_id == "tap-live-readiness-replay"
-            assert rows[0].state == "adopted"
+            assert rows[0].state == "dispatched"
             assert live_db.query(LiveArchiveOutbox).count() == 2
     finally:
         live_engine.dispose()
@@ -579,13 +595,13 @@ def test_launch_client_request_id_replay_uses_durable_attempt_when_live_store_is
             drained = drain_live_archive_outbox(live_db, archive_db, limit=1)
             assert drained.drained == 1
         with SessionLocal() as db:
-            assert _latest_attempt(db, first.session_id).state == "adopted"
+            assert _latest_attempt(db, first.session_id).state == "dispatched"
 
         with SessionLocal() as db:
             second = asyncio.run(launch_remote_session(db, params, registry=registry))
 
         assert second.session_id == first.session_id
-        assert second.launch_state == "live"
+        assert second.launch_state == "launching_unknown"
         assert len(registry.sent) == 1
     finally:
         live_engine.dispose()
@@ -622,7 +638,7 @@ def test_launch_remote_session_does_not_require_live_store_mirror_write(tmp_path
                 )
             )
 
-    assert result.launch_state == "live"
+    assert result.launch_state == "launching_unknown"
     assert len(registry.sent) == 1
     assert "Failed to write live launch readiness" in caplog.text
 
@@ -1137,10 +1153,10 @@ def test_remote_launch_materializes_archive_shell_before_dispatch(tmp_path, monk
     _seed_user_and_device(SessionLocal)
 
     class HotDispatchRegistry(_StubRegistry):
-        async def send_command(self, **kwargs):  # type: ignore[override]
+        async def send_command_nowait(self, **kwargs):  # type: ignore[override]
             with SessionLocal() as db:
                 assert db.get(AgentSession, kwargs["session_id"]) is not None
-            return await super().send_command(**kwargs)
+            return await super().send_command_nowait(**kwargs)
 
     registry = HotDispatchRegistry()
     _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
@@ -1166,11 +1182,11 @@ def test_remote_launch_materializes_archive_shell_before_dispatch(tmp_path, monk
                     registry=registry,
                 )
             )
-        assert result.launch_state == "live"
+        assert result.launch_state == "launching_unknown"
         assert len(registry.sent) == 1
         with SessionLocal() as db:
             assert db.get(AgentSession, result.session_id) is not None
-            assert _latest_attempt(db, result.session_id).state == "adopted"
+            assert _latest_attempt(db, result.session_id).state == "dispatched"
     finally:
         live_engine.dispose()
 
@@ -1217,16 +1233,15 @@ def test_live_launch_detail_uses_durable_shell_before_archive_drain(tmp_path, mo
         assert body["id"] == str(result.session_id)
         assert body["provider"] == "codex"
         assert body["project"] == "repo"
-        assert body["launch_state"] == "live"
+        assert body["launch_state"] == "launching_unknown"
         assert body["runtime_source"] != "live_launch_readiness"
         assert body["runtime_display"]["detail"] != "Archive is catching up."
-        assert body["capabilities"]["composer_enabled"] is True
 
         with SessionLocal() as db:
             session = db.get(AgentSession, result.session_id)
             assert session is not None
             [list_row] = build_session_response_list(db=db, store=AgentsStore(db), sessions=[session])
-        assert list_row.launch_state == "live"
+        assert list_row.launch_state == "launching_unknown"
         assert list_row.runtime_source != "live_launch_readiness"
     finally:
         live_engine.dispose()
@@ -1276,20 +1291,7 @@ def test_live_launch_detail_fallback_requires_owner_match(tmp_path, monkeypatch)
 def test_failed_live_launch_detail_uses_durable_shell(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
-
-    class FailingRegistry(_StubRegistry):
-        async def send_command(self, **kwargs):  # type: ignore[override]
-            self.sent.append(kwargs)
-            return MachineControlCommandResponse(
-                transport_ok=True,
-                message={
-                    "type": "command_result",
-                    "ok": False,
-                    "error": {"code": "cwd_not_found", "message": "missing cwd"},
-                },
-            )
-
-    registry = FailingRegistry()
+    registry = _StubRegistry()
     _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
 
     live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-detail-failed.db")
@@ -1316,6 +1318,20 @@ def test_failed_live_launch_detail_uses_durable_shell(tmp_path, monkeypatch):
                 )
             )
             assert db.get(AgentSession, result.session_id) is not None
+            assert result.launch_state == "launching_unknown"
+
+        command_id = registry.sent[-1]["command_id"]
+        with SessionLocal() as db:
+            reconciled = reconcile_launch_from_command_result(
+                db,
+                {
+                    "type": "command_result",
+                    "command_id": command_id,
+                    "ok": False,
+                    "error": {"code": "cwd_not_found", "message": "missing cwd"},
+                },
+            )
+            assert reconciled is True
 
         client, api_app = _make_agents_client(SessionLocal)
         try:
@@ -1371,7 +1387,7 @@ def test_live_launch_workspace_uses_durable_shell_before_archive_drain(tmp_path,
             )
 
         assert workspace.session.id == str(result.session_id)
-        assert workspace.session.launch_state == "live"
+        assert workspace.session.launch_state == "launching_unknown"
         assert workspace.thread.root_session_id == str(result.session_id)
         assert workspace.projection.items == []
         assert workspace.projection.total == 0
@@ -1416,7 +1432,7 @@ def test_live_launch_mobile_tail_uses_durable_shell_before_archive_drain(tmp_pat
             )
 
         assert mobile_tail.session.id == str(result.session_id)
-        assert mobile_tail.session.launch_state == "live"
+        assert mobile_tail.session.launch_state == "launching_unknown"
         assert mobile_tail.projection.items == []
         assert mobile_tail.projection.total == 0
         assert mobile_tail.snapshot_event_id is None
