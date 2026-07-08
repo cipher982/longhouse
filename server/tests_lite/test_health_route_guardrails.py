@@ -182,6 +182,35 @@ def test_readyz_reports_archive_degraded_for_stale_active_writer_with_queued_wor
     assert response["write_serializer"]["archive_degraded"] is True
 
 
+def test_readyz_reports_degraded_for_stale_live_ingest_writer_with_queued_work(tmp_path, monkeypatch):
+    engine = make_engine(f"sqlite:///{tmp_path}/readyz_stale_live_ingest_writer.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
+
+    class StaleWriter:
+        is_configured = True
+
+        def get_metrics(self):
+            return {
+                "queue_depth": 38,
+                "writer_active": True,
+                "active_label": "ingest-live",
+                "active_age_ms": health_router._write_serializer_stale_active_ms() + 1,
+            }
+
+    import zerg.database as database_module
+
+    monkeypatch.setattr(database_module, "default_engine", engine)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: StaleWriter())
+
+    response = health_router.readyz_check()
+
+    assert response["status"] == "ready_with_archive_degraded"
+    assert response["write_serializer"]["status"] == "warn"
+    assert response["write_serializer"]["archive_degraded"] is True
+    assert response["write_serializer"]["active_label"] == "ingest-live"
+
+
 def test_readyz_fails_stale_non_archive_writer_with_queued_work(tmp_path, monkeypatch):
     engine = make_engine(f"sqlite:///{tmp_path}/readyz_stale_non_archive_writer.db")
     with engine.begin() as conn:
@@ -207,6 +236,52 @@ def test_readyz_fails_stale_non_archive_writer_with_queued_work(tmp_path, monkey
 
     assert response.status_code == 503
     assert b"write_serializer_stalled" in response.body
+
+
+def test_health_reports_degraded_for_stale_live_ingest_writer_with_queued_work(tmp_path, monkeypatch):
+    _stub_build_identity(monkeypatch)
+    engine = make_engine(f"sqlite:///{tmp_path}/health_stale_live_ingest_writer.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
+
+    class StaleWriter:
+        is_configured = True
+
+        def get_metrics(self):
+            return {
+                "queue_depth": 38,
+                "writer_active": True,
+                "active_label": "ingest-live",
+                "active_age_ms": health_router._write_serializer_stale_active_ms() + 1,
+            }
+
+    import zerg.database as database_module
+
+    monkeypatch.setattr(database_module, "default_engine", engine)
+    monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: StaleWriter())
+    monkeypatch.setattr(
+        health_router,
+        "_session_projection_lag_check",
+        lambda: {"status": "pass", "pending_sessions": 0},
+    )
+    monkeypatch.setattr(
+        health_router,
+        "_session_enrichment_lag_check",
+        lambda: {"status": "pass", "pending_sessions": 0},
+    )
+
+    response = health_router.health_check(
+        SimpleNamespace(
+            client=SimpleNamespace(host="testclient"),
+            headers={},
+        )
+    )
+
+    assert response["status"] == "degraded"
+    assert response["checks"]["write_serializer"]["status"] == "warn"
+    assert response["checks"]["write_serializer"]["archive_degraded"] is True
+    assert response["checks"]["write_serializer"]["active_label"] == "ingest-live"
 
 
 def test_health_fails_stale_non_archive_writer_with_queued_work(tmp_path, monkeypatch):

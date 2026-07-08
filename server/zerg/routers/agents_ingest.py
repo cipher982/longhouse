@@ -97,6 +97,7 @@ _INGEST_CHUNK_BY_LABEL: dict[str, int] = {
 }
 
 _ARCHIVE_INGEST_LABELS = {"ingest", "ingest-replay", "ingest-scan"}
+_COOPERATIVE_INGEST_LABELS = _ARCHIVE_INGEST_LABELS | {"ingest-live"}
 _DEFER_DERIVED_PROJECTION_LABELS = {"ingest", "ingest-replay", "ingest-scan"}
 _SYNC_SESSION_COUNT_LABELS = {"ingest-live"}
 _INCREMENTAL_SESSION_COUNT_LABELS = {"ingest"}
@@ -152,7 +153,7 @@ def _copy_session_ingest(
 
 
 def _archive_ingest_batches(data: SessionIngest, *, max_items: int = _ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS) -> list[SessionIngest]:
-    """Split cold archive ingest into serializer-sized cooperative units."""
+    """Split ingest into serializer-sized cooperative units."""
     max_items = max(1, max_items)
     events = list(data.events)
     source_lines = list(data.source_lines or [])
@@ -172,6 +173,13 @@ def _archive_ingest_batches(data: SessionIngest, *, max_items: int = _ARCHIVE_IN
             )
         )
     return batches
+
+
+async def _check_ingest_writer_pressure(write_label: str, response: Response) -> None:
+    if write_label in _ARCHIVE_INGEST_LABELS:
+        await _check_archive_ingest_writer_pressure(write_label, response)
+    elif write_label == "ingest-live":
+        await _check_live_ingest_writer_pressure(write_label, response)
 
 
 def _merge_ingest_results(results: list[IngestResult]) -> IngestResult:
@@ -1142,16 +1150,16 @@ async def ingest_session(
                 write_started = time.monotonic()
                 ingest_batches = (
                     _archive_ingest_batches(data, max_items=min(ingest_chunk, _ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS))
-                    if write_label in _ARCHIVE_INGEST_LABELS
+                    if write_label in _COOPERATIVE_INGEST_LABELS
                     else [data]
                 )
                 write_results: list[IngestResult] = []
                 archive_primary_states: list[str] = []
                 legacy_raw_states: list[bool] = []
                 for batch_index, ingest_batch in enumerate(ingest_batches):
-                    if batch_index > 0 and write_label in _ARCHIVE_INGEST_LABELS:
+                    if batch_index > 0 and write_label in _COOPERATIVE_INGEST_LABELS:
                         await asyncio.sleep(0)
-                        await _check_archive_ingest_writer_pressure(write_label, response)
+                        await _check_ingest_writer_pressure(write_label, response)
 
                     archive_primary_prepared = None
                     archive_primary_state = "disabled"

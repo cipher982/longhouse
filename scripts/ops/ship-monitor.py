@@ -24,7 +24,7 @@ EXIT_NO_RUNS = 12
 EXIT_LIVE_DRIFT = 13
 
 ACCEPTED_CONCLUSIONS = {"success", "neutral", "skipped"}
-RUNTIME_HEALTH = {"healthy"}
+RUNTIME_HEALTH = {"healthy", "degraded"}
 DEPLOY_AND_VERIFY = "Deploy and Verify"
 CI_WORKFLOW = "CI"
 DEPLOY_DEMO_JOB = "Deploy public demo runtime"

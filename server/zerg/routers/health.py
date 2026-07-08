@@ -22,6 +22,7 @@ _ARCHIVE_DEGRADABLE_WRITER_LABELS = {
     "archive-shadow-manifest",
     "heartbeat-bookkeeping",
     "ingest",
+    "ingest-live",
     "ingest-replay",
     "ingest-scan",
     "live-archive-drain",

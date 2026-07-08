@@ -727,6 +727,42 @@ def _spool_replay_trace_header(session_id: str) -> dict[str, str]:
     }
 
 
+def _live_transcript_trace_header(session_id: str) -> dict[str, str]:
+    return {
+        "X-Agents-Token": "dev",
+        "X-Longhouse-Ship-Trace": json.dumps(
+            {
+                "schema": "ship_trace.v1",
+                "trace_id": f"{session_id}:0:8192:1778220000000",
+                "provider": "codex",
+                "session_id": session_id,
+                "work_context": "live_transcript",
+            },
+            separators=(",", ":"),
+        ),
+    }
+
+
+def test_live_transcript_ingest_uses_cooperative_sub_batches(tmp_path):
+    client, SessionLocal = _make_client(tmp_path)
+    try:
+        session_id = "71111111-2222-3333-4444-555555555555"
+        response = client.post(
+            "/agents/ingest",
+            json=_batched_archive_primary_payload(session_id, 130),
+            headers=_live_transcript_trace_header(session_id),
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        assert response.headers["X-Ingest-Lane"] == "live"
+        assert response.headers["X-Ingest-Label"] == "ingest-live"
+        assert response.headers["X-Ingest-Sub-Batches"] == "3"
+        with SessionLocal() as db:
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 130
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_archive_primary_later_batch_prepare_failure_falls_back_when_legacy_raw_enabled(tmp_path, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
     monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")

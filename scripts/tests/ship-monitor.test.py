@@ -18,14 +18,14 @@ sys.modules[spec.name] = ship_monitor
 spec.loader.exec_module(ship_monitor)
 
 
-def deploy_status(demo_sha: str, canary_sha: str) -> str:
+def deploy_status(demo_sha: str, canary_sha: str, *, demo_health: str = "healthy", canary_health: str = "healthy") -> str:
     return f"""
 
 Surface              SHA          Health     Uptime
 -------              ---          ------     ------
-Demo runtime         {demo_sha}   healthy    Up 2 minutes (healthy)
+Demo runtime         {demo_sha}   {demo_health}    Up 2 minutes ({demo_health})
 Control plane        f3e42620e7   ok         Up 2 days (healthy)
-Canary               {canary_sha}   healthy    Up 39 seconds (healthy)
+Canary               {canary_sha}   {canary_health}    Up 39 seconds ({canary_health})
 Local HEAD           ac77b06d72
 
 """
@@ -227,6 +227,30 @@ def test_runtime_publish_accepts_deploy_stamped_target_sha() -> None:
     assert errors == []
 
 
+def test_live_verify_accepts_degraded_runtime_health() -> None:
+    with_fakes(
+        {
+            1: {ship_monitor.DEPLOY_AND_VERIFY_JOB: "success"},
+            2: {ship_monitor.RUNTIME_IMAGE_JOB: "success"},
+        },
+        latest_runtime_sha="7e917a42689f626ed83908f7ab0a6ab21c3aafc4",
+        deploy_status_output=deploy_status(
+            "ac77b06d72",
+            "ac77b06d72",
+            demo_health="degraded",
+            canary_health="degraded",
+        ),
+    )
+    runs = [
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1),
+        run_info(ship_monitor.RUNTIME_IMAGE_WORKFLOW, 2),
+    ]
+
+    _surfaces, errors, _raw = ship_monitor.verify_live_state(ROOT, "cipher982/longhouse", "ac77b06d72", runs)
+
+    assert errors == []
+
+
 def test_live_verify_retries_transient_canary_status_gap() -> None:
     original_sleep = ship_monitor.time.sleep
     sleeps: list[float] = []
@@ -412,6 +436,7 @@ if __name__ == "__main__":
     test_runtime_reuse_accepts_intermediate_sha_when_deploy_job_is_absent()
     test_runtime_publish_requires_exact_live_sha()
     test_runtime_publish_accepts_deploy_stamped_target_sha()
+    test_live_verify_accepts_degraded_runtime_health()
     test_live_verify_retries_transient_canary_status_gap()
     test_skipped_tip_still_requires_latest_runtime_affecting_sha()
     test_gate_heartbeat_names_blocking_ci_job_and_step()
