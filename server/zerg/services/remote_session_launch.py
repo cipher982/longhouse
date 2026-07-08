@@ -35,6 +35,7 @@ from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveArchiveOutbox
+from zerg.models.live_store import LiveLaunchReadiness
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.agents.kernel_writes import ensure_open_run_for_session
 from zerg.services.agents.kernel_writes import ensure_primary_thread
@@ -1635,15 +1636,7 @@ async def continue_remote_session(
 
 
 def _reconcile_live_launch_from_command_result(message: dict, *, command_id: str) -> bool:
-    if not command_id.startswith("launch-") or not database_module.live_store_configured():
-        return False
-    session_id_text = command_id.removeprefix("launch-")
-    try:
-        session_uuid = UUID(session_id_text)
-    except ValueError:
-        return False
-    reported_session_id = str(message.get("session_id") or "").strip()
-    if reported_session_id and reported_session_id != str(session_uuid):
+    if not (command_id.startswith("launch-") or command_id.startswith("continue-")) or not database_module.live_store_configured():
         return False
 
     live_session_factory = database_module.get_live_write_session_factory()
@@ -1651,13 +1644,36 @@ def _reconcile_live_launch_from_command_result(message: dict, *, command_id: str
         return False
 
     def _write(live_db: Session) -> bool:
-        outbox = (
-            live_db.query(LiveArchiveOutbox)
-            .filter(LiveArchiveOutbox.kind == REMOTE_LAUNCH_KIND)
-            .filter(LiveArchiveOutbox.idempotency_key == remote_launch_idempotency_key(session_id=session_uuid))
-            .order_by(LiveArchiveOutbox.id.desc())
-            .first()
-        )
+        session_uuid: UUID | None = None
+        client_request_id: str | None = None
+        readiness = live_db.query(LiveLaunchReadiness).filter(LiveLaunchReadiness.command_id == command_id).first()
+        if readiness is not None:
+            try:
+                session_uuid = UUID(str(readiness.session_id))
+            except ValueError:
+                return False
+            client_request_id = (readiness.client_request_id or "").strip() or None
+        elif command_id.startswith("launch-"):
+            try:
+                session_uuid = UUID(command_id.removeprefix("launch-"))
+            except ValueError:
+                return False
+        else:
+            return False
+
+        reported_session_id = str(message.get("session_id") or "").strip()
+        if reported_session_id and reported_session_id != str(session_uuid):
+            return False
+
+        outbox_query = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == REMOTE_LAUNCH_KIND)
+        if command_id.startswith("continue-") and client_request_id:
+            outbox_query = outbox_query.filter(
+                LiveArchiveOutbox.idempotency_key
+                == _remote_continue_outbox_key(session_id=session_uuid, client_request_id=client_request_id)
+            )
+        else:
+            outbox_query = outbox_query.filter(LiveArchiveOutbox.idempotency_key == remote_launch_idempotency_key(session_id=session_uuid))
+        outbox = outbox_query.order_by(LiveArchiveOutbox.id.desc()).first()
         if outbox is None:
             return False
         payload = json.loads(outbox.payload_json or "{}")

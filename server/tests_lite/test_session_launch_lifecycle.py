@@ -51,7 +51,7 @@ def _project(attempt):
         ("dispatched", None, "launching_unknown"),
         ("adopted", None, "live"),
         ("pending", uuid4(), "live"),
-        ("dispatched", uuid4(), "live"),
+        ("dispatched", uuid4(), "launching_unknown"),
         ("failed", uuid4(), "launch_failed"),
         ("abandoned", uuid4(), "launch_orphaned"),
     ],

@@ -1505,6 +1505,120 @@ def test_late_launch_result_reconciles_durable_attempt(tmp_path, monkeypatch):
         live_engine.dispose()
 
 
+def test_hot_launch_nowait_transport_failure_marks_durable_attempt_failed(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    class FailingNowaitRegistry(_StubRegistry):
+        async def send_command_nowait(self, **kwargs):  # type: ignore[override]
+            self.sent.append(kwargs)
+            return MachineControlCommandResponse(transport_ok=False, error="socket closed")
+
+    registry = FailingNowaitRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-nowait-failed.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    live_serializer = _LiveReadinessSerializer(LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+
+    try:
+        with SessionLocal() as db:
+            result = asyncio.run(
+                launch_remote_session(
+                    db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="codex",
+                        cwd="/Users/me/repo",
+                    ),
+                    registry=registry,
+                )
+            )
+
+        assert result.launch_state == "launch_failed"
+        assert result.launch_error_code == "machine_offline"
+        with SessionLocal() as db:
+            session = db.get(AgentSession, result.session_id)
+            assert session is not None
+            assert session.ended_at is not None
+            attempt = _latest_attempt(db, result.session_id)
+            assert attempt.state == "failed"
+            assert attempt.error_code == "machine_offline"
+        with LiveSession() as live_db:
+            readiness = live_db.get(LiveLaunchReadiness, str(result.session_id))
+            assert readiness.state == "failed"
+            assert readiness.error_code == "machine_offline"
+    finally:
+        live_engine.dispose()
+
+
+def test_hot_one_shot_launch_dispatches_reserved_run_then_late_adopts(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-one-shot-nowait.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    live_serializer = _LiveReadinessSerializer(LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+
+    try:
+        with SessionLocal() as db:
+            result = asyncio.run(
+                launch_remote_session(
+                    db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="codex",
+                        cwd="/Users/me/repo",
+                        initial_prompt="Do one bounded turn",
+                        execution_lifetime="one_shot",
+                    ),
+                    registry=registry,
+                )
+            )
+
+        assert result.launch_state == "launching_unknown"
+        sent = registry.sent[-1]
+        assert sent["command_type"] == "session.run_once"
+        assert sent["payload"]["run_id"]
+        with SessionLocal() as db:
+            attempt = _latest_attempt(db, result.session_id)
+            assert attempt.state == "dispatched"
+            assert str(attempt.run_id) == sent["payload"]["run_id"]
+            assert db.query(SessionConnection).count() == 0
+            reconciled = reconcile_launch_from_command_result(
+                db,
+                {
+                    "type": "command_result",
+                    "command_id": sent["command_id"],
+                    "ok": True,
+                    "result": {
+                        "session_id": str(result.session_id),
+                        "pid": 4242,
+                        "argv": ["codex", "exec", "--json", "Do one bounded turn"],
+                    },
+                },
+            )
+            assert reconciled is True
+        with SessionLocal() as db:
+            attempt = _latest_attempt(db, result.session_id)
+            run = db.get(SessionRun, attempt.run_id)
+            assert attempt.state == "adopted"
+            assert run.pid == 4242
+            assert db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
+    finally:
+        live_engine.dispose()
+
+
 def test_happy_path_inserts_live_claude_channel_session(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
@@ -2567,6 +2681,74 @@ def test_one_shot_continue_hot_outbox_releases_existing_runs(tmp_path, monkeypat
             assert one_shot_connection.control_plane == "codex_exec"
             assert one_shot_connection.can_send_input == 0
             assert one_shot_connection.can_resume == 0
+    finally:
+        live_engine.dispose()
+
+
+def test_hot_continue_timeout_late_result_reconciles_through_live_outbox(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    class TimeoutRegistry(_StubRegistry):
+        async def send_command(self, **kwargs):  # type: ignore[override]
+            self.sent.append(kwargs)
+            return MachineControlCommandResponse(transport_ok=False, error="timed out")
+
+    registry = TimeoutRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.launch", "codex.continue"))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/continue-late-live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    live_serializer = _LiveReadinessSerializer(LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module.database_module, "get_live_write_session_factory", lambda: LiveSession)
+    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+
+    try:
+        with SessionLocal() as db:
+            result = asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        client_request_id="continue-hot-timeout",
+                    ),
+                    registry=registry,
+                )
+            )
+
+        assert result.launch_state == "launching_unknown"
+        command_id = registry.sent[-1]["command_id"]
+        assert command_id.startswith("continue-")
+        with SessionLocal() as db:
+            assert db.query(SessionLaunchAttempt).count() == 0
+            reconciled = reconcile_launch_from_command_result(
+                db,
+                {
+                    "type": "command_result",
+                    "command_id": command_id,
+                    "ok": True,
+                    "result": {"session_id": str(session_id), "thread_id": "thread-abc"},
+                },
+            )
+            assert reconciled is True
+
+        with LiveSession() as live_db:
+            readiness = live_db.get(LiveLaunchReadiness, str(session_id))
+            assert readiness.state == "adopted"
+            with SessionLocal() as archive_db:
+                drained = drain_live_archive_outbox(live_db, archive_db)
+            assert drained.drained == 3
+        with SessionLocal() as db:
+            attempt = _latest_attempt(db, session_id)
+            assert attempt.state == "adopted"
+            assert attempt.command_id == command_id
+            assert db.query(SessionConnection).count() == 1
     finally:
         live_engine.dispose()
 
