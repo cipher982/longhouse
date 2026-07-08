@@ -1,5 +1,6 @@
 """Agents API — semantic search and recall endpoints."""
 
+import asyncio
 import logging
 import time
 from datetime import datetime
@@ -559,7 +560,8 @@ async def recall_sessions(
 
     if mode in {"auto", "lexical"}:
         lexical_started = time.perf_counter()
-        lexical_response = _try_retrieval_index_recall(
+        lexical_response = await asyncio.to_thread(
+            _try_retrieval_index_recall,
             database_url,
             query=query,
             project=project,
