@@ -308,6 +308,17 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func serverDateParserAcceptsFractionalAndPlainISO8601() throws {
+        let fractional = try #require(LonghouseAPI.parseServerDate("2026-07-08T12:34:56.789Z"))
+        let plain = try #require(LonghouseAPI.parseServerDate("2026-07-08T12:34:56Z"))
+
+        #expect(abs(fractional.timeIntervalSince1970 - 1_783_514_096.789) < 0.001)
+        #expect(abs(plain.timeIntervalSince1970 - 1_783_514_096.0) < 0.001)
+        #expect(LonghouseAPI.parseServerDate(nil) == nil)
+        #expect(LonghouseAPI.parseServerDate("") == nil)
+    }
+
+    @Test
     func workspaceSuggestionsResponseDecodesSnakeCase() throws {
         let json = """
         {

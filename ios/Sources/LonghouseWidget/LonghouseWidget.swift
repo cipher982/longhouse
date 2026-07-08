@@ -294,7 +294,8 @@ struct SessionsWidgetPushHandler: WidgetPushHandler {
         guard widgets.contains(where: { $0.kind == LonghouseWidgetConstants.pushSessionsKind }) else {
             return
         }
-        guard let serverURL = SharedAuthStore.loadServerURL(), let api = LonghouseAPI(host: serverURL) else {
+        guard let serverURL = SharedAuthStore.loadServerURL(),
+              let api = LonghouseAPI(host: serverURL, allowsAuthRefresh: false) else {
             return
         }
 
