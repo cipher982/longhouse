@@ -128,6 +128,23 @@ def test_provider_proof_sessions_are_hidden_by_default_but_visible_with_include_
     assert [str(session.id) for session in with_test] == [str(session_id)]
 
 
+def test_provider_live_cwd_sessions_are_visible_with_include_test(tmp_path):
+    store, db = _make_store(tmp_path)
+    session_id = uuid4()
+    cwd = "/Users/davidrose/.longhouse/canaries/provider-live/opencode/20260605T164518Z/workspace"
+
+    store.ingest_session(_ingest_payload(session_id, environment="cinder", cwd=cwd))
+
+    visible, visible_total = store.list_sessions(include_test=False, hide_autonomous=False)
+    with_test, with_test_total = store.list_sessions(include_test=True, hide_autonomous=False)
+
+    assert db.get(AgentSession, session_id).environment == "test"
+    assert visible_total == 0
+    assert visible == []
+    assert with_test_total == 1
+    assert [str(session.id) for session in with_test] == [str(session_id)]
+
+
 def test_opencode_normal_workspace_does_not_reclassify_machine_environment(tmp_path):
     store, db = _make_store(tmp_path)
     session_id = uuid4()

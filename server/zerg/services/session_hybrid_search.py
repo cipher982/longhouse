@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents import AgentsStore
+from zerg.services.internal_sessions import internal_canary_session_clause
+from zerg.services.internal_sessions import is_internal_canary_provider_filter
+from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_listing_types import SessionListingError
 from zerg.services.session_listing_types import SessionListParams
@@ -122,6 +125,12 @@ def _hybrid_semantic_candidate_ids(db: Session, params: SessionListParams) -> se
         filter_q = filter_q.filter(AgentSession.provider == params.provider)
     if params.environment:
         filter_q = filter_q.filter(AgentSession.environment == params.environment)
+    elif not params.include_test:
+        filter_q = filter_q.filter(AgentSession.environment.notin_(["test", "e2e"]))
+    if not is_internal_canary_provider_filter(params.provider):
+        filter_q = filter_q.filter(~internal_canary_session_clause(AgentSession))
+    if not params.include_test:
+        filter_q = filter_q.filter(~provider_proof_session_clause(AgentSession))
     if params.hide_autonomous:
         # Session-identity-kernel cleanup: ``is_sidechain`` was dropped.
         filter_q = filter_q.filter(AgentSession.user_messages > 0)

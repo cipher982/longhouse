@@ -20,6 +20,7 @@ from zerg.models.agents import AgentSession
 from zerg.services.agents import AgentsStore
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
+from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_pause_requests import load_active_pause_request_map
@@ -58,6 +59,7 @@ async def semantic_search_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
+    include_test: bool = Query(False, description="Include test/e2e sessions"),
     days_back: int = Query(14, ge=1, le=365, description="Days to look back"),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
@@ -95,6 +97,10 @@ async def semantic_search_sessions(
         filter_query = filter_query.filter(~internal_canary_session_clause(AgentSession))
     if environment:
         filter_query = filter_query.filter(AgentSession.environment == environment)
+    elif not include_test:
+        filter_query = filter_query.filter(AgentSession.environment.notin_(["test", "e2e"]))
+    if not include_test:
+        filter_query = filter_query.filter(~provider_proof_session_clause(AgentSession))
     # Session-identity-kernel cleanup: ``is_sidechain`` was dropped.
     filter_query = filter_query.filter(AgentSession.user_messages > 0)
     valid_ids = {str(row[0]) for row in filter_query.all()}
@@ -207,6 +213,7 @@ async def recall_sessions(
     query: str = Query(..., description="What to search for"),
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
+    include_test: bool = Query(False, description="Include test/e2e sessions"),
     since_days: int = Query(90, ge=1, le=365, description="Days to look back"),
     max_results: int = Query(5, ge=1, le=20, description="Max matches"),
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
@@ -247,6 +254,9 @@ async def recall_sessions(
         filter_query = filter_query.filter(AgentSession.provider == provider)
     if not is_internal_canary_provider_filter(provider):
         filter_query = filter_query.filter(~internal_canary_session_clause(AgentSession))
+    if not include_test:
+        filter_query = filter_query.filter(AgentSession.environment.notin_(["test", "e2e"]))
+        filter_query = filter_query.filter(~provider_proof_session_clause(AgentSession))
     valid_ids = {str(row[0]) for row in filter_query.all()}
     if valid_ids and cache.turn_embedding_count == 0:
         raise _embedding_corpus_unavailable_response("turn")

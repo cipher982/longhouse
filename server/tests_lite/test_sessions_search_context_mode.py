@@ -123,24 +123,32 @@ def _seed_compacted_session(factory):
         db.close()
 
 
-def _seed_simple_session(factory, name: str, *, provider: str = "claude") -> str:
+def _seed_simple_session(
+    factory,
+    name: str,
+    *,
+    provider: str = "claude",
+    environment: str = "production",
+    cwd: str = "/tmp",
+    first_user_text: str | None = None,
+) -> str:
     db = factory()
     try:
         store = AgentsStore(db)
         result = store.ingest_session(
             SessionIngest(
                 provider=provider,
-                environment="production",
+                environment=environment,
                 project="zerg",
                 device_id=f"{name}-device",
-                cwd="/tmp",
+                cwd=cwd,
                 git_repo=None,
                 git_branch=None,
                 started_at=_ts(10),
                 events=[
                     EventIngest(
                         role="user",
-                        content_text=f"{name} question",
+                        content_text=first_user_text or f"{name} question",
                         timestamp=_ts(11),
                         source_path=f"/tmp/{name}.jsonl",
                         source_offset=0,
@@ -260,6 +268,52 @@ def test_semantic_search_batches_thread_meta_for_result_set(tmp_path):
 
     assert len(batch_calls) == 1
     assert set(batch_calls[0]) == {first_id, second_id}
+
+
+def test_semantic_search_hides_test_and_provider_proof_by_default(tmp_path):
+    factory = _make_db(tmp_path)
+    visible_id = _seed_simple_session(factory, "visible")
+    test_id = _seed_simple_session(
+        factory,
+        "proof",
+        provider="opencode",
+        environment="test",
+        first_user_text="LONGHOUSE_OPENCODE_NOREPLY_semantic",
+    )
+
+    class FakeEmbeddingCache:
+        def __init__(self):
+            self._session_loaded = False
+
+        def load_session_embeddings(self, db, model, dims):
+            self._session_loaded = True
+
+        @property
+        def session_embedding_count(self):
+            return 2
+
+        def search_sessions(self, query_vec, limit, session_filter):
+            assert visible_id in session_filter
+            assert test_id not in session_filter
+            return [(visible_id, 0.91)]
+
+    async def fake_generate_embedding(query, config):
+        return [0.1, 0.2, 0.3]
+
+    with (
+        patch("zerg.models_config.get_embedding_config", return_value=SimpleNamespace(model="fake", dims=3)),
+        patch("zerg.services.embedding_cache.EmbeddingCache", FakeEmbeddingCache),
+        patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
+    ):
+        for client in _get_client(factory):
+            resp = client.get(
+                "/agents/sessions/semantic",
+                params={"query": "anything", "days_back": 90, "context_mode": "forensic", "limit": 5},
+            )
+            assert resp.status_code == 200, resp.text
+            payload = resp.json()
+            assert payload["total"] == 1
+            assert payload["sessions"][0]["id"] == visible_id
 
 
 def test_recall_active_context_dedupes_session_boundary_lookups(tmp_path):

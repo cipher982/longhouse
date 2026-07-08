@@ -54,6 +54,7 @@ from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.internal_sessions import classify_provider_proof_environment
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
+from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import visible_transcript_event_predicate
 from zerg.services.raw_json_compression import CODEC_PLAIN
@@ -3574,6 +3575,8 @@ class AgentsStore:
             stmt = stmt.where(AgentSession.provider == provider)
         if not is_internal_canary_provider_filter(provider):
             stmt = stmt.where(~internal_canary_session_clause(AgentSession))
+        if not include_test:
+            stmt = stmt.where(~provider_proof_session_clause(AgentSession))
         if device_id:
             # Strictly scope to device_id. Do NOT fall back to matching
             # `environment`: a renamed machine leaves ghost rows whose dead
@@ -3644,6 +3647,8 @@ class AgentsStore:
             stmt = stmt.where(TimelineCard.provider == provider)
         if not is_internal_canary_provider_filter(provider):
             stmt = stmt.where(~internal_canary_session_clause(TimelineCard))
+        if not include_test:
+            stmt = stmt.where(~provider_proof_session_clause(TimelineCard))
         if device_id:
             stmt = stmt.where(TimelineCard.device_id == device_id)
         if since:

@@ -37,6 +37,16 @@ def classify_provider_proof_environment(
     return None
 
 
+def provider_proof_session_clause(model):
+    """Return a SQLAlchemy clause matching provider live-proof sessions."""
+    cwd = func.lower(func.coalesce(model.cwd, ""))
+    first_user = func.trim(func.coalesce(model.first_user_message_preview, ""))
+    return or_(
+        cwd.like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%/workspace"),
+        first_user.like("LONGHOUSE_%_NOREPLY_%"),
+    )
+
+
 def internal_canary_session_clause(model):
     """Return a SQLAlchemy clause matching synthetic canary/debug sessions.
 
@@ -48,8 +58,6 @@ def internal_canary_session_clause(model):
     provider = func.lower(func.coalesce(model.provider, ""))
     project = func.lower(func.coalesce(model.project, ""))
     device_id = func.lower(func.coalesce(model.device_id, ""))
-    cwd = func.lower(func.coalesce(model.cwd, ""))
-
     label_clauses = []
     for prefix in INTERNAL_CANARY_LABEL_PREFIXES:
         label_clauses.extend(
@@ -63,6 +71,5 @@ def internal_canary_session_clause(model):
 
     return or_(
         provider.in_(INTERNAL_CANARY_PROVIDER_ALIASES),
-        cwd.like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%/workspace"),
         *label_clauses,
     )

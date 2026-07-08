@@ -20,6 +20,7 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.models.agents import AgentSession
 from zerg.services.internal_sessions import internal_canary_session_clause
+from zerg.services.internal_sessions import provider_proof_session_clause
 from zerg.services.session_response_projection import SUMMARY_MIN_MEANINGFUL_MESSAGES
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ def select_stale_summary_session_ids(
         .filter(meaningful_count >= SUMMARY_MIN_MEANINGFUL_MESSAGES)
         .filter(AgentSession.environment.notin_(["test", "e2e"]))
         .filter(~internal_canary_session_clause(AgentSession))
+        .filter(~provider_proof_session_clause(AgentSession))
         .order_by(
             title_missing,
             AgentSession.last_activity_at.desc().nullslast(),
@@ -112,6 +114,7 @@ def select_initial_title_session_ids(
         .filter(meaningful_count < SUMMARY_MIN_MEANINGFUL_MESSAGES)
         .filter(AgentSession.environment.notin_(["test", "e2e"]))
         .filter(~internal_canary_session_clause(AgentSession))
+        .filter(~provider_proof_session_clause(AgentSession))
         .filter(or_(AgentSession.anchor_title.is_(None), AgentSession.anchor_title == ""))
         .filter(or_(AgentSession.summary_title.is_(None), AgentSession.summary_title == ""))
         .filter(AgentSession.first_user_message_preview.isnot(None))

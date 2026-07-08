@@ -20,6 +20,8 @@ from zerg.models.agents import AgentSession
 from zerg.routers.agents_search import recall_sessions
 from zerg.services.agents import AgentsStore
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+from zerg.services.session_hybrid_search import _hybrid_semantic_candidate_ids
+from zerg.services.session_listing_types import SessionListParams
 from zerg.services.session_response_projection import has_real_sessions
 
 
@@ -36,20 +38,25 @@ def _seed_session(
     provider: str,
     project: str,
     device_id: str,
+    environment: str = "production",
+    cwd: str | None = None,
+    first_user_message_preview: str | None = None,
     user_messages: int = 0,
     ended: bool = False,
 ) -> AgentSession:
     session = AgentSession(
         id=uuid4(),
         provider=provider,
-        environment="production",
+        environment=environment,
         project=project,
         device_id=device_id,
+        cwd=cwd,
         started_at=datetime.now(timezone.utc),
         ended_at=datetime.now(timezone.utc) if ended else None,
         user_messages=user_messages,
         assistant_messages=0,
         tool_calls=0,
+        first_user_message_preview=first_user_message_preview,
     )
     db.add(session)
     db.flush()
@@ -135,6 +142,67 @@ def test_canary_sessions_do_not_make_demo_data_count_as_real(tmp_path):
         assert has_real_sessions(db, default_when_empty=False) is True
 
 
+def test_hybrid_semantic_candidates_hide_test_and_provider_proof_by_default(tmp_path):
+    factory = _make_db(tmp_path)
+    with factory() as db:
+        visible = _seed_session(db, provider="codex", project="zerg", device_id="cinder", user_messages=1)
+        test_session = _seed_session(
+            db,
+            provider="opencode",
+            project="zerg",
+            device_id="cinder",
+            environment="test",
+            first_user_message_preview="LONGHOUSE_OPENCODE_NOREPLY_hidden",
+            user_messages=1,
+        )
+        cwd_proof = _seed_session(
+            db,
+            provider="opencode",
+            project="zerg",
+            device_id="cinder",
+            cwd="/Users/david/.longhouse/canaries/provider-live/opencode/proof/workspace",
+            user_messages=1,
+        )
+        params = SessionListParams(
+            project=None,
+            provider=None,
+            environment=None,
+            include_test=False,
+            hide_autonomous=False,
+            device_id=None,
+            days_back=14,
+            query="proof",
+            limit=10,
+            offset=0,
+            sort=None,
+            mode="hybrid",
+            context_mode="forensic",
+        )
+
+        assert _hybrid_semantic_candidate_ids(db, params) == {str(visible.id)}
+
+        include_test_params = SessionListParams(
+            project=None,
+            provider=None,
+            environment=None,
+            include_test=True,
+            hide_autonomous=False,
+            device_id=None,
+            days_back=14,
+            query="proof",
+            limit=10,
+            offset=0,
+            sort=None,
+            mode="hybrid",
+            context_mode="forensic",
+        )
+        assert _hybrid_semantic_candidate_ids(db, include_test_params) == {
+            str(visible.id),
+            str(test_session.id),
+            str(cwd_proof.id),
+        }
+
+
 def test_recall_hides_internal_canary_sessions(monkeypatch, tmp_path):
     factory = _make_db(tmp_path)
 
@@ -167,8 +235,17 @@ def test_recall_hides_internal_canary_sessions(monkeypatch, tmp_path):
         canary = _seed_session(db, provider="canary", project="canary", device_id="demo-machine-canary", user_messages=1)
         typo = _seed_session(db, provider="cnary", project="cnary", device_id="demo-machine-cnary", user_messages=1)
         mislabeled = _seed_session(db, provider="codex", project="canary-stress", device_id="demo-machine-canary", user_messages=1)
+        proof = _seed_session(
+            db,
+            provider="opencode",
+            project="zerg",
+            device_id="cinder",
+            environment="test",
+            first_user_message_preview="LONGHOUSE_OPENCODE_NOREPLY_recall",
+            user_messages=1,
+        )
         visible = _seed_session(db, provider="codex", project="zerg", device_id="cinder", user_messages=1)
-        for session in (canary, typo, mislabeled, visible):
+        for session in (canary, typo, mislabeled, proof, visible):
             db.add(
                 AgentEvent(
                     session_id=session.id,
@@ -184,6 +261,7 @@ def test_recall_hides_internal_canary_sessions(monkeypatch, tmp_path):
                 query="launch review",
                 project=None,
                 provider=None,
+                include_test=False,
                 max_results=10,
                 since_days=14,
                 context_turns=2,
@@ -243,6 +321,7 @@ def test_recall_allows_explicit_internal_canary_provider(monkeypatch, tmp_path, 
                 query="launch review",
                 project=None,
                 provider=provider,
+                include_test=False,
                 max_results=10,
                 since_days=14,
                 context_turns=2,
