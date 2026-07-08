@@ -86,6 +86,7 @@ def test_resolved_hosted_user_does_not_commit_when_claims_are_unchanged(monkeypa
         provider="control-plane",
         provider_user_id="cp:123",
         display_name="CP User",
+        avatar_url="https://example.com/avatar.png",
         email_verified=True,
         is_active=True,
         last_login=datetime.now(timezone.utc),
@@ -109,6 +110,7 @@ def test_resolved_hosted_user_does_not_commit_when_claims_are_unchanged(monkeypa
     )
 
     assert resolved.id == user.id
+    assert resolved.avatar_url == "https://example.com/avatar.png"
     assert commits == 0
 
 

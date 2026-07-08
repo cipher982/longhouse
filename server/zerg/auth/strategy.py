@@ -409,8 +409,9 @@ class HostedCPAuthStrategy(AuthStrategy):
         if user.display_name != display_name:
             user.display_name = display_name
             changed = True
-        if user.avatar_url != claims.avatar_url:
-            user.avatar_url = claims.avatar_url
+        avatar_url = claims.avatar_url or user.avatar_url
+        if user.avatar_url != avatar_url:
+            user.avatar_url = avatar_url
             changed = True
         if user.email_verified != claims.email_verified:
             user.email_verified = claims.email_verified
