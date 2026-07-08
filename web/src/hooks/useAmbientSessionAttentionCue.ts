@@ -33,6 +33,18 @@ function setBrowserBadge(count: number) {
   }
 }
 
+function setFaviconAttention(active: boolean) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const links = document.querySelectorAll<HTMLLinkElement>('link[rel="icon"]');
+  for (const link of links) {
+    const href = link.getAttribute("href") ?? "";
+    const base = href.split("?")[0];
+    link.href = active ? `${base}?v=3&attention=1` : `${base}?v=3`;
+  }
+}
+
 export function useAmbientSessionAttentionCue(
   sessions: TimelineSessionCard[],
   options: { enabled?: boolean } = {},
@@ -53,6 +65,13 @@ export function useAmbientSessionAttentionCue(
     }
     setBrowserBadge(0);
   }, [count, shouldCue]);
+
+  useEffect(() => {
+    setFaviconAttention(shouldCue);
+    return () => {
+      setFaviconAttention(false);
+    };
+  }, [shouldCue]);
 
   useEffect(() => {
     return () => {

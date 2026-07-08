@@ -32,6 +32,10 @@ describe("useAmbientSessionAttentionCue", () => {
   beforeEach(() => {
     const title = document.querySelector("title") ?? document.head.appendChild(document.createElement("title"));
     title.textContent = "Longhouse";
+    const icon = document.createElement("link");
+    icon.rel = "icon";
+    icon.href = "/favicon-32.png?v=3";
+    document.head.appendChild(icon);
     setDocumentHidden(true);
     setAppBadge.mockClear();
     clearAppBadge.mockClear();
@@ -55,6 +59,7 @@ describe("useAmbientSessionAttentionCue", () => {
     await waitFor(() => {
       expect(document.title).toBe("● Blocked · Longhouse");
       expect(setAppBadge).toHaveBeenCalledWith(1);
+      expect(document.querySelector('link[rel="icon"]')?.getAttribute("href")).toContain("attention=1");
     });
 
     act(() => {
