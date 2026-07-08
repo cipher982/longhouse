@@ -3,13 +3,18 @@ import sqlite3
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
+from uuid import uuid4
 
 from sqlalchemy import inspect
 
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
+from zerg.routers.agents_search import index_recall_sessions
 from zerg.routers.agents_search import recall_sessions
+from zerg.routers.agents_search import recall_index_status
 from zerg.services.retrieval_index import RetrievalChunk
 from zerg.services.retrieval_index import check_fts_integrity
 from zerg.services.retrieval_index import connect_retrieval_db
@@ -340,6 +345,88 @@ def test_recall_fast_path_uses_retrieval_db_without_embedding_cache(monkeypatch,
     assert match.parent_chunk_id is not None
     assert match.context_text == "parent trace with timeout"
     assert match.diagnostics == {"mode": "lexical", "source": "retrieval_db"}
+
+
+def test_recall_index_endpoint_projects_recent_sessions(monkeypatch, tmp_path):
+    main_path = tmp_path / "longhouse.db"
+    engine = make_engine(f"sqlite:///{main_path}")
+    initialize_database(engine)
+    SessionLocal = make_sessionmaker(engine)
+    session_id = uuid4()
+
+    with SessionLocal() as db:
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="production",
+                project="longhouse",
+                device_id="device-1",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                git_repo="cipher982/longhouse",
+                git_branch="feature/recall-index",
+                started_at=datetime.now(timezone.utc),
+                last_activity_at=datetime.now(timezone.utc),
+                user_messages=1,
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="user",
+                content_text="Find the request timeout middleware note",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="assistant",
+                content_text="The request timeout middleware was fixed by avoiding whole-session hydration.",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        index_response = asyncio.run(
+            index_recall_sessions(
+                project=None,
+                provider=None,
+                since_days=90,
+                limit=10,
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+        )
+        status_response = asyncio.run(recall_index_status(db=db, _auth=None, _single=None))
+
+        def fail_embedding_config():
+            raise AssertionError("indexed recall must not request embedding config")
+
+        monkeypatch.setattr("zerg.models_config.get_embedding_config", fail_embedding_config)
+        recall_response = asyncio.run(
+            recall_sessions(
+                query="whole-session hydration",
+                project=None,
+                provider=None,
+                since_days=90,
+                max_results=5,
+                context_turns=2,
+                context_mode="forensic",
+                mode="auto",
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+        )
+
+    assert index_response["sessions_indexed"] == 1
+    assert index_response["child_chunk_count"] > 0
+    assert status_response["status"] == "ready"
+    assert recall_response.total == 1
+    assert recall_response.matches[0].session_id == str(session_id)
+    assert recall_response.matches[0].chunk_kind == "assistant_conclusion"
 
 
 def test_rebuild_fts_restores_child_rows_only(tmp_path):

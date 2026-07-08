@@ -319,6 +319,95 @@ async def semantic_search_sessions(
     return SemanticSearchResponse(sessions=sessions, total=len(sessions))
 
 
+@router.get("/recall/status")
+async def recall_index_status(
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    """Return retrieval.db recall index status."""
+
+    bind = db.get_bind()
+    retrieval_path = resolve_retrieval_db_path(str(getattr(bind, "url", "") or ""))
+    if retrieval_path is None:
+        return {"status": "unavailable", "reason": "main database is not file-backed SQLite"}
+    if not retrieval_path.exists():
+        return {"status": "missing", "path": str(retrieval_path), "chunk_count": 0, "child_chunk_count": 0}
+    with connect_retrieval_db(retrieval_path) as retrieval_db:
+        initialize_retrieval_db(retrieval_db)
+        chunk_count = int(retrieval_db.execute("SELECT count(*) FROM recall_chunks").fetchone()[0])
+        searchable_count = child_chunk_count(retrieval_db)
+        return {
+            "status": "ready" if searchable_count > 0 else "empty",
+            "path": str(retrieval_path),
+            "chunk_count": chunk_count,
+            "child_chunk_count": searchable_count,
+        }
+
+
+@router.post("/recall/index")
+async def index_recall_sessions(
+    project: Optional[str] = Query(None, description="Filter by project"),
+    provider: Optional[str] = Query(None, description="Filter by provider"),
+    since_days: int = Query(90, ge=1, le=365, description="Days to index"),
+    limit: int = Query(100, ge=1, le=1000, description="Max sessions to index"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    """Project recent sessions into retrieval.db for fast recall."""
+
+    from zerg.services.retrieval_index import project_session_chunks
+    from zerg.services.retrieval_index import replace_session_chunks
+
+    bind = db.get_bind()
+    retrieval_path = resolve_retrieval_db_path(str(getattr(bind, "url", "") or ""))
+    if retrieval_path is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Retrieval index unavailable: main database is not file-backed SQLite.",
+        )
+
+    since = datetime.now(timezone.utc) - timedelta(days=since_days)
+    session_query = db.query(AgentSession).filter(AgentSession.started_at >= since)
+    if project:
+        session_query = session_query.filter(AgentSession.project == project)
+    if provider:
+        session_query = session_query.filter(AgentSession.provider == provider)
+    if not is_internal_canary_provider_filter(provider):
+        session_query = session_query.filter(~internal_canary_session_clause(AgentSession))
+    session_query = session_query.filter(AgentSession.user_messages > 0)
+    sessions = session_query.order_by(AgentSession.last_activity_at.desc(), AgentSession.started_at.desc()).limit(limit).all()
+
+    indexed_sessions = 0
+    indexed_chunks = 0
+    with connect_retrieval_db(retrieval_path) as retrieval_db:
+        initialize_retrieval_db(retrieval_db)
+        for session in sessions:
+            events = (
+                db.query(AgentEvent)
+                .filter(AgentEvent.session_id == session.id)
+                .filter(durable_transcript_event_predicate())
+                .order_by(AgentEvent.timestamp, AgentEvent.id)
+                .all()
+            )
+            chunks = project_session_chunks(session, events)
+            if not chunks:
+                continue
+            indexed_chunks += replace_session_chunks(retrieval_db, str(session.id), chunks)
+            indexed_sessions += 1
+        searchable_count = child_chunk_count(retrieval_db)
+
+    return {
+        "status": "ok",
+        "path": str(retrieval_path),
+        "sessions_considered": len(sessions),
+        "sessions_indexed": indexed_sessions,
+        "chunks_indexed": indexed_chunks,
+        "child_chunk_count": searchable_count,
+    }
+
+
 @router.get("/recall", response_model=RecallResponse)
 async def recall_sessions(
     query: str = Query(..., description="What to search for"),
