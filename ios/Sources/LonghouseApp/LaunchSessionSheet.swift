@@ -17,8 +17,6 @@ struct LaunchSessionSheet: View {
 
     @State private var selectedDeviceId: String = ""
     @State private var selectedProvider: String = ""
-    @State private var executionLifetime: RemoteExecutionLifetime = .oneShot
-    @State private var initialPrompt: String = ""
     @State private var workspaces: [WorkspaceSuggestion]
     @State private var workspaceSearch: String = ""
     @State private var loadingWorkspaces = false
@@ -26,7 +24,6 @@ struct LaunchSessionSheet: View {
     @State private var cwd: String = ""
     @State private var displayName: String = ""
     @State private var showManualPath = false
-    @State private var showAdvanced = false
 
     init(
         previewMachines: [MachineDirectoryEntry]? = nil,
@@ -38,11 +35,10 @@ struct LaunchSessionSheet: View {
         self.onLaunched = onLaunched
         _machines = State(initialValue: previewMachines ?? [])
         _workspaces = State(initialValue: previewWorkspaces ?? [])
-        if let first = previewMachines?.first(where: { $0.isLaunchable }) {
-            let provider = first.defaultProvider ?? ""
+        if let first = previewMachines?.first(where: { Self.canStartInteractiveSession($0) }) {
+            let provider = Self.defaultLiveControlProvider(for: first)
             _selectedDeviceId = State(initialValue: first.deviceId)
             _selectedProvider = State(initialValue: provider)
-            _executionLifetime = State(initialValue: first.supportsRunOnce(provider: provider) ? .oneShot : .liveControl)
         } else if let first = previewMachines?.first {
             _selectedDeviceId = State(initialValue: first.deviceId)
         }
@@ -62,25 +58,13 @@ struct LaunchSessionSheet: View {
         cwd.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var normalizedPrompt: String {
-        initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private var selectedCanRunOnce: Bool {
-        selectedMachine?.supportsRunOnce(provider: selectedProvider) ?? false
-    }
-
     private var selectedCanLiveControl: Bool {
         selectedMachine?.supportsLiveControlLaunch(provider: selectedProvider) ?? false
     }
 
-    private var selectedModeSupported: Bool {
-        switch executionLifetime {
-        case .oneShot:
-            return selectedCanRunOnce
-        case .liveControl:
-            return selectedCanLiveControl
-        }
+    private var liveControlProviders: [String] {
+        guard let selectedMachine else { return [] }
+        return selectedMachine.remoteLaunchProviders.filter { selectedMachine.supportsLiveControlLaunch(provider: $0) }
     }
 
     private var canSubmit: Bool {
@@ -88,8 +72,7 @@ struct LaunchSessionSheet: View {
             && (selectedMachine?.isLaunchable ?? false)
             && !selectedProvider.isEmpty
             && normalizedCwd.starts(with: "/")
-            && selectedModeSupported
-            && (executionLifetime != .oneShot || !normalizedPrompt.isEmpty)
+            && selectedCanLiveControl
     }
 
     private var filteredWorkspaces: [WorkspaceSuggestion] {
@@ -128,7 +111,7 @@ struct LaunchSessionSheet: View {
                     formView
                 }
             }
-            .navigationTitle("Start Session")
+            .navigationTitle("New Session")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -150,8 +133,9 @@ struct LaunchSessionSheet: View {
                         Label {
                             Text(machineLabel(machine))
                         } icon: {
-                            Image(systemName: machine.isLaunchable ? "circle.fill" : "xmark.circle.fill")
-                                .foregroundStyle(machine.isLaunchable ? .green : .red)
+                            let available = Self.canStartInteractiveSession(machine)
+                            Image(systemName: available ? "circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(available ? .green : .red)
                         }
                         .tag(machine.deviceId)
                     }
@@ -163,27 +147,25 @@ struct LaunchSessionSheet: View {
                     submitError = nil
                     showManualPath = false
                     let nextMachine = selectedMachine
-                    let nextProvider = nextMachine?.isLaunchable == true ? (nextMachine?.defaultProvider ?? "") : ""
+                    let nextProvider = Self.canStartInteractiveSession(nextMachine) ? Self.defaultLiveControlProvider(for: nextMachine) : ""
                     selectedProvider = nextProvider
-                    resetExecutionLifetime(machine: nextMachine, provider: nextProvider)
                 }
             }
 
-            if let machine = selectedMachine, !machine.isLaunchable {
+            if let machine = selectedMachine, !Self.canStartInteractiveSession(machine) {
                 Section("Status") {
                     Label(launchBlockedLabel(machine), systemImage: "xmark.circle.fill")
                         .foregroundStyle(.red)
                 }
             } else {
                 Section("Coding agent") {
-                    if let machine = selectedMachine, machine.remoteLaunchProviders.count > 1 {
+                    if liveControlProviders.count > 1 {
                         Picker("Provider", selection: $selectedProvider) {
-                            ForEach(machine.remoteLaunchProviders, id: \.self) { provider in
+                            ForEach(liveControlProviders, id: \.self) { provider in
                                 Text(provider).tag(provider)
                             }
                         }
                         .onChange(of: selectedProvider) { _, _ in
-                            resetExecutionLifetime(machine: selectedMachine, provider: selectedProvider)
                             submitError = nil
                         }
                     } else {
@@ -192,18 +174,6 @@ struct LaunchSessionSheet: View {
                                 .foregroundStyle(.secondary)
                             Text(selectedProvider.isEmpty ? "codex" : selectedProvider)
                         }
-                    }
-                }
-
-                if executionLifetime == .oneShot {
-                    Section("First message") {
-                        TextField("What should the agent do?", text: $initialPrompt, axis: .vertical)
-                            .lineLimit(3...8)
-                            .textInputAutocapitalization(.sentences)
-                            .autocorrectionDisabled(false)
-                            .onChange(of: initialPrompt) { _, _ in
-                                submitError = nil
-                            }
                     }
                 }
 
@@ -262,20 +232,6 @@ struct LaunchSessionSheet: View {
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled(true)
                 }
-
-                Section("Advanced") {
-                    DisclosureGroup(isExpanded: $showAdvanced) {
-                        Picker("Runtime", selection: $executionLifetime) {
-                            Text("Default").tag(RemoteExecutionLifetime.oneShot)
-                                .disabled(!selectedCanRunOnce)
-                            Text("Keep runtime open").tag(RemoteExecutionLifetime.liveControl)
-                                .disabled(!selectedCanLiveControl)
-                        }
-                        .pickerStyle(.segmented)
-                    } label: {
-                        Label("Runtime", systemImage: "slider.horizontal.3")
-                    }
-                }
             }
 
             if let submitError {
@@ -293,7 +249,7 @@ struct LaunchSessionSheet: View {
                     if submitting {
                         ProgressView().frame(maxWidth: .infinity)
                     } else {
-                        Text("Start").frame(maxWidth: .infinity)
+                        Text("Create").frame(maxWidth: .infinity)
                     }
                 }
                 .disabled(!canSubmit)
@@ -314,7 +270,7 @@ struct LaunchSessionSheet: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal)
             } else {
-                Text("No machine can start Codex right now.")
+                Text("No machine can start an interactive session right now.")
                     .font(.headline)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
@@ -363,11 +319,10 @@ struct LaunchSessionSheet: View {
             machines = result
             let selectedStillExists = result.contains { $0.deviceId == selectedDeviceId }
             if (selectedDeviceId.isEmpty || !selectedStillExists),
-               let first = result.first(where: { $0.isLaunchable }) ?? result.first {
+               let first = result.first(where: { Self.canStartInteractiveSession($0) }) ?? result.first {
                 selectedDeviceId = first.deviceId
-                let nextProvider = first.isLaunchable ? (first.defaultProvider ?? "") : ""
+                let nextProvider = Self.canStartInteractiveSession(first) ? Self.defaultLiveControlProvider(for: first) : ""
                 selectedProvider = nextProvider
-                resetExecutionLifetime(machine: first, provider: nextProvider)
             }
         } catch {
             loadError = (error as? LocalizedError)?.errorDescription ?? "Could not load machines."
@@ -379,7 +334,7 @@ struct LaunchSessionSheet: View {
         guard !usesPreviewData, !deviceId.isEmpty, let api = LonghouseAPI(host: appState.serverURL) else {
             return
         }
-        guard machines.first(where: { $0.deviceId == deviceId })?.isLaunchable == true else {
+        guard Self.canStartInteractiveSession(machines.first(where: { $0.deviceId == deviceId })) else {
             workspaces = []
             cwd = ""
             workspaceSearch = ""
@@ -427,8 +382,8 @@ struct LaunchSessionSheet: View {
                 deviceId: selectedDeviceId,
                 provider: selectedProvider,
                 cwd: normalizedCwd,
-                initialPrompt: executionLifetime == .oneShot ? normalizedPrompt : nil,
-                executionLifetime: executionLifetime,
+                initialPrompt: nil,
+                executionLifetime: .liveControl,
                 displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName,
                 clientRequestId: "launch-\(UUID().uuidString)"
             )
@@ -444,17 +399,21 @@ struct LaunchSessionSheet: View {
         }
     }
 
-    private func resetExecutionLifetime(machine: MachineDirectoryEntry?, provider: String) {
-        if machine?.supportsRunOnce(provider: provider) == true {
-            executionLifetime = .oneShot
-        } else if machine?.supportsLiveControlLaunch(provider: provider) == true {
-            executionLifetime = .liveControl
-        }
+    private static func defaultLiveControlProvider(for machine: MachineDirectoryEntry?) -> String {
+        guard let machine else { return "" }
+        let providers = machine.remoteLaunchProviders.filter { machine.supportsLiveControlLaunch(provider: $0) }
+        if providers.contains("codex") { return "codex" }
+        return providers.first ?? ""
+    }
+
+    private static func canStartInteractiveSession(_ machine: MachineDirectoryEntry?) -> Bool {
+        guard let machine, machine.isLaunchable else { return false }
+        return !defaultLiveControlProvider(for: machine).isEmpty
     }
 
     private func machineLabel(_ machine: MachineDirectoryEntry) -> String {
         let suffix: String
-        if machine.isLaunchable {
+        if Self.canStartInteractiveSession(machine) {
             suffix = ""
         } else if machine.launchBlockedBy == "control_down" || !machine.online {
             suffix = " - offline"
@@ -481,7 +440,7 @@ struct LaunchSessionSheet: View {
         case "runtime_unreachable":
             return "runtime host unreachable"
         default:
-            return machine.online ? "launch unavailable" : "control channel disconnected"
+            return machine.online ? "interactive launch unavailable" : "control channel disconnected"
         }
     }
 
