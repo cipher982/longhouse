@@ -54,6 +54,7 @@ from zerg.services.session_kernel_projection import project_session_control_fiel
 from zerg.services.session_kernel_projection import project_session_kernel_fields
 from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
+from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycle
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
 from zerg.services.session_liveness_facts import build_session_liveness_facts
@@ -111,6 +112,7 @@ def build_session_capabilities_response(
     kernel_capabilities: KernelSessionCapabilities | None = None,
     can_continue: bool = False,
     continue_targets: list[SessionContinueTarget] | None = None,
+    launch_lifecycle: RemoteLaunchLifecycle | None = None,
 ) -> SessionCapabilitiesResponse:
     if capability_flags is None:
         raise RuntimeError("capability_flags is required; the kernel adapter must build them")
@@ -144,21 +146,33 @@ def build_session_capabilities_response(
         is_executing=_runtime_is_executing(runtime_display=runtime_display, runtime_facts=runtime_facts),
         host_state=availability_host_state,
     )
+    launch_state = launch_lifecycle.state if launch_lifecycle is not None else None
+    launch_failed = launch_state in {"launch_failed", "launch_orphaned"}
+    display_label = "Launch failed" if launch_failed else capability_display.label
+    display_detail = (
+        launch_lifecycle.error_message or "The session did not start."
+        if launch_failed and launch_lifecycle is not None
+        else capability_display.detail
+    )
+    display_tone = "accent" if launch_failed else capability_display.tone
+    composer_enabled = False if launch_failed else input_presentation.composer_enabled
+    composer_disabled_reason = "Launch failed." if launch_failed else input_presentation.composer_disabled_reason
+    send_disabled_reason = "read_only" if launch_failed else input_presentation.send_disabled_reason
     return SessionCapabilitiesResponse(
-        live_control_available=effective_live_control,
+        live_control_available=False if launch_failed else effective_live_control,
         host_reattach_available=effective_host_reattach,
-        reply_to_live_session_available=effective_reply,
-        can_queue_next_input=effective_queue,
-        can_steer_active_turn=effective_steer,
-        display_label=capability_display.label,
-        display_detail=capability_display.detail,
-        display_tone=capability_display.tone,
+        reply_to_live_session_available=False if launch_failed else effective_reply,
+        can_queue_next_input=False if launch_failed else effective_queue,
+        can_steer_active_turn=False if launch_failed else effective_steer,
+        display_label=display_label,
+        display_detail=display_detail,
+        display_tone=display_tone,
         input_mode=input_presentation.input_mode,
         default_input_intent=input_presentation.default_input_intent,
-        composer_enabled=input_presentation.composer_enabled,
+        composer_enabled=composer_enabled,
         composer_placeholder=input_presentation.composer_placeholder,
-        composer_disabled_reason=input_presentation.composer_disabled_reason,
-        send_disabled_reason=input_presentation.send_disabled_reason,
+        composer_disabled_reason=composer_disabled_reason,
+        send_disabled_reason=send_disabled_reason,
         control_label=(kernel_capabilities.control_label if kernel_capabilities is not None else None),
         observe_only=(kernel_capabilities.observe_only if kernel_capabilities is not None else False),
         search_only=(kernel_capabilities.search_only if kernel_capabilities is not None else False),
@@ -1623,6 +1637,7 @@ def build_session_response(
             kernel_capabilities=resolved_kernel_capabilities,
             can_continue=continue_target is not None,
             continue_targets=continue_targets,
+            launch_lifecycle=archive_launch_lifecycle,
         ),
         runtime_display=runtime_display,
         transcript_preview=transcript_preview_response,

@@ -982,9 +982,7 @@ def get_session(
         transcript_preview_map = load_active_provisional_preview_map(db, [session.id])
         pending_response_turn_map = load_pending_response_turn_map(db, [session.id])
         control_state_map = load_managed_control_state_map(db, [session.id])
-        live_launch_readiness_map = latest_live_launch_readiness([session.id], now=now)
-        live_launch_readiness = live_launch_readiness_map.get(session.id)
-        launch_attempt_map = {} if live_launch_readiness is not None else latest_launch_attempts(db, [session.id])
+        launch_attempt_map = latest_launch_attempts(db, [session.id])
     with timing.span("build_response"):
         effective_owner_id = owner_id
         if effective_owner_id is None:
@@ -1006,7 +1004,6 @@ def get_session(
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
             pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
             launch_attempt=launch_attempt_map.get(session.id),
-            launch_readiness=live_launch_readiness,
         )
     # Expose the provider-native id (when bound) so binding-convergence tooling
     # can group sessions by it; the list endpoint does not carry it. Mirrors the
@@ -1057,7 +1054,6 @@ def get_session_thread(
         pending_response_turn_map = load_pending_response_turn_map(db, thread_session_ids)
         control_state_map = load_managed_control_state_map(db, [item.id for item in thread_sessions])
         launch_attempt_map = latest_launch_attempts(db, thread_session_ids)
-        live_launch_readiness_map = latest_live_launch_readiness(thread_session_ids, now=now)
 
     with timing.span("build_response"):
         effective_owner_id = owner_id
@@ -1085,7 +1081,6 @@ def get_session_thread(
                     has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),
                     pause_request=serialize_pause_request_projection(pause_request_map.get(item.id)),
                     launch_attempt=launch_attempt_map.get(item.id),
-                    launch_readiness=live_launch_readiness_map.get(item.id),
                 )
                 for item in thread_sessions
             ],
