@@ -543,3 +543,47 @@ async def test_revoke_native_session_proxies_to_cp(monkeypatch):
     assert captured["headers"] == {"X-Internal-Token": "secret"}
     assert captured["json"] == {"refresh_token": "lhr_current"}
     assert captured["timeout"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_revoke_native_session_ignores_empty_token(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+
+    result = await revoke_native_session(NativeRevokeRequest(refresh_token=" "))
+
+    assert result == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_revoke_native_session_treats_cp_rejection_as_idempotent(monkeypatch):
+    class FakeResponse:
+        status_code = 500
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
+
+    result = await revoke_native_session(NativeRevokeRequest(refresh_token="lhr_current"))
+
+    assert result == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_revoke_native_session_treats_cp_network_error_as_idempotent(monkeypatch):
+    def fake_post(*a, **k):
+        raise httpx.HTTPError("connection refused")
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
+
+    result = await revoke_native_session(NativeRevokeRequest(refresh_token="lhr_current"))
+
+    assert result == {"status": "ok"}

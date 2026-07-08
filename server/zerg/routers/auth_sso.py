@@ -214,20 +214,18 @@ async def revoke_native_session(body: NativeRevokeRequest):
         return {"status": "ok"}
 
     try:
-        exchange = httpx.post(
+        httpx.post(
             f"{control_plane_url.rstrip('/')}/api/identity/revoke-native-session",
             headers={"X-Internal-Token": settings.internal_api_secret},
             json={"refresh_token": refresh_token},
             timeout=5.0,
         )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane native session revoke failed",
-        ) from exc
+    except httpx.HTTPError:
+        # Logout must clear local client credentials even when CP is
+        # unreachable. CP revocation is best-effort; old refresh tokens still
+        # expire naturally and refresh failures remain explicit on next use.
+        return {"status": "ok"}
 
-    if exchange.status_code >= 500:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Control plane revoke failed")
     return {"status": "ok"}
 
 
