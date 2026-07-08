@@ -26,7 +26,9 @@ RUNNER_HEALTH_RECONCILE_INTERVAL = 120
 # Keep the automatic bridge opt-in so it cannot contend with launch-critical
 # ingest on small SQLite hosts unless an operator explicitly enables it.
 LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_INTERVAL_SECONDS", "0"))
-LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_BATCH_SIZE", "50"))
+# If enabled, default to one row per writer admission. Operators can raise this
+# after observing queue/exec telemetry on an always-on host.
+LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_BATCH_SIZE", "1"))
 LIVE_ARCHIVE_OUTBOX_DRAIN_MAX_BATCHES_PER_TICK = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_MAX_BATCHES_PER_TICK", "1"))
 LIVE_ARCHIVE_OUTBOX_DRAIN_TIMEOUT_SECONDS = float(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_TIMEOUT_SECONDS", "0"))
 LIVE_ARCHIVE_OUTBOX_DRAIN_QUEUE_TIMEOUT_SECONDS = float(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_QUEUE_TIMEOUT_SECONDS", "2"))
@@ -65,7 +67,7 @@ async def _process_queued_notifications_once() -> None:
 
 
 async def _drain_live_archive_outbox_once() -> dict[str, int]:
-    """Drain one live archive outbox batch when the hot writer lane is idle."""
+    """Drain one live archive outbox batch through the archive writer lane."""
 
     from zerg.database import get_live_session_factory
     from zerg.database import live_store_configured
@@ -103,10 +105,6 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
         return {"processed": 0, "drained": 0, "failed": 0, "cleaned": cleaned}
 
     ws = get_write_serializer()
-    writer_metrics = ws.get_metrics()
-    if writer_metrics.get("writer_active") or int(writer_metrics.get("queue_depth") or 0) > 0:
-        cleaned = _cleanup_drained()
-        return {"processed": 0, "drained": 0, "failed": 0, "cleaned": cleaned, "deferred": 1}
 
     def _drain_serialized(archive_db):
         totals = {"processed": 0, "drained": 0, "failed": 0}

@@ -93,7 +93,7 @@ async def test_live_archive_drain_uses_fresh_archive_session_when_writer_idle(tm
 
 
 @pytest.mark.asyncio
-async def test_live_archive_drain_defers_when_archive_writer_active(tmp_path, monkeypatch):
+async def test_live_archive_drain_defers_when_archive_writer_queue_times_out(tmp_path, monkeypatch):
     live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
     initialize_live_database(live_engine)
     LiveSession = sessionmaker(bind=live_engine)
@@ -127,6 +127,9 @@ async def test_live_archive_drain_defers_when_archive_writer_active(tmp_path, mo
     class FakeSerializer:
         def get_metrics(self):
             return {"writer_active": True, "queue_depth": 0}
+
+        async def execute(self, *_args, **_kwargs):
+            raise TimeoutError("writer queue timeout")
 
     monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
@@ -189,6 +192,9 @@ async def test_live_archive_drain_timeout_defers_pending_rows(tmp_path, monkeypa
         def get_metrics(self):
             return {"writer_active": False, "queue_depth": 1}
 
+        async def execute(self, *_args, **_kwargs):
+            raise TimeoutError("writer timeout")
+
     monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
     monkeypatch.setattr("zerg.database.get_write_session_factory", lambda: None)
@@ -241,6 +247,9 @@ async def test_live_archive_drain_queue_timeout_defers_pending_rows(tmp_path, mo
     class BusySerializer:
         def get_metrics(self):
             return {"writer_active": False, "queue_depth": 1}
+
+        async def execute(self, *_args, **_kwargs):
+            raise TimeoutError("writer queue timeout")
 
     monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
