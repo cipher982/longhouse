@@ -115,6 +115,37 @@ def test_provider_proof_repair_apply_updates_session_and_timeline_card(tmp_path)
         db.close()
 
 
+def test_provider_proof_repair_catches_build_canary_and_reviewed_proof_worktree(tmp_path):
+    factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        build_canary = _seed_session(
+            db,
+            cwd="/Users/david/git/zerg/longhouse/.build/canaries/provider-live/claude/20260701T210350Z/claude-live-token-contract/workspace",
+        )
+        proof_worktree = _seed_session(
+            db,
+            cwd="/Users/david/git/_wt/longhouse-provider-live-proof-owner",
+        )
+        visible = _seed_session(
+            db,
+            cwd="/Users/david/git/zerg/longhouse",
+            first_user_message_preview="Please debug provider live proof without hiding this real session.",
+        )
+
+        result = repair_provider_proof_session_environments(db, apply=True)
+        db.commit()
+
+        assert result.scanned_sessions == 2
+        assert result.repairable_sessions == 2
+        assert result.updated_sessions == 2
+        assert db.get(AgentSession, build_canary.id).environment == "test"
+        assert db.get(AgentSession, proof_worktree.id).environment == "test"
+        assert db.get(AgentSession, visible.id).environment == "cinder"
+    finally:
+        db.close()
+
+
 def test_provider_proof_repair_default_skips_event_only_rows(tmp_path):
     factory = _make_db(tmp_path)
     db = factory()

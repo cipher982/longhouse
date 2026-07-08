@@ -45,7 +45,9 @@ Use the existing classification axes instead of inventing a new one:
 A session should be treated as provider proof/internal test traffic when one or
 more durable signals are present:
 
-- `cwd` is under `/.longhouse/canaries/provider-live/<provider>/.../workspace`.
+- `cwd` is under a provider-live canary workspace, such as
+  `/.longhouse/canaries/provider-live/<provider>/.../workspace` or the repo
+  build artifact path `/.build/canaries/provider-live/<provider>/.../workspace`.
 - First non-empty user text starts with `LONGHOUSE_*_NOREPLY_`.
 - A provider live proof classification sidecar exists for
   `(provider, provider_session_id)` and says `environment=test`.
@@ -59,10 +61,9 @@ Treat sidecars as supporting evidence, not the primary online signal. The canary
 may write the sidecar after the provider session is created, while `cwd` and the
 no-reply marker are present in ingest payloads/events.
 
-Some historical dogfood rows have projects like
-`longhouse-provider-live-proof-owner`. That can be useful for one-time repair,
-but it should not be the first-cut runtime classifier unless the canary launcher
-is changed to set that project intentionally.
+Some historical dogfood rows have reviewed proof worktree paths like
+`longhouse-provider-live-proof-owner`. Those are narrow path markers, not broad
+content heuristics, and can be treated as provider proof rows.
 
 ## Proposed Behavior
 
@@ -99,10 +100,10 @@ The existing default listing behavior should continue to do the main work:
 - Continue applying `internal_canary_session_clause()` to catch legacy canary
   labels and proof projects that were not normalized.
 - Extend `internal_canary_session_clause()` with real durable labels only. The
-  first cut should include cwd-based provider-live canary matching. A project
-  prefix such as `longhouse-provider-live-proof%` should be added only if the
-  producer starts setting that project intentionally, or used narrowly in a
-  historical repair.
+  first cut should include cwd-based provider-live canary matching and reviewed
+  historical proof worktree path markers. A project prefix such as
+  `longhouse-provider-live-proof%` should be added only if the producer starts
+  setting that project intentionally.
 
 ### Title Generation
 
@@ -122,9 +123,8 @@ Add an explicit backfill/repair operation, not a startup migration:
 
 1. Select sessions with provider proof signals that are not already
    `environment=test/e2e`.
-2. Match on cwd and no-reply marker first. Optionally include historical dogfood
-   project prefixes such as `longhouse-provider-live-proof%` after examples are
-   reviewed.
+2. Match on cwd and no-reply marker first. Include reviewed historical dogfood
+   proof worktree paths after examples are inspected.
 3. Dry-run by default and report counts plus example rows.
 4. Apply in small batches through the write serializer or an operator script.
 5. Upsert affected `timeline_cards` rows so hot listing behavior matches the

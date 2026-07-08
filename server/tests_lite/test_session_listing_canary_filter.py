@@ -163,6 +163,22 @@ def test_hybrid_semantic_candidates_hide_test_and_provider_proof_by_default(tmp_
             cwd="/Users/david/.longhouse/canaries/provider-live/opencode/proof/workspace",
             user_messages=1,
         )
+        build_cwd_proof = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="cinder",
+            cwd="/Users/david/git/zerg/longhouse/.build/canaries/provider-live/claude/20260701T210350Z/claude-live-token-contract/workspace",
+            user_messages=1,
+        )
+        reviewed_worktree_proof = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="cinder",
+            cwd="/Users/david/git/_wt/longhouse-provider-live-proof-owner",
+            user_messages=1,
+        )
         params = SessionListParams(
             project=None,
             provider=None,
@@ -200,6 +216,8 @@ def test_hybrid_semantic_candidates_hide_test_and_provider_proof_by_default(tmp_
             str(visible.id),
             str(test_session.id),
             str(cwd_proof.id),
+            str(build_cwd_proof.id),
+            str(reviewed_worktree_proof.id),
         }
 
 

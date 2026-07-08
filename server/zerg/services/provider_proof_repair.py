@@ -6,16 +6,15 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import func
-from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import TimelineCard
-from zerg.services.internal_sessions import PROVIDER_LIVE_CANARY_CWD_SEGMENT
 from zerg.services.internal_sessions import PROVIDER_NOREPLY_MARKER_SQL_LIKE
 from zerg.services.internal_sessions import SQL_LIKE_ESCAPE
 from zerg.services.internal_sessions import classify_provider_proof_environment
+from zerg.services.internal_sessions import provider_proof_session_clause
 
 
 @dataclass(frozen=True)
@@ -67,15 +66,7 @@ def repair_provider_proof_session_environments(
     rows = (
         db.query(AgentSession)
         .filter(AgentSession.environment.notin_(["test", "e2e"]))
-        .filter(
-            or_(
-                func.coalesce(AgentSession.cwd, "").like(f"%{PROVIDER_LIVE_CANARY_CWD_SEGMENT}%/workspace"),
-                func.trim(func.coalesce(AgentSession.first_user_message_preview, "")).like(
-                    PROVIDER_NOREPLY_MARKER_SQL_LIKE,
-                    escape=SQL_LIKE_ESCAPE,
-                ),
-            )
-        )
+        .filter(provider_proof_session_clause(AgentSession))
         .order_by(AgentSession.last_activity_at.desc().nullslast(), AgentSession.started_at.desc())
         .limit(limit)
         .all()
