@@ -21,11 +21,10 @@ from zerg.models.agents import AgentHeartbeat
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.services.maintenance import _drain_live_archive_outbox_once
-from zerg.services.write_serializer import WriteQueueTimeoutError
 
 
 @pytest.mark.asyncio
-async def test_live_archive_drain_uses_archive_writer_lane(tmp_path, monkeypatch):
+async def test_live_archive_drain_uses_fresh_archive_session_when_writer_idle(tmp_path, monkeypatch):
     archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
     Base.metadata.create_all(bind=archive_engine)
     ArchiveSession = sessionmaker(bind=archive_engine)
@@ -61,26 +60,19 @@ async def test_live_archive_drain_uses_archive_writer_lane(tmp_path, monkeypatch
         )
         live_db.commit()
 
-    calls = []
-
     class FakeSerializer:
-        async def execute(self, fn, **kwargs):
-            calls.append(kwargs)
-            with ArchiveSession() as archive_db:
-                return fn(archive_db)
+        def get_metrics(self):
+            return {"writer_active": False, "queue_depth": 0}
 
     monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr("zerg.database.get_write_session_factory", lambda: ArchiveSession)
     monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: FakeSerializer())
 
     try:
         result = await _drain_live_archive_outbox_once()
 
         assert result == {"processed": 1, "drained": 1, "failed": 0, "cleaned": 0}
-        assert calls[0]["label"] == "live-archive-drain"
-        assert calls[0]["auto_commit"] is False
-        assert "timeout_seconds" in calls[0]
-        assert "queue_timeout_seconds" in calls[0]
         with ArchiveSession() as archive_db:
             row = archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "maintenance-drain").one()
             assert row.spool_pending == 4
@@ -93,11 +85,7 @@ async def test_live_archive_drain_uses_archive_writer_lane(tmp_path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_live_archive_drain_passes_bounded_writer_timeouts(tmp_path, monkeypatch):
-    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
-    Base.metadata.create_all(bind=archive_engine)
-    ArchiveSession = sessionmaker(bind=archive_engine)
-
+async def test_live_archive_drain_defers_when_archive_writer_active(tmp_path, monkeypatch):
     live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
     initialize_live_database(live_engine)
     LiveSession = sessionmaker(bind=live_engine)
@@ -128,30 +116,24 @@ async def test_live_archive_drain_passes_bounded_writer_timeouts(tmp_path, monke
         )
         live_db.commit()
 
-    calls = []
-
     class FakeSerializer:
-        async def execute(self, fn, **kwargs):
-            calls.append(kwargs)
-            with ArchiveSession() as archive_db:
-                return fn(archive_db)
+        def get_metrics(self):
+            return {"writer_active": True, "queue_depth": 0}
 
     monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr("zerg.database.get_write_session_factory", lambda: None)
     monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: FakeSerializer())
-    monkeypatch.setattr("zerg.services.maintenance.LIVE_ARCHIVE_OUTBOX_DRAIN_TIMEOUT_SECONDS", 4.0)
-    monkeypatch.setattr("zerg.services.maintenance.LIVE_ARCHIVE_OUTBOX_DRAIN_QUEUE_TIMEOUT_SECONDS", 0.5)
 
     try:
         result = await _drain_live_archive_outbox_once()
 
-        assert result == {"processed": 1, "drained": 1, "failed": 0, "cleaned": 0}
-        assert calls[0]["label"] == "live-archive-drain"
-        assert calls[0]["auto_commit"] is False
-        assert calls[0]["timeout_seconds"] == 4.0
-        assert calls[0]["queue_timeout_seconds"] == 0.5
+        assert result == {"processed": 0, "drained": 0, "failed": 0, "cleaned": 0, "deferred": 1}
+        with LiveSession() as live_db:
+            outbox = live_db.query(LiveArchiveOutbox).one()
+            assert outbox.drained_at is None
+            assert outbox.attempts == 0
     finally:
-        archive_engine.dispose()
         live_engine.dispose()
 
 
@@ -195,13 +177,14 @@ async def test_live_archive_drain_timeout_defers_pending_rows(tmp_path, monkeypa
         )
         live_db.commit()
 
-    class TimeoutSerializer:
-        async def execute(self, *_args, **_kwargs):
-            raise TimeoutError("archive writer saturated")
+    class BusySerializer:
+        def get_metrics(self):
+            return {"writer_active": False, "queue_depth": 1}
 
     monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
-    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: TimeoutSerializer())
+    monkeypatch.setattr("zerg.database.get_write_session_factory", lambda: None)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: BusySerializer())
 
     try:
         result = await _drain_live_archive_outbox_once()
@@ -247,16 +230,14 @@ async def test_live_archive_drain_queue_timeout_defers_pending_rows(tmp_path, mo
         )
         live_db.commit()
 
-    class QueueTimeoutSerializer:
-        async def execute(self, *_args, **kwargs):
-            raise WriteQueueTimeoutError(
-                label=str(kwargs.get("label") or ""),
-                queue_timeout_seconds=float(kwargs.get("queue_timeout_seconds") or 2.0),
-            )
+    class BusySerializer:
+        def get_metrics(self):
+            return {"writer_active": False, "queue_depth": 1}
 
     monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
-    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: QueueTimeoutSerializer())
+    monkeypatch.setattr("zerg.database.get_write_session_factory", lambda: None)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: BusySerializer())
 
     try:
         result = await _drain_live_archive_outbox_once()
@@ -326,16 +307,13 @@ async def test_live_archive_drain_catches_up_multiple_batches_per_tick(
             )
         live_db.commit()
 
-    calls = []
-
     class FakeSerializer:
-        async def execute(self, fn, **kwargs):
-            calls.append(kwargs)
-            with ArchiveSession() as archive_db:
-                return fn(archive_db)
+        def get_metrics(self):
+            return {"writer_active": False, "queue_depth": 0}
 
     monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr("zerg.database.get_write_session_factory", lambda: ArchiveSession)
     monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: FakeSerializer())
     monkeypatch.setattr("zerg.services.maintenance.LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE", 2)
     monkeypatch.setattr("zerg.services.maintenance.LIVE_ARCHIVE_OUTBOX_DRAIN_MAX_BATCHES_PER_TICK", max_batches)
@@ -344,8 +322,6 @@ async def test_live_archive_drain_catches_up_multiple_batches_per_tick(
         result = await _drain_live_archive_outbox_once()
 
         assert result == {"processed": expected_processed, "drained": expected_processed, "failed": 0, "cleaned": 0}
-        assert calls[0]["label"] == "live-archive-drain"
-        assert calls[0]["auto_commit"] is False
         with ArchiveSession() as archive_db:
             assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "maintenance-catchup").count() == expected_processed
         with LiveSession() as live_db:
