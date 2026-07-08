@@ -63,6 +63,7 @@ from zerg.services.remote_session_launch import reconcile_launch_from_command_re
 from zerg.services.session_kernel_projection import project_session_control_fields  # noqa: E402
 from zerg.services.session_runtime import RuntimeEventIngest  # noqa: E402
 from zerg.services.session_runtime import ingest_runtime_events  # noqa: E402
+from zerg.services.session_workspace import build_session_mobile_tail  # noqa: E402
 from zerg.services.session_workspace import build_session_workspace  # noqa: E402
 from zerg.services.write_serializer import WriteSerializer  # noqa: E402
 
@@ -1368,6 +1369,51 @@ def test_live_launch_workspace_placeholder_before_archive_drain(tmp_path, monkey
         assert workspace.projection.items == []
         assert workspace.projection.total == 0
         assert workspace.workspace_revision.fingerprint.startswith("live-launch:")
+    finally:
+        live_engine.dispose()
+
+
+def test_live_launch_mobile_tail_placeholder_before_archive_drain(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-mobile-tail-placeholder.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    live_serializer = _LiveReadinessSerializer(LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module.database_module, "get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+
+    try:
+        with SessionLocal() as db:
+            result = asyncio.run(
+                launch_remote_session(
+                    db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="codex",
+                        cwd="/Users/me/repo",
+                        project="repo",
+                    ),
+                    registry=registry,
+                )
+            )
+            mobile_tail = build_session_mobile_tail(
+                db=db,
+                session_id=result.session_id,
+                owner_id=OWNER_ID,
+            )
+
+        assert mobile_tail.session.id == str(result.session_id)
+        assert mobile_tail.session.launch_state == "live"
+        assert mobile_tail.projection.items == []
+        assert mobile_tail.projection.total == 0
+        assert mobile_tail.snapshot_event_id is None
+        assert mobile_tail.workspace_revision.fingerprint.startswith("live-launch:")
     finally:
         live_engine.dispose()
 

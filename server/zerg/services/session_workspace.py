@@ -258,6 +258,38 @@ def build_session_mobile_tail(
     with timing.span("load_session"):
         session = store.get_session(session_id)
     if not session:
+        live_readiness = latest_live_launch_readiness([session_id]).get(session_id)
+        if live_readiness is not None and (owner_id is None or live_readiness.owner_id == str(owner_id)):
+            session_response = build_live_launch_placeholder_response(live_readiness)
+            revision_at = live_readiness.updated_at or live_readiness.created_at
+            return SessionMobileTailResponse(
+                session=session_response,
+                projection=SessionProjectionResponse(
+                    root_session_id=str(session_id),
+                    focus_session_id=str(session_id),
+                    head_session_id=str(session_id),
+                    path_session_ids=[str(session_id)],
+                    items=[],
+                    total=0,
+                    page_offset=offset,
+                    branch_mode=branch_mode,
+                    abandoned_events=0,
+                ),
+                snapshot_event_id=None,
+                workspace_revision=SessionWorkspaceRevisionResponse(
+                    latest_event_id=0,
+                    latest_session_updated_at=None,
+                    latest_runtime_signal_at=revision_at,
+                    runtime_version_sum=0,
+                    pause_request_count=0,
+                    pause_request_fingerprint=None,
+                    managed_control_count=0,
+                    managed_control_fingerprint=None,
+                    live_preview_updated_at=None,
+                    thread_session_count=1,
+                    fingerprint=f"live-launch:{session_id}:{revision_at}",
+                ),
+            )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id} not found",

@@ -396,13 +396,26 @@ class HostedCPAuthStrategy(AuthStrategy):
             else:
                 user.email = claims.email
 
-        user.display_name = claims.display_name or user.display_name
-        user.avatar_url = claims.avatar_url or user.avatar_url
-        user.email_verified = claims.email_verified
-        user.is_active = True
-        user.last_login = utc_now_naive()
-        db.commit()
-        db.refresh(user)
+        changed = False
+        display_name = claims.display_name or user.display_name
+        if user.display_name != display_name:
+            user.display_name = display_name
+            changed = True
+        if user.avatar_url != claims.avatar_url:
+            user.avatar_url = claims.avatar_url
+            changed = True
+        if user.email_verified != claims.email_verified:
+            user.email_verified = claims.email_verified
+            changed = True
+        if user.is_active is not True:
+            user.is_active = True
+            changed = True
+        if getattr(user, "last_login", None) is None:
+            user.last_login = utc_now_naive()
+            changed = True
+        if changed:
+            db.commit()
+            db.refresh(user)
         return user
 
     def _user_from_token(self, token: str, db: Session):

@@ -22,10 +22,10 @@ logger = logging.getLogger(__name__)
 
 # Interval between runner-health reconcile passes (seconds).
 RUNNER_HEALTH_RECONCILE_INTERVAL = 120
-# Cold live->archive reconciliation is durable but nonessential for hot UI truth.
-# Keep the automatic bridge opt-in so it cannot contend with launch-critical
-# ingest on small SQLite hosts unless an operator explicitly enables it.
-LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_INTERVAL_SECONDS", "0"))
+# Cold live->archive reconciliation is durable but secondary to hot UI truth.
+# Keep the default conservative: one row per writer admission unless an operator
+# explicitly raises the interval/batch knobs after observing queue telemetry.
+LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_INTERVAL_SECONDS", "1"))
 # If enabled, default to one row per writer admission. Operators can raise this
 # after observing queue/exec telemetry on an always-on host.
 LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_BATCH_SIZE", "1"))
