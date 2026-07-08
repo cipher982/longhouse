@@ -820,11 +820,12 @@ export interface paths {
          * @description Proxy a CP runtime token refresh for iOS/hosted native clients.
          *
          *     iOS stores the CP-issued bearer in keychain and sends it on every request.
-         *     The token has a 1-hour lifetime, so the client proactively refreshes ~60s
-         *     before expiry and retries with refresh on a 401. This route forwards the
-         *     current bearer to the CP's /api/identity/refresh-runtime-token and returns
-         *     the re-minted token. No local validation — the CP is the issuer and is the
-         *     authority on token validity (including the refresh leeway window).
+         *     Active runtime tokens have a short lifetime, so the client proactively
+         *     refreshes before expiry and retries with refresh on a 401. This route
+         *     forwards the current bearer to the CP's
+         *     /api/identity/refresh-runtime-token and returns the re-minted token. No
+         *     local validation — the CP is the issuer and is the authority on token
+         *     validity, including the long native-app refresh window.
          */
         post: operations["refresh_runtime_token_auth_refresh_runtime_token_post"];
         delete?: never;
@@ -2774,9 +2775,43 @@ export interface paths {
         put?: never;
         /**
          * Index Recall Sessions
-         * @description Project recent sessions into retrieval.db for fast recall.
+         * @description Queue recent sessions for projection into retrieval.db.
          */
         post: operations["index_recall_sessions_agents_recall_index_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/recall/index/{job_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Recall Index Job Status */
+        get: operations["recall_index_job_status_agents_recall_index__job_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/recall/index/{job_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Recall Index Job */
+        post: operations["cancel_recall_index_job_agents_recall_index__job_id__cancel_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8209,7 +8244,7 @@ export interface components {
         SessionProjectionItemResponse: {
             /**
              * Kind
-             * @description Projection item kind: event|seam
+             * @description Projection item kind: event|seam|action
              */
             kind: string;
             /**
@@ -8225,6 +8260,8 @@ export interface components {
             timestamp: string;
             /** @description Present when kind=event */
             event?: components["schemas"]["EventResponse"] | null;
+            /** @description Present when kind=action */
+            action?: components["schemas"]["TranscriptActionResponse"] | null;
             /**
              * Continued From Session Id
              * @description Parent continuation session UUID for seams
@@ -9718,6 +9755,43 @@ export interface components {
         TopAutomationsResponse: {
             /** Top Automations */
             top_automations: components["schemas"]["OpsTopAutomation"][];
+        };
+        /**
+         * TranscriptActionResponse
+         * @description Provider-neutral lifecycle/control action projected into a transcript.
+         */
+        TranscriptActionResponse: {
+            /**
+             * Id
+             * @description Stable action id within the projection
+             */
+            id: string;
+            /**
+             * Kind
+             * @description Action kind, e.g. turn_interrupted
+             */
+            kind: string;
+            /**
+             * Provider
+             * @description Provider that emitted the action evidence
+             */
+            provider?: string | null;
+            /**
+             * Source
+             * @description Action source: user|remote_control|provider|system|unknown
+             * @default unknown
+             */
+            source: string;
+            /**
+             * Provider Reason
+             * @description Provider-specific reason or compatibility marker
+             */
+            provider_reason?: string | null;
+            /**
+             * Event Id
+             * @description Backing event id when the action projects from an event row
+             */
+            event_id?: number | null;
         };
         /**
          * TruthTier
@@ -14871,6 +14945,72 @@ export interface operations {
             };
             header?: never;
             path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    recall_index_job_status_agents_recall_index__job_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_recall_index_job_agents_recall_index__job_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
             cookie?: never;
         };
         requestBody?: never;

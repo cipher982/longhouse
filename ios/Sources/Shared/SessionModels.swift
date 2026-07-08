@@ -863,11 +863,21 @@ struct SessionThreadResponse: Codable, Sendable {
     let sessions: [SessionDetail]
 }
 
+struct SessionAction: Codable, Hashable, Sendable {
+    let id: String
+    let kind: String
+    let provider: String?
+    let source: String
+    let providerReason: String?
+    let eventId: Int?
+}
+
 struct SessionProjectionItem: Codable, Identifiable, Sendable {
     let kind: String
     let sessionId: String
     let timestamp: String
     let event: SessionEvent?
+    var action: SessionAction? = nil
     let continuedFromSessionId: String?
     let continuationKind: String?
     let originLabel: String?
@@ -878,6 +888,9 @@ struct SessionProjectionItem: Codable, Identifiable, Sendable {
     var id: String {
         if kind == "event", let event {
             return "event:\(event.id)"
+        }
+        if kind == "action", let action {
+            return action.id
         }
         return "seam:\(sessionId):\(timestamp)"
     }

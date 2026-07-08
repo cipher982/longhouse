@@ -1,4 +1,4 @@
-import type { AgentEvent } from "../../services/api/agents";
+import type { AgentEvent, AgentSessionTranscriptAction } from "../../services/api/agents";
 
 export type EventFilter = "all" | "messages" | "tools";
 
@@ -32,8 +32,16 @@ export type TimelineSeam = {
   timestamp: string;
 };
 
+export type TimelineAction = {
+  key: string;
+  action: AgentSessionTranscriptAction;
+  label: string;
+  timestamp: string;
+};
+
 export type TimelineItem =
   | { kind: "seam"; seam: TimelineSeam }
+  | { kind: "action"; action: TimelineAction }
   | { kind: "message"; event: AgentEvent }
   | { kind: "tool"; interaction: ToolInteraction }
   | { kind: "noise_group"; group: NoiseGroup };

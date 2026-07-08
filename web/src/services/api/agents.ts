@@ -294,11 +294,21 @@ export interface WorkflowRunResponse {
   agents: WorkflowRunAgent[];
 }
 
+export interface AgentSessionTranscriptAction {
+  id: string;
+  kind: "turn_interrupted" | string;
+  provider?: string | null;
+  source: "user" | "remote_control" | "provider" | "system" | "unknown" | string;
+  provider_reason?: string | null;
+  event_id?: number | null;
+}
+
 export interface AgentSessionProjectionItem {
-  kind: "event" | "seam";
+  kind: "event" | "seam" | "action";
   session_id: string;
   timestamp: string;
   event?: AgentEvent | null;
+  action?: AgentSessionTranscriptAction | null;
   continued_from_session_id?: string | null;
   continuation_kind?: string | null;
   origin_label?: string | null;

@@ -16,6 +16,7 @@ enum ToolPairing: String, Sendable {
 enum TimelineItem: Identifiable, Sendable {
     case user(SessionEvent)
     case assistant(SessionEvent)
+    case action(SessionAction, timestamp: String)
     case tool(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing)
     case orphanTool(SessionEvent)
     case passiveGroup(calls: [PassiveCall])
@@ -24,6 +25,7 @@ enum TimelineItem: Identifiable, Sendable {
         switch self {
         case .user(let e): return "user:\(e.id)"
         case .assistant(let e): return "prose:\(e.id)"
+        case .action(let action, _): return action.id
         case .tool(let call, _, _): return "tool:\(call.id)"
         case .orphanTool(let e): return "orphan:\(e.id)"
         case .passiveGroup(let calls):
@@ -36,6 +38,8 @@ enum TimelineItem: Identifiable, Sendable {
         switch self {
         case .user(let e), .assistant(let e), .orphanTool(let e):
             return e.timestamp
+        case .action(_, let timestamp):
+            return timestamp
         case .tool(let call, _, _):
             return call.timestamp
         case .passiveGroup(let calls):
@@ -151,6 +155,31 @@ enum TimelineBuilder {
         }
 
         return collapsePassive(raw)
+    }
+
+    static func build(items projectionItems: [SessionProjectionItem]) -> [TimelineItem] {
+        var out: [TimelineItem] = []
+        var eventBuffer: [SessionEvent] = []
+
+        func flushEvents() {
+            guard !eventBuffer.isEmpty else { return }
+            out.append(contentsOf: build(events: eventBuffer))
+            eventBuffer.removeAll()
+        }
+
+        for item in projectionItems {
+            if item.kind == "action", let action = item.action {
+                flushEvents()
+                out.append(.action(action, timestamp: item.timestamp))
+                continue
+            }
+            if item.kind == "event", let event = item.event {
+                eventBuffer.append(event)
+            }
+        }
+
+        flushEvents()
+        return out
     }
 
     /// Collapse runs of 2+ consecutive passive tool calls into `.passiveGroup`

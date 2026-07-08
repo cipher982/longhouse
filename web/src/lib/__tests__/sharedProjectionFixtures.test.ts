@@ -7,6 +7,12 @@ import type { TimelineItem } from "../sessionWorkspace";
 
 type ExpectedRow =
   | {
+      kind: "action";
+      action_kind: string;
+      provider: string | null;
+      event_id: number | null;
+    }
+  | {
       kind: "message";
       role: string;
       event_id: number;
@@ -58,6 +64,14 @@ function summarizeRows(items: TimelineItem[]): ExpectedRow[] {
         event_id: item.event.id,
       };
     }
+    if (item.kind === "action") {
+      return {
+        kind: "action",
+        action_kind: item.action.action.kind,
+        provider: item.action.action.provider ?? null,
+        event_id: item.action.action.event_id ?? null,
+      };
+    }
     if (item.kind === "noise_group") {
       return {
         kind: "noise_group",
@@ -94,7 +108,7 @@ function summarizeRows(items: TimelineItem[]): ExpectedRow[] {
 }
 
 describe("shared session projection fixtures", () => {
-  it.each(["tool-pairing-fifo.json", "context-boundary-noise-collapse.json"])(
+  it.each(["tool-pairing-fifo.json", "context-boundary-noise-collapse.json", "session-action-interrupt.json"])(
     "matches %s",
     (fixtureName) => {
       const fixture = loadFixture(fixtureName);

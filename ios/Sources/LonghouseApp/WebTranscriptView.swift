@@ -222,6 +222,8 @@ struct WebTranscriptView: UIViewRepresentable {
                 origin: nil,
                 mediaRefs: payloadMediaRefs(event.mediaRefs, serverURL: serverURL)
             )
+        case .action(let action, _):
+            return actionPayload(id: item.id, action: action)
         case .tool(let call, let result, _):
             return toolPayload(id: item.id, call: call, result: result, serverURL: serverURL)
         case .orphanTool(let event):
@@ -257,6 +259,31 @@ struct WebTranscriptView: UIViewRepresentable {
             origin: origin?.payloadValue,
             media: mediaRefs
         )
+    }
+
+    private nonisolated static func actionPayload(id: String, action: SessionAction) -> WebTranscriptPayloadItem {
+        WebTranscriptPayloadItem(
+            id: id,
+            kind: "action",
+            role: nil,
+            title: actionLabel(action.kind),
+            subtitle: action.provider,
+            body: nil,
+            fullBody: nil,
+            collapsed: false,
+            status: action.kind,
+            duration: nil,
+            input: nil,
+            output: nil,
+            calls: [],
+            origin: nil,
+            media: nil
+        )
+    }
+
+    private nonisolated static func actionLabel(_ kind: String) -> String {
+        if kind == "turn_interrupted" { return "User interrupted the turn" }
+        return "Session action"
     }
 
     private nonisolated static func payloadSubmittedInput(_ input: SubmittedInput) -> WebTranscriptPayloadItem {
@@ -1166,6 +1193,28 @@ private extension WebTranscriptView {
       text-align: right;
     }
 
+    .action {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--secondary);
+      font-size: 12px;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .action-rule {
+      width: 22px;
+      height: 1px;
+      background: var(--rule);
+      flex-shrink: 0;
+    }
+
+    .action-title {
+      color: var(--primary);
+      font-weight: 650;
+    }
+
     .origin {
       margin-top: 6px;
       color: var(--secondary);
@@ -1893,9 +1942,21 @@ private extension WebTranscriptView {
       `;
     }
 
+    function action(item) {
+      const subtitle = item.subtitle ? `<span>${escapeHtml(item.subtitle)}</span>` : '';
+      return `
+        <div class="row action">
+          <span class="action-rule"></span>
+          <span class="action-title">${escapeHtml(item.title || 'Session action')}</span>
+          ${subtitle}
+        </div>
+      `;
+    }
+
     function renderItem(item, index) {
       if (item.kind === 'message') return message(item, index);
       if (item.kind === 'submitted') return submitted(item);
+      if (item.kind === 'action') return action(item);
       if (item.kind === 'question') return question(item);
       if (item.kind === 'tool') return toolDetails(item);
       if (item.kind === 'passiveGroup') return passiveGroup(item);

@@ -1196,6 +1196,41 @@
     align-self: start;
   }
 
+  .tl-system-action {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: var(--tl-tool-max);
+    width: 100%;
+    margin-inline: auto;
+    padding: 6px 0;
+    color: var(--color-text-muted);
+    font-size: 12px;
+  }
+  .tl-system-action__rule {
+    width: 20px;
+    height: 1px;
+    background: rgba(212, 184, 122, 0.36);
+    flex-shrink: 0;
+  }
+  .tl-system-action__label {
+    color: rgba(250, 245, 236, 0.82);
+    font-weight: 600;
+  }
+  .tl-system-action__provider {
+    font-family: var(--font-family-mono);
+    font-size: 11px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .tl-system-action__time {
+    margin-left: auto;
+    font-family: var(--font-family-mono);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+
   /* --- Shared ---
      Three width scopes:
        - prose (tl-msg): 80ch max, centered — tuned for reading.

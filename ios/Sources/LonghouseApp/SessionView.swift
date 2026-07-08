@@ -1569,6 +1569,7 @@ final class SessionViewModel: ObservableObject {
     private var activeSessionId: String?
     private var activeServerURL: String?
     private var lastWorkspaceEvents: [SessionEvent] = []
+    private var lastWorkspaceProjectionItems: [SessionProjectionItem] = []
     private var loadedProjectionItemCount = 0
     private var totalProjectionItemCount = 0
     private var tailSnapshotEventId: Int?
@@ -1637,6 +1638,7 @@ final class SessionViewModel: ObservableObject {
             transcriptDiagnostics = nil
             pendingRealtimeTelemetry = nil
             lastWorkspaceEvents = []
+            lastWorkspaceProjectionItems = []
             loadedProjectionItemCount = 0
             totalProjectionItemCount = 0
             tailSnapshotEventId = nil
@@ -2230,7 +2232,8 @@ final class SessionViewModel: ObservableObject {
         let currentDetail = detail?.replacingTranscriptPreview(preview)
         detail = currentDetail
         items = TimelineBuilder.build(
-            events: TranscriptPreviewProjection.visibleEvents(
+            items: projectionItemsWithTranscriptPreview(
+                lastWorkspaceProjectionItems,
                 durableEvents: lastWorkspaceEvents,
                 preview: currentDetail?.transcriptPreview
             )
@@ -2291,7 +2294,12 @@ final class SessionViewModel: ObservableObject {
             let events = tail.events
             let buildStartedAt = Date()
             let mergedEvents = mergeRefreshedTail(events)
+            let mergedProjectionItems = mergeRefreshedProjectionItems(
+                freshTailItems: tail.projection.items,
+                mergedEvents: mergedEvents
+            )
             self.lastWorkspaceEvents = mergedEvents
+            self.lastWorkspaceProjectionItems = mergedProjectionItems
             let refreshedLoadedCount = min(
                 tail.projection.total,
                 max(0, max(tail.projection.total - tail.projection.pageOffset, mergedEvents.count))
@@ -2308,7 +2316,8 @@ final class SessionViewModel: ObservableObject {
                 self.prefetchedOlderSnapshotEventId = nil
             }
             let builtItems = TimelineBuilder.build(
-                events: TranscriptPreviewProjection.visibleEvents(
+                items: projectionItemsWithTranscriptPreview(
+                    mergedProjectionItems,
                     durableEvents: mergedEvents,
                     preview: tail.session.transcriptPreview
                 )
@@ -2351,6 +2360,42 @@ final class SessionViewModel: ObservableObject {
             }
         }
         return olderEvents + freshTailEvents
+    }
+
+    private func mergeRefreshedProjectionItems(
+        freshTailItems: [SessionProjectionItem],
+        mergedEvents: [SessionEvent]
+    ) -> [SessionProjectionItem] {
+        let currentTailWindowCount = min(initialTailLimit, totalProjectionItemCount)
+        guard loadedProjectionItemCount > currentTailWindowCount else {
+            return freshTailItems
+        }
+        guard let firstFreshEvent = freshTailItems.compactMap(\.event).first else {
+            return freshTailItems
+        }
+
+        let freshItemIds = Set(freshTailItems.map(\.id))
+        if let firstFreshItemId = freshTailItems.first?.id,
+           let firstFreshIndex = lastWorkspaceProjectionItems.firstIndex(where: { $0.id == firstFreshItemId }) {
+            let olderItems = lastWorkspaceProjectionItems[..<firstFreshIndex].filter {
+                !freshItemIds.contains($0.id)
+            }
+            return olderItems + freshTailItems
+        }
+
+        let freshEventIds = Set(freshTailItems.compactMap(\.event?.id))
+        let freshActionIds = Set(freshTailItems.compactMap(\.action?.id))
+        let olderMergedEventIds = Set(mergedEvents.filter { $0.id < firstFreshEvent.id }.map(\.id))
+        let olderItems = lastWorkspaceProjectionItems.filter { item in
+            if let event = item.event {
+                return olderMergedEventIds.contains(event.id) && !freshEventIds.contains(event.id)
+            }
+            if let action = item.action {
+                return item.timestamp < firstFreshEvent.timestamp && !freshActionIds.contains(action.id)
+            }
+            return false
+        }
+        return olderItems + freshTailItems
     }
 
     private func scheduleOlderPrefetch(api: SessionWorkspaceClient, sessionId: String) {
@@ -2419,12 +2464,16 @@ final class SessionViewModel: ObservableObject {
         totalProjectionItemCount = tail.projection.total
         lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint ?? lastWorkspaceRevisionFingerprint
         loadedProjectionItemCount = max(loadedProjectionItemCount, tail.projection.total - tail.projection.pageOffset)
-        let existingEventIds = Set(lastWorkspaceEvents.map(\.id))
-        let olderEvents = tail.events.filter { !existingEventIds.contains($0.id) }
-        if !olderEvents.isEmpty {
+        let existingItemIds = Set(lastWorkspaceProjectionItems.map(\.id))
+        let olderProjectionItems = tail.projection.items.filter { !existingItemIds.contains($0.id) }
+        if !olderProjectionItems.isEmpty {
+            let existingEventIds = Set(lastWorkspaceEvents.map(\.id))
+            let olderEvents = olderProjectionItems.compactMap(\.event).filter { !existingEventIds.contains($0.id) }
             lastWorkspaceEvents = olderEvents + lastWorkspaceEvents
+            lastWorkspaceProjectionItems = olderProjectionItems + lastWorkspaceProjectionItems
             items = TimelineBuilder.build(
-                events: TranscriptPreviewProjection.visibleEvents(
+                items: projectionItemsWithTranscriptPreview(
+                    lastWorkspaceProjectionItems,
                     durableEvents: lastWorkspaceEvents,
                     preview: detail?.transcriptPreview
                 )
@@ -2434,9 +2483,48 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
+    private func projectionItemsWithTranscriptPreview(
+        _ projectionItems: [SessionProjectionItem],
+        durableEvents: [SessionEvent],
+        preview: SessionTranscriptPreview?
+    ) -> [SessionProjectionItem] {
+        let baseItems = projectionItems.isEmpty && !durableEvents.isEmpty
+            ? projectionItemsFromEvents(durableEvents)
+            : projectionItems
+        let visibleEvents = TranscriptPreviewProjection.visibleEvents(
+            durableEvents: durableEvents,
+            preview: preview
+        )
+        guard visibleEvents.count != durableEvents.count,
+              let synthetic = visibleEvents.last,
+              synthetic.id < 0
+        else {
+            return baseItems
+        }
+        return baseItems + projectionItemsFromEvents([synthetic])
+    }
+
+    private func projectionItemsFromEvents(_ events: [SessionEvent]) -> [SessionProjectionItem] {
+        events.map { event in
+            SessionProjectionItem(
+                kind: "event",
+                sessionId: activeSessionId ?? detail?.id ?? "",
+                timestamp: event.timestamp,
+                event: event,
+                continuedFromSessionId: nil,
+                continuationKind: nil,
+                originLabel: nil,
+                parentOriginLabel: nil,
+                parentContinuationKind: nil,
+                branchedFromEventId: nil
+            )
+        }
+    }
+
     private func applyCachedSnapshot(_ snapshot: SessionTranscriptCache.Snapshot) {
         detail = snapshot.detail
         lastWorkspaceEvents = snapshot.events
+        lastWorkspaceProjectionItems = projectionItemsFromEvents(snapshot.events)
         loadedProjectionItemCount = snapshot.loadedProjectionItemCount
         totalProjectionItemCount = snapshot.totalProjectionItemCount
         tailSnapshotEventId = snapshot.tailSnapshotEventId
@@ -2458,6 +2546,7 @@ final class SessionViewModel: ObservableObject {
     private func applyDiskSnapshot(_ snapshot: TranscriptSnapshotStore.Snapshot) {
         detail = snapshot.detail
         lastWorkspaceEvents = snapshot.events
+        lastWorkspaceProjectionItems = projectionItemsFromEvents(snapshot.events)
         loadedProjectionItemCount = snapshot.loadedProjectionItemCount
         totalProjectionItemCount = snapshot.totalProjectionItemCount
         tailSnapshotEventId = snapshot.tailSnapshotEventId

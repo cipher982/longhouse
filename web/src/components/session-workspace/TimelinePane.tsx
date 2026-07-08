@@ -5,6 +5,7 @@ import { EmptyState, Spinner } from "../ui";
 import { FunnelIcon } from "../icons";
 import type {
   NoiseGroup,
+  TimelineAction,
   TimelineItem,
   TimelineSeam,
   ToolInteraction,
@@ -131,6 +132,24 @@ function SeamRow({ seam }: { seam: TimelineSeam }) {
         <span className="tl-seam__description">{seam.description}</span>
       </div>
       <div className="tl-seam__stamp">{formatContinuationStamp(seam.timestamp)}</div>
+    </div>
+  );
+}
+
+function ActionRow({ action }: { action: TimelineAction }) {
+  const provider = action.action.provider || null;
+  return (
+    <div
+      id={`action-${action.action.event_id ?? action.key}`}
+      className="tl-system-action"
+      data-testid="session-timeline-action"
+      data-row-kind="action"
+      aria-label={action.label}
+    >
+      <span className="tl-system-action__rule" />
+      <span className="tl-system-action__label">{action.label}</span>
+      {provider ? <span className="tl-system-action__provider">{provider}</span> : null}
+      <span className="tl-system-action__time">{formatTime(action.timestamp)}</span>
     </div>
   );
 }
@@ -946,6 +965,12 @@ export function TimelinePane({
       if (item.kind === "message") {
         return item.event.content_text?.toLowerCase().includes(query);
       }
+      if (item.kind === "action") {
+        return (
+          item.action.label.toLowerCase().includes(query) ||
+          (item.action.action.provider || "").toLowerCase().includes(query)
+        );
+      }
       const interactions =
         item.kind === "noise_group" ? item.group.interactions : [item.interaction];
       return interactions.some((interaction) => {
@@ -1123,6 +1148,10 @@ export function TimelinePane({
           filteredItems.map((item) => {
             if (item.kind === "seam") {
               return <SeamRow key={item.seam.key} seam={item.seam} />;
+            }
+
+            if (item.kind === "action") {
+              return <ActionRow key={item.action.key} action={item.action} />;
             }
 
             if (item.kind === "message") {

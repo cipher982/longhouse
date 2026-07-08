@@ -4,6 +4,7 @@ export type {
   NoiseGroup,
   SessionInteractionCapabilities,
   SessionInteractionMode,
+  TimelineAction,
   TimelineItem,
   TimelineModel,
   TimelineSeam,

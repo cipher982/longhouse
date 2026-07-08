@@ -2,6 +2,7 @@ import type { AgentEvent, AgentSession, AgentSessionProjectionItem } from "../..
 import { parseUTC } from "../dateUtils";
 import type {
   NoiseGroup,
+  TimelineAction,
   TimelineItem,
   TimelineModel,
   TimelineSeam,
@@ -76,6 +77,21 @@ function buildTimelineSeam(item: AgentSessionProjectionItem): TimelineSeam {
     sessionId: item.session_id,
     label: `${childOrigin} branch begins`,
     description: `Everything below continues on ${childOrigin} from the saved split point in ${parentOrigin}.`,
+    timestamp: item.timestamp,
+  };
+}
+
+function actionLabel(kind: string): string {
+  if (kind === "turn_interrupted") return "User interrupted the turn";
+  return "Session action";
+}
+
+function buildTimelineAction(item: AgentSessionProjectionItem): TimelineAction | null {
+  if (!item.action) return null;
+  return {
+    key: item.action.id || `action:${item.session_id}:${item.timestamp}`,
+    action: item.action,
+    label: actionLabel(item.action.kind),
     timestamp: item.timestamp,
   };
 }
@@ -311,6 +327,12 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
       continue;
     }
 
+    if (projectionItem.kind === "action") {
+      const action = buildTimelineAction(projectionItem);
+      if (action) items.push({ kind: "action", action });
+      continue;
+    }
+
     const event = projectionItem.event;
     if (!event) continue;
     if (event.role === "system") continue;
@@ -392,7 +414,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
   const eventIdToRowId = new Map<number, string>();
 
   for (const item of groupedItems) {
-    if (item.kind === "seam") continue;
+    if (item.kind === "seam" || item.kind === "action") continue;
 
     if (item.kind === "message") {
       const key = `message:${item.event.id}`;
@@ -464,6 +486,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
 
 export function getPreferredSelectionKey(item: TimelineItem): string | null {
   if (item.kind === "seam") return null;
+  if (item.kind === "action") return null;
   if (item.kind === "message") return `message:${item.event.id}`;
   if (item.kind === "tool") return `tool:${item.interaction.key}`;
   return `group:${item.group.key}`;
@@ -472,6 +495,7 @@ export function getPreferredSelectionKey(item: TimelineItem): string | null {
 export function timelineItemContainsSelection(item: TimelineItem, selectionKey: string | null): boolean {
   if (!selectionKey) return false;
   if (item.kind === "seam") return false;
+  if (item.kind === "action") return false;
   if (item.kind === "message") return selectionKey === `message:${item.event.id}`;
   if (item.kind === "tool") return selectionKey === `tool:${item.interaction.key}`;
   if (selectionKey === `group:${item.group.key}`) return true;

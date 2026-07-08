@@ -27,6 +27,8 @@ final class SharedProjectionFixtureTests: XCTestCase {
         let callEventIds: [Int]?
         let resultEventIds: [Int?]?
         let pairings: [String]?
+        let actionKind: String?
+        let provider: String?
     }
 
     private struct TranscriptPreviewFixture: Decodable {
@@ -52,9 +54,9 @@ final class SharedProjectionFixtureTests: XCTestCase {
     }
 
     func testSharedProjectionFixtures() throws {
-        for fixtureName in ["tool-pairing-fifo.json", "context-boundary-noise-collapse.json"] {
+        for fixtureName in ["tool-pairing-fifo.json", "context-boundary-noise-collapse.json", "session-action-interrupt.json"] {
             let fixture = try loadFixture(fixtureName)
-            let items = TimelineBuilder.build(events: fixture.projection.items.compactMap(\.event))
+            let items = TimelineBuilder.build(items: fixture.projection.items)
 
             XCTAssertEqual(summarizeRows(items), fixture.expectations.rows, fixtureName)
             XCTAssertEqual(toolInteractionCount(items), fixture.expectations.toolCount, fixtureName)
@@ -120,7 +122,25 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     toolNames: nil,
                     callEventIds: nil,
                     resultEventIds: nil,
-                    pairings: nil
+                    pairings: nil,
+                    actionKind: nil,
+                    provider: nil
+                )
+            case .action(let action, _):
+                return ExpectedRow(
+                    kind: "action",
+                    role: nil,
+                    eventId: action.eventId,
+                    toolName: nil,
+                    callEventId: nil,
+                    resultEventId: nil,
+                    pairing: nil,
+                    toolNames: nil,
+                    callEventIds: nil,
+                    resultEventIds: nil,
+                    pairings: nil,
+                    actionKind: action.kind,
+                    provider: action.provider
                 )
             case .tool(let call, let result, let pairing):
                 return ExpectedRow(
@@ -134,7 +154,9 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     toolNames: nil,
                     callEventIds: nil,
                     resultEventIds: nil,
-                    pairings: nil
+                    pairings: nil,
+                    actionKind: nil,
+                    provider: nil
                 )
             case .orphanTool(let event):
                 return ExpectedRow(
@@ -148,7 +170,9 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     toolNames: nil,
                     callEventIds: nil,
                     resultEventIds: nil,
-                    pairings: nil
+                    pairings: nil,
+                    actionKind: nil,
+                    provider: nil
                 )
             case .passiveGroup(let calls):
                 return ExpectedRow(
@@ -162,7 +186,9 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     toolNames: calls.map { $0.call.toolName ?? "" },
                     callEventIds: calls.map(\.call.id),
                     resultEventIds: calls.map { $0.result?.id },
-                    pairings: calls.map { $0.pairing.rawValue }
+                    pairings: calls.map { $0.pairing.rawValue },
+                    actionKind: nil,
+                    provider: nil
                 )
             }
         }
@@ -175,7 +201,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
                 return count + 1
             case .passiveGroup(let calls):
                 return count + calls.count
-            case .user, .assistant:
+            case .user, .assistant, .action:
                 return count
             }
         }
@@ -204,7 +230,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
             switch item {
             case .user(let event), .assistant(let event):
                 return event
-            case .tool, .orphanTool, .passiveGroup:
+            case .tool, .orphanTool, .passiveGroup, .action:
                 return nil
             }
         }

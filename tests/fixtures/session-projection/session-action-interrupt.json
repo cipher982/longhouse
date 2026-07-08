@@ -1,0 +1,60 @@
+{
+  "name": "session-action-interrupt",
+  "description": "Lifecycle actions render as timeline facts and do not become user messages.",
+  "projection": {
+    "root_session_id": "fixture-session-action",
+    "focus_session_id": "fixture-session-action",
+    "head_session_id": "fixture-session-action",
+    "path_session_ids": ["fixture-session-action"],
+    "total": 2,
+    "page_offset": 0,
+    "branch_mode": "head",
+    "abandoned_events": 0,
+    "items": [
+      {
+        "kind": "action",
+        "session_id": "fixture-session-action",
+        "timestamp": "2026-05-15T20:00:00Z",
+        "action": {
+          "id": "event:10:turn_interrupted",
+          "kind": "turn_interrupted",
+          "provider": "codex",
+          "source": "user",
+          "provider_reason": "interrupted",
+          "event_id": 10
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-session-action",
+        "timestamp": "2026-05-15T20:00:03Z",
+        "event": {
+          "id": 11,
+          "role": "user",
+          "content_text": "Hey, great work. Let's pause and recap.",
+          "tool_name": null,
+          "tool_input_json": null,
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "timestamp": "2026-05-15T20:00:03Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      }
+    ]
+  },
+  "expectations": {
+    "rows": [
+      {
+        "kind": "action",
+        "action_kind": "turn_interrupted",
+        "provider": "codex",
+        "event_id": 10
+      },
+      { "kind": "message", "role": "user", "event_id": 11 }
+    ],
+    "tool_count": 0,
+    "noise_group_count": 0,
+    "orphan_tool_ids": []
+  }
+}

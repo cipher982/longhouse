@@ -351,11 +351,21 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let mediaRefs: [APIEventMediaRefResponse]?
 }
 
+struct APITranscriptActionResponse: Codable, Hashable, Sendable {
+    let id: String
+    let kind: String
+    let provider: String?
+    let source: String?
+    let providerReason: String?
+    let eventId: Int?
+}
+
 struct APISessionProjectionItemResponse: Codable, Hashable, Sendable {
     let kind: String
     let sessionId: String
     let timestamp: String
     let event: APIEventResponse?
+    let action: APITranscriptActionResponse?
     let continuedFromSessionId: String?
     let continuationKind: String?
     let originLabel: String?

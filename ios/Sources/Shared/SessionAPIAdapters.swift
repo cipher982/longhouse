@@ -257,6 +257,19 @@ extension APIInputOriginResponse {
     }
 }
 
+extension APITranscriptActionResponse {
+    var sessionAction: SessionAction {
+        SessionAction(
+            id: id,
+            kind: kind,
+            provider: provider,
+            source: source ?? "unknown",
+            providerReason: providerReason,
+            eventId: eventId
+        )
+    }
+}
+
 extension APISessionProjectionItemResponse {
     var sessionProjectionItem: SessionProjectionItem {
         SessionProjectionItem(
@@ -264,6 +277,7 @@ extension APISessionProjectionItemResponse {
             sessionId: sessionId,
             timestamp: timestamp,
             event: event?.sessionEvent,
+            action: action?.sessionAction,
             continuedFromSessionId: continuedFromSessionId,
             continuationKind: continuationKind,
             originLabel: originLabel,
