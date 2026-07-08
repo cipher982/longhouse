@@ -630,6 +630,11 @@ def repair_provider_proof_sessions_command(
     database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override."),
     limit: int = typer.Option(500, "--limit", min=1, help="Maximum candidate sessions to scan."),
     apply: bool = typer.Option(False, "--apply", help="Persist environment=test repairs."),
+    include_event_scan: bool = typer.Option(
+        False,
+        "--include-event-scan",
+        help="Also scan events for marker-only legacy rows. Can be expensive on large DBs.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
 ) -> None:
     """Repair historical provider live-proof sessions. Defaults to dry-run."""
@@ -646,7 +651,12 @@ def repair_provider_proof_sessions_command(
     try:
         with SessionLocal() as db:
             try:
-                result = repair_provider_proof_session_environments(db, limit=limit, apply=apply)
+                result = repair_provider_proof_session_environments(
+                    db,
+                    limit=limit,
+                    apply=apply,
+                    include_event_scan=include_event_scan,
+                )
                 if apply:
                     db.commit()
             except Exception:
@@ -657,6 +667,7 @@ def repair_provider_proof_sessions_command(
 
     payload = asdict(result)
     payload["mode"] = "apply" if apply else "dry-run"
+    payload["include_event_scan"] = include_event_scan
     if json_output:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
         return

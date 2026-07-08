@@ -46,6 +46,7 @@ def repair_provider_proof_session_environments(
     *,
     limit: int = 500,
     apply: bool = False,
+    include_event_scan: bool = False,
 ) -> ProviderProofRepairResult:
     """Mark historical provider-proof rows as environment=test.
 
@@ -80,7 +81,7 @@ def repair_provider_proof_session_environments(
         .all()
     )
     seen_session_ids = {session.id for session in rows}
-    if len(rows) < limit:
+    if include_event_scan and len(rows) < limit:
         event_rows = (
             db.query(AgentSession)
             .join(AgentEvent, AgentEvent.session_id == AgentSession.id)
@@ -109,7 +110,9 @@ def repair_provider_proof_session_environments(
     for session in rows:
         # Provider proof sessions are expected to start with the no-reply
         # marker. Later user text is not enough to reclassify a real session.
-        first_user_text = session.first_user_message_preview or _first_user_event_text(db, session.id)
+        first_user_text = session.first_user_message_preview
+        if include_event_scan and not first_user_text:
+            first_user_text = _first_user_event_text(db, session.id)
         if classify_provider_proof_environment(cwd=session.cwd, first_user_text=first_user_text) != "test":
             skipped_false_positives += 1
             continue

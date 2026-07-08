@@ -115,7 +115,25 @@ def test_provider_proof_repair_apply_updates_session_and_timeline_card(tmp_path)
         db.close()
 
 
-def test_provider_proof_repair_uses_event_text_and_skips_false_positives(tmp_path):
+def test_provider_proof_repair_default_skips_event_only_rows(tmp_path):
+    factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        marker = _seed_session(db)
+        _add_user_event(db, marker, "LONGHOUSE_MY-TOOL_NOREPLY_event_only")
+
+        result = repair_provider_proof_session_environments(db, apply=True)
+        db.commit()
+
+        assert result.scanned_sessions == 0
+        assert result.repairable_sessions == 0
+        assert result.updated_sessions == 0
+        assert db.get(AgentSession, marker.id).environment == "cinder"
+    finally:
+        db.close()
+
+
+def test_provider_proof_repair_event_scan_uses_event_text_and_skips_false_positives(tmp_path):
     factory = _make_db(tmp_path)
     db = factory()
     try:
@@ -124,7 +142,7 @@ def test_provider_proof_repair_uses_event_text_and_skips_false_positives(tmp_pat
         _add_user_event(db, marker, "LONGHOUSE_MY-TOOL_NOREPLY_event_only")
         _add_user_event(db, false_positive, "LONGHOUSE__NOREPLY_not_a_provider_marker")
 
-        result = repair_provider_proof_session_environments(db, apply=True)
+        result = repair_provider_proof_session_environments(db, apply=True, include_event_scan=True)
         db.commit()
 
         assert result.scanned_sessions == 2
