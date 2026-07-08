@@ -22,16 +22,23 @@ logger = logging.getLogger(__name__)
 
 # Interval between runner-health reconcile passes (seconds).
 RUNNER_HEALTH_RECONCILE_INTERVAL = 120
-LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_INTERVAL_SECONDS", "10"))
+# Cold live->archive reconciliation is durable but nonessential for hot UI truth.
+# Keep the automatic bridge opt-in so it cannot contend with launch-critical
+# ingest on small SQLite hosts unless an operator explicitly enables it.
+LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_INTERVAL_SECONDS", "0"))
 LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_BATCH_SIZE", "50"))
 LIVE_ARCHIVE_OUTBOX_DRAIN_MAX_BATCHES_PER_TICK = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_MAX_BATCHES_PER_TICK", "1"))
-LIVE_ARCHIVE_OUTBOX_DRAIN_TIMEOUT_SECONDS = float(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_TIMEOUT_SECONDS", "5"))
+LIVE_ARCHIVE_OUTBOX_DRAIN_TIMEOUT_SECONDS = float(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_TIMEOUT_SECONDS", "0"))
 LIVE_ARCHIVE_OUTBOX_DRAIN_QUEUE_TIMEOUT_SECONDS = float(os.getenv("LONGHOUSE_LIVE_ARCHIVE_DRAIN_QUEUE_TIMEOUT_SECONDS", "2"))
 LIVE_ARCHIVE_OUTBOX_CLEANUP_BATCH_SIZE = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_OUTBOX_CLEANUP_BATCH_SIZE", "1000"))
 LIVE_ARCHIVE_OUTBOX_RETENTION_DAYS = int(os.getenv("LONGHOUSE_LIVE_ARCHIVE_OUTBOX_RETENTION_DAYS", "7"))
 
 _maintenance_task: asyncio.Task | None = None
 _live_archive_drain_task: asyncio.Task | None = None
+
+
+def _positive_timeout_or_none(seconds: float) -> float | None:
+    return seconds if seconds > 0 else None
 
 
 async def _reconcile_runner_health_once() -> None:
@@ -119,8 +126,8 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
             _drain_serialized,
             label="live-archive-drain",
             auto_commit=False,
-            timeout_seconds=LIVE_ARCHIVE_OUTBOX_DRAIN_TIMEOUT_SECONDS,
-            queue_timeout_seconds=LIVE_ARCHIVE_OUTBOX_DRAIN_QUEUE_TIMEOUT_SECONDS,
+            timeout_seconds=_positive_timeout_or_none(LIVE_ARCHIVE_OUTBOX_DRAIN_TIMEOUT_SECONDS),
+            queue_timeout_seconds=_positive_timeout_or_none(LIVE_ARCHIVE_OUTBOX_DRAIN_QUEUE_TIMEOUT_SECONDS),
         )
     except Exception:
         logger.warning("Live archive outbox drain deferred because archive writer is saturated", exc_info=True)
@@ -143,6 +150,9 @@ async def _loop() -> None:
 
 
 async def _live_archive_drain_loop() -> None:
+    if LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL <= 0:
+        logger.info("Live archive outbox drain loop disabled")
+        return
     while True:
         try:
             await asyncio.sleep(LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL)
@@ -170,8 +180,10 @@ def start_maintenance_loop() -> None:
         _maintenance_task = asyncio.create_task(_loop())
     if _live_archive_drain_task and not _live_archive_drain_task.done():
         pass
-    else:
+    elif LIVE_ARCHIVE_OUTBOX_DRAIN_INTERVAL > 0:
         _live_archive_drain_task = asyncio.create_task(_live_archive_drain_loop())
+    else:
+        _live_archive_drain_task = None
     logger.info("Maintenance loop started (runner-health reconcile every %ds)", RUNNER_HEALTH_RECONCILE_INTERVAL)
 
 

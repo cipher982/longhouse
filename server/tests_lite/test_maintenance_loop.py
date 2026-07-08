@@ -67,7 +67,7 @@ async def test_live_archive_drain_uses_fresh_archive_session_when_writer_idle(tm
         async def execute(self, fn, **kwargs):
             assert kwargs["label"] == "live-archive-drain"
             assert kwargs["auto_commit"] is False
-            assert kwargs["timeout_seconds"] > 0
+            assert kwargs["timeout_seconds"] is None
             assert kwargs["queue_timeout_seconds"] > 0
             with ArchiveSession() as archive_db:
                 return fn(archive_db)
