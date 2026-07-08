@@ -246,7 +246,7 @@ def test_readyz_reports_archive_degraded_for_stale_active_writer_with_queued_wor
     assert response["write_serializer"]["archive_degraded"] is True
 
 
-def test_readyz_reports_degraded_for_stale_live_ingest_writer_with_queued_work(tmp_path, monkeypatch):
+def test_readyz_fails_stale_live_ingest_writer_with_queued_work(tmp_path, monkeypatch):
     engine = make_engine(f"sqlite:///{tmp_path}/readyz_stale_live_ingest_writer.db")
     with engine.begin() as conn:
         conn.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
@@ -269,10 +269,8 @@ def test_readyz_reports_degraded_for_stale_live_ingest_writer_with_queued_work(t
 
     response = health_router.readyz_check()
 
-    assert response["status"] == "ready_with_archive_degraded"
-    assert response["write_serializer"]["status"] == "warn"
-    assert response["write_serializer"]["archive_degraded"] is True
-    assert response["write_serializer"]["active_label"] == "ingest-live"
+    assert response.status_code == 503
+    assert b"write_serializer_stalled" in response.body
 
 
 def test_readyz_fails_stale_non_archive_writer_with_queued_work(tmp_path, monkeypatch):
@@ -302,7 +300,7 @@ def test_readyz_fails_stale_non_archive_writer_with_queued_work(tmp_path, monkey
     assert b"write_serializer_stalled" in response.body
 
 
-def test_health_reports_degraded_for_stale_live_ingest_writer_with_queued_work(tmp_path, monkeypatch):
+def test_health_fails_stale_live_ingest_writer_with_queued_work(tmp_path, monkeypatch):
     _stub_build_identity(monkeypatch)
     engine = make_engine(f"sqlite:///{tmp_path}/health_stale_live_ingest_writer.db")
     with engine.begin() as conn:
@@ -342,10 +340,8 @@ def test_health_reports_degraded_for_stale_live_ingest_writer_with_queued_work(t
         )
     )
 
-    assert response["status"] == "degraded"
-    assert response["checks"]["write_serializer"]["status"] == "warn"
-    assert response["checks"]["write_serializer"]["archive_degraded"] is True
-    assert response["checks"]["write_serializer"]["active_label"] == "ingest-live"
+    assert response.status_code == 503
+    assert b"Write serializer is stalled" in response.body
 
 
 def test_health_fails_stale_non_archive_writer_with_queued_work(tmp_path, monkeypatch):
