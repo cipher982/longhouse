@@ -67,6 +67,7 @@ def _try_retrieval_index_recall(
     provider: str | None,
     since_days: int,
     max_results: int,
+    context_turns: int,
     context_mode: str,
     explicit: bool,
 ) -> RecallResponse | None:
@@ -110,22 +111,7 @@ def _try_retrieval_index_recall(
         context_text = parent.content if parent is not None else hit.content
         context_start = parent.event_index_start if parent is not None else hit.event_index_start
         context_end = parent.event_index_end if parent is not None else hit.event_index_end
-        context = [
-            {
-                "index": context_start,
-                "role": parent.chunk_kind if parent is not None else hit.chunk_kind,
-                "content": _bounded_context_text(context_text),
-                "tool_name": None,
-                "is_match": False,
-            },
-            {
-                "index": hit.event_index_start,
-                "role": hit.chunk_kind,
-                "content": _bounded_context_text(hit.content),
-                "tool_name": None,
-                "is_match": True,
-            },
-        ]
+        context = _indexed_context_items(parent, hit, context_turns=context_turns)
         matches.append(
             RecallMatch(
                 session_id=hit.session_id,
@@ -156,6 +142,64 @@ def _bounded_context_text(value: str | None) -> str:
     if not value:
         return ""
     return value[:500] + ("..." if len(value) > 500 else "")
+
+
+def _indexed_context_items(parent, hit, *, context_turns: int) -> list[dict[str, object]]:
+    if parent is None or context_turns <= 0:
+        return [_context_item_from_hit(hit)]
+
+    lower = hit.event_index_start - context_turns
+    upper = hit.event_index_end + context_turns
+    items: list[dict[str, object]] = []
+    for offset, line in enumerate(parent.content.splitlines()):
+        event_index = parent.event_index_start + offset
+        if event_index < lower or event_index > upper:
+            continue
+        parsed = _parse_context_line(line)
+        if parsed is None:
+            continue
+        role, tool_name, content = parsed
+        items.append(
+            {
+                "index": event_index,
+                "role": role,
+                "content": _bounded_context_text(content),
+                "tool_name": tool_name,
+                "is_match": hit.event_index_start <= event_index <= hit.event_index_end,
+            }
+        )
+    return items or [_context_item_from_hit(hit)]
+
+
+def _context_item_from_hit(hit) -> dict[str, object]:
+    return {
+        "index": hit.event_index_start,
+        "role": _role_for_chunk_kind(hit.chunk_kind),
+        "content": _bounded_context_text(hit.content),
+        "tool_name": None,
+        "is_match": True,
+    }
+
+
+def _parse_context_line(line: str) -> tuple[str, str | None, str] | None:
+    label, sep, content = line.partition(": ")
+    if not sep:
+        return None
+    if ":" in label:
+        role, tool_name = label.split(":", 1)
+    else:
+        role, tool_name = label, None
+    if role not in {"user", "assistant", "tool", "system"}:
+        return None
+    return role, tool_name, content.replace("\\n", "\n")
+
+
+def _role_for_chunk_kind(chunk_kind: str) -> str:
+    if chunk_kind == "intent":
+        return "user"
+    if chunk_kind == "tool_result":
+        return "tool"
+    return "assistant"
 
 
 def _structured_hits(value: str | None) -> list[str]:
@@ -448,6 +492,7 @@ async def recall_sessions(
             provider=provider,
             since_days=since_days,
             max_results=max_results,
+            context_turns=context_turns,
             context_mode=context_mode,
             explicit=mode == "lexical",
         )

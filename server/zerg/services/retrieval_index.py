@@ -270,8 +270,8 @@ def _token_count(text: str) -> int:
     return max(1, len(text) // 3) if text else 0
 
 
-def _bounded_text(text: str, token_budget: int) -> str:
-    bounded, _, _was_truncated = truncate(text, token_budget, strategy="head")
+def _bounded_text(text: str, token_budget: int, *, strategy: str = "sandwich") -> str:
+    bounded, _, _was_truncated = truncate(text, token_budget, strategy=strategy)
     return bounded.strip()
 
 
@@ -333,7 +333,8 @@ def _format_event(event: CleanTranscriptEvent) -> str:
     label = event.role
     if event.tool_name:
         label = f"{label}:{event.tool_name}"
-    return f"{label}: {event.content}"
+    content = event.content.replace("\n", "\\n")
+    return f"{label}: {content}"
 
 
 def _iter_traces(clean_events: list[CleanTranscriptEvent]) -> Iterable[_Trace]:
@@ -354,17 +355,18 @@ def _trace_text(events: list[CleanTranscriptEvent]) -> str:
     return "\n".join(_format_event(event) for event in events)
 
 
-def _structured_text(*, session: object, events: list[CleanTranscriptEvent]) -> str | None:
+def _structured_text(*, session: object, events: list[CleanTranscriptEvent], include_session: bool) -> str | None:
     tokens: list[str] = []
-    cwd = _as_str(_session_value(session, "cwd"))
-    branch = _as_str(_session_value(session, "git_branch"))
-    repo = _as_str(_session_value(session, "git_repo"))
-    if cwd:
-        tokens.append(f"cwd:{cwd}")
-    if repo:
-        tokens.append(f"repo:{repo}")
-    if branch:
-        tokens.append(f"branch:{branch}")
+    if include_session:
+        cwd = _as_str(_session_value(session, "cwd"))
+        branch = _as_str(_session_value(session, "git_branch"))
+        repo = _as_str(_session_value(session, "git_repo"))
+        if cwd:
+            tokens.append(f"cwd:{cwd}")
+        if repo:
+            tokens.append(f"repo:{repo}")
+        if branch:
+            tokens.append(f"branch:{branch}")
     for event in events:
         if event.tool_name:
             tokens.append(f"tool:{event.tool_name}")
@@ -424,7 +426,7 @@ def project_session_chunks(
                 first_event_id=trace.events[0].event_id,
                 last_event_id=trace.events[-1].event_id,
                 content=parent_content,
-                structured_text=_structured_text(session=session, events=trace.events),
+                structured_text=_structured_text(session=session, events=trace.events, include_session=True),
                 transcript_revision=revision,
                 **metadata,
             )
@@ -432,7 +434,7 @@ def project_session_chunks(
         chunk_index += 1
 
         for child_kind, child_event in _child_events_for_trace(trace.events):
-            child_content = _bounded_text(_format_event(child_event), CHILD_TOKEN_BUDGET)
+            child_content = _bounded_text(_format_event(child_event), CHILD_TOKEN_BUDGET, strategy="tail")
             if not child_content:
                 continue
             child_uid = _chunk_uid(session_id, revision, chunk_index, child_kind, child_content)
@@ -451,7 +453,7 @@ def project_session_chunks(
                     content=child_content,
                     intent_text=child_content if child_kind == "intent" else None,
                     evidence_text=child_content if child_kind != "intent" else None,
-                    structured_text=_structured_text(session=session, events=[child_event]),
+                    structured_text=_structured_text(session=session, events=[child_event], include_session=False),
                     transcript_revision=revision,
                     **metadata,
                 )
@@ -520,11 +522,37 @@ def replace_session_chunks(conn: sqlite3.Connection, session_id: str, chunks: li
                 )
                 """,
                 {
-                    **chunk.__dict__,
+                    "chunk_uid": chunk.chunk_uid,
+                    "session_id": chunk.session_id,
+                    "parent_session_id": chunk.parent_session_id,
+                    "thread_id": chunk.thread_id,
+                    "parent_thread_id": chunk.parent_thread_id,
                     "parent_chunk_id": parent_chunk_id,
+                    "chunk_index": chunk.chunk_index,
+                    "chunk_kind": chunk.chunk_kind,
+                    "retrieval_role": chunk.retrieval_role,
+                    "event_index_start": chunk.event_index_start,
+                    "event_index_end": chunk.event_index_end,
+                    "first_event_id": chunk.first_event_id,
+                    "last_event_id": chunk.last_event_id,
+                    "provider": chunk.provider,
+                    "project": chunk.project,
+                    "environment": chunk.environment,
+                    "device_id": chunk.device_id,
+                    "cwd": chunk.cwd,
+                    "git_repo": chunk.git_repo,
+                    "git_branch": chunk.git_branch,
+                    "started_at": chunk.started_at,
+                    "last_activity_at": chunk.last_activity_at,
+                    "content": chunk.content,
+                    "intent_text": chunk.intent_text,
+                    "evidence_text": chunk.evidence_text,
+                    "structured_text": chunk.structured_text,
                     "content_hash": content_hash,
                     "token_count": token_count,
+                    "transcript_revision": chunk.transcript_revision,
                     "indexed_at": _utc_now_iso(),
+                    "stale": chunk.stale,
                 },
             )
             chunk_id = int(cursor.lastrowid)

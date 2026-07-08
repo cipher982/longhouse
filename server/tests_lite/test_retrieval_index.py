@@ -344,6 +344,15 @@ def test_recall_fast_path_uses_retrieval_db_without_embedding_cache(monkeypatch,
     assert match.chunk_uid == "child"
     assert match.parent_chunk_id is not None
     assert match.context_text == "parent trace with timeout"
+    assert match.context == [
+        {
+            "index": 0,
+            "role": "user",
+            "content": "specific timeout evidence",
+            "tool_name": None,
+            "is_match": True,
+        }
+    ]
     assert match.diagnostics == {"mode": "lexical", "source": "retrieval_db"}
 
 
@@ -427,6 +436,7 @@ def test_recall_index_endpoint_projects_recent_sessions(monkeypatch, tmp_path):
     assert recall_response.total == 1
     assert recall_response.matches[0].session_id == str(session_id)
     assert recall_response.matches[0].chunk_kind == "assistant_conclusion"
+    assert [item["role"] for item in recall_response.matches[0].context] == ["user", "assistant"]
 
 
 def test_rebuild_fts_restores_child_rows_only(tmp_path):
