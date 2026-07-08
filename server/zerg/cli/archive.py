@@ -625,6 +625,51 @@ def backfill_compaction_kind_command(
     typer.echo(f"{status}: scanned={total_scanned} updated={total_updated} batches={batches} last_id={last_id}")
 
 
+@app.command("repair-provider-proof-sessions")
+def repair_provider_proof_sessions_command(
+    database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override."),
+    limit: int = typer.Option(500, "--limit", min=1, help="Maximum candidate sessions to scan."),
+    apply: bool = typer.Option(False, "--apply", help="Persist environment=test repairs."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Repair historical provider live-proof sessions. Defaults to dry-run."""
+
+    settings = get_settings()
+    effective_database_url = database_url or settings.database_url
+
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+    from zerg.services.provider_proof_repair import repair_provider_proof_session_environments
+
+    engine = make_engine(effective_database_url)
+    SessionLocal = make_sessionmaker(engine)
+    try:
+        with SessionLocal() as db:
+            try:
+                result = repair_provider_proof_session_environments(db, limit=limit, apply=apply)
+                if apply:
+                    db.commit()
+            except Exception:
+                db.rollback()
+                raise
+    finally:
+        engine.dispose()
+
+    payload = asdict(result)
+    payload["mode"] = "apply" if apply else "dry-run"
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    mode = "apply" if apply else "dry-run"
+    typer.echo(
+        "provider proof repair: "
+        f"mode={mode} scanned={result.scanned_sessions} repairable={result.repairable_sessions} "
+        f"updated={result.updated_sessions} cards={result.updated_timeline_cards} "
+        f"false_positives={result.skipped_false_positives}"
+    )
+
+
 @app.command("scan-orphan-tool-results")
 def scan_orphan_tool_results_command(
     database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override."),
@@ -716,7 +761,7 @@ def ensure_tool_result_repair_indexes_command(
     if json_output:
         typer.echo(json.dumps(payload, indent=2, sort_keys=True))
         return
-    typer.echo("tool-result repair indexes ready: " f"indexes={','.join(indexes)} elapsed_seconds={payload['elapsed_seconds']}")
+    typer.echo(f"tool-result repair indexes ready: indexes={','.join(indexes)} elapsed_seconds={payload['elapsed_seconds']}")
 
 
 @app.command("repair-orphan-tool-results")
