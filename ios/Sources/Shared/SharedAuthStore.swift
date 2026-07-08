@@ -7,9 +7,15 @@ struct SharedAuthDebugState: Sendable {
     let serverURL: String?
     let host: String?
     let cookieNames: [String]
+    let hasRuntimeToken: Bool
+    let hasNativeRefreshToken: Bool
 
     var cookieCount: Int {
         cookieNames.count
+    }
+
+    var hasCredentials: Bool {
+        cookieCount > 0 || hasRuntimeToken || hasNativeRefreshToken
     }
 }
 
@@ -23,6 +29,8 @@ enum SharedAuthStore {
     private static let cookieStoragePrefix = "managed_cookies."
     private static let runtimeTokenStoragePrefix = "runtime_tokens."
     private static let runtimeTokenExpiryPrefix = "runtime_token_expires_at."
+    private static let nativeRefreshTokenStoragePrefix = "native_refresh_tokens."
+    private static let nativeRefreshTokenExpiryPrefix = "native_refresh_token_expires_at."
     private static let keychainService = "ai.longhouse.shared-cookies"
 
     private static var defaults: UserDefaults? {
@@ -100,6 +108,19 @@ enum SharedAuthStore {
         saveRuntimeTokenExpiry(expiresAt, for: serverURL)
     }
 
+    static func saveHostedTokens(
+        runtimeToken: String,
+        runtimeExpiresAt: Date?,
+        refreshToken: String?,
+        refreshExpiresAt: Date?,
+        for serverURL: String
+    ) {
+        if let refreshToken {
+            saveNativeRefreshToken(refreshToken, expiresAt: refreshExpiresAt, for: serverURL)
+        }
+        saveRuntimeToken(runtimeToken, expiresAt: runtimeExpiresAt, for: serverURL)
+    }
+
     static func runtimeToken(for serverURL: String) -> String? {
         guard let data = loadKeychainData(account: runtimeTokenStorageKey(for: serverURL)),
               let token = String(data: data, encoding: .utf8)?
@@ -141,6 +162,58 @@ enum SharedAuthStore {
         deleteKeychainData(account: runtimeTokenStorageKey(for: serverURL))
         KeychainHelper.deleteAuthToken()
         saveRuntimeTokenExpiry(nil, for: serverURL)
+    }
+
+    static func saveNativeRefreshToken(_ token: String, expiresAt: Date? = nil, for serverURL: String) {
+        let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            clearNativeRefreshToken(for: serverURL)
+            return
+        }
+        guard let data = value.data(using: .utf8) else {
+            return
+        }
+        saveKeychainData(
+            data,
+            account: nativeRefreshTokenStorageKey(for: serverURL),
+            accessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        )
+        saveNativeRefreshTokenExpiry(expiresAt, for: serverURL)
+    }
+
+    static func nativeRefreshToken(for serverURL: String) -> String? {
+        guard let data = loadKeychainData(account: nativeRefreshTokenStorageKey(for: serverURL)),
+              let token = String(data: data, encoding: .utf8)?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else {
+            return nil
+        }
+        return token
+    }
+
+    static func hasNativeRefreshToken(for serverURL: String) -> Bool {
+        nativeRefreshToken(for: serverURL) != nil
+    }
+
+    static func nativeRefreshTokenExpiresAt(for serverURL: String) -> Date? {
+        let key = nativeRefreshTokenExpiryKey(for: serverURL)
+        let ts = defaults?.double(forKey: key) ?? 0
+        guard ts > 0 else { return nil }
+        return Date(timeIntervalSince1970: ts)
+    }
+
+    static func saveNativeRefreshTokenExpiry(_ expiresAt: Date?, for serverURL: String) {
+        let key = nativeRefreshTokenExpiryKey(for: serverURL)
+        if let expiresAt {
+            defaults?.set(expiresAt.timeIntervalSince1970, forKey: key)
+        } else {
+            defaults?.removeObject(forKey: key)
+        }
+    }
+
+    static func clearNativeRefreshToken(for serverURL: String) {
+        deleteKeychainData(account: nativeRefreshTokenStorageKey(for: serverURL))
+        saveNativeRefreshTokenExpiry(nil, for: serverURL)
     }
 
     static func setManagedCookies(_ cookies: [HTTPCookie], for serverURL: String) {
@@ -224,7 +297,9 @@ enum SharedAuthStore {
             containerPath: containerURL?.path,
             serverURL: resolvedServerURL,
             host: resolvedServerURL.flatMap(normalizedHost(for:)),
-            cookieNames: cookies.map(\.name).sorted()
+            cookieNames: cookies.map(\.name).sorted(),
+            hasRuntimeToken: resolvedServerURL.map(hasRuntimeToken(for:)) ?? false,
+            hasNativeRefreshToken: resolvedServerURL.map(hasNativeRefreshToken(for:)) ?? false
         )
     }
 
@@ -242,6 +317,14 @@ enum SharedAuthStore {
 
     private static func runtimeTokenExpiryKey(for serverURL: String) -> String {
         runtimeTokenExpiryPrefix + (normalizedHost(for: serverURL) ?? serverURL)
+    }
+
+    private static func nativeRefreshTokenStorageKey(for serverURL: String) -> String {
+        nativeRefreshTokenStoragePrefix + (normalizedHost(for: serverURL) ?? serverURL)
+    }
+
+    private static func nativeRefreshTokenExpiryKey(for serverURL: String) -> String {
+        nativeRefreshTokenExpiryPrefix + (normalizedHost(for: serverURL) ?? serverURL)
     }
 
     private static func cookieDictionary(from cookie: HTTPCookie) -> [String: Any]? {
@@ -286,12 +369,16 @@ enum SharedAuthStore {
         ]
     }
 
-    private static func saveKeychainData(_ data: Data, account: String) {
+    private static func saveKeychainData(
+        _ data: Data,
+        account: String,
+        accessible: CFString = kSecAttrAccessibleAfterFirstUnlock
+    ) {
         let query = keychainQuery(account: account)
         SecItemDelete(query as CFDictionary)
         var addQuery = query
         addQuery[kSecValueData as String] = data
-        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        addQuery[kSecAttrAccessible as String] = accessible
         SecItemAdd(addQuery as CFDictionary, nil)
     }
 

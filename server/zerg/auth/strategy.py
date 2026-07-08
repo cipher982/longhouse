@@ -350,6 +350,7 @@ class HostedCPAuthStrategy(AuthStrategy):
     def _resolve_claims_user(self, db: Session, claims: CPTokenClaims):
         from zerg.models.models import User
 
+        changed = False
         user = db.query(User).filter(User.cp_user_id == claims.cp_user_id).first()
         if user is None:
             existing = get_user_by_email(db, claims.email)
@@ -380,9 +381,16 @@ class HostedCPAuthStrategy(AuthStrategy):
                     skip_notification=True,
                 )
 
-            user.cp_user_id = claims.cp_user_id
-            user.provider = "control-plane"
-            user.provider_user_id = f"cp:{claims.cp_user_id}"
+            if user.cp_user_id != claims.cp_user_id:
+                user.cp_user_id = claims.cp_user_id
+                changed = True
+            if user.provider != "control-plane":
+                user.provider = "control-plane"
+                changed = True
+            provider_user_id = f"cp:{claims.cp_user_id}"
+            if user.provider_user_id != provider_user_id:
+                user.provider_user_id = provider_user_id
+                changed = True
 
         if user.email != claims.email:
             other = get_user_by_email(db, claims.email)
@@ -395,14 +403,28 @@ class HostedCPAuthStrategy(AuthStrategy):
                 )
             else:
                 user.email = claims.email
+                changed = True
 
-        user.display_name = claims.display_name or user.display_name
-        user.avatar_url = claims.avatar_url or user.avatar_url
-        user.email_verified = claims.email_verified
-        user.is_active = True
-        user.last_login = utc_now_naive()
-        db.commit()
-        db.refresh(user)
+        display_name = claims.display_name or user.display_name
+        if user.display_name != display_name:
+            user.display_name = display_name
+            changed = True
+        avatar_url = claims.avatar_url or user.avatar_url
+        if user.avatar_url != avatar_url:
+            user.avatar_url = avatar_url
+            changed = True
+        if user.email_verified != claims.email_verified:
+            user.email_verified = claims.email_verified
+            changed = True
+        if user.is_active is not True:
+            user.is_active = True
+            changed = True
+        if getattr(user, "last_login", None) is None:
+            user.last_login = utc_now_naive()
+            changed = True
+        if changed:
+            db.commit()
+            db.refresh(user)
         return user
 
     def _user_from_token(self, token: str, db: Session):

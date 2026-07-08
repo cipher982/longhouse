@@ -28,9 +28,13 @@ from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.models import User
 from zerg.routers.auth_sso import NativeHandoffRequest
+from zerg.routers.auth_sso import NativeRefreshRequest
+from zerg.routers.auth_sso import NativeRevokeRequest
 from zerg.routers.auth_sso import accept_handoff_request
 from zerg.routers.auth_sso import accept_native_handoff
+from zerg.routers.auth_sso import refresh_native_session
 from zerg.routers.auth_sso import refresh_runtime_token
+from zerg.routers.auth_sso import revoke_native_session
 
 
 @pytest.fixture()
@@ -75,6 +79,114 @@ def test_verified_cp_email_can_link_existing_hosted_user(monkeypatch, db_session
     assert resolved.cp_user_id == 123
     assert resolved.provider == "control-plane"
     assert resolved.email_verified is True
+
+
+def test_resolved_hosted_user_does_not_commit_when_claims_are_unchanged(monkeypatch, db_session):
+    monkeypatch.setenv("INSTANCE_ID", "david010")
+    strategy = HostedCPAuthStrategy()
+    user = User(
+        email="david010@example.com",
+        cp_user_id=123,
+        provider="control-plane",
+        provider_user_id="cp:123",
+        display_name="CP User",
+        avatar_url="https://example.com/avatar.png",
+        email_verified=True,
+        is_active=True,
+        last_login=datetime.now(timezone.utc),
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    commits = 0
+    original_commit = db_session.commit
+
+    def counting_commit():
+        nonlocal commits
+        commits += 1
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", counting_commit)
+
+    resolved = strategy._resolve_claims_user(  # noqa: SLF001
+        db_session,
+        _claims(cp_user_id=123, email="david010@example.com", email_verified=True),
+    )
+
+    assert resolved.id == user.id
+    assert resolved.avatar_url == "https://example.com/avatar.png"
+    assert commits == 0
+
+
+def test_verified_cp_email_link_commits_when_profile_fields_already_match(monkeypatch, db_session):
+    monkeypatch.setenv("INSTANCE_ID", "david010")
+    strategy = HostedCPAuthStrategy()
+    user = User(
+        email="david010@example.com",
+        display_name="CP User",
+        email_verified=True,
+        is_active=True,
+        last_login=datetime.now(timezone.utc),
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    commits = 0
+    original_commit = db_session.commit
+
+    def counting_commit():
+        nonlocal commits
+        commits += 1
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", counting_commit)
+
+    resolved = strategy._resolve_claims_user(  # noqa: SLF001
+        db_session,
+        _claims(cp_user_id=123, email="david010@example.com", email_verified=True),
+    )
+
+    assert resolved.id == user.id
+    assert resolved.cp_user_id == 123
+    assert resolved.provider == "control-plane"
+    assert resolved.provider_user_id == "cp:123"
+    assert commits == 1
+
+
+def test_cp_email_update_commits_when_profile_fields_already_match(monkeypatch, db_session):
+    monkeypatch.setenv("INSTANCE_ID", "david010")
+    strategy = HostedCPAuthStrategy()
+    user = User(
+        email="old@example.com",
+        cp_user_id=123,
+        provider="control-plane",
+        provider_user_id="cp:123",
+        display_name="CP User",
+        email_verified=True,
+        is_active=True,
+        last_login=datetime.now(timezone.utc),
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    commits = 0
+    original_commit = db_session.commit
+
+    def counting_commit():
+        nonlocal commits
+        commits += 1
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", counting_commit)
+
+    resolved = strategy._resolve_claims_user(  # noqa: SLF001
+        db_session,
+        _claims(cp_user_id=123, email="new@example.com", email_verified=True),
+    )
+
+    assert resolved.id == user.id
+    assert resolved.email == "new@example.com"
+    assert commits == 1
 
 
 def test_unverified_cp_email_cannot_link_existing_hosted_user(monkeypatch, db_session):
@@ -180,7 +292,7 @@ async def test_accept_handoff_allows_code_only_control_plane_open_instance(monke
 
     def exchange(**kwargs):
         calls.update(kwargs)
-        return ("cp.runtime.jwt", 3600)
+        return {"runtime_token": "cp.runtime.jwt", "expires_in": 3600}
 
     class Strategy:
         def validate_ws_token(self, token, db):
@@ -257,7 +369,13 @@ async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_sess
 
     def exchange(**kwargs):
         calls.update(kwargs)
-        return ("cp.runtime.jwt", 3600)
+        return {
+            "runtime_token": "cp.runtime.jwt",
+            "expires_in": 3600,
+            "refresh_token": "lhr_refresh",
+            "refresh_token_expires_at": "2027-01-01T00:00:00+00:00",
+            "device_session_id": "nds_session",
+        }
 
     class Strategy:
         def validate_ws_token(self, token, db):
@@ -274,7 +392,13 @@ async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_sess
 
     result = await accept_native_handoff(NativeHandoffRequest(code="one-use-code", tenant_state="verifier"), db_session)
 
-    assert result == {"runtime_token": "cp.runtime.jwt", "expires_in": 3600}
+    assert result == {
+        "runtime_token": "cp.runtime.jwt",
+        "expires_in": 3600,
+        "refresh_token": "lhr_refresh",
+        "refresh_token_expires_at": "2027-01-01T00:00:00+00:00",
+        "device_session_id": "nds_session",
+    }
     assert calls == {
         "control_plane_url": "https://control.longhouse.ai",
         "internal_api_secret": "secret",
@@ -306,7 +430,13 @@ async def test_refresh_runtime_token_proxies_bearer_to_cp(monkeypatch):
     class FakeResponse:
         status_code = 200
         def json(self):
-            return {"runtime_token": "cp.fresh.jwt", "expires_in": 3600}
+            return {
+                "runtime_token": "cp.fresh.jwt",
+                "expires_in": 3600,
+                "refresh_token": "lhr_refresh",
+                "refresh_token_expires_at": "2027-01-01T00:00:00+00:00",
+                "device_session_id": "nds_session",
+            }
 
     def fake_post(url, headers, timeout):
         captured["url"] = url
@@ -322,7 +452,13 @@ async def test_refresh_runtime_token_proxies_bearer_to_cp(monkeypatch):
 
     result = await refresh_runtime_token(_refresh_request(auth_header="Bearer cp.current.jwt"))
 
-    assert result == {"runtime_token": "cp.fresh.jwt", "expires_in": 3600}
+    assert result == {
+        "runtime_token": "cp.fresh.jwt",
+        "expires_in": 3600,
+        "refresh_token": "lhr_refresh",
+        "refresh_token_expires_at": "2027-01-01T00:00:00+00:00",
+        "device_session_id": "nds_session",
+    }
     assert captured["url"] == "https://control.longhouse.ai/api/identity/refresh-runtime-token"
     assert captured["headers"] == {"Authorization": "Bearer cp.current.jwt"}
     assert captured["timeout"] == 10.0
@@ -395,3 +531,167 @@ async def test_refresh_runtime_token_returns_502_on_cp_network_error(monkeypatch
     with pytest.raises(HTTPException) as exc:
         await refresh_runtime_token(_refresh_request(auth_header="Bearer cp.jwt"))
     assert exc.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_refresh_native_session_proxies_refresh_token_to_cp(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return {
+                "runtime_token": "cp.fresh.jwt",
+                "expires_in": 3600,
+                "refresh_token": "lhr_next",
+                "refresh_token_expires_at": "2027-01-01T00:00:00+00:00",
+                "device_session_id": "nds_session",
+            }
+
+    def fake_post(url, headers, json, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
+
+    result = await refresh_native_session(NativeRefreshRequest(refresh_token="lhr_current"))
+
+    assert result == {
+        "runtime_token": "cp.fresh.jwt",
+        "expires_in": 3600,
+        "refresh_token": "lhr_next",
+        "refresh_token_expires_at": "2027-01-01T00:00:00+00:00",
+        "device_session_id": "nds_session",
+    }
+    assert captured["url"] == "https://control.longhouse.ai/api/identity/refresh-native-session"
+    assert captured["headers"] == {"X-Internal-Token": "secret"}
+    assert captured["json"] == {"refresh_token": "lhr_current", "tenant": "david010"}
+    assert captured["timeout"] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_refresh_native_session_propagates_cp_rejection(monkeypatch):
+    class FakeResponse:
+        status_code = 401
+        def json(self):
+            return {"detail": "revoked"}
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
+
+    with pytest.raises(HTTPException) as exc:
+        await refresh_native_session(NativeRefreshRequest(refresh_token="lhr_revoked"))
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_refresh_native_session_returns_502_on_cp_network_error(monkeypatch):
+    def fake_post(*a, **k):
+        raise httpx.HTTPError("connection refused")
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
+
+    with pytest.raises(HTTPException) as exc:
+        await refresh_native_session(NativeRefreshRequest(refresh_token="lhr_current"))
+    assert exc.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_refresh_native_session_rejects_missing_token(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await refresh_native_session(NativeRefreshRequest(refresh_token=" "))
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_revoke_native_session_proxies_to_cp(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+    def fake_post(url, headers, json, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
+
+    result = await revoke_native_session(NativeRevokeRequest(refresh_token="lhr_current"))
+
+    assert result == {"status": "ok"}
+    assert captured["url"] == "https://control.longhouse.ai/api/identity/revoke-native-session"
+    assert captured["headers"] == {"X-Internal-Token": "secret"}
+    assert captured["json"] == {"refresh_token": "lhr_current"}
+    assert captured["timeout"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_revoke_native_session_ignores_empty_token(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+
+    result = await revoke_native_session(NativeRevokeRequest(refresh_token=" "))
+
+    assert result == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_revoke_native_session_treats_cp_rejection_as_idempotent(monkeypatch):
+    class FakeResponse:
+        status_code = 500
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
+
+    result = await revoke_native_session(NativeRevokeRequest(refresh_token="lhr_current"))
+
+    assert result == {"status": "ok"}
+
+
+@pytest.mark.asyncio
+async def test_revoke_native_session_treats_cp_network_error_as_idempotent(monkeypatch):
+    def fake_post(*a, **k):
+        raise httpx.HTTPError("connection refused")
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
+
+    result = await revoke_native_session(NativeRevokeRequest(refresh_token="lhr_current"))
+
+    assert result == {"status": "ok"}

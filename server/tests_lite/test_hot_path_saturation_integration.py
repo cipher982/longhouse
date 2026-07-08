@@ -120,6 +120,19 @@ class _StubRegistry(MachineControlChannelRegistry):
             },
         )
 
+    async def send_command_nowait(self, **kwargs):  # type: ignore[override]
+        self.sent.append(kwargs)
+        return MachineControlCommandResponse(
+            transport_ok=True,
+            message={
+                "type": "command",
+                "command_id": kwargs.get("command_id"),
+                "command_type": kwargs.get("command_type"),
+                "session_id": kwargs.get("session_id", ""),
+                "payload": kwargs.get("payload") or {},
+            },
+        )
+
 
 async def _wait_until(predicate, *, timeout: float = 1.0) -> None:
     deadline = asyncio.get_running_loop().time() + timeout
@@ -457,7 +470,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
                 ),
                 timeout=ROUTE_TIMEOUT_SECONDS,
         )
-        assert launch.launch_state == "live"
+        assert launch.launch_state == "launching_unknown"
         assert len(registry.sent) == 1
         with live_factory() as live_db:
             readiness = (
@@ -465,7 +478,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
                 .filter(LiveLaunchReadiness.session_id == str(launch.session_id))
                 .one()
             )
-            assert readiness.state == "adopted"
+            assert readiness.state == "dispatched"
             assert readiness.device_id == "cinder"
             assert readiness.provider == "codex"
 

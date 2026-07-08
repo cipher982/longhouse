@@ -35,6 +35,7 @@ from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveArchiveOutbox
+from zerg.models.live_store import LiveLaunchReadiness
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.agents.kernel_writes import ensure_open_run_for_session
 from zerg.services.agents.kernel_writes import ensure_primary_thread
@@ -134,6 +135,19 @@ class RemoteLaunchResult:
     launch_error_message: str | None = None
 
 
+@dataclass(frozen=True)
+class RemoteLaunchShell:
+    session: AgentSession
+    launch_attempt: SessionLaunchAttempt
+    one_shot_run: SessionRun | None
+    session_uuid: UUID
+    command_id: str
+    project: str
+    display_name: str
+    started_at: datetime
+    lease_until: datetime
+
+
 def _verify_device_owned_by(db: Session, *, owner_id: int, device_id: str) -> None:
     """Require that ``device_id`` has a non-revoked device token for ``owner_id``."""
     q = (
@@ -170,6 +184,107 @@ def _launch_result_for_attempt(attempt: SessionLaunchAttempt) -> RemoteLaunchRes
         execution_lifetime=lifecycle.execution_lifetime,
         launch_error_code=lifecycle.error_code,
         launch_error_message=lifecycle.error_message,
+    )
+
+
+def _find_existing_launch_attempt(
+    db: Session,
+    *,
+    owner_id: int,
+    device_id: str,
+    provider: str,
+    client_request_id: str | None,
+) -> SessionLaunchAttempt | None:
+    if not client_request_id:
+        return None
+    return (
+        db.query(SessionLaunchAttempt)
+        .join(AgentSession, AgentSession.id == SessionLaunchAttempt.session_id)
+        .filter(SessionLaunchAttempt.client_request_id == client_request_id)
+        .filter(SessionLaunchAttempt.owner_id == owner_id)
+        .filter(SessionLaunchAttempt.host_id == device_id)
+        .filter(SessionLaunchAttempt.provider == provider)
+        .filter(AgentSession.device_id == device_id)
+        .filter(AgentSession.provider == provider)
+        .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
+        .first()
+    )
+
+
+def _create_remote_launch_shell(
+    db: Session,
+    *,
+    params: RemoteLaunchParams,
+    provider: str,
+    execution_lifetime: RemoteExecutionLifetime,
+    device_id: str,
+    cwd: str,
+    machine_name: str | None,
+    client_request_id: str | None,
+) -> RemoteLaunchShell:
+    session_uuid = uuid4()
+    command_id = f"launch-{session_uuid}"
+    project = _project_for(cwd, params.project)
+    display_name = (params.display_name or project).strip() or project
+    now = datetime.now(timezone.utc)
+    lease_until = now + timedelta(seconds=LAUNCH_LEASE_SECS)
+
+    session = AgentSession(
+        id=session_uuid,
+        provider=provider,
+        environment="development",
+        project=project,
+        device_id=device_id,
+        device_name=machine_name or device_id,
+        cwd=cwd,
+        git_repo=params.git_repo,
+        git_branch=params.git_branch,
+        started_at=now,
+        ended_at=None,
+        user_messages=0,
+        assistant_messages=0,
+        tool_calls=0,
+        loop_mode=SessionLoopMode.ASSIST.value,
+    )
+    db.add(session)
+    db.flush()
+
+    primary_thread = ensure_primary_thread(db, session)
+    launch_attempt = record_launch_attempt(
+        db,
+        session=session,
+        thread=primary_thread,
+        provider=provider,
+        host_id=device_id,
+        owner_id=params.owner_id,
+        execution_lifetime=execution_lifetime,
+        client_request_id=client_request_id,
+        command_id=command_id,
+        state="pending",
+        expires_at=lease_until,
+    )
+    one_shot_run: SessionRun | None = None
+    if execution_lifetime == "one_shot":
+        one_shot_run = record_run(
+            db,
+            thread=primary_thread,
+            provider=provider,
+            host_id=device_id,
+            cwd=cwd,
+            launch_origin="longhouse_spawned",
+        )
+        launch_attempt.run_id = one_shot_run.id
+
+    return RemoteLaunchShell(
+        session=session,
+        launch_attempt=launch_attempt,
+        one_shot_run=one_shot_run,
+        session_uuid=session_uuid,
+        command_id=command_id,
+        project=project,
+        display_name=display_name,
+        started_at=now,
+        lease_until=lease_until,
     )
 
 
@@ -581,59 +696,54 @@ async def _launch_remote_session_hot(
     client_request_id: str | None,
     machine_name: str | None,
 ) -> RemoteLaunchResult:
-    if client_request_id:
-        existing = await _read_live_launch_idempotency(
-            owner_id=params.owner_id,
-            device_id=device_id,
-            provider=provider,
-            client_request_id=client_request_id,
-        )
-        if existing is not None:
-            return _remote_launch_result_from_live_view(existing)
+    shell = _create_remote_launch_shell(
+        db,
+        params=params,
+        provider=provider,
+        execution_lifetime=execution_lifetime,
+        device_id=device_id,
+        cwd=cwd,
+        machine_name=machine_name,
+        client_request_id=client_request_id,
+    )
+    db.commit()
+    db.refresh(shell.session)
 
-    session_uuid = uuid4()
-    run_uuid = uuid4() if execution_lifetime == "one_shot" else None
-    command_id = f"launch-{session_uuid}"
-    project = _project_for(cwd, params.project)
-    display_name = (params.display_name or project).strip() or project
-    now = datetime.now(timezone.utc)
-    lease_until = now + timedelta(seconds=LAUNCH_LEASE_SECS)
     launch_payload = _build_remote_launch_live_payload(
-        session_uuid=session_uuid,
-        run_uuid=run_uuid,
+        session_uuid=shell.session_uuid,
+        run_uuid=shell.one_shot_run.id if shell.one_shot_run is not None else None,
         params=params,
         provider=provider,
         device_id=device_id,
         cwd=cwd,
         execution_lifetime=execution_lifetime,
-        command_id=command_id,
-        project=project,
-        display_name=display_name,
+        command_id=shell.command_id,
+        project=shell.project,
+        display_name=shell.display_name,
         machine_id=machine_name,
-        started_at=now,
-        expires_at=lease_until,
+        started_at=shell.started_at,
+        expires_at=shell.lease_until,
     )
 
-    await _execute_live_launch_write(
+    await _write_live_launch_readiness(
         lambda live_db: (
             upsert_live_launch_readiness(
                 live_db,
-                session_id=session_uuid,
+                session_id=shell.session_uuid,
                 owner_id=params.owner_id,
                 device_id=device_id,
                 provider=provider,
                 execution_lifetime=execution_lifetime,
                 state="pending",
-                command_id=command_id,
+                command_id=shell.command_id,
                 client_request_id=client_request_id,
                 machine_id=machine_name or device_id,
-                project=project,
-                expires_at=lease_until,
-                now=now,
+                project=shell.project,
+                expires_at=shell.lease_until,
+                now=shell.started_at,
             ),
             enqueue_remote_launch_outbox(live_db, launch=launch_payload),
-        ),
-        label="remote-launch-intent",
+        )
     )
 
     payload = {
@@ -642,109 +752,79 @@ async def _launch_remote_session_hot(
         "execution_lifetime": execution_lifetime,
         "git_repo": params.git_repo,
         "git_branch": params.git_branch,
-        "project": project,
-        "display_name": display_name,
+        "project": shell.project,
+        "display_name": shell.display_name,
     }
     if execution_lifetime == "one_shot":
         payload["initial_prompt"] = initial_prompt
-        payload["run_id"] = str(run_uuid)
-    response: MachineControlCommandResponse = await registry.send_command(
+        if shell.one_shot_run is not None:
+            payload["run_id"] = str(shell.one_shot_run.id)
+    response: MachineControlCommandResponse = await registry.send_command_nowait(
         owner_id=params.owner_id,
         device_id=device_id,
-        session_id=str(session_uuid),
+        session_id=str(shell.session_uuid),
         command_type="session.run_once" if execution_lifetime == "one_shot" else "session.launch",
         payload=payload,
-        timeout_secs=LAUNCH_COMMAND_TIMEOUT_SECS,
-        command_id=command_id,
+        command_id=shell.command_id,
     )
 
     if not response.transport_ok:
         error_message = response.error or "control channel transport failed"
-        outcome = {"state": "dispatched", "error_message": error_message}
+        shell.session.ended_at = datetime.now(timezone.utc)
+        if execution_lifetime == "one_shot":
+            _mark_one_shot_launch_run_failed(db, attempt=shell.launch_attempt, error_code="machine_offline")
+        update_launch_attempt(
+            db,
+            shell.launch_attempt,
+            state="failed",
+            error_code="machine_offline",
+            error_message=error_message,
+            clear_expires=True,
+        )
+        db.commit()
+        outcome = {"state": "failed", "error_code": "machine_offline", "error_message": error_message}
         await _write_live_launch_readiness(
             lambda live_db: (
                 update_live_launch_readiness_state(
                     live_db,
-                    session_id=session_uuid,
-                    state="dispatched",
+                    session_id=shell.session_uuid,
+                    state="failed",
+                    error_code="machine_offline",
                     error_message=error_message,
-                ),
-                enqueue_remote_launch_outcome_outbox(live_db, launch=launch_payload, outcome=outcome),
-            )
-        )
-        return RemoteLaunchResult(
-            session_id=session_uuid,
-            launch_state="launching_unknown",
-            execution_lifetime=execution_lifetime,
-        )
-
-    message = response.message or {}
-    if message.get("ok"):
-        outcome = {
-            "state": "adopted",
-            "pid": _result_pid(message),
-            "argv": _result_argv(message),
-            "provider_thread_id": _result_resume_thread_id(message),
-            "thread_path": _result_resume_thread_path(message),
-            "external_name": machine_name or device_id,
-        }
-        await _write_live_launch_readiness(
-            lambda live_db: (
-                update_live_launch_readiness_state(
-                    live_db,
-                    session_id=session_uuid,
-                    state="adopted",
                     clear_expires=True,
                 ),
                 enqueue_remote_launch_outcome_outbox(live_db, launch=launch_payload, outcome=outcome),
             )
         )
-        elapsed_ms = int((datetime.now(timezone.utc) - now).total_seconds() * 1000)
-        logger.info(
-            "remote_launch session=%s device=%s provider=%s lifetime=%s state=live duration_ms=%s",
-            session_uuid,
-            device_id,
-            provider,
-            execution_lifetime,
-            elapsed_ms,
-        )
-        return RemoteLaunchResult(
-            session_id=session_uuid,
-            launch_state="live",
-            execution_lifetime=execution_lifetime,
-        )
+        return _launch_result_for_attempt(shell.launch_attempt)
 
-    error = message.get("error") or {}
-    code = normalize_remote_launch_error_code(error.get("code"))
-    err_msg = str(error.get("message") or "unknown error")
-    outcome = {"state": "failed", "error_code": code, "error_message": err_msg}
+    update_launch_attempt(
+        db,
+        shell.launch_attempt,
+        state="dispatched",
+    )
+    db.commit()
+    outcome = {"state": "dispatched"}
     await _write_live_launch_readiness(
         lambda live_db: (
             update_live_launch_readiness_state(
                 live_db,
-                session_id=session_uuid,
-                state="failed",
-                error_code=code,
-                error_message=err_msg,
-                clear_expires=True,
+                session_id=shell.session_uuid,
+                state="dispatched",
             ),
             enqueue_remote_launch_outcome_outbox(live_db, launch=launch_payload, outcome=outcome),
         )
     )
-    logger.warning(
-        "remote_launch session=%s device=%s provider=%s state=launch_failed code=%s",
-        session_uuid,
+    elapsed_ms = int((datetime.now(timezone.utc) - shell.started_at).total_seconds() * 1000)
+    logger.info(
+        "remote_launch session=%s device=%s provider=%s lifetime=%s state=dispatched duration_ms=%s",
+        shell.session_uuid,
         device_id,
         provider,
-        code,
+        execution_lifetime,
+        elapsed_ms,
     )
-    return RemoteLaunchResult(
-        session_id=session_uuid,
-        launch_state="launch_failed",
-        execution_lifetime=execution_lifetime,
-        launch_error_code=code,
-        launch_error_message=err_msg,
-    )
+    return _launch_result_for_attempt(shell.launch_attempt)
 
 
 def _remote_continue_outbox_key(*, session_id: UUID, client_request_id: str) -> str:
@@ -1032,21 +1112,15 @@ async def launch_remote_session(
     _verify_device_owned_by(db, owner_id=params.owner_id, device_id=device_id)
 
     client_request_id = (params.client_request_id or "").strip() or None
-    if client_request_id and not database_module.live_store_configured():
-        existing = (
-            db.query(SessionLaunchAttempt)
-            .join(AgentSession, AgentSession.id == SessionLaunchAttempt.session_id)
-            .filter(SessionLaunchAttempt.client_request_id == client_request_id)
-            .filter(SessionLaunchAttempt.owner_id == params.owner_id)
-            .filter(SessionLaunchAttempt.host_id == device_id)
-            .filter(SessionLaunchAttempt.provider == provider)
-            .filter(AgentSession.device_id == device_id)
-            .filter(AgentSession.provider == provider)
-            .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
-            .first()
-        )
-        if existing is not None:
-            return _launch_result_for_attempt(existing)
+    existing = _find_existing_launch_attempt(
+        db,
+        owner_id=params.owner_id,
+        device_id=device_id,
+        provider=provider,
+        client_request_id=client_request_id,
+    )
+    if existing is not None:
+        return _launch_result_for_attempt(existing)
 
     reg = registry or get_machine_control_channel_registry()
     info = reg.info(owner_id=params.owner_id, device_id=device_id)
@@ -1562,15 +1636,7 @@ async def continue_remote_session(
 
 
 def _reconcile_live_launch_from_command_result(message: dict, *, command_id: str) -> bool:
-    if not command_id.startswith("launch-") or not database_module.live_store_configured():
-        return False
-    session_id_text = command_id.removeprefix("launch-")
-    try:
-        session_uuid = UUID(session_id_text)
-    except ValueError:
-        return False
-    reported_session_id = str(message.get("session_id") or "").strip()
-    if reported_session_id and reported_session_id != str(session_uuid):
+    if not (command_id.startswith("launch-") or command_id.startswith("continue-")) or not database_module.live_store_configured():
         return False
 
     live_session_factory = database_module.get_live_write_session_factory()
@@ -1578,13 +1644,36 @@ def _reconcile_live_launch_from_command_result(message: dict, *, command_id: str
         return False
 
     def _write(live_db: Session) -> bool:
-        outbox = (
-            live_db.query(LiveArchiveOutbox)
-            .filter(LiveArchiveOutbox.kind == REMOTE_LAUNCH_KIND)
-            .filter(LiveArchiveOutbox.idempotency_key == remote_launch_idempotency_key(session_id=session_uuid))
-            .order_by(LiveArchiveOutbox.id.desc())
-            .first()
-        )
+        session_uuid: UUID | None = None
+        client_request_id: str | None = None
+        readiness = live_db.query(LiveLaunchReadiness).filter(LiveLaunchReadiness.command_id == command_id).first()
+        if readiness is not None:
+            try:
+                session_uuid = UUID(str(readiness.session_id))
+            except ValueError:
+                return False
+            client_request_id = (readiness.client_request_id or "").strip() or None
+        elif command_id.startswith("launch-"):
+            try:
+                session_uuid = UUID(command_id.removeprefix("launch-"))
+            except ValueError:
+                return False
+        else:
+            return False
+
+        reported_session_id = str(message.get("session_id") or "").strip()
+        if reported_session_id and reported_session_id != str(session_uuid):
+            return False
+
+        outbox_query = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == REMOTE_LAUNCH_KIND)
+        if command_id.startswith("continue-") and client_request_id:
+            outbox_query = outbox_query.filter(
+                LiveArchiveOutbox.idempotency_key
+                == _remote_continue_outbox_key(session_id=session_uuid, client_request_id=client_request_id)
+            )
+        else:
+            outbox_query = outbox_query.filter(LiveArchiveOutbox.idempotency_key == remote_launch_idempotency_key(session_id=session_uuid))
+        outbox = outbox_query.order_by(LiveArchiveOutbox.id.desc()).first()
         if outbox is None:
             return False
         payload = json.loads(outbox.payload_json or "{}")
