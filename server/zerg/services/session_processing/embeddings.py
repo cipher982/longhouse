@@ -240,13 +240,17 @@ def _event_sort_key(event: Mapping[str, object]) -> tuple[datetime, int]:
     return ts, int(event.get("id") or 0)
 
 
-def iter_clean_transcript_events(events: list[Mapping[str, object]]) -> Iterator[CleanTranscriptEvent]:
+def iter_clean_transcript_events(
+    events: list[Mapping[str, object]],
+    *,
+    include_tool_calls: bool = False,
+) -> Iterator[CleanTranscriptEvent]:
     """Yield content-bearing events in the clean index space used by turn embeddings."""
     ordered = sorted(events, key=_event_sort_key)
     message_index = 0
 
     for event in ordered:
-        content = _extract_content(event, include_tool_calls=False, tool_output_max_chars=500)
+        content = _extract_content(event, include_tool_calls=include_tool_calls, tool_output_max_chars=500)
         if content is None:
             continue
         content = redact_secrets(strip_noise(content))

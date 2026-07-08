@@ -178,7 +178,7 @@ CREATE VIRTUAL TABLE recall_chunks_fts USING fts5(
   cwd,
   git_repo,
   git_branch,
-  tokenize='unicode61 tokenchars ''._/-:''
+  tokenize='unicode61 tokenchars ''_/-:''
 );
 ```
 
@@ -187,8 +187,11 @@ serving path should only index child evidence rows. This keeps ranking sharp and
 lets hydration fetch a larger parent trace after ranking.
 
 Do not use Porter stemming for coding-agent recall. Agents search file paths,
-snake_case symbols, flags, branch names, and exact error strings. Tokenizer tests
-must cover:
+snake_case symbols, flags, branch names, and exact error strings. Do not include
+`.` as a token character: it preserves file extensions, but it also makes normal
+sentence punctuation part of prose tokens. Path queries still work as quoted FTS
+phrases and through deterministic `file:` structured text. Tokenizer tests must
+cover:
 
 - `server/zerg/routers/agents_search.py`;
 - `--no-verify`;

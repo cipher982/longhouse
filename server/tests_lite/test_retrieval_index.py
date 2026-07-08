@@ -1,3 +1,7 @@
+from datetime import datetime
+from datetime import timezone
+from types import SimpleNamespace
+
 import sqlite3
 
 from sqlalchemy import inspect
@@ -8,6 +12,7 @@ from zerg.services.retrieval_index import RetrievalChunk
 from zerg.services.retrieval_index import check_fts_integrity
 from zerg.services.retrieval_index import connect_retrieval_db
 from zerg.services.retrieval_index import initialize_retrieval_db
+from zerg.services.retrieval_index import project_session_chunks
 from zerg.services.retrieval_index import rebuild_fts
 from zerg.services.retrieval_index import replace_session_chunks
 from zerg.services.retrieval_index import resolve_retrieval_db_path
@@ -56,6 +61,24 @@ def _chunk(
     )
 
 
+def _session(**overrides):
+    values = {
+        "id": "session-1",
+        "provider": "codex",
+        "environment": "test",
+        "project": "longhouse",
+        "device_id": "device-1",
+        "cwd": "/Users/davidrose/git/zerg/longhouse",
+        "git_repo": "cipher982/longhouse",
+        "git_branch": "feature/recall-index",
+        "started_at": datetime(2026, 7, 8, tzinfo=timezone.utc),
+        "last_activity_at": datetime(2026, 7, 8, 0, 1, tzinfo=timezone.utc),
+        "transcript_revision": 7,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 def test_retrieval_db_initializes_separately_from_main_db(tmp_path):
     main_path = tmp_path / "longhouse.db"
     main_url = f"sqlite:///{main_path}"
@@ -80,6 +103,69 @@ def test_retrieval_db_initializes_separately_from_main_db(tmp_path):
     assert "recall_chunks" in tables
     assert "recall_chunks_fts" in tables
     assert "recall_index_state" in tables
+
+
+def test_project_session_chunks_creates_parent_and_child_evidence():
+    chunks = project_session_chunks(
+        _session(),
+        [
+            {
+                "id": 1,
+                "role": "user",
+                "content_text": "Find the recall timeout in server/zerg/routers/agents_search.py",
+            },
+            {
+                "id": 2,
+                "role": "tool",
+                "tool_name": "exec_command",
+                "tool_output_text": "OperationalError while scanning source_lines",
+            },
+            {
+                "id": 3,
+                "role": "assistant",
+                "content_text": "The issue is the full turn embedding matrix load.",
+            },
+        ],
+    )
+
+    kinds = [chunk.chunk_kind for chunk in chunks]
+    assert kinds == ["trace_parent", "intent", "assistant_conclusion", "tool_result"]
+    parent = chunks[0]
+    assert parent.retrieval_role == "parent"
+    assert parent.event_index_start == 0
+    assert parent.event_index_end == 2
+    assert parent.first_event_id == 1
+    assert parent.last_event_id == 3
+
+    children = chunks[1:]
+    assert all(chunk.retrieval_role == "child" for chunk in children)
+    assert {chunk.parent_chunk_uid for chunk in children} == {parent.chunk_uid}
+    assert children[0].intent_text
+    assert children[1].evidence_text
+    assert "file:server/zerg/routers/agents_search.py" in (children[0].structured_text or "")
+    assert "tool:exec_command" in (children[2].structured_text or "")
+    assert "error:OperationalError" in (children[2].structured_text or "")
+    assert children[0].transcript_revision == 7
+    assert children[0].git_branch == "feature/recall-index"
+
+
+def test_projected_chunks_round_trip_into_search_index(tmp_path):
+    session = _session()
+    chunks = project_session_chunks(
+        session,
+        [
+            {"id": 1, "role": "user", "content_text": "Need launchctl dogfood refresh command"},
+            {"id": 2, "role": "assistant", "content_text": "Run make dogfood-refresh then launchctl kickstart."},
+        ],
+    )
+
+    with _open_index(tmp_path) as conn:
+        replace_session_chunks(conn, session.id, chunks)
+
+        hits = search_lexical_chunks(conn, "kickstart", limit=2)
+        assert [hit.chunk_kind for hit in hits] == ["assistant_conclusion"]
+        assert hits[0].parent_chunk_id is not None
+        assert hits[0].first_event_id == 2
 
 
 def test_child_chunks_are_searchable_but_parent_rows_are_not_primary_hits(tmp_path):
@@ -138,7 +224,8 @@ def test_fts_tokenizer_preserves_code_shaped_terms(tmp_path):
         conn.execute("CREATE VIRTUAL TABLE recall_chunks_vocab USING fts5vocab(recall_chunks_fts, 'row')")
         terms = {row[0] for row in conn.execute("SELECT term FROM recall_chunks_vocab")}
 
-        assert "server/zerg/routers/agents_search.py" in terms
+        assert "server/zerg/routers/agents_search" in terms
+        assert "py" in terms
         assert "--no-verify" in terms
         assert "source_lines" in terms
         assert "feature/recall-index" in terms

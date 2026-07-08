@@ -7,6 +7,7 @@ import json
 import os
 import re
 import sqlite3
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -14,7 +15,13 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
+from zerg.services.session_processing.embeddings import CleanTranscriptEvent
+from zerg.services.session_processing.embeddings import iter_clean_transcript_events
+from zerg.services.session_processing.tokens import truncate
+
 SCHEMA_VERSION = 1
+CHILD_TOKEN_BUDGET = 500
+PARENT_TOKEN_BUDGET = 2500
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,12 @@ class RetrievalHit:
     intent_text: str | None
     evidence_text: str | None
     structured_text: str | None
+
+
+@dataclass(frozen=True)
+class _Trace:
+    index: int
+    events: list[CleanTranscriptEvent]
 
 
 def _strip_env_quotes(value: str) -> str:
@@ -191,7 +204,7 @@ def initialize_retrieval_db(conn: sqlite3.Connection) -> None:
           cwd,
           git_repo,
           git_branch,
-          tokenize='unicode61 tokenchars ''._/-:'''
+          tokenize='unicode61 tokenchars ''_/-:'''
         );
 
         CREATE TABLE IF NOT EXISTS recall_index_state (
@@ -234,6 +247,209 @@ def _content_hash(text: str) -> str:
 
 def _token_count(text: str) -> int:
     return max(1, len(text) // 3) if text else 0
+
+
+def _bounded_text(text: str, token_budget: int) -> str:
+    bounded, _, _was_truncated = truncate(text, token_budget, strategy="head")
+    return bounded.strip()
+
+
+def _row_value(row: object, key: str) -> object:
+    if isinstance(row, Mapping):
+        return row.get(key)
+    return getattr(row, key, None)
+
+
+def _event_to_mapping(event: object) -> dict[str, object]:
+    if isinstance(event, Mapping):
+        return dict(event)
+    return {
+        "id": _row_value(event, "id"),
+        "role": _row_value(event, "role"),
+        "content_text": _row_value(event, "content_text"),
+        "tool_output_text": _row_value(event, "tool_output_text"),
+        "tool_name": _row_value(event, "tool_name"),
+        "timestamp": _row_value(event, "timestamp"),
+    }
+
+
+def _session_value(session: object, key: str) -> object:
+    return _row_value(session, key)
+
+
+def _datetime_to_iso(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).isoformat()
+    return str(value)
+
+
+def _metadata_kwargs(session: object) -> dict[str, str | None]:
+    return {
+        "provider": _as_str(_session_value(session, "provider")),
+        "project": _as_str(_session_value(session, "project")),
+        "environment": _as_str(_session_value(session, "environment")),
+        "device_id": _as_str(_session_value(session, "device_id")),
+        "cwd": _as_str(_session_value(session, "cwd")),
+        "git_repo": _as_str(_session_value(session, "git_repo")),
+        "git_branch": _as_str(_session_value(session, "git_branch")),
+        "started_at": _datetime_to_iso(_session_value(session, "started_at")),
+        "last_activity_at": _datetime_to_iso(_session_value(session, "last_activity_at")),
+    }
+
+
+def _as_str(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _format_event(event: CleanTranscriptEvent) -> str:
+    label = event.role
+    if event.tool_name:
+        label = f"{label}:{event.tool_name}"
+    return f"{label}: {event.content}"
+
+
+def _iter_traces(clean_events: list[CleanTranscriptEvent]) -> Iterable[_Trace]:
+    current: list[CleanTranscriptEvent] = []
+    trace_index = 0
+    for event in clean_events:
+        if event.role == "user" and current:
+            yield _Trace(index=trace_index, events=current)
+            trace_index += 1
+            current = [event]
+            continue
+        current.append(event)
+    if current:
+        yield _Trace(index=trace_index, events=current)
+
+
+def _trace_text(events: list[CleanTranscriptEvent]) -> str:
+    return "\n".join(_format_event(event) for event in events)
+
+
+def _structured_text(*, session: object, events: list[CleanTranscriptEvent]) -> str | None:
+    tokens: list[str] = []
+    cwd = _as_str(_session_value(session, "cwd"))
+    branch = _as_str(_session_value(session, "git_branch"))
+    repo = _as_str(_session_value(session, "git_repo"))
+    if cwd:
+        tokens.append(f"cwd:{cwd}")
+    if repo:
+        tokens.append(f"repo:{repo}")
+    if branch:
+        tokens.append(f"branch:{branch}")
+    for event in events:
+        if event.tool_name:
+            tokens.append(f"tool:{event.tool_name}")
+        for path in _extract_path_tokens(event.content):
+            tokens.append(f"file:{path}")
+        for error_name in _extract_error_tokens(event.content):
+            tokens.append(f"error:{error_name}")
+    deduped = list(dict.fromkeys(tokens))
+    return " ".join(deduped) if deduped else None
+
+
+def _extract_path_tokens(text: str) -> list[str]:
+    return re.findall(r"(?:[\w.-]+/)+[\w./-]+\b", text)
+
+
+def _extract_error_tokens(text: str) -> list[str]:
+    return re.findall(r"\b[A-Z][A-Za-z0-9_]*(?:Error|Exception)\b", text)
+
+
+def _chunk_uid(session_id: str, revision: int, chunk_index: int, kind: str, content: str) -> str:
+    return f"{session_id}:{revision}:{chunk_index}:{kind}:{_content_hash(content)[:16]}"
+
+
+def project_session_chunks(
+    session: object,
+    events: list[object],
+    *,
+    transcript_revision: int | None = None,
+) -> list[RetrievalChunk]:
+    """Project durable transcript events into parent/child recall chunks."""
+
+    session_id = str(_session_value(session, "id") or "")
+    if not session_id:
+        raise ValueError("session.id is required to project retrieval chunks")
+    revision = int(transcript_revision or _session_value(session, "transcript_revision") or 0)
+    clean_events = list(iter_clean_transcript_events([_event_to_mapping(event) for event in events], include_tool_calls=True))
+    if not clean_events:
+        return []
+
+    chunks: list[RetrievalChunk] = []
+    metadata = _metadata_kwargs(session)
+    chunk_index = 0
+    for trace in _iter_traces(clean_events):
+        parent_content = _bounded_text(_trace_text(trace.events), PARENT_TOKEN_BUDGET)
+        if not parent_content:
+            continue
+        parent_uid = _chunk_uid(session_id, revision, chunk_index, "trace_parent", parent_content)
+        chunks.append(
+            RetrievalChunk(
+                chunk_uid=parent_uid,
+                session_id=session_id,
+                chunk_index=chunk_index,
+                chunk_kind="trace_parent",
+                retrieval_role="parent",
+                event_index_start=trace.events[0].index,
+                event_index_end=trace.events[-1].index,
+                first_event_id=trace.events[0].event_id,
+                last_event_id=trace.events[-1].event_id,
+                content=parent_content,
+                structured_text=_structured_text(session=session, events=trace.events),
+                transcript_revision=revision,
+                **metadata,
+            )
+        )
+        chunk_index += 1
+
+        for child_kind, child_event in _child_events_for_trace(trace.events):
+            child_content = _bounded_text(_format_event(child_event), CHILD_TOKEN_BUDGET)
+            if not child_content:
+                continue
+            child_uid = _chunk_uid(session_id, revision, chunk_index, child_kind, child_content)
+            chunks.append(
+                RetrievalChunk(
+                    chunk_uid=child_uid,
+                    session_id=session_id,
+                    parent_chunk_uid=parent_uid,
+                    chunk_index=chunk_index,
+                    chunk_kind=child_kind,
+                    retrieval_role="child",
+                    event_index_start=child_event.index,
+                    event_index_end=child_event.index,
+                    first_event_id=child_event.event_id,
+                    last_event_id=child_event.event_id,
+                    content=child_content,
+                    intent_text=child_content if child_kind == "intent" else None,
+                    evidence_text=child_content if child_kind != "intent" else None,
+                    structured_text=_structured_text(session=session, events=[child_event]),
+                    transcript_revision=revision,
+                    **metadata,
+                )
+            )
+            chunk_index += 1
+
+    return chunks
+
+
+def _child_events_for_trace(events: list[CleanTranscriptEvent]) -> Iterable[tuple[str, CleanTranscriptEvent]]:
+    user_event = next((event for event in events if event.role == "user"), None)
+    if user_event is not None:
+        yield "intent", user_event
+    assistant_events = [event for event in events if event.role == "assistant"]
+    if assistant_events:
+        yield "assistant_conclusion", assistant_events[-1]
+    for event in events:
+        if event.role == "tool" or event.tool_name:
+            yield "tool_result", event
 
 
 def _delete_fts_rows(conn: sqlite3.Connection, row_ids: Iterable[int]) -> None:
