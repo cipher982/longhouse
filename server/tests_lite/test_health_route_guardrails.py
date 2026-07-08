@@ -246,6 +246,93 @@ def test_readyz_reports_archive_degraded_for_stale_active_writer_with_queued_wor
     assert response["write_serializer"]["archive_degraded"] is True
 
 
+def test_health_reports_archive_wal_pressure_as_degraded(tmp_path, monkeypatch):
+    _stub_build_identity(monkeypatch)
+    engine = make_engine(f"sqlite:///{tmp_path}/health_archive_wal_pressure.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
+
+    class QuietWriter:
+        is_configured = True
+
+        def get_metrics(self):
+            return {
+                "queue_depth": 0,
+                "writer_active": False,
+                "active_label": None,
+                "active_age_ms": 0.0,
+            }
+
+    import zerg.database as database_module
+
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_WAL_SHED_BYTES", "100")
+    monkeypatch.setattr(database_module, "default_engine", engine)
+    monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 100)
+    monkeypatch.setattr(database_module, "get_live_wal_bytes", lambda: 12)
+    monkeypatch.setattr(database_module, "get_wal_checkpoint_metrics", lambda: {})
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: QuietWriter())
+    monkeypatch.setattr("zerg.services.write_serializer.get_live_write_serializer", lambda: QuietWriter())
+    monkeypatch.setattr(
+        health_router,
+        "_session_projection_lag_check",
+        lambda: {"status": "pass", "pending_sessions": 0},
+    )
+    monkeypatch.setattr(
+        health_router,
+        "_session_enrichment_lag_check",
+        lambda: {"status": "pass", "pending_sessions": 0},
+    )
+
+    response = health_router.health_check(
+        SimpleNamespace(
+            client=SimpleNamespace(host="testclient"),
+            headers={},
+        )
+    )
+
+    assert response["status"] == "degraded"
+    assert response["message"] == "Archive WAL pressure is shedding archive ingest; live lane may remain available"
+    assert response["checks"]["sqlite_wal"]["status"] == "warn"
+    assert response["checks"]["sqlite_wal"]["archive_degraded"] is True
+    assert response["checks"]["sqlite_wal"]["shed"] is True
+    assert response["checks"]["sqlite_wal"]["wal_bytes"] == 100
+    assert response["checks"]["sqlite_wal"]["threshold_bytes"] == 100
+    assert response["checks"]["sqlite_wal"]["live_wal_bytes"] == 12
+
+
+def test_readyz_reports_archive_wal_pressure_as_degraded(tmp_path, monkeypatch):
+    engine = make_engine(f"sqlite:///{tmp_path}/readyz_archive_wal_pressure.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
+
+    class QuietWriter:
+        is_configured = True
+
+        def get_metrics(self):
+            return {
+                "queue_depth": 0,
+                "writer_active": False,
+                "active_label": None,
+                "active_age_ms": 0.0,
+            }
+
+    import zerg.database as database_module
+
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_WAL_SHED_BYTES", "100")
+    monkeypatch.setattr(database_module, "default_engine", engine)
+    monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 100)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: QuietWriter())
+    monkeypatch.setattr("zerg.services.write_serializer.get_live_write_serializer", lambda: QuietWriter())
+
+    response = health_router.readyz_check()
+
+    assert response["status"] == "ready_with_archive_degraded"
+    assert response["reason"] == "archive_wal_pressure"
+    assert response["sqlite_wal"]["status"] == "warn"
+    assert response["sqlite_wal"]["archive_degraded"] is True
+    assert response["sqlite_wal"]["shed"] is True
+
+
 def test_readyz_fails_stale_live_ingest_writer_with_queued_work(tmp_path, monkeypatch):
     engine = make_engine(f"sqlite:///{tmp_path}/readyz_stale_live_ingest_writer.db")
     with engine.begin() as conn:

@@ -157,12 +157,12 @@ Acceptance:
 - repair emits metrics and final state into trusted health;
 - failed repair leaves the system live with search/indexing degraded.
 
-### 2. Make WAL pressure a first-class shed signal
+### Landed: make WAL pressure a first-class shed signal
 
 **Decision:** WAL growth is not just a DB metric; it is a control input.
 
-Current implementation already exposes WAL bytes and checkpoint metrics. Launch
-hardening should wire those metrics into archive admission. Start with two states
+Current implementation exposes WAL bytes and checkpoint metrics, and archive
+admission now uses archive WAL size as a shed signal. Start with two states
 before adding a ladder nobody has operated:
 
 - ok: archive replay/scan may proceed under existing limits;
@@ -183,7 +183,8 @@ Acceptance:
 - archive admission checks WAL bytes before accepting replay/scan work;
 - live/control routes do not shed solely because archive WAL is large;
 - WAL checkpoint `busy` and `remaining_frames` are visible in trusted health;
-- shed decisions are visible in trusted health with the triggering WAL value;
+- shed decisions are visible in trusted health and `/readyz` with the triggering
+  WAL value;
 - admission recovers automatically when WAL drains below threshold.
 
 ### 3. Make hosted restart default conservative
@@ -273,7 +274,7 @@ These are the simplifications with the best launch leverage:
 
 1. Done: land archive/live writer exit-policy split and FTS rebuild guard.
 2. Add the July 8 degradation regression scenario.
-3. Wire one WAL shed threshold into archive admission and trusted health.
+3. Done: wire one WAL shed threshold into archive admission and trusted health.
 4. Change hosted archive restart default to paused/trickle, with replay rate
    ceiling and transition logs.
 5. Add one explicit FTS repair command/state row only if hosted repair needs it.

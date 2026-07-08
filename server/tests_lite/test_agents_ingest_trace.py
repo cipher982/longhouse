@@ -281,6 +281,36 @@ async def test_archive_ingest_admission_rejects_when_writer_queue_hits_hard_limi
 
 
 @pytest.mark.asyncio
+async def test_archive_ingest_admission_rejects_when_archive_wal_pressure_sheds(monkeypatch):
+    class QuietSerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+        queue_depth = 0
+
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_WAL_SHED_BYTES", "100")
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_WAL_RETRY_AFTER_SECONDS", "17")
+    monkeypatch.setattr("zerg.database.get_wal_bytes", lambda: 100)
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: QuietSerializer(),
+    )
+    response = Response()
+
+    with pytest.raises(HTTPException) as exc:
+        await _acquire_archive_ingest_slot("ingest-replay", response)
+
+    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.headers["Retry-After"] == "17"
+    assert response.headers["X-Ingest-Lane"] == "archive"
+    assert response.headers["X-Ingest-Admission-State"] == "archive_wal_pressure"
+    assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
+    assert response.headers["X-Ingest-Archive-Wal-Bytes"] == "100"
+    assert response.headers["X-Ingest-Archive-Wal-Shed-Threshold-Bytes"] == "100"
+
+
+@pytest.mark.asyncio
 async def test_archive_ingest_admission_allows_short_non_archive_writer(monkeypatch):
     class BusySerializer:
         is_configured = True
@@ -1026,6 +1056,39 @@ def test_live_transcript_ingest_uses_cooperative_sub_batches(tmp_path):
         api_app.dependency_overrides.clear()
 
 
+def test_july8_archive_wal_degradation_sheds_replay_but_live_transcript_still_writes(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_WAL_SHED_BYTES", "100")
+    monkeypatch.setattr("zerg.database.get_wal_bytes", lambda: 100)
+    client, SessionLocal = _make_client(tmp_path)
+    try:
+        archive_session_id = "72111111-2222-3333-4444-555555555555"
+        archive_response = client.post(
+            "/agents/ingest",
+            json=_batched_archive_primary_payload(archive_session_id, 1),
+            headers=_spool_replay_trace_header(archive_session_id),
+        )
+        assert archive_response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert archive_response.headers["X-Ingest-Admission-State"] == "archive_wal_pressure"
+        assert archive_response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
+
+        live_session_id = "73111111-2222-3333-4444-555555555555"
+        live_response = client.post(
+            "/agents/ingest",
+            json=_batched_archive_primary_payload(live_session_id, 1),
+            headers=_live_transcript_trace_header(live_session_id),
+        )
+        assert live_response.status_code == status.HTTP_200_OK, live_response.text
+        assert live_response.headers["X-Ingest-Lane"] == "live"
+        assert live_response.headers["X-Ingest-Label"] == "ingest-live"
+        assert live_response.headers["X-Ingest-Admission-State"] == "not_applicable"
+        assert "X-Ingest-Backpressure" not in live_response.headers
+        with SessionLocal() as db:
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == archive_session_id).count() == 0
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == live_session_id).count() == 1
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_archive_primary_later_batch_prepare_failure_falls_back_when_legacy_raw_enabled(tmp_path, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
     monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
@@ -1064,14 +1127,14 @@ def test_archive_primary_later_batch_prepare_failure_falls_back_when_legacy_raw_
 def test_archive_primary_prepare_timeout_falls_back_when_legacy_raw_enabled(tmp_path, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
     monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS", "0.01")
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS", "2.0")
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_WAL_SHED_BYTES", "0")
 
     async def admit_without_shared_pressure(_write_label, _response):
         return False
 
     async def slow_prepare(*, data, fallback_db, settings):  # noqa: ARG001
-        await asyncio.sleep(0.2)
-        return SimpleNamespace(error=None, chunks=(), records_written=0)
+        raise asyncio.TimeoutError
 
     monkeypatch.setattr(
         "zerg.routers.agents_ingest._acquire_archive_ingest_slot",

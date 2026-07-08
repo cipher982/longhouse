@@ -218,6 +218,7 @@ def _archive_ingest_batches(data: SessionIngest, *, max_items: int = _ARCHIVE_IN
 
 async def _check_ingest_writer_pressure(write_label: str, response: Response) -> None:
     if write_label in _ARCHIVE_INGEST_LABELS:
+        _check_archive_ingest_wal_pressure(write_label, response)
         await _check_archive_ingest_writer_pressure(write_label, response)
     elif write_label == "ingest-live":
         await _check_live_ingest_writer_pressure(write_label, response)
@@ -301,6 +302,10 @@ def _archive_retry_after_for_queue_depth(queue_depth: int) -> int:
         _ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
         min(_ARCHIVE_INGEST_MAX_RETRY_AFTER_SECONDS, queue_depth * 2),
     )
+
+
+def _archive_retry_after_for_wal_pressure() -> int:
+    return max(1, int(_env_float("LONGHOUSE_ARCHIVE_INGEST_WAL_RETRY_AFTER_SECONDS", 30.0)))
 
 
 def _archive_backpressure_headers(
@@ -411,6 +416,30 @@ async def _check_archive_ingest_writer_pressure(write_label: str, response: Resp
             )
 
 
+def _check_archive_ingest_wal_pressure(write_label: str, response: Response) -> None:
+    if write_label not in _ARCHIVE_INGEST_LABELS:
+        return
+
+    try:
+        from zerg.database import get_wal_bytes
+        from zerg.services.archive_pressure import evaluate_archive_wal_pressure
+
+        pressure = evaluate_archive_wal_pressure(get_wal_bytes())
+    except Exception:
+        logger.warning("Archive ingest WAL pressure check failed; allowing ingest", exc_info=True)
+        return
+
+    if pressure.wal_bytes is not None:
+        response.headers["X-Ingest-Archive-Wal-Bytes"] = str(pressure.wal_bytes)
+    response.headers["X-Ingest-Archive-Wal-Shed-Threshold-Bytes"] = str(pressure.threshold_bytes)
+    if pressure.shed:
+        _raise_archive_ingest_backpressure(
+            response,
+            admission_state="archive_wal_pressure",
+            retry_after_seconds=_archive_retry_after_for_wal_pressure(),
+        )
+
+
 async def _check_live_ingest_writer_pressure(write_label: str, response: Response) -> None:
     if write_label != "ingest-live":
         return
@@ -453,6 +482,7 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
     if write_label not in _ARCHIVE_INGEST_LABELS:
         return False
 
+    _check_archive_ingest_wal_pressure(write_label, response)
     await _check_archive_ingest_writer_pressure(write_label, response)
 
     if _ARCHIVE_INGEST_SLOTS.locked():

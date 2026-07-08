@@ -77,6 +77,15 @@ def _live_write_serializer_check() -> tuple[bool, dict]:
     return _serializer_metrics_check("get_live_write_serializer")
 
 
+def _archive_wal_pressure_payload(wal_bytes: int | None) -> dict[str, object]:
+    from zerg.services.archive_pressure import evaluate_archive_wal_pressure
+
+    payload = evaluate_archive_wal_pressure(wal_bytes).as_health_payload()
+    if payload.get("shed"):
+        payload["archive_degraded"] = True
+    return payload
+
+
 def _session_projection_lag_check(session_factory=None) -> dict:
     """Return lag for sessions whose archive ingest skipped derived projections."""
     if session_factory is None:
@@ -324,6 +333,19 @@ def readyz_check():
                 "write_serializer": writer_metrics,
             },
         )
+
+    try:
+        from zerg.database import get_wal_bytes
+
+        archive_wal = _archive_wal_pressure_payload(get_wal_bytes())
+        if archive_wal.get("shed"):
+            return {
+                "status": "ready_with_archive_degraded",
+                "reason": "archive_wal_pressure",
+                "sqlite_wal": archive_wal,
+            }
+    except Exception:
+        pass
 
     return {"status": "ok"}
 
@@ -633,15 +655,15 @@ def health_check(request: Request):
         wal_bytes = get_wal_bytes()
         live_wal_bytes = get_live_wal_bytes()
         checkpoint_metrics = get_wal_checkpoint_metrics()
-        if wal_bytes is None:
-            checks["sqlite_wal"] = {"status": "skip", "reason": "wal path unknown"}
-        else:
-            wal_check: dict[str, object] = {"status": "pass", "wal_bytes": wal_bytes}
-            if live_wal_bytes is not None:
-                wal_check["live_wal_bytes"] = live_wal_bytes
-            if checkpoint_metrics:
-                wal_check["checkpoints"] = checkpoint_metrics
-            checks["sqlite_wal"] = wal_check
+        wal_check = _archive_wal_pressure_payload(wal_bytes)
+        if live_wal_bytes is not None:
+            wal_check["live_wal_bytes"] = live_wal_bytes
+        if checkpoint_metrics:
+            wal_check["checkpoints"] = checkpoint_metrics
+        checks["sqlite_wal"] = wal_check
+        if wal_check.get("shed") and health_status.get("status") == "healthy":
+            health_status["status"] = "degraded"
+            health_status["message"] = "Archive WAL pressure is shedding archive ingest; live lane may remain available"
     except Exception as e:
         checks["sqlite_wal"] = {"status": "warn", "error": str(e)}
 
