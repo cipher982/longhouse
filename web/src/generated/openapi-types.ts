@@ -2726,6 +2726,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/recall/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Recall Index Status
+         * @description Return retrieval.db recall index status.
+         */
+        get: operations["recall_index_status_agents_recall_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/recall/index": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Index Recall Sessions
+         * @description Project recent sessions into retrieval.db for fast recall.
+         */
+        post: operations["index_recall_sessions_agents_recall_index_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/recall": {
         parameters: {
             query?: never;
@@ -6480,6 +6520,28 @@ export interface components {
             chunk_index: number;
             /** Score */
             score: number;
+            /** Chunk Id */
+            chunk_id?: number | null;
+            /** Chunk Uid */
+            chunk_uid?: string | null;
+            /** Parent Chunk Id */
+            parent_chunk_id?: number | null;
+            /** Context Chunk Id */
+            context_chunk_id?: number | null;
+            /** Chunk Kind */
+            chunk_kind?: string | null;
+            /** Context Text */
+            context_text?: string | null;
+            /** Intent */
+            intent?: string | null;
+            /** Evidence */
+            evidence?: string | null;
+            /** Structured Hits */
+            structured_hits?: string[];
+            /** Diagnostics */
+            diagnostics?: {
+                [key: string]: unknown;
+            };
             /** Event Index Start */
             event_index_start?: number | null;
             /** Event Index End */
@@ -13231,6 +13293,8 @@ export interface operations {
                 provider?: string | null;
                 /** @description Filter by environment (production, development, test, e2e) */
                 environment?: string | null;
+                /** @description Include test/e2e sessions */
+                include_test?: boolean;
                 /** @description Days to look back */
                 days_back?: number;
                 /** @description Max results */
@@ -13273,6 +13337,8 @@ export interface operations {
                 project?: string | null;
                 /** @description Filter by provider */
                 provider?: string | null;
+                /** @description Include test/e2e sessions */
+                include_test?: boolean;
                 /** @description Days to look back */
                 since_days?: number;
                 /** @description Max matches */
@@ -14625,6 +14691,8 @@ export interface operations {
                 provider?: string | null;
                 /** @description Filter by environment (production, development, test, e2e) */
                 environment?: string | null;
+                /** @description Include test/e2e sessions */
+                include_test?: boolean;
                 /** @description Days to look back */
                 days_back?: number;
                 /** @description Max results */
@@ -14658,6 +14726,68 @@ export interface operations {
             };
         };
     };
+    recall_index_status_agents_recall_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    index_recall_sessions_agents_recall_index_post: {
+        parameters: {
+            query?: {
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by provider */
+                provider?: string | null;
+                /** @description Days to index */
+                since_days?: number;
+                /** @description Max sessions to index */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     recall_sessions_agents_recall_get: {
         parameters: {
             query: {
@@ -14667,6 +14797,8 @@ export interface operations {
                 project?: string | null;
                 /** @description Filter by provider */
                 provider?: string | null;
+                /** @description Include test/e2e sessions */
+                include_test?: boolean;
                 /** @description Days to look back */
                 since_days?: number;
                 /** @description Max matches */
@@ -14675,6 +14807,7 @@ export interface operations {
                 context_turns?: number;
                 /** @description Context projection mode: forensic|active_context */
                 context_mode?: string;
+                mode?: string;
             };
             header?: never;
             path?: never;
