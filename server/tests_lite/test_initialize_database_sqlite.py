@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import patch
 
 from sqlalchemy import inspect
@@ -113,3 +114,28 @@ def test_ensure_agents_fts_skips_write_path_when_objects_already_exist(tmp_path)
             _ensure_agents_fts(engine)
 
     assert seen_statements
+
+
+def test_events_fts_rebuild_stays_in_startup_or_explicit_repair_lane():
+    """Whole-index FTS rebuilds must not creep back into hot ingest code."""
+
+    server_root = Path(__file__).resolve().parents[1]
+    source_root = server_root / "zerg"
+    rebuild_sql = "INSERT INTO events_fts(events_fts) VALUES('rebuild')"
+
+    rebuild_owners = sorted(
+        path.relative_to(server_root).as_posix()
+        for path in source_root.rglob("*.py")
+        if rebuild_sql in path.read_text()
+    )
+    assert rebuild_owners == [
+        "zerg/database.py",
+        "zerg/services/agents/store.py",
+    ]
+
+    explicit_rebuild_callers = sorted(
+        path.relative_to(server_root).as_posix()
+        for path in source_root.rglob("*.py")
+        if ".rebuild_fts(" in path.read_text()
+    )
+    assert explicit_rebuild_callers == ["zerg/services/demo_seed.py"]

@@ -378,7 +378,16 @@ class WriteSerializer:
     'database is locked' errors from concurrent background writers.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        name: str = "write_serializer",
+        default_exit_on_wedged_writer: bool | None = None,
+        exit_on_wedged_writer_env: str = "LONGHOUSE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER",
+    ) -> None:
+        self._name = name
+        self._default_exit_on_wedged_writer = default_exit_on_wedged_writer
+        self._exit_on_wedged_writer_env = exit_on_wedged_writer_env
         self._wait_cond = asyncio.Condition()
         self._session_factory: sessionmaker | None = None
         self._session_factory_resolver: Callable[[], sessionmaker] | None = None
@@ -423,7 +432,7 @@ class WriteSerializer:
         self._session_factory_resolver = None
         self._configured = True
         _last_write_timing.set(None)
-        logger.info("WriteSerializer configured")
+        logger.info("WriteSerializer configured name=%s", self._name)
 
     def configure_resolver(self, session_factory_resolver: Callable[[], sessionmaker]) -> None:
         """Set a dynamic session-factory resolver.
@@ -435,7 +444,7 @@ class WriteSerializer:
         self._session_factory_resolver = session_factory_resolver
         self._configured = True
         _last_write_timing.set(None)
-        logger.info("WriteSerializer configured")
+        logger.info("WriteSerializer configured name=%s", self._name)
 
     @property
     def is_configured(self) -> bool:
@@ -579,7 +588,8 @@ class WriteSerializer:
         self._last_active_stack_dump_text = stack_text
 
         logger.warning(
-            "WriteSerializer active writer stack dump reason=%s label=%s job_id=%s thread_id=%s " "age_ms=%.1f stage=%s\n%s",
+            "WriteSerializer active writer stack dump name=%s reason=%s label=%s job_id=%s thread_id=%s " "age_ms=%.1f stage=%s\n%s",
+            self._name,
             reason,
             self._active_label or "unlabeled",
             self._active_job_id,
@@ -623,7 +633,8 @@ class WriteSerializer:
             conn = self._active_sqlite_connection
             if conn is None:
                 logger.warning(
-                    "WriteSerializer interrupt requested but no sqlite connection is visible " "label=%s job_id=%s age_ms=%.1f",
+                    "WriteSerializer interrupt requested but no sqlite connection is visible " "name=%s label=%s job_id=%s age_ms=%.1f",
+                    self._name,
                     label or "unlabeled",
                     job_id,
                     active_age_ms,
@@ -631,7 +642,8 @@ class WriteSerializer:
                 return
 
             logger.warning(
-                "WriteSerializer interrupting active sqlite writer label=%s job_id=%s age_ms=%.1f deadline_s=%.1f",
+                "WriteSerializer interrupting active sqlite writer name=%s label=%s job_id=%s age_ms=%.1f deadline_s=%.1f",
+                self._name,
                 label or "unlabeled",
                 job_id,
                 active_age_ms,
@@ -684,7 +696,8 @@ class WriteSerializer:
         self._last_active_wedged_writer_label = label
         self._last_active_wedged_writer_reason = reason
         logger.critical(
-            "WriteSerializer active writer wedged reason=%s label=%s job_id=%s age_ms=%.1f %s",
+            "WriteSerializer active writer wedged name=%s reason=%s label=%s job_id=%s age_ms=%.1f %s",
+            self._name,
             reason,
             label or "unlabeled",
             job_id,
@@ -695,12 +708,15 @@ class WriteSerializer:
 
     def _exit_if_wedged_writer_enabled(self) -> None:
         if self._wedged_writer_exit_enabled():
-            logger.critical("WriteSerializer forcing process exit after wedged active writer")
+            logger.critical("WriteSerializer forcing process exit after wedged active writer name=%s", self._name)
             os._exit(86)
 
     def _wedged_writer_exit_enabled(self) -> bool:
-        default_exit = os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV
-        return _env_bool("LONGHOUSE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", default_exit)
+        if self._default_exit_on_wedged_writer is None:
+            default_exit = os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV
+        else:
+            default_exit = self._default_exit_on_wedged_writer
+        return _env_bool(self._exit_on_wedged_writer_env, default_exit)
 
     async def execute(
         self,
@@ -1152,6 +1168,8 @@ class WriteSerializer:
                 "exec_ms": _percentiles(hist.exec_ms),
             }
         return {
+            "name": self._name,
+            "exit_on_wedged_writer": self._wedged_writer_exit_enabled(),
             "writer_active": self._writer_active,
             "active_label": self._active_label,
             "active_priority": self._active_priority,
@@ -1197,8 +1215,15 @@ class WriteSerializer:
 
 # Process singletons. The live serializer is intentionally separate from the
 # archive serializer so hot writes do not queue behind archive work.
-_serializer = WriteSerializer()
-_live_serializer = WriteSerializer()
+_serializer = WriteSerializer(
+    name="archive",
+    default_exit_on_wedged_writer=False,
+    exit_on_wedged_writer_env="LONGHOUSE_ARCHIVE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER",
+)
+_live_serializer = WriteSerializer(
+    name="live",
+    exit_on_wedged_writer_env="LONGHOUSE_LIVE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER",
+)
 
 
 def get_write_serializer() -> WriteSerializer:

@@ -808,6 +808,31 @@ async def test_sqlite_interrupt_releases_writer_slot_and_next_write_succeeds(tmp
     assert persisted == ["after-interrupt"]
 
 
+def test_archive_writer_defaults_to_degraded_mode_while_live_writer_keeps_fail_fast(monkeypatch):
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.delenv("LONGHOUSE_ARCHIVE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", raising=False)
+    monkeypatch.delenv("LONGHOUSE_LIVE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", raising=False)
+
+    archive = WriteSerializer(
+        name="archive-test",
+        default_exit_on_wedged_writer=False,
+        exit_on_wedged_writer_env="LONGHOUSE_ARCHIVE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER",
+    )
+    live = WriteSerializer(
+        name="live-test",
+        exit_on_wedged_writer_env="LONGHOUSE_LIVE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER",
+    )
+
+    assert archive._wedged_writer_exit_enabled() is False  # noqa: SLF001 - exit policy regression guard
+    assert live._wedged_writer_exit_enabled() is True  # noqa: SLF001
+
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", "1")
+    monkeypatch.setenv("LONGHOUSE_LIVE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", "0")
+
+    assert archive._wedged_writer_exit_enabled() is True  # noqa: SLF001
+    assert live._wedged_writer_exit_enabled() is False  # noqa: SLF001
+
+
 @pytest.mark.asyncio
 async def test_non_sqlite_stall_escalates_when_interrupt_cannot_unwind(tmp_path, monkeypatch):
     db_path = tmp_path / "write-serializer-non-sqlite-stall.db"
@@ -853,7 +878,7 @@ async def test_non_sqlite_stall_escalates_when_interrupt_cannot_unwind(tmp_path,
 
 
 @pytest.mark.asyncio
-async def test_cancelled_stuck_write_deadman_frees_slot_when_exit_disabled(tmp_path, monkeypatch):
+async def test_archive_stuck_write_deadman_frees_slot_without_process_exit(tmp_path, monkeypatch):
     db_path = tmp_path / "write-serializer-cancelled-stuck.db"
     engine = make_engine(f"sqlite:///{db_path}")
     session_factory = make_sessionmaker(engine)
@@ -863,9 +888,13 @@ async def test_cancelled_stuck_write_deadman_frees_slot_when_exit_disabled(tmp_p
 
     monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_AFTER_SECONDS", "0")
     monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_BACKGROUND_FINALIZE_GRACE_SECONDS", "0.02")
-    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", "0")
+    monkeypatch.delenv("LONGHOUSE_ARCHIVE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", raising=False)
 
-    serializer = WriteSerializer()
+    serializer = WriteSerializer(
+        name="archive-test",
+        default_exit_on_wedged_writer=False,
+        exit_on_wedged_writer_env="LONGHOUSE_ARCHIVE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER",
+    )
     serializer.configure(session_factory)
 
     started = threading.Event()
@@ -881,7 +910,7 @@ async def test_cancelled_stuck_write_deadman_frees_slot_when_exit_disabled(tmp_p
         run_order.append("next")
         db.execute(sa_text("INSERT INTO writes(label) VALUES ('next')"))
 
-    stuck = asyncio.create_task(serializer.execute(_stuck_write, label="ingest-live"))
+    stuck = asyncio.create_task(serializer.execute(_stuck_write, label="ingest-replay"))
     await asyncio.to_thread(started.wait, 1.0)
 
     stuck.cancel()
@@ -893,11 +922,64 @@ async def test_cancelled_stuck_write_deadman_frees_slot_when_exit_disabled(tmp_p
 
     metrics = serializer.get_metrics()
     assert run_order == ["stuck", "next"]
+    assert metrics["name"] == "archive-test"
+    assert metrics["exit_on_wedged_writer"] is False
     assert metrics["active_wedged_writer_count"] == 1
-    assert metrics["last_active_wedged_writer_label"] == "ingest-live"
+    assert metrics["last_active_wedged_writer_label"] == "ingest-replay"
     assert metrics["last_active_wedged_writer_reason"] == "background_finalize_deadman"
 
     release.set()
+
+
+@pytest.mark.asyncio
+async def test_live_serializer_write_proceeds_while_archive_serializer_is_stuck(tmp_path, monkeypatch):
+    archive_engine = make_engine(f"sqlite:///{tmp_path / 'archive-stuck.db'}")
+    archive_factory = make_sessionmaker(archive_engine)
+    live_engine = make_engine(f"sqlite:///{tmp_path / 'live-still-writes.db'}")
+    live_factory = make_sessionmaker(live_engine)
+
+    with archive_engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+    with live_engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_AFTER_SECONDS", "0")
+
+    archive = WriteSerializer(
+        name="archive-test",
+        default_exit_on_wedged_writer=False,
+        exit_on_wedged_writer_env="LONGHOUSE_ARCHIVE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER",
+    )
+    live = WriteSerializer(name="live-test")
+    archive.configure(archive_factory)
+    live.configure(live_factory)
+
+    archive_started = threading.Event()
+    release_archive = threading.Event()
+
+    def _stuck_archive(_db):
+        archive_started.set()
+        release_archive.wait(1.0)
+
+    archive_task = asyncio.create_task(archive.execute(_stuck_archive, label="ingest-replay"))
+    await asyncio.to_thread(archive_started.wait, 1.0)
+
+    await asyncio.wait_for(
+        live.execute(
+            lambda db: db.execute(sa_text("INSERT INTO writes(label) VALUES ('live')")),
+            label="runtime-live",
+        ),
+        timeout=1.0,
+    )
+
+    with live_factory() as db:
+        persisted = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
+    assert persisted == ["live"]
+    assert archive.writer_active is True
+    assert live.writer_active is False
+
+    release_archive.set()
+    await archive_task
 
 
 @pytest.mark.asyncio

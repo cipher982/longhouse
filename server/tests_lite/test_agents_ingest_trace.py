@@ -1066,10 +1066,17 @@ def test_archive_primary_prepare_timeout_falls_back_when_legacy_raw_enabled(tmp_
     monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS", "0.01")
 
+    async def admit_without_shared_pressure(_write_label, _response):
+        return False
+
     async def slow_prepare(*, data, fallback_db, settings):  # noqa: ARG001
         await asyncio.sleep(0.2)
         return SimpleNamespace(error=None, chunks=(), records_written=0)
 
+    monkeypatch.setattr(
+        "zerg.routers.agents_ingest._acquire_archive_ingest_slot",
+        admit_without_shared_pressure,
+    )
     monkeypatch.setattr(
         "zerg.routers.agents_ingest._prepare_archive_primary_before_ingest",
         slow_prepare,
