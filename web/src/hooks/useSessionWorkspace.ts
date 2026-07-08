@@ -75,6 +75,9 @@ function getProjectionItemKey(item: AgentSessionProjectionItem): string {
   if (item.kind === "event" && item.event) {
     return `event:${item.event.id}`;
   }
+  if (item.kind === "action" && item.action) {
+    return `action:${item.action.id}`;
+  }
   return `seam:${item.session_id}:${item.timestamp}`;
 }
 

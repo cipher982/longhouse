@@ -226,6 +226,48 @@ describe("useSessionWorkspace", () => {
     });
   });
 
+  it("keeps action rows distinct when projection pages share timestamps", () => {
+    seedHookMocks(0);
+    const actionItems = ["action:interrupt-1", "action:interrupt-2"].map((id) => ({
+      kind: "action",
+      session_id: baseSession.id,
+      timestamp: "2026-03-14T12:00:00.000Z",
+      action: {
+        id,
+        kind: "turn_interrupted",
+        provider: "codex",
+        source: "user",
+        provider_reason: "interrupted",
+        event_id: null,
+      },
+    }));
+    agentSessionMocks.useAgentSessionProjectionInfinite.mockReturnValue({
+      data: {
+        pages: [
+          {
+            page_offset: 0,
+            items: actionItems,
+            total: actionItems.length,
+            abandoned_events: 0,
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      fetchPreviousPage: vi.fn(),
+      hasPreviousPage: false,
+      isFetchingPreviousPage: false,
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(result.current.items.map((item) => (item.kind === "action" ? item.action.key : item.kind))).toEqual([
+      "action:interrupt-1",
+      "action:interrupt-2",
+    ]);
+    expect(result.current.loadedEntryCount).toBe(2);
+  });
+
   it("scrolls the timeline list to the latest context when the container is already scrollable", async () => {
     const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
     const list = makeScrollableTimelineList({
