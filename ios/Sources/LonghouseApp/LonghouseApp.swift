@@ -190,8 +190,13 @@ final class AppState: ObservableObject {
                 // (e.g. app suspended past expiry). Try one refresh before
                 // dropping the session so an overnight-suspended app doesn't
                 // hard-log-out when the token is still refreshable.
-                if await refreshRuntimeTokenProactively() {
+                switch await refreshRuntimeTokenProactively() {
+                case .refreshed:
                     result = await verifyBrowserSession()
+                case .rejected:
+                    result = .unauthenticated
+                case .deferred:
+                    result = .indeterminate
                 }
             }
         } else if hasRefresh {
@@ -499,6 +504,12 @@ final class AppState: ObservableObject {
         case indeterminate
     }
 
+    private enum RuntimeTokenRefreshResult: Equatable {
+        case refreshed
+        case rejected
+        case deferred
+    }
+
     private func refreshBrowserSession() async -> SessionRestoreResult {
         guard let url = URL(string: "\(serverURL)/api/auth/refresh") else {
             return .unauthenticated
@@ -570,11 +581,11 @@ final class AppState: ObservableObject {
             // restoreSession calls refreshRuntimeTokenProactively directly and
             // does not go through this task path.
             guard await self?.isAuthenticated == true else { return }
-            await self?.refreshRuntimeTokenProactively()
+            _ = await self?.refreshRuntimeTokenProactively()
         }
     }
 
-    private func refreshRuntimeTokenProactively() async -> Bool {
+    private func refreshRuntimeTokenProactively() async -> RuntimeTokenRefreshResult {
         // Snapshot the server URL: signout/server-switch may land during the
         // await and we must not write a refreshed token back into a cleared or
         // switched keychain slot.
@@ -584,16 +595,20 @@ final class AppState: ObservableObject {
             guard serverURL == capturedServerURL,
                   SharedAuthStore.hasRuntimeToken(for: capturedServerURL) else {
                 // Session was cleared or server switched while we were refreshing.
-                return false
+                return .deferred
             }
             SharedAuthStore.saveRuntimeToken(token, expiresAt: expiresAt, for: capturedServerURL)
             scheduleRuntimeTokenRefresh()
-            return true
+            return .refreshed
+        } catch LonghouseAPIError.notAuthenticated {
+            return .rejected
         } catch {
             // Leave the existing token in place; the 401-retry path handles it
-            // when the token finally expires.
+            // when the token finally expires. During restore this keeps the
+            // cached shell visible instead of logging out on a deploy/network
+            // blip.
             logger.error("proactive runtime token refresh failed error=\(error.localizedDescription, privacy: .public)")
-            return false
+            return .deferred
         }
     }
 
@@ -608,8 +623,20 @@ final class AppState: ObservableObject {
             request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
         }
         let (data, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            throw URLError(.userAuthenticationRequired)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard http.statusCode == 200 else {
+            switch http.statusCode {
+            case 401, 403:
+                throw LonghouseAPIError.notAuthenticated
+            case 502:
+                throw LonghouseAPIError.upstreamFailed
+            case 503:
+                throw LonghouseAPIError.serviceUnavailable
+            default:
+                throw LonghouseAPIError.requestFailed
+            }
         }
         guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let token = json["runtime_token"] as? String else {

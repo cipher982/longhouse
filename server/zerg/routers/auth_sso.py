@@ -152,11 +152,12 @@ async def refresh_runtime_token(request: Request):
     """Proxy a CP runtime token refresh for iOS/hosted native clients.
 
     iOS stores the CP-issued bearer in keychain and sends it on every request.
-    The token has a 1-hour lifetime, so the client proactively refreshes ~60s
-    before expiry and retries with refresh on a 401. This route forwards the
-    current bearer to the CP's /api/identity/refresh-runtime-token and returns
-    the re-minted token. No local validation — the CP is the issuer and is the
-    authority on token validity (including the refresh leeway window).
+    Active runtime tokens have a short lifetime, so the client proactively
+    refreshes before expiry and retries with refresh on a 401. This route
+    forwards the current bearer to the CP's
+    /api/identity/refresh-runtime-token and returns the re-minted token. No
+    local validation — the CP is the issuer and is the authority on token
+    validity, including the long native-app refresh window.
     """
     settings = get_settings()
     control_plane_url = getattr(settings, "control_plane_url", None)

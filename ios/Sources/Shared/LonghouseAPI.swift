@@ -701,8 +701,13 @@ struct LonghouseAPI: Sendable {
                     try await refreshSession()
                 }
                 return try await self.data(for: request, allowRetry: false)
+            } catch let refreshError as LonghouseAPIError {
+                if case .notAuthenticated = refreshError {
+                    throw LonghouseAPIError.notAuthenticated
+                }
+                throw refreshError
             } catch {
-                throw LonghouseAPIError.notAuthenticated
+                throw error
             }
         }
         return (data, httpResponse)
