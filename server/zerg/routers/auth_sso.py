@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import logging
 
 import httpx
 from fastapi import APIRouter
@@ -24,6 +25,7 @@ from zerg.config import get_settings
 from zerg.database import get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger(__name__)
 
 
 class NativeHandoffRequest(BaseModel):
@@ -224,6 +226,7 @@ async def revoke_native_session(body: NativeRevokeRequest):
         # Logout must clear local client credentials even when CP is
         # unreachable. CP revocation is best-effort; old refresh tokens still
         # expire naturally and refresh failures remain explicit on next use.
+        logger.warning("native session revoke skipped because control plane is unreachable", exc_info=True)
         return {"status": "ok"}
 
     return {"status": "ok"}

@@ -163,15 +163,17 @@ struct LonghouseAPI: Sendable {
 
     let baseURL: URL
     let allowsAuthRefresh: Bool
+    let urlSession: URLSession
 
-    init(baseURL: URL, allowsAuthRefresh: Bool = true) {
+    init(baseURL: URL, allowsAuthRefresh: Bool = true, urlSession: URLSession = .shared) {
         self.baseURL = baseURL
         self.allowsAuthRefresh = allowsAuthRefresh
+        self.urlSession = urlSession
     }
 
-    init?(host: String, allowsAuthRefresh: Bool = true) {
+    init?(host: String, allowsAuthRefresh: Bool = true, urlSession: URLSession = .shared) {
         guard let url = URL(string: host) else { return nil }
-        self.init(baseURL: url, allowsAuthRefresh: allowsAuthRefresh)
+        self.init(baseURL: url, allowsAuthRefresh: allowsAuthRefresh, urlSession: urlSession)
     }
 
     func sessionsNeedingAttention() async throws -> [SessionSummary] {
@@ -714,7 +716,14 @@ struct LonghouseAPI: Sendable {
         }
         let expiresIn = json["expires_in"] as? Int
         let expiresAt = expiresIn.map { Date().addingTimeInterval(TimeInterval($0)) }
-        let refreshToken = json["refresh_token"] as? String
+        let refreshToken = (json["refresh_token"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if requestBody != nil && (refreshToken == nil || refreshToken?.isEmpty == true) {
+            // Native refresh rotates the refresh token every time. If a buggy or
+            // mid-deploy CP response omits the replacement, never keep the now-
+            // stale token; presenting it later can look like token reuse.
+            SharedAuthStore.clearNativeRefreshToken(for: baseURL.absoluteString)
+        }
         let refreshExpiresAt = Self.parseServerDate(json["refresh_token_expires_at"] as? String)
         SharedAuthStore.saveHostedTokens(
             runtimeToken: token,
@@ -737,7 +746,7 @@ struct LonghouseAPI: Sendable {
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await urlSession.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw LonghouseAPIError.requestFailed
         }
