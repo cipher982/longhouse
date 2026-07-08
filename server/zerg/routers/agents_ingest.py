@@ -1340,12 +1340,13 @@ async def ingest_session(
                     admission_state="writer_interrupted",
                     retry_after_seconds=_ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
                 )
-            request_status_label = "archive_backpressure"
-            _raise_archive_ingest_backpressure(
-                response,
-                admission_state="writer_interrupted",
-                retry_after_seconds=_ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS,
-            )
+            else:
+                request_status_label = "archive_backpressure"
+                _raise_archive_ingest_backpressure(
+                    response,
+                    admission_state="writer_interrupted",
+                    retry_after_seconds=_ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS,
+                )
         except Exception:
             logger.exception("Failed to ingest session")
             request_status_label = "internal_error"

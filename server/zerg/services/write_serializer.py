@@ -51,6 +51,7 @@ from typing import Deque
 from typing import Iterator
 from typing import TypeVar
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
@@ -164,7 +165,7 @@ _DEFAULT_STACK_DUMP_AFTER_MS = 30_000.0
 _DEFAULT_STACK_DUMP_RATE_LIMIT_MS = 30_000.0
 _DEFAULT_INTERRUPT_AFTER_SECONDS = 120.0
 _DEFAULT_INTERRUPT_GRACE_SECONDS = 15.0
-_DEFAULT_TIMEOUT_INTERRUPT_GRACE_SECONDS = 2.0
+_DEFAULT_TIMEOUT_INTERRUPT_GRACE_SECONDS = 5.0
 _DEFAULT_BACKGROUND_FINALIZE_GRACE_SECONDS = 10.0
 _DEFAULT_FAIRNESS_PROMOTE_AFTER_MS = 30_000.0
 
@@ -213,6 +214,8 @@ def _sqlite_connection_from_session(db: Session) -> sqlite3.Connection | None:
 
 def _looks_like_sqlite_interrupt(exc: BaseException) -> bool:
     if isinstance(exc, sqlite3.OperationalError) and "interrupted" in str(exc).lower():
+        return True
+    if isinstance(exc, SQLAlchemyError) and "interrupted" in str(exc).lower():
         return True
     orig = getattr(exc, "orig", None)
     if isinstance(orig, BaseException) and _looks_like_sqlite_interrupt(orig):
@@ -396,6 +399,7 @@ class WriteSerializer:
         self._active_stack_dump_count = 0
         self._active_interrupt_count = 0
         self._active_wedged_writer_count = 0
+        self._active_wedged_writer_job_id: int | None = None
         self._fairness_promotions = 0
         self._last_active_interrupt_at_iso: str | None = None
         self._last_active_interrupt_age_ms: float | None = None
@@ -514,6 +518,7 @@ class WriteSerializer:
             self._active_sqlite_connection = None
             self._active_interrupt_requested = False
             self._active_interrupt_after_seconds = None
+            self._active_wedged_writer_job_id = None
             self._active_started_at = time.monotonic()
             if not queued.ready.done():
                 queued.ready.set_result(None)
@@ -658,15 +663,19 @@ class WriteSerializer:
         if not self._writer_active or self._active_job_id != job_id:
             return
 
-        self._mark_wedged_writer(
+        marked = self._mark_wedged_writer(
             job_id=job_id,
             label=label,
             reason="interrupt_wedged",
             detail=f"interrupt_after_s={interrupt_after_seconds:.1f} grace_s={grace_seconds:.1f}",
         )
-        self._exit_if_wedged_writer_enabled()
+        if marked:
+            self._exit_if_wedged_writer_enabled()
 
-    def _mark_wedged_writer(self, *, job_id: int, label: str, reason: str, detail: str) -> None:
+    def _mark_wedged_writer(self, *, job_id: int, label: str, reason: str, detail: str) -> bool:
+        if self._active_wedged_writer_job_id == job_id:
+            return False
+        self._active_wedged_writer_job_id = job_id
         active_age_ms = self.active_age_ms
         self.capture_active_worker_stack_if_stale(reason=reason, force=True)
         self._active_wedged_writer_count += 1
@@ -682,6 +691,7 @@ class WriteSerializer:
             active_age_ms,
             detail,
         )
+        return True
 
     def _exit_if_wedged_writer_enabled(self) -> None:
         if self._wedged_writer_exit_enabled():
@@ -886,6 +896,7 @@ class WriteSerializer:
                 self._active_sqlite_connection = None
                 self._active_interrupt_requested = False
                 self._active_interrupt_after_seconds = None
+                self._active_wedged_writer_job_id = None
                 self._active_stage = None
                 self._active_started_at = None
                 self._promote_next_locked()
@@ -911,15 +922,15 @@ class WriteSerializer:
                     pass
 
                 if timed_out and self._writer_active and self._active_job_id == queued.seq:
-                    self._mark_wedged_writer(
+                    marked = self._mark_wedged_writer(
                         job_id=queued.seq,
                         label=label,
                         reason="background_finalize_deadman",
                         detail=f"deadline_s={deadline_seconds:.1f}",
                     )
-                    if self._wedged_writer_exit_enabled():
+                    if marked and self._wedged_writer_exit_enabled():
                         self._exit_if_wedged_writer_enabled()
-                    else:
+                    elif marked:
                         logger.critical(
                             "WriteSerializer releasing wedged writer slot with forced exit disabled; "
                             "stale worker thread may still be running label=%s job_id=%s",
