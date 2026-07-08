@@ -1252,6 +1252,15 @@ class SessionLoopModeResponse(BaseModel):
     loop_mode: SessionLoopMode
 
 
+class SessionNotificationWatchRequest(BaseModel):
+    notification_muted: bool = Field(..., description="When true, suppress Tier 1/2 pushes for this session.")
+
+
+class SessionNotificationWatchResponse(BaseModel):
+    session_id: str
+    notification_muted: bool
+
+
 class BackfillSummariesResponse(BaseModel):
     """Response for summary backfill endpoint."""
 

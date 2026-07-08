@@ -46,6 +46,17 @@ async def _reconcile_runner_health_once() -> None:
         db.close()
 
 
+async def _process_queued_notifications_once() -> None:
+    from zerg.database import get_session_factory
+    from zerg.services.notification_queue import process_queued_notification_events
+
+    db = get_session_factory()()
+    try:
+        await process_queued_notification_events(db)
+    finally:
+        db.close()
+
+
 async def _drain_live_archive_outbox_once() -> dict[str, int]:
     """Drain one live archive outbox batch through the archive writer lane."""
 
@@ -121,6 +132,7 @@ async def _loop() -> None:
         try:
             await asyncio.sleep(RUNNER_HEALTH_RECONCILE_INTERVAL)
             await _reconcile_runner_health_once()
+            await _process_queued_notifications_once()
         except asyncio.CancelledError:
             return
         except Exception:

@@ -69,6 +69,8 @@ from zerg.services.session_views import SessionActionRequest
 from zerg.services.session_views import SessionActionResponse
 from zerg.services.session_views import SessionLoopModeRequest
 from zerg.services.session_views import SessionLoopModeResponse
+from zerg.services.session_views import SessionNotificationWatchRequest
+from zerg.services.session_views import SessionNotificationWatchResponse
 from zerg.services.session_views import SessionPreviewMessage
 from zerg.services.session_views import SessionPreviewResponse
 from zerg.services.session_views import SessionProjectionItemResponse
@@ -912,6 +914,28 @@ async def set_session_loop_mode(
     db.commit()
 
     return SessionLoopModeResponse(session_id=str(session_id), loop_mode=body.loop_mode)
+
+
+@router.patch("/sessions/{session_id}/notification-watch", response_model=SessionNotificationWatchResponse)
+async def set_session_notification_watch(
+    session_id: UUID,
+    body: SessionNotificationWatchRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionNotificationWatchResponse:
+    """Mute or unmute session attention notifications."""
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    session.notification_muted = bool(body.notification_muted)
+    db.commit()
+
+    return SessionNotificationWatchResponse(
+        session_id=str(session_id),
+        notification_muted=bool(session.notification_muted),
+    )
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)

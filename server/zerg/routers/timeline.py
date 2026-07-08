@@ -60,6 +60,8 @@ from zerg.services.session_views import SessionActionResponse
 from zerg.services.session_views import SessionLoopModeRequest
 from zerg.services.session_views import SessionLoopModeResponse
 from zerg.services.session_views import SessionMobileTailResponse
+from zerg.services.session_views import SessionNotificationWatchRequest
+from zerg.services.session_views import SessionNotificationWatchResponse
 from zerg.services.session_views import SessionPreviewResponse
 from zerg.services.session_views import SessionProjectionResponse
 from zerg.services.session_views import SessionResponse
@@ -459,6 +461,21 @@ async def set_timeline_session_loop_mode(
     db: Session = Depends(get_db),
 ):
     return await _sessions_router.set_session_loop_mode(
+        session_id=session_id,
+        body=body,
+        db=db,
+        _auth=None,
+        _single=None,
+    )
+
+
+@router.patch("/sessions/{session_id}/notification-watch", response_model=SessionNotificationWatchResponse)
+async def set_timeline_session_notification_watch(
+    session_id: UUID,
+    body: SessionNotificationWatchRequest,
+    db: Session = Depends(get_db),
+):
+    return await _sessions_router.set_session_notification_watch(
         session_id=session_id,
         body=body,
         db=db,

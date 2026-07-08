@@ -130,6 +130,7 @@ class AgentSession(AgentsBase):
     # not control-plane state — kernel rows do not encode it. Stored as a
     # plain column so PATCH /loop-mode survives restart and refresh.
     loop_mode = Column(String(32), nullable=False, default="assist", server_default=text("'assist'"))
+    notification_muted = Column(Boolean, nullable=False, default=False, server_default=text("0"))
     # Managed permission policy: "bypass" (default, autonomous/skip-permissions) or
     # "remote_approve" (pause on permission prompts, answerable via Longhouse). Has
     # a server_default so _auto_add_missing_columns adds it without a migrator.

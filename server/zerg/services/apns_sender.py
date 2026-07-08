@@ -28,6 +28,10 @@ from zerg.models.notification_client_presence import NotificationClientPresence
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.notification_policy import AttentionDeliveryAction
+from zerg.services.notification_policy import evaluate_tier1_delivery
+from zerg.services.notification_policy import evaluate_tier2_delivery
+from zerg.services.notification_policy import user_time_sensitive_blocked
 from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
 from zerg.services.session_pause_requests import load_active_pause_request_for_session
@@ -106,6 +110,7 @@ class SessionAttentionPush:
     previous_stamp_state: str | None = None
     previous_stamp_at: datetime | None = None
     stamp_state: str = "blocked"
+    time_sensitive: bool = False
 
 
 @dataclass(frozen=True)
@@ -296,6 +301,7 @@ def _create_notification_event(
     collapse_key: str,
     occurred_at: datetime,
     channel_results: dict | None = None,
+    eligible_at: datetime | None = None,
 ) -> NotificationEvent:
     event = NotificationEvent(
         owner_id=owner_id,
@@ -304,12 +310,130 @@ def _create_notification_event(
         state_key=state_key,
         collapse_key=collapse_key,
         event_started_at=occurred_at,
-        eligible_at=occurred_at,
+        eligible_at=eligible_at or occurred_at,
         channel_results=channel_results or {},
     )
     db.add(event)
     db.flush()
     return event
+
+
+def _load_owner_user(db: Session, owner_id: int | None) -> User | None:
+    if owner_id is None:
+        return None
+    return db.query(User).filter(User.id == owner_id).first()
+
+
+def _record_attention_policy_decision(
+    db: Session,
+    *,
+    owner_id: int,
+    session_id: str,
+    event_type: str,
+    state_key: str,
+    collapse_key: str,
+    occurred_at: datetime,
+    reason: str,
+    queue_until: datetime | None = None,
+) -> None:
+    if db.query(User.id).filter(User.id == owner_id).first() is None:
+        return
+    existing = (
+        db.query(NotificationEvent.id)
+        .filter(
+            NotificationEvent.owner_id == owner_id,
+            NotificationEvent.collapse_key == collapse_key,
+            NotificationEvent.event_type == event_type,
+            NotificationEvent.delivered_at.is_(None),
+            NotificationEvent.resolved_at.is_(None),
+        )
+        .first()
+    )
+    if existing is not None:
+        return
+    channel_results: dict[str, object] = {"suppressed": reason}
+    eligible_at = occurred_at
+    if queue_until is not None:
+        channel_results["queued"] = True
+        eligible_at = queue_until
+    _create_notification_event(
+        db,
+        owner_id=owner_id,
+        session_id=session_id,
+        event_type=event_type,
+        state_key=state_key,
+        collapse_key=collapse_key,
+        occurred_at=occurred_at,
+        eligible_at=eligible_at,
+        channel_results=channel_results,
+    )
+
+
+def _tier1_policy_allows_delivery(
+    db: Session,
+    *,
+    owner_id: int,
+    session: AgentSession,
+    event_type: str,
+    state_key: str,
+    collapse_key: str,
+    occurred_at: datetime,
+) -> bool:
+    user = _load_owner_user(db, owner_id)
+    decision = evaluate_tier1_delivery(
+        db,
+        user=user,
+        session=session,
+        occurred_at=occurred_at,
+        event_type=event_type,
+    )
+    if decision.action == AttentionDeliveryAction.DELIVER:
+        return True
+    _record_attention_policy_decision(
+        db,
+        owner_id=owner_id,
+        session_id=str(session.id),
+        event_type=event_type,
+        state_key=state_key,
+        collapse_key=collapse_key,
+        occurred_at=occurred_at,
+        reason=str(decision.reason or decision.action.value),
+        queue_until=decision.queue_until,
+    )
+    return False
+
+
+def _tier2_policy_allows_delivery(
+    db: Session,
+    *,
+    owner_id: int,
+    session: AgentSession,
+    event_type: str,
+    state_key: str,
+    collapse_key: str,
+    occurred_at: datetime,
+) -> bool:
+    user = _load_owner_user(db, owner_id)
+    decision = evaluate_tier2_delivery(
+        db,
+        user=user,
+        session=session,
+        occurred_at=occurred_at,
+    )
+    if decision.action == AttentionDeliveryAction.DELIVER:
+        return True
+    _record_attention_policy_decision(
+        db,
+        owner_id=owner_id,
+        session_id=str(session.id),
+        event_type=event_type,
+        state_key=state_key,
+        collapse_key=collapse_key,
+        occurred_at=occurred_at,
+        reason=str(decision.reason or decision.action.value),
+        queue_until=decision.queue_until,
+    )
+    return False
 
 
 def _mark_attention_events_resolved(
@@ -405,12 +529,24 @@ def prepare_session_attention_push(
     ):
         return None
 
+    collapse_id = _attention_collapse_id(str(session.id))
+    state_key = f"{current_state}:{occurred_at.isoformat()}"
+    if not _tier1_policy_allows_delivery(
+        db,
+        owner_id=owner_id,
+        session=session,
+        event_type=NOTIFICATION_EVENT_SESSION_BLOCKED,
+        state_key=state_key,
+        collapse_key=collapse_id,
+        occurred_at=occurred_at,
+    ):
+        return None
+
     if targets is _TARGETS_SENTINEL:
         targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="attention push")
     if not targets:
         return None
 
-    collapse_id = _attention_collapse_id(str(session.id))
     if previous_state in RESOLVABLE_ATTENTION_PUSH_STATES and previous_state != current_state:
         _mark_attention_events_resolved(
             db,
@@ -437,6 +573,8 @@ def prepare_session_attention_push(
     summary = str(getattr(session, "summary", "") or "").strip() or title
     alert_title = _attention_alert_title(state=current_state, provider=provider)
     alert_body = _attention_alert_body(state=current_state, project=project, title=title, tool_name=tool_name)
+    owner_user = _load_owner_user(db, owner_id)
+    time_sensitive = user_time_sensitive_blocked(owner_user) and current_state == "blocked"
 
     return SessionAttentionPush(
         session_id=str(session.id),
@@ -456,6 +594,7 @@ def prepare_session_attention_push(
         previous_stamp_state=last_attention_push_state,
         previous_stamp_at=last_attention_push_at,
         stamp_state=current_state,
+        time_sensitive=time_sensitive,
     )
 
 
@@ -485,12 +624,23 @@ def prepare_session_needs_answer_push(
     if previous_stamp_state == stamp_state:
         return None
 
+    collapse_id = _attention_collapse_id(str(session.id))
+    if not _tier1_policy_allows_delivery(
+        db,
+        owner_id=owner_id,
+        session=session,
+        event_type=NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER,
+        state_key=stamp_state,
+        collapse_key=collapse_id,
+        occurred_at=occurred_at,
+    ):
+        return None
+
     if targets is _TARGETS_SENTINEL:
         targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="needs-answer push")
     if not targets:
         return None
 
-    collapse_id = _attention_collapse_id(str(session.id))
     replaces_previous_attention = previous_state != "needs_answer" or previous_stamp_state != stamp_state
     if previous_state in RESOLVABLE_ATTENTION_PUSH_STATES and replaces_previous_attention:
         _mark_attention_events_resolved(
@@ -537,6 +687,7 @@ def prepare_session_needs_answer_push(
         previous_stamp_state=previous_stamp_state,
         previous_stamp_at=previous_stamp_at,
         stamp_state=stamp_state,
+        time_sensitive=user_time_sensitive_blocked(_load_owner_user(db, owner_id)),
     )
 
 
@@ -568,6 +719,19 @@ def prepare_session_blocked_reminder_push(
     if (occurred_at - previous_stamp_at) < BLOCKED_REMINDER_DELAY:
         return None
 
+    collapse_id = _collapse_id("lh-attn-reminder", str(session.id))
+    state_key = f"blocked:{previous_stamp_at.isoformat()}"
+    if not _tier1_policy_allows_delivery(
+        db,
+        owner_id=owner_id,
+        session=session,
+        event_type=NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER,
+        state_key=state_key,
+        collapse_key=collapse_id,
+        occurred_at=occurred_at,
+    ):
+        return None
+
     if targets is _TARGETS_SENTINEL:
         targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="blocked reminder push")
     if not targets:
@@ -578,9 +742,7 @@ def prepare_session_blocked_reminder_push(
     tool_name = _clean_label(current_tool_name)
     title = _session_title(session, db=db)
     summary = str(getattr(session, "summary", "") or "").strip() or title
-    collapse_id = _collapse_id("lh-attn-reminder", str(session.id))
     stamp_state = "blocked:reminded"
-    state_key = f"blocked:{previous_stamp_at.isoformat()}"
     notification_event = _create_notification_event(
         db,
         owner_id=owner_id,
@@ -611,6 +773,7 @@ def prepare_session_blocked_reminder_push(
         previous_stamp_state=previous_stamp_state,
         previous_stamp_at=previous_stamp_at,
         stamp_state=stamp_state,
+        time_sensitive=user_time_sensitive_blocked(_load_owner_user(db, owner_id)),
     )
 
 
@@ -747,6 +910,19 @@ def prepare_long_run_waiting_push(
     if _has_unresolved_attention(previous_stamp_state, "needs_answer"):
         return None
 
+    collapse_id = _collapse_id("lh-attn-longrun", str(session.id))
+    state_key = f"needs_user:{execution_started_at.isoformat()}"
+    if not _tier2_policy_allows_delivery(
+        db,
+        owner_id=owner_id,
+        session=session,
+        event_type=NOTIFICATION_EVENT_LONG_RUN_WAITING,
+        state_key=state_key,
+        collapse_key=collapse_id,
+        occurred_at=occurred_at,
+    ):
+        return None
+
     if targets is _TARGETS_SENTINEL:
         targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="long-run waiting push")
     if not targets:
@@ -756,8 +932,6 @@ def prepare_long_run_waiting_push(
     project = _clean_label(getattr(session, "project", None))
     title = _session_title(session, db=db)
     summary = str(getattr(session, "summary", "") or "").strip() or title
-    collapse_id = _collapse_id("lh-attn-longrun", str(session.id))
-    state_key = f"needs_user:{execution_started_at.isoformat()}"
     notification_event = _create_notification_event(
         db,
         owner_id=owner_id,
@@ -1144,6 +1318,8 @@ async def send_session_attention_push(notification: SessionAttentionPush) -> boo
                 "apns-collapse-id": notification.collapse_id,
                 "apns-expiration": expiration,
             }
+            if notification.time_sensitive:
+                headers["apns-interruption-level"] = "time-sensitive"
             url = f"https://{host}/3/device/{target.device_token}"
             try:
                 response = await client.post(url, headers=headers, json=payload)

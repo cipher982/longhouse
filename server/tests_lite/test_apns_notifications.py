@@ -246,11 +246,11 @@ def test_user_notification_settings_default_true_and_patchable(tmp_path):
     with TestClient(api_app) as client:
         initial = client.get("/users/me/notifications")
         assert initial.status_code == 200, initial.text
-        assert initial.json() == {"apns_enabled": True}
+        assert initial.json()["apns_enabled"] is True
 
         updated = client.patch("/users/me/notifications", json={"apns_enabled": False})
         assert updated.status_code == 200, updated.text
-        assert updated.json() == {"apns_enabled": False}
+        assert updated.json()["apns_enabled"] is False
 
     with SessionLocal() as db:
         user = db.query(User).filter(User.id == 1).first()

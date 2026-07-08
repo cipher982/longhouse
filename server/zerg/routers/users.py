@@ -32,11 +32,11 @@ from zerg.models.user import User
 from zerg.schemas.schemas import UserOut
 from zerg.schemas.schemas import UserUpdate
 from zerg.schemas.usage import UserUsageResponse
-from zerg.services.apns_sender import set_user_apns_enabled
-from zerg.services.apns_sender import user_apns_enabled
 
 # Avatar helper
 from zerg.services.avatar_service import store_avatar_for_user
+from zerg.services.notification_policy import apply_user_notification_prefs
+from zerg.services.notification_policy import load_user_notification_prefs
 
 # Usage service
 from zerg.services.usage_service import get_user_usage
@@ -48,10 +48,18 @@ router = APIRouter(tags=["users"], dependencies=[Depends(get_current_user)])
 
 class UserNotificationSettingsResponse(BaseModel):
     apns_enabled: bool
+    notify_only_when_away: bool = False
+    time_sensitive_blocked: bool = False
+    quiet_hours_start: str | None = None
+    quiet_hours_end: str | None = None
 
 
 class UserNotificationSettingsUpdate(BaseModel):
-    apns_enabled: bool
+    apns_enabled: bool | None = None
+    notify_only_when_away: bool | None = None
+    time_sensitive_blocked: bool | None = None
+    quiet_hours_start: str | None = None
+    quiet_hours_end: str | None = None
 
 
 class UserClientPresenceHeartbeat(BaseModel):
@@ -136,7 +144,14 @@ async def update_current_user(
 def read_current_user_notification_settings(current_user=Depends(get_current_user)) -> UserNotificationSettingsResponse:
     """Return the authenticated user's mobile notification settings."""
 
-    return UserNotificationSettingsResponse(apns_enabled=user_apns_enabled(current_user))
+    prefs = load_user_notification_prefs(current_user)
+    return UserNotificationSettingsResponse(
+        apns_enabled=prefs.apns_enabled,
+        notify_only_when_away=prefs.notify_only_when_away,
+        time_sensitive_blocked=prefs.time_sensitive_blocked,
+        quiet_hours_start=prefs.quiet_hours_start,
+        quiet_hours_end=prefs.quiet_hours_end,
+    )
 
 
 @router.patch("/users/me/notifications", response_model=UserNotificationSettingsResponse)
@@ -152,10 +167,23 @@ async def update_current_user_notification_settings(
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    set_user_apns_enabled(user, patch.apns_enabled)
+    updates = patch.model_dump(exclude_unset=True)
+    if not updates:
+        prefs = load_user_notification_prefs(user)
+    else:
+        try:
+            prefs = apply_user_notification_prefs(user, updates)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     db.commit()
     db.refresh(user)
-    return UserNotificationSettingsResponse(apns_enabled=user_apns_enabled(user))
+    return UserNotificationSettingsResponse(
+        apns_enabled=prefs.apns_enabled,
+        notify_only_when_away=prefs.notify_only_when_away,
+        time_sensitive_blocked=prefs.time_sensitive_blocked,
+        quiet_hours_start=prefs.quiet_hours_start,
+        quiet_hours_end=prefs.quiet_hours_end,
+    )
 
 
 @router.post("/users/me/client-presence", response_model=UserClientPresenceResponse)
