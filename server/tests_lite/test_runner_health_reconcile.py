@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 from unittest.mock import patch
 from uuid import UUID
 
@@ -72,11 +72,11 @@ async def test_reconcile_opens_offline_incident_and_marks_cached_status(tmp_path
         db.close()
 
 
-async def test_reconcile_sends_one_telegram_alert_per_incident(tmp_path: Path):
+async def test_reconcile_sends_one_email_alert_per_incident(tmp_path: Path):
     db = _make_db(tmp_path)
     try:
         now = utc_now_naive()
-        user = User(email="owner@test.local", role="ADMIN", context={"telegram_chat_id": "1234"})
+        user = User(email="owner@test.local", role="ADMIN")
         db.add(user)
         db.commit()
         db.refresh(user)
@@ -108,14 +108,13 @@ async def test_reconcile_sends_one_telegram_alert_per_incident(tmp_path: Path):
         db.add(incident)
         db.commit()
 
-        send_telegram = AsyncMock(return_value=True)
+        send_email = MagicMock(return_value=True)
         with (
             patch(
                 "zerg.services.runner_health_reconciler.get_runner_connection_manager",
                 return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: False),
             ),
-            patch("zerg.services.runner_health_reconciler._send_telegram_alert", send_telegram),
-            patch("zerg.services.runner_health_reconciler._send_email_alert", return_value=False),
+            patch("zerg.services.runner_health_reconciler._send_email_alert", send_email),
         ):
             result_first = await reconcile_runner_health(db, now=now)
             result_second = await reconcile_runner_health(db, now=now + timedelta(minutes=1))
@@ -124,9 +123,9 @@ async def test_reconcile_sends_one_telegram_alert_per_incident(tmp_path: Path):
 
         assert result_first["alerts_sent"] == 1
         assert result_second["alerts_sent"] == 0
-        assert incident.alert_channel == "telegram"
+        assert incident.alert_channel == "email"
         assert incident.alert_sent_at is not None
-        send_telegram.assert_awaited_once()
+        send_email.assert_called_once()
     finally:
         db.close()
 
@@ -136,7 +135,7 @@ async def test_reconcile_commits_runner_and_incident_before_alert_await(tmp_path
     try:
         now = utc_now_naive()
         SessionLocal = make_sessionmaker(db.get_bind())
-        user = User(email="owner@test.local", role="ADMIN", context={"telegram_chat_id": "1234"})
+        user = User(email="owner@test.local", role="ADMIN")
         db.add(user)
         db.commit()
         db.refresh(user)
@@ -170,7 +169,7 @@ async def test_reconcile_commits_runner_and_incident_before_alert_await(tmp_path
 
         observed: dict[str, object] = {}
 
-        async def _send_telegram_alert(_user, _text):
+        def _send_email_alert(_user, _subject, _body):
             with SessionLocal() as probe_db:
                 stored_runner = probe_db.query(Runner).filter(Runner.id == runner.id).one()
                 stored_incident = (
@@ -188,8 +187,7 @@ async def test_reconcile_commits_runner_and_incident_before_alert_await(tmp_path
                 "zerg.services.runner_health_reconciler.get_runner_connection_manager",
                 return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: False),
             ),
-            patch("zerg.services.runner_health_reconciler._send_telegram_alert", _send_telegram_alert),
-            patch("zerg.services.runner_health_reconciler._send_email_alert", return_value=False),
+            patch("zerg.services.runner_health_reconciler._send_email_alert", _send_email_alert),
         ):
             result = await reconcile_runner_health(db, now=now)
 
@@ -205,7 +203,7 @@ async def test_reconcile_resolves_non_proactive_incident_for_on_demand_runner(tm
     db = _make_db(tmp_path)
     try:
         now = utc_now_naive()
-        user = User(email="owner@test.local", role="ADMIN", context={"telegram_chat_id": "1234"})
+        user = User(email="owner@test.local", role="ADMIN")
         db.add(user)
         db.commit()
         db.refresh(user)
@@ -238,14 +236,9 @@ async def test_reconcile_resolves_non_proactive_incident_for_on_demand_runner(tm
         db.add(incident)
         db.commit()
 
-        send_telegram = AsyncMock(return_value=True)
-        with (
-            patch(
-                "zerg.services.runner_health_reconciler.get_runner_connection_manager",
-                return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: False),
-            ),
-            patch("zerg.services.runner_health_reconciler._send_telegram_alert", send_telegram),
-            patch("zerg.services.runner_health_reconciler._send_email_alert", return_value=True),
+        with patch(
+            "zerg.services.runner_health_reconciler.get_runner_connection_manager",
+            return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: False),
         ):
             result = await reconcile_runner_health(db, now=now)
 
@@ -257,7 +250,6 @@ async def test_reconcile_resolves_non_proactive_incident_for_on_demand_runner(tm
         assert incident.alert_sent_at is None
         assert incident.context["alert_suppressed_reason"] == "non_proactive_availability"
         assert incident.context["resolved_by_policy"] == "on_demand"
-        send_telegram.assert_not_awaited()
     finally:
         db.close()
 

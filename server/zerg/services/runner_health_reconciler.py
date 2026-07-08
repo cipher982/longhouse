@@ -17,7 +17,6 @@ from zerg.services.runner_connection_manager import get_runner_connection_manage
 from zerg.services.runner_health import RunnerHealthAssessment
 from zerg.services.runner_health import assess_runner_health
 from zerg.services.runner_health import runner_requires_proactive_attention
-from zerg.services.telegram_format import format_for_telegram
 from zerg.shared.email import send_email
 from zerg.utils.time import utc_now_naive
 
@@ -170,29 +169,6 @@ def _resolve_open_incident_as_non_actionable(
     incident.context = context
 
 
-async def _send_telegram_alert(user: User, text: str) -> bool:
-    chat_id = str((user.context or {}).get("telegram_chat_id", "")).strip()
-    if not chat_id:
-        return False
-
-    from zerg.channels.registry import get_registry
-    from zerg.channels.types import ChannelMessage
-
-    channel = get_registry().get("telegram")
-    if not channel:
-        return False
-
-    result = await channel.send_message(
-        ChannelMessage(
-            channel_id="telegram",
-            to=chat_id,
-            text=format_for_telegram(text),
-            parse_mode="html",
-        )
-    )
-    return bool(result.get("success"))
-
-
 def _send_email_alert(user: User, subject: str, body: str) -> bool:
     email = str(getattr(user, "email", "") or "").strip()
     if not email:
@@ -212,7 +188,7 @@ def _build_external_alert_copy(
     health: RunnerHealthAssessment,
     incident: RunnerHealthIncident,
     now: datetime,
-) -> tuple[str, str, str]:
+) -> tuple[str, str]:
     offline_for = _format_duration(now - incident.opened_at)
     host_label = _runner_host_label(runner)
     version_line = ""
@@ -220,12 +196,6 @@ def _build_external_alert_copy(
         version_line = f"\nVersion: v{health.runner_version} (latest v{health.latest_runner_version})"
 
     subject = f"Runner offline: {runner.name}"
-    telegram_text = (
-        f"Runner <b>{runner.name}</b> on <b>{host_label}</b> has been offline for <b>{offline_for}</b>.\n"
-        f"{health.status_summary}\n"
-        "Next step: restart the runner service. If it does not reconnect, generate a repair command in "
-        "Longhouse and re-run the installer."
-    )
     body = (
         "Longhouse detected a runner outage.\n\n"
         f"Runner: {runner.name}\n"
@@ -239,7 +209,7 @@ def _build_external_alert_copy(
         "1. Restart the runner service on the machine.\n"
         "2. If it does not reconnect, generate a repair command in Longhouse and re-run the installer.\n"
     )
-    return subject, telegram_text, body
+    return subject, body
 
 
 def _external_attention_allowed(health: RunnerHealthAssessment) -> tuple[bool, str | None]:
@@ -276,24 +246,23 @@ async def _maybe_send_external_alert(
     if now - incident.opened_at < ALERT_AFTER:
         return False
 
-    subject, telegram_text, body = _build_external_alert_copy(runner, health, incident, now)
-    channel: str | None = None
-    if await _send_telegram_alert(user, telegram_text):
-        channel = "telegram"
-    elif _send_email_alert(user, subject, body):
-        channel = "email"
-
-    if not channel:
+    subject, body = _build_external_alert_copy(runner, health, incident, now)
+    if not _send_email_alert(user, subject, body):
+        logger.warning(
+            "Runner offline alert email failed for runner %s owner %s",
+            runner.name,
+            user.id,
+        )
         return False
 
     incident.alert_sent_at = now
-    incident.alert_channel = channel
+    incident.alert_channel = "email"
     incident.alert_count = int(incident.alert_count or 0) + 1
     context = dict(incident.context or {})
     context.update(
         {
             "alert_sent_at": now.isoformat(),
-            "alert_channel": channel,
+            "alert_channel": "email",
         }
     )
     incident.context = context
