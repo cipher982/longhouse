@@ -1,6 +1,7 @@
 import asyncio
 import sqlite3
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -24,8 +25,12 @@ from zerg.services.retrieval_index import rebuild_fts
 from zerg.services.retrieval_index import replace_session_chunks
 from zerg.services.retrieval_index import resolve_retrieval_db_path
 from zerg.services.retrieval_index import search_lexical_chunks
+from zerg.services.retrieval_index_jobs import claim_next_recall_index_job
 from zerg.services.retrieval_index_jobs import enqueue_recall_index_job
 from zerg.services.retrieval_index_jobs import get_active_recall_index_job
+from zerg.services.retrieval_index_jobs import get_recall_index_job
+from zerg.services.retrieval_index_jobs import requeue_stale_recall_index_jobs
+from zerg.services.retrieval_index_jobs import request_recall_index_cancel
 from zerg.services.retrieval_index_jobs import run_recall_index_job_once
 
 
@@ -48,6 +53,8 @@ def _chunk(
     project: str = "longhouse",
     provider: str = "codex",
     environment: str = "test",
+    started_at: str = "2026-07-08T00:00:00+00:00",
+    last_activity_at: str | None = None,
 ) -> RetrievalChunk:
     return RetrievalChunk(
         chunk_uid=uid,
@@ -63,7 +70,8 @@ def _chunk(
         provider=provider,
         project=project,
         environment=environment,
-        started_at="2026-07-08T00:00:00+00:00",
+        started_at=started_at,
+        last_activity_at=last_activity_at,
         content=content,
         intent_text=content if kind == "intent" else None,
         evidence_text=content if kind != "intent" else None,
@@ -140,6 +148,59 @@ def test_retrieval_index_jobs_allow_one_active_job(tmp_path):
     assert second.id == first.id
     assert active is not None
     assert active.id == first.id
+
+
+def test_retrieval_index_requeues_stale_running_job(tmp_path):
+    with _open_index(tmp_path) as conn:
+        queued, _created = enqueue_recall_index_job(
+            conn,
+            project=None,
+            provider=None,
+            since_days=90,
+            limit=100,
+        )
+        running = claim_next_recall_index_job(conn)
+        assert running is not None
+        stale_heartbeat = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        with conn:
+            conn.execute(
+                "UPDATE recall_index_jobs SET heartbeat_at = ? WHERE id = ?",
+                (stale_heartbeat, queued.id),
+            )
+
+        requeued = requeue_stale_recall_index_jobs(conn, stale_after_seconds=300)
+        job = get_recall_index_job(conn, queued.id)
+
+    assert requeued == 1
+    assert job is not None
+    assert job.status == "queued"
+
+
+def test_canceled_recall_index_job_finishes_canceled_without_indexing(tmp_path):
+    main_path = tmp_path / "longhouse.db"
+    database_url = f"sqlite:///{main_path}"
+    engine = make_engine(database_url)
+    initialize_database(engine)
+    SessionLocal = make_sessionmaker(engine)
+    retrieval_path = resolve_retrieval_db_path(database_url)
+    assert retrieval_path is not None
+
+    with connect_retrieval_db(retrieval_path) as conn:
+        initialize_retrieval_db(conn)
+        queued, _created = enqueue_recall_index_job(
+            conn,
+            project=None,
+            provider=None,
+            since_days=90,
+            limit=100,
+        )
+        request_recall_index_cancel(conn, queued.id)
+
+    result = run_recall_index_job_once(database_url=database_url, session_factory=SessionLocal)
+
+    assert result is not None
+    assert result.status == "canceled"
+    assert result.sessions_indexed == 0
 
 
 def test_project_session_chunks_creates_parent_and_child_evidence():
@@ -237,6 +298,40 @@ def test_child_chunks_can_reference_parent_context(tmp_path):
         assert len(hits) == 1
         assert hits[0].chunk_uid == "child"
         assert hits[0].parent_chunk_id is not None
+
+
+def test_lexical_since_filter_uses_recent_activity_for_old_sessions(tmp_path):
+    with _open_index(tmp_path) as conn:
+        replace_session_chunks(
+            conn,
+            "session-old-active",
+            [
+                _chunk(
+                    "old-active",
+                    session_id="session-old-active",
+                    content="ancient started recent activity needle",
+                    started_at="2026-01-01T00:00:00+00:00",
+                    last_activity_at="2026-07-08T00:00:00+00:00",
+                )
+            ],
+        )
+        replace_session_chunks(
+            conn,
+            "session-old-inactive",
+            [
+                _chunk(
+                    "old-inactive",
+                    session_id="session-old-inactive",
+                    content="ancient inactive needle",
+                    started_at="2026-01-01T00:00:00+00:00",
+                    last_activity_at="2026-01-02T00:00:00+00:00",
+                )
+            ],
+        )
+
+        hits = search_lexical_chunks(conn, "ancient", since="2026-07-01T00:00:00+00:00", limit=5)
+
+    assert [hit.chunk_uid for hit in hits] == ["old-active"]
 
 
 def test_reprojection_removes_stale_fts_rows(tmp_path):

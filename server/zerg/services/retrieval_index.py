@@ -729,7 +729,7 @@ def search_lexical_chunks(
           AND (:project IS NULL OR c.project = :project)
           AND (:provider IS NULL OR c.provider = :provider)
           AND (:environment IS NULL OR c.environment = :environment)
-          AND (:since IS NULL OR c.started_at >= :since)
+          AND (:since IS NULL OR coalesce(c.last_activity_at, c.started_at) >= :since)
           AND (
             :hide_internal_canary = 0
             OR (

@@ -277,12 +277,9 @@ def _update_job(
     error: str | None = None,
     finished: bool = False,
 ) -> None:
-    current = get_recall_index_job(conn, job_id)
-    if current is None:
-        raise RuntimeError(f"recall index job {job_id} not found")
     now = _utc_now_iso()
     with conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             UPDATE recall_index_jobs
             SET status = COALESCE(?, status),
@@ -313,11 +310,13 @@ def _update_job(
                 job_id,
             ),
         )
+    if cursor.rowcount == 0:
+        raise RuntimeError(f"recall index job {job_id} not found")
 
 
 def _candidate_sessions(db: Session, job: RecallIndexJob) -> list[AgentSession]:
     since = datetime.now(timezone.utc) - timedelta(days=job.since_days)
-    session_query = db.query(AgentSession).filter(AgentSession.started_at >= since)
+    session_query = db.query(AgentSession).filter((AgentSession.started_at >= since) | (AgentSession.last_activity_at >= since))
     if job.project:
         session_query = session_query.filter(AgentSession.project == job.project)
     if job.provider:
@@ -347,6 +346,7 @@ def _index_one_job(
             db = session_factory()
             try:
                 sessions = _candidate_sessions(db, job)
+                db.expunge_all()
                 progress_total = len(sessions)
                 _update_job(
                     retrieval_db,
@@ -354,6 +354,17 @@ def _index_one_job(
                     progress_total=progress_total,
                     progress_done=min(job.progress_done, progress_total),
                 )
+                latest = get_recall_index_job(retrieval_db, job.id)
+                if latest is not None and latest.cancel_requested:
+                    child_chunks = child_chunk_count(retrieval_db)
+                    _update_job(
+                        retrieval_db,
+                        job.id,
+                        status="canceled",
+                        child_chunks=child_chunks,
+                        finished=True,
+                    )
+                    return get_recall_index_job(retrieval_db, job.id)
                 for position, session in enumerate(sessions, start=1):
                     latest = get_recall_index_job(retrieval_db, job.id)
                     if latest is not None and latest.cancel_requested:
@@ -380,6 +391,7 @@ def _index_one_job(
                     if chunks:
                         chunks_indexed += replace_session_chunks(retrieval_db, str(session.id), chunks)
                         sessions_indexed += 1
+                    db.expunge_all()
                     child_chunks = child_chunk_count(retrieval_db)
                     _update_job(
                         retrieval_db,
