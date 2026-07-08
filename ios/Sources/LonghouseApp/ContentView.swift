@@ -22,7 +22,7 @@ struct ContentView: View {
     @ViewBuilder
     private var normalContent: some View {
         if appState.shouldShowAuthenticatedShell {
-            AuthenticatedPager()
+            TimelineView()
         } else if appState.isValidating {
             LoadingScreen()
         } else {
@@ -47,38 +47,6 @@ private struct LoadingScreen: View {
             }
         }
     }
-}
-
-private struct AuthenticatedPager: View {
-    @EnvironmentObject var appState: AppState
-    @State private var selectedTab: PagerTab = .timeline
-
-    var body: some View {
-        TabView(selection: $selectedTab) {
-            TimelineView()
-                .tag(PagerTab.timeline)
-                .tabItem {
-                    Label("Timeline", systemImage: "rectangle.stack")
-                }
-            SettingsView()
-                .tag(PagerTab.settings)
-                .tabItem {
-                    Label("Settings", systemImage: "gearshape")
-                }
-        }
-        // NotificationCenter delivers on the posting thread, and push payloads
-        // are posted from nonisolated APNs delegate code — hop to main before
-        // touching SwiftUI state or it crashes with "Publishing changes from
-        // background threads is not allowed".
-        .onReceive(NotificationCenter.default.publisher(for: .longhouseOpenSessionFromPush).receive(on: DispatchQueue.main)) { _ in
-            selectedTab = .timeline
-        }
-    }
-}
-
-private enum PagerTab {
-    case timeline
-    case settings
 }
 
 private struct ServerConfigButton: View {

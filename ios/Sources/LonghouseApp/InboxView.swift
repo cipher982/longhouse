@@ -9,6 +9,7 @@ struct TimelineView: View {
     @StateObject private var viewModel = TimelineViewModel()
     @State private var path: [SessionRoute] = []
     @State private var launchSheetPresented = false
+    @State private var settingsPresented = false
     #if DEBUG
     @State private var forcedConnectionBanner: TimelineConnectivityBanner?
     #endif
@@ -72,6 +73,14 @@ struct TimelineView: View {
                             .accessibilityLabel("Start session")
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        settingsPresented = true
+                    } label: {
+                        Image(systemName: "gearshape")
+                            .accessibilityLabel("Settings")
+                    }
+                }
                 #if DEBUG
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
@@ -94,6 +103,9 @@ struct TimelineView: View {
                     }
                 }
                 #endif
+            }
+            .sheet(isPresented: $settingsPresented) {
+                SettingsView()
             }
             .sheet(isPresented: $launchSheetPresented) {
                 LaunchSessionSheet { sessionId in

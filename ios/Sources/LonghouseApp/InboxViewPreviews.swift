@@ -380,3 +380,8 @@ private func mockSession(
     .preferredColorScheme(.dark)
 }
 #endif
+
+#Preview("Timeline shell — toolbar") {
+    TimelineView()
+        .environmentObject(AppState())
+}

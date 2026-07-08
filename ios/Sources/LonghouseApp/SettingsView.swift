@@ -3,6 +3,7 @@ import SwiftUI
 @MainActor
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.dismiss) private var dismiss
     @State private var showingServerSheet = false
     @State private var showingSignOutConfirm = false
     @State private var apnsEnabled = true
@@ -63,6 +64,12 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
             .sheet(isPresented: $showingServerSheet) {
                 ServerConfigSheet()
             }
@@ -141,4 +148,9 @@ struct SettingsView: View {
             notificationsError = "Couldn't save notification settings."
         }
     }
+}
+
+#Preview("Settings sheet") {
+    SettingsView()
+        .environmentObject(AppState())
 }
