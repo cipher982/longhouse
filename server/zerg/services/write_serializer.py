@@ -155,6 +155,7 @@ class _QueuedWrite:
     priority: int
     seq: int
     label: str = field(compare=False, default="")
+    enqueued_at: float = field(compare=False, default=0.0)
     ready: asyncio.Future[None] = field(compare=False, repr=False, default=None)
 
 
@@ -165,6 +166,7 @@ _DEFAULT_INTERRUPT_AFTER_SECONDS = 120.0
 _DEFAULT_INTERRUPT_GRACE_SECONDS = 15.0
 _DEFAULT_TIMEOUT_INTERRUPT_GRACE_SECONDS = 2.0
 _DEFAULT_BACKGROUND_FINALIZE_GRACE_SECONDS = 10.0
+_DEFAULT_FAIRNESS_PROMOTE_AFTER_MS = 30_000.0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -394,6 +396,7 @@ class WriteSerializer:
         self._active_stack_dump_count = 0
         self._active_interrupt_count = 0
         self._active_wedged_writer_count = 0
+        self._fairness_promotions = 0
         self._last_active_interrupt_at_iso: str | None = None
         self._last_active_interrupt_age_ms: float | None = None
         self._last_active_interrupt_label: str | None = None
@@ -500,7 +503,7 @@ class WriteSerializer:
         if self._writer_active:
             return
         while self._queue:
-            queued = heapq.heappop(self._queue)
+            queued = self._pop_next_locked()
             if queued.ready.cancelled():
                 continue
             self._writer_active = True
@@ -515,6 +518,28 @@ class WriteSerializer:
             if not queued.ready.done():
                 queued.ready.set_result(None)
             return
+
+    def _pop_next_locked(self) -> _QueuedWrite:
+        promote_after_ms = _env_float(
+            "LONGHOUSE_WRITE_SERIALIZER_FAIRNESS_PROMOTE_AFTER_MS",
+            _DEFAULT_FAIRNESS_PROMOTE_AFTER_MS,
+        )
+        if promote_after_ms > 0:
+            now = time.monotonic()
+            aged: list[tuple[float, int, int, int, _QueuedWrite]] = []
+            for index, item in enumerate(self._queue):
+                if item.ready.cancelled():
+                    continue
+                wait_ms = (now - item.enqueued_at) * 1000
+                if wait_ms >= promote_after_ms:
+                    aged.append((item.enqueued_at, item.priority, item.seq, index, item))
+            if aged:
+                _, _, _, index, queued = min(aged)
+                self._queue.pop(index)
+                heapq.heapify(self._queue)
+                self._fairness_promotions += 1
+                return queued
+        return heapq.heappop(self._queue)
 
     def capture_active_worker_stack_if_stale(self, *, reason: str = "watchdog", force: bool = False) -> bool:
         """Log the active writer thread stack when it exceeds the evidence threshold."""
@@ -749,6 +774,7 @@ class WriteSerializer:
             priority=_priority_for_label(label) if priority is None else priority,
             seq=self._next_seq,
             label=label,
+            enqueued_at=t0,
             ready=asyncio.get_running_loop().create_future(),
         )
         self._next_seq += 1
@@ -1128,6 +1154,7 @@ class WriteSerializer:
             "queued_labels": [item.label for item in sorted(self._queue)[:5]],
             "total_writes": s.total_writes,
             "errors": s.errors,
+            "fairness_promotions": self._fairness_promotions,
             "avg_queue_wait_ms": round(avg_wait, 1),
             "max_queue_wait_ms": round(s.max_queue_wait_ms, 1),
             "avg_exec_ms": round(avg_exec, 1),

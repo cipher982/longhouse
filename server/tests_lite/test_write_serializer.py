@@ -228,6 +228,52 @@ async def test_background_ingest_repair_stays_behind_machine_health_signals(tmp_
 
 
 @pytest.mark.asyncio
+async def test_aged_background_writer_gets_fairness_promotion(tmp_path, monkeypatch):
+    db_path = tmp_path / "write-serializer-fairness.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_FAIRNESS_PROMOTE_AFTER_MS", "1")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    started = threading.Event()
+    release = threading.Event()
+    run_order: list[str] = []
+
+    def _make_write(label: str):
+        def _write(db):
+            run_order.append(label)
+            if label == "first":
+                started.set()
+                release.wait(1.0)
+            db.execute(sa_text("INSERT INTO writes(label) VALUES (:label)"), {"label": label})
+
+        return _write
+
+    first = asyncio.create_task(serializer.execute(_make_write("first"), label="summary"))
+    await asyncio.to_thread(started.wait, 1.0)
+
+    archive = asyncio.create_task(serializer.execute(_make_write("archive"), label="ingest-replay"))
+    for _ in range(50):
+        if serializer.queue_depth == 1:
+            break
+        await asyncio.sleep(0.01)
+    await asyncio.sleep(0.01)
+
+    interactive = asyncio.create_task(serializer.execute(_make_write("interactive"), label="refresh-session"))
+    release.set()
+    await asyncio.gather(first, archive, interactive)
+
+    assert run_order == ["first", "archive", "interactive"]
+    assert serializer.get_metrics()["fairness_promotions"] >= 1
+
+
+@pytest.mark.asyncio
 async def test_live_ingest_jumps_ahead_of_archive_ingest(tmp_path):
     db_path = tmp_path / "write-serializer-live-ingest-priority.db"
     engine = make_engine(f"sqlite:///{db_path}")
@@ -1057,3 +1103,30 @@ def test_get_wal_bytes_returns_int_or_none(tmp_path, monkeypatch):
         assert wal_bytes >= 0
     finally:
         monkeypatch.setattr(database_mod, "default_engine", original_engine)
+
+
+def test_wal_checkpoint_records_last_result(tmp_path):
+    db_path = tmp_path / "wal-checkpoint-metrics.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY)")
+        conn.exec_driver_sql("INSERT INTO writes DEFAULT VALUES")
+
+    import zerg.database as database_mod
+
+    payload = database_mod._run_wal_checkpoint(engine, label="archive-test", truncate_bytes=0)
+    metrics = database_mod.get_wal_checkpoint_metrics()
+
+    assert payload["label"] == "archive-test"
+    assert metrics["archive-test"]["label"] == "archive-test"
+    assert metrics["archive-test"]["skipped"] is False
+    assert metrics["archive-test"]["busy"] >= 0
+    assert metrics["archive-test"]["log_frames"] >= 0
+    assert metrics["archive-test"]["checkpointed_frames"] >= 0
+    assert metrics["archive-test"]["remaining_frames"] >= 0
+    assert metrics["archive-test"]["checked_at_unix"] > 0
+
+    metrics["archive-test"]["busy"] = 999
+    assert database_mod.get_wal_checkpoint_metrics()["archive-test"]["busy"] != 999

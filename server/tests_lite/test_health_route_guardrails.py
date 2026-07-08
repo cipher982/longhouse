@@ -106,6 +106,70 @@ def test_health_reports_saturated_writer_without_entering_writer_lane(tmp_path, 
     assert payload["checks"]["db_pool"]["total_checkouts"] >= 2
 
 
+def test_health_reports_sqlite_wal_checkpoint_metrics(tmp_path, monkeypatch):
+    _stub_build_identity(monkeypatch)
+    engine = make_engine(f"sqlite:///{tmp_path}/health_wal_checkpoint.db")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
+
+    class QuietWriter:
+        is_configured = True
+
+        def get_metrics(self):
+            return {
+                "queue_depth": 0,
+                "writer_active": False,
+                "active_label": None,
+                "active_age_ms": 0.0,
+            }
+
+    import zerg.database as database_module
+
+    monkeypatch.setattr(database_module, "default_engine", engine)
+    monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 123)
+    monkeypatch.setattr(database_module, "get_live_wal_bytes", lambda: 45)
+    monkeypatch.setattr(
+        database_module,
+        "get_wal_checkpoint_metrics",
+        lambda: {
+            "archive": {
+                "label": "archive",
+                "skipped": False,
+                "busy": 0,
+                "log_frames": 7,
+                "checkpointed_frames": 7,
+                "remaining_frames": 0,
+                "checked_at_unix": 1.0,
+            }
+        },
+    )
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: QuietWriter())
+    monkeypatch.setattr("zerg.services.write_serializer.get_live_write_serializer", lambda: QuietWriter())
+    monkeypatch.setattr(
+        health_router,
+        "_session_projection_lag_check",
+        lambda: {"status": "pass", "pending_sessions": 0},
+    )
+    monkeypatch.setattr(
+        health_router,
+        "_session_enrichment_lag_check",
+        lambda: {"status": "pass", "pending_sessions": 0},
+    )
+
+    payload = health_router.health_check(
+        SimpleNamespace(
+            client=SimpleNamespace(host="testclient"),
+            headers={},
+        )
+    )
+
+    sqlite_wal = payload["checks"]["sqlite_wal"]
+    assert sqlite_wal["wal_bytes"] == 123
+    assert sqlite_wal["live_wal_bytes"] == 45
+    assert sqlite_wal["checkpoints"]["archive"]["log_frames"] == 7
+    assert sqlite_wal["checkpoints"]["archive"]["remaining_frames"] == 0
+
+
 def test_health_reports_archive_degraded_for_stale_active_writer_with_queued_work(tmp_path, monkeypatch):
     _stub_build_identity(monkeypatch)
     engine = make_engine(f"sqlite:///{tmp_path}/health_stale_writer.db")

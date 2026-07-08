@@ -2217,6 +2217,8 @@ def _ensure_agents_fts(engine: Engine) -> None:
 # ---------------------------------------------------------------------------
 
 _wal_checkpoint_task = None
+_wal_checkpoint_metrics_lock = Lock()
+_wal_checkpoint_metrics: dict[str, dict[str, Any]] = {}
 
 WAL_CHECKPOINT_INTERVAL = int(os.getenv("SQLITE_WAL_CHECKPOINT_INTERVAL", "60"))
 WAL_TRUNCATE_BYTES = int(os.getenv("SQLITE_WAL_TRUNCATE_BYTES", str(512 * 1024 * 1024)))
@@ -2277,10 +2279,26 @@ def _checkpoint_counts(row) -> tuple[int, int, int, int]:
     return busy, log_frames, checkpointed_frames, remaining_frames
 
 
-def _run_wal_checkpoint(engine: Engine | None, *, label: str, truncate_bytes: int) -> dict[str, int | bool | str]:
+def _record_wal_checkpoint_result(payload: dict[str, Any]) -> dict[str, Any]:
+    snapshot = dict(payload)
+    snapshot["checked_at_unix"] = round(time.time(), 3)
+    label = str(snapshot.get("label") or "unknown")
+    with _wal_checkpoint_metrics_lock:
+        _wal_checkpoint_metrics[label] = snapshot
+    return payload
+
+
+def get_wal_checkpoint_metrics() -> dict[str, dict[str, Any]]:
+    """Return the latest PASSIVE WAL checkpoint result per SQLite store."""
+
+    with _wal_checkpoint_metrics_lock:
+        return {label: dict(payload) for label, payload in _wal_checkpoint_metrics.items()}
+
+
+def _run_wal_checkpoint(engine: Engine | None, *, label: str, truncate_bytes: int) -> dict[str, Any]:
     """Run one non-blocking WAL checkpoint pass for a SQLite engine."""
     if engine is None:
-        return {"label": label, "skipped": True, "reason": "engine_unavailable"}
+        return _record_wal_checkpoint_result({"label": label, "skipped": True, "reason": "engine_unavailable"})
     with engine.connect() as conn:
         result = conn.exec_driver_sql("PRAGMA wal_checkpoint(PASSIVE)")
         busy, log_frames, checkpointed_frames, remaining_frames = _checkpoint_counts(result.fetchone())
@@ -2303,12 +2321,12 @@ def _run_wal_checkpoint(engine: Engine | None, *, label: str, truncate_bytes: in
             "truncated": False,
         }
         if busy or remaining_frames:
-            return payload
+            return _record_wal_checkpoint_result(payload)
         wal_path = _sqlite_wal_path_for_engine(engine)
         wal_size = wal_path.stat().st_size if wal_path is not None and wal_path.exists() else 0
         payload["wal_bytes"] = wal_size
         if truncate_bytes <= 0 or wal_size < truncate_bytes:
-            return payload
+            return _record_wal_checkpoint_result(payload)
         payload["truncate_attempted"] = True
         truncate_result = conn.exec_driver_sql("PRAGMA wal_checkpoint(TRUNCATE)")
         t_busy, t_log_frames, t_checkpointed_frames, t_remaining_frames = _checkpoint_counts(truncate_result.fetchone())
@@ -2337,7 +2355,7 @@ def _run_wal_checkpoint(engine: Engine | None, *, label: str, truncate_bytes: in
                 wal_size,
                 truncate_bytes,
             )
-        return payload
+        return _record_wal_checkpoint_result(payload)
 
 
 async def start_wal_checkpoint_loop() -> None:
