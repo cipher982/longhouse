@@ -34,6 +34,7 @@ import contextvars
 import heapq
 import logging
 import os
+import sqlite3
 import sys
 import threading
 import time
@@ -160,6 +161,7 @@ class _QueuedWrite:
 _HISTOGRAM_WINDOW = 256
 _DEFAULT_STACK_DUMP_AFTER_MS = 30_000.0
 _DEFAULT_STACK_DUMP_RATE_LIMIT_MS = 30_000.0
+_DEFAULT_INTERRUPT_AFTER_SECONDS = 120.0
 
 
 def _env_float(name: str, default: float) -> float:
@@ -174,6 +176,36 @@ def _env_float(name: str, default: float) -> float:
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _sqlite_connection_from_session(db: Session) -> sqlite3.Connection | None:
+    """Best-effort access to the DB-API sqlite connection owned by this Session."""
+
+    try:
+        sqlalchemy_connection = db.connection()
+    except Exception:
+        return None
+
+    candidate: object = getattr(sqlalchemy_connection, "connection", None)
+    seen: set[int] = set()
+    while candidate is not None and id(candidate) not in seen:
+        if isinstance(candidate, sqlite3.Connection):
+            return candidate
+        seen.add(id(candidate))
+        next_candidate = getattr(candidate, "driver_connection", None)
+        if next_candidate is None:
+            next_candidate = getattr(candidate, "connection", None)
+        candidate = next_candidate
+    return None
+
+
+def _looks_like_sqlite_interrupt(exc: BaseException) -> bool:
+    if isinstance(exc, sqlite3.OperationalError) and "interrupted" in str(exc).lower():
+        return True
+    orig = getattr(exc, "orig", None)
+    if isinstance(orig, BaseException) and _looks_like_sqlite_interrupt(orig):
+        return True
+    return "interrupted" in str(exc).lower()
 
 
 @dataclass
@@ -255,6 +287,17 @@ class WriteQueueTimeoutError(TimeoutError):
         super().__init__(f"WriteSerializer queue wait for {label or 'unlabeled'} exceeded {queue_timeout_seconds:.1f}s")
 
 
+class InterruptedWriteError(RuntimeError):
+    """Raised when the active SQLite writer is interrupted by the watchdog."""
+
+    def __init__(self, *, label: str, interrupt_after_seconds: float) -> None:
+        self.label = label
+        self.interrupt_after_seconds = interrupt_after_seconds
+        super().__init__(
+            f"WriteSerializer write for {label or 'unlabeled'} exceeded " f"{interrupt_after_seconds:.1f}s and was interrupted"
+        )
+
+
 def request_session_released_by_serializer(ws: object) -> bool:
     """Return true when ``execute_after_closing_request_session`` closed fallback DB."""
 
@@ -333,9 +376,16 @@ class WriteSerializer:
         self._active_priority: int | None = None
         self._active_job_id: int | None = None
         self._active_worker_thread_id: int | None = None
+        self._active_sqlite_connection: sqlite3.Connection | None = None
+        self._active_interrupt_requested = False
+        self._active_interrupt_after_seconds: float | None = None
         self._active_stage: str | None = None
         self._active_started_at: float | None = None
         self._active_stack_dump_count = 0
+        self._active_interrupt_count = 0
+        self._last_active_interrupt_at_iso: str | None = None
+        self._last_active_interrupt_age_ms: float | None = None
+        self._last_active_interrupt_label: str | None = None
         self._last_active_stack_dump_at: float | None = None
         self._last_active_stack_dump_iso: str | None = None
         self._last_active_stack_dump_age_ms: float | None = None
@@ -443,6 +493,9 @@ class WriteSerializer:
             self._active_priority = queued.priority
             self._active_job_id = queued.seq
             self._active_worker_thread_id = None
+            self._active_sqlite_connection = None
+            self._active_interrupt_requested = False
+            self._active_interrupt_after_seconds = None
             self._active_started_at = time.monotonic()
             if not queued.ready.done():
                 queued.ready.set_result(None)
@@ -491,6 +544,54 @@ class WriteSerializer:
             stack_text,
         )
         return True
+
+    def _interrupt_after_seconds_for(self, *, timeout_seconds: float | None) -> float | None:
+        configured = _env_float(
+            "LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_AFTER_SECONDS",
+            _DEFAULT_INTERRUPT_AFTER_SECONDS,
+        )
+        candidates = [value for value in (configured, timeout_seconds) if value is not None and value > 0]
+        if not candidates:
+            return None
+        return min(candidates)
+
+    async def _interrupt_active_after(self, *, job_id: int, label: str, interrupt_after_seconds: float) -> None:
+        try:
+            await asyncio.sleep(interrupt_after_seconds)
+            if not self._writer_active or self._active_job_id != job_id:
+                return
+
+            active_age_ms = self.active_age_ms
+            self.capture_active_worker_stack_if_stale(reason="interrupt", force=True)
+            self._active_interrupt_requested = True
+            self._active_interrupt_after_seconds = interrupt_after_seconds
+            self._active_interrupt_count += 1
+            self._last_active_interrupt_at_iso = _utc_now_iso()
+            self._last_active_interrupt_age_ms = active_age_ms
+            self._last_active_interrupt_label = label
+
+            conn = self._active_sqlite_connection
+            if conn is None:
+                logger.warning(
+                    "WriteSerializer interrupt requested but no sqlite connection is visible " "label=%s job_id=%s age_ms=%.1f",
+                    label or "unlabeled",
+                    job_id,
+                    active_age_ms,
+                )
+                return
+
+            logger.warning(
+                "WriteSerializer interrupting active sqlite writer label=%s job_id=%s age_ms=%.1f deadline_s=%.1f",
+                label or "unlabeled",
+                job_id,
+                active_age_ms,
+                interrupt_after_seconds,
+            )
+            conn.interrupt()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("WriteSerializer interrupt watchdog failed for %s", label or "unlabeled", exc_info=True)
 
     async def execute(
         self,
@@ -613,6 +714,16 @@ class WriteSerializer:
         worker_task: asyncio.Task[T] = asyncio.create_task(
             asyncio.to_thread(self._run_with_factory, session_factory, fn, auto_commit, label)
         )
+        interrupt_after_seconds = self._interrupt_after_seconds_for(timeout_seconds=timeout_seconds)
+        interrupt_task: asyncio.Task[None] | None = None
+        if interrupt_after_seconds is not None:
+            interrupt_task = asyncio.create_task(
+                self._interrupt_active_after(
+                    job_id=queued.seq,
+                    label=label,
+                    interrupt_after_seconds=interrupt_after_seconds,
+                )
+            )
         finalized = False
 
         async def _finalize(*, was_cancelled: bool) -> None:
@@ -665,11 +776,16 @@ class WriteSerializer:
                 )
 
             async with self._wait_cond:
+                if interrupt_task is not None and not interrupt_task.done():
+                    interrupt_task.cancel()
                 self._writer_active = False
                 self._active_label = None
                 self._active_priority = None
                 self._active_job_id = None
                 self._active_worker_thread_id = None
+                self._active_sqlite_connection = None
+                self._active_interrupt_requested = False
+                self._active_interrupt_after_seconds = None
                 self._active_stage = None
                 self._active_started_at = None
                 self._promote_next_locked()
@@ -855,15 +971,21 @@ class WriteSerializer:
         """Execute fn with a fresh session from the provided factory."""
         db = session_factory()
         self._active_worker_thread_id = threading.get_ident()
+        self._active_sqlite_connection = _sqlite_connection_from_session(db)
         try:
             result = fn(db)
             if auto_commit:
                 db.commit()
             return result
-        except Exception:
+        except Exception as exc:
             db.rollback()
             if label:
                 logger.debug("WriteSerializer: %s rolled back", label)
+            if self._active_interrupt_requested and _looks_like_sqlite_interrupt(exc):
+                raise InterruptedWriteError(
+                    label=label,
+                    interrupt_after_seconds=self._active_interrupt_after_seconds or 0.0,
+                ) from exc
             raise
         finally:
             db.close()
@@ -895,6 +1017,7 @@ class WriteSerializer:
             "active_priority": self._active_priority,
             "active_job_id": self._active_job_id,
             "active_worker_thread_id": self._active_worker_thread_id,
+            "active_interrupt_after_seconds": self._active_interrupt_after_seconds,
             "active_stage": self._active_stage,
             "active_age_ms": round(self.active_age_ms, 1),
             "queue_depth": len(self._queue),
@@ -910,6 +1033,12 @@ class WriteSerializer:
             "rolling_window": _HISTOGRAM_WINDOW,
             "rolling_by_label": rolling,
             "active_stack_dump_count": self._active_stack_dump_count,
+            "active_interrupt_count": self._active_interrupt_count,
+            "last_active_interrupt_at": self._last_active_interrupt_at_iso,
+            "last_active_interrupt_age_ms": (
+                round(self._last_active_interrupt_age_ms, 1) if self._last_active_interrupt_age_ms is not None else None
+            ),
+            "last_active_interrupt_label": self._last_active_interrupt_label,
             "last_active_stack_dump_at": self._last_active_stack_dump_iso,
             "last_active_stack_dump_age_ms": (
                 round(self._last_active_stack_dump_age_ms, 1) if self._last_active_stack_dump_age_ms is not None else None

@@ -18,6 +18,7 @@ from sqlalchemy import text as sa_text
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.services.write_serializer import execute_post_write
+from zerg.services.write_serializer import InterruptedWriteError
 from zerg.services.write_serializer import post_write_fallback_db
 from zerg.services.write_serializer import request_session_released_by_serializer
 from zerg.services.write_serializer import WriteSerializer
@@ -712,6 +713,53 @@ async def test_active_writer_stack_dump_logs_stale_worker(tmp_path, monkeypatch,
 
     release.set()
     await task
+
+
+@pytest.mark.asyncio
+async def test_sqlite_interrupt_releases_writer_slot_and_next_write_succeeds(tmp_path, monkeypatch):
+    db_path = tmp_path / "write-serializer-interrupt.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_AFTER_SECONDS", "0.05")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    def _long_sql(db):
+        db.execute(
+            sa_text(
+                """
+                WITH RECURSIVE cnt(x) AS (
+                  SELECT 0
+                  UNION ALL
+                  SELECT x + 1 FROM cnt WHERE x < 100000000
+                )
+                SELECT sum(x) FROM cnt
+                """
+            )
+        ).scalar()
+
+    with pytest.raises(InterruptedWriteError):
+        await serializer.execute(_long_sql, label="ingest-live")
+
+    assert serializer.writer_active is False
+    assert serializer.queue_depth == 0
+    metrics = serializer.get_metrics()
+    assert metrics["active_interrupt_count"] == 1
+    assert metrics["last_active_interrupt_label"] == "ingest-live"
+
+    await serializer.execute(
+        lambda db: db.execute(sa_text("INSERT INTO writes(label) VALUES ('after-interrupt')")),
+        label="ingest-live",
+    )
+
+    with session_factory() as db:
+        persisted = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
+    assert persisted == ["after-interrupt"]
 
 
 @pytest.mark.asyncio
