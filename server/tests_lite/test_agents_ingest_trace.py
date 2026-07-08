@@ -31,6 +31,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
 from zerg.routers.agents_ingest import _ARCHIVE_INGEST_MAX_IN_FLIGHT
 from zerg.routers.agents_ingest import _acquire_archive_ingest_slot
@@ -1125,7 +1126,7 @@ def test_archive_primary_later_batch_prepare_failure_fails_closed_without_legacy
         api_app.dependency_overrides.clear()
 
 
-def test_live_archive_primary_prepare_failure_continues_without_legacy_raw(tmp_path, monkeypatch):
+def test_live_archive_primary_prepare_failure_forces_legacy_raw_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
     monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "0")
     monkeypatch.delenv("LONGHOUSE_DISABLE_LEGACY_RAW_WRITES", raising=False)
@@ -1151,16 +1152,18 @@ def test_live_archive_primary_prepare_failure_continues_without_legacy_raw(tmp_p
         )
 
         assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.headers["X-Ingest-Archive-Primary"] == "failed"
-        assert response.headers["X-Ingest-Legacy-Raw"] == "disabled"
+        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
+        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
         assert prepared_sizes == [16, 16, 16, 16, 1]
         with SessionLocal() as db:
             assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 65
+            source_lines = db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).all()
+            assert any(line.raw_json_z is not None for line in source_lines)
     finally:
         api_app.dependency_overrides.clear()
 
 
-def test_live_archive_primary_manifest_failure_rolls_back_before_hot_ingest(tmp_path, monkeypatch):
+def test_live_archive_primary_manifest_failure_rolls_back_before_forced_legacy_raw_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
     monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "0")
     monkeypatch.delenv("LONGHOUSE_DISABLE_LEGACY_RAW_WRITES", raising=False)
@@ -1213,11 +1216,12 @@ def test_live_archive_primary_manifest_failure_rolls_back_before_hot_ingest(tmp_
         )
 
         assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.headers["X-Ingest-Archive-Primary"] == "failed"
-        assert response.headers["X-Ingest-Legacy-Raw"] == "disabled"
+        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
+        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
         assert rollbacks >= 1
         with SessionLocal() as db:
             assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 1
+            assert db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).one().raw_json_z is not None
             assert db.execute(text("SELECT count(*) FROM poisoned_archive_write")).scalar_one() == 0
     finally:
         api_app.dependency_overrides.clear()

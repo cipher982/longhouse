@@ -1128,10 +1128,10 @@ async def ingest_session(
                         write_db.rollback()
                         if not settings.legacy_raw_write_enabled:
                             if write_label == "ingest-live":
-                                archive_primary_state = "failed"
-                                legacy_raw_effective = False
+                                archive_primary_state = "fallback"
+                                legacy_raw_effective = True
                                 logger.warning(
-                                    "Archive-primary manifest insert failed for live session %s; continuing without raw archive",
+                                    "Archive-primary manifest insert failed for live session %s; falling back to legacy raw",
                                     data.id,
                                     exc_info=True,
                                 )
@@ -1260,10 +1260,10 @@ async def ingest_session(
                         if archive_primary_prepared.error:
                             if not settings.legacy_raw_write_enabled:
                                 if write_label == "ingest-live":
-                                    archive_primary_state = "failed"
-                                    legacy_raw_effective = False
+                                    archive_primary_state = "fallback"
+                                    legacy_raw_effective = True
                                     logger.warning(
-                                        "Archive-primary prepare failed for live session %s batch=%s; continuing without raw archive: %s",
+                                        "Archive-primary prepare failed for live session %s batch=%s; falling back to legacy raw: %s",
                                         data.id,
                                         batch_index + 1,
                                         archive_primary_prepared.error,

@@ -537,11 +537,12 @@ def test_live_ingest_archive_primary_failure_does_not_block_hot_ingest(tmp_path,
         )
 
         assert response.status_code == 200, response.text
-        assert response.headers["X-Ingest-Archive-Primary"] == "failed"
-        assert response.headers["X-Ingest-Legacy-Raw"] == "disabled"
+        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
+        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
         with SessionLocal() as db:
             assert db.query(ArchiveChunk).count() == 0
-            assert db.query(AgentSourceLine).count() == 1
+            source_line = db.query(AgentSourceLine).one()
+            assert source_line.raw_json_z is not None
             assert db.query(AgentEvent).count() == 0
     finally:
         api_app.dependency_overrides.clear()
