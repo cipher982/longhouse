@@ -12,6 +12,8 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
+from zerg.routers.agents_search import get_recall_database_url
+from zerg.routers.agents_search import get_recall_session_factory
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
@@ -44,6 +46,8 @@ def _get_client(session_factory):
         return SimpleNamespace(device_id="context-mode", id="token-1", owner_id=1)
 
     api_app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[get_recall_database_url] = lambda: str(session_factory.kw["bind"].url)
+    api_app.dependency_overrides[get_recall_session_factory] = lambda: session_factory
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     client = TestClient(api_app)
     yield client

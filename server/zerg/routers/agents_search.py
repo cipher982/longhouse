@@ -11,8 +11,11 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi import status
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import sessionmaker
 
+from zerg.config import get_settings
 from zerg.database import get_db
+from zerg.database import get_session_factory
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
@@ -30,6 +33,11 @@ from zerg.services.retrieval_index import initialize_retrieval_db
 from zerg.services.retrieval_index import resolve_retrieval_db_path
 from zerg.services.retrieval_index import retrieval_schema_ready
 from zerg.services.retrieval_index import search_lexical_chunks
+from zerg.services.retrieval_index_jobs import enqueue_recall_index_job
+from zerg.services.retrieval_index_jobs import get_latest_recall_index_job
+from zerg.services.retrieval_index_jobs import get_recall_index_job
+from zerg.services.retrieval_index_jobs import request_recall_index_cancel
+from zerg.services.retrieval_index_jobs import wake_recall_index_worker
 from zerg.services.session_pause_requests import load_active_pause_request_map
 from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_processing.embeddings import CleanTranscriptEvent
@@ -40,6 +48,14 @@ from zerg.services.session_views import SemanticSearchResponse
 from zerg.services.session_views import build_session_response
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+def get_recall_database_url() -> str:
+    return get_settings().database_url
+
+
+def get_recall_session_factory() -> sessionmaker:
+    return get_session_factory()
 
 
 def _embedding_unavailable_response(detail: str) -> HTTPException:
@@ -61,7 +77,7 @@ def _embedding_corpus_unavailable_response(kind: str) -> HTTPException:
 
 
 def _try_retrieval_index_recall(
-    db: Session,
+    database_url: str,
     *,
     query: str,
     project: str | None,
@@ -82,8 +98,6 @@ def _try_retrieval_index_recall(
             )
         return None
 
-    bind = db.get_bind()
-    database_url = str(getattr(bind, "url", "") or "")
     retrieval_path = resolve_retrieval_db_path(database_url)
     if retrieval_path is None or not retrieval_path.exists():
         return None
@@ -367,28 +381,30 @@ async def semantic_search_sessions(
 
 @router.get("/recall/status")
 async def recall_index_status(
-    db: Session = Depends(get_db),
+    database_url: str = Depends(get_recall_database_url),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     """Return retrieval.db recall index status."""
 
-    bind = db.get_bind()
-    retrieval_path = resolve_retrieval_db_path(str(getattr(bind, "url", "") or ""))
+    retrieval_path = resolve_retrieval_db_path(database_url)
     if retrieval_path is None:
         return {"status": "unavailable", "reason": "main database is not file-backed SQLite"}
     if not retrieval_path.exists():
         return {"status": "missing", "path": str(retrieval_path), "chunk_count": 0, "child_chunk_count": 0}
     with connect_retrieval_db(retrieval_path) as retrieval_db:
+        initialize_retrieval_db(retrieval_db)
         if not retrieval_schema_ready(retrieval_db):
             return {"status": "uninitialized", "path": str(retrieval_path), "chunk_count": 0, "child_chunk_count": 0}
         chunk_count = int(retrieval_db.execute("SELECT count(*) FROM recall_chunks").fetchone()[0])
         searchable_count = child_chunk_count(retrieval_db)
+        latest_job = get_latest_recall_index_job(retrieval_db)
         return {
             "status": "ready" if searchable_count > 0 else "empty",
             "path": str(retrieval_path),
             "chunk_count": chunk_count,
             "child_chunk_count": searchable_count,
+            "latest_job": latest_job.as_dict() if latest_job is not None else None,
         }
 
 
@@ -398,61 +414,73 @@ async def index_recall_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     since_days: int = Query(90, ge=1, le=365, description="Days to index"),
     limit: int = Query(100, ge=1, le=1000, description="Max sessions to index"),
-    db: Session = Depends(get_db),
+    database_url: str = Depends(get_recall_database_url),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
-    """Project recent sessions into retrieval.db for fast recall."""
+    """Queue recent sessions for projection into retrieval.db."""
 
-    from zerg.services.retrieval_index import project_session_chunks
-    from zerg.services.retrieval_index import replace_session_chunks
-
-    bind = db.get_bind()
-    retrieval_path = resolve_retrieval_db_path(str(getattr(bind, "url", "") or ""))
+    retrieval_path = resolve_retrieval_db_path(database_url)
     if retrieval_path is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Retrieval index unavailable: main database is not file-backed SQLite.",
         )
 
-    since = datetime.now(timezone.utc) - timedelta(days=since_days)
-    session_query = db.query(AgentSession).filter(AgentSession.started_at >= since)
-    if project:
-        session_query = session_query.filter(AgentSession.project == project)
-    if provider:
-        session_query = session_query.filter(AgentSession.provider == provider)
-    if not is_internal_canary_provider_filter(provider):
-        session_query = session_query.filter(~internal_canary_session_clause(AgentSession))
-    session_query = session_query.filter(AgentSession.user_messages > 0)
-    sessions = session_query.order_by(AgentSession.last_activity_at.desc(), AgentSession.started_at.desc()).limit(limit).all()
-
-    indexed_sessions = 0
-    indexed_chunks = 0
     with connect_retrieval_db(retrieval_path) as retrieval_db:
         initialize_retrieval_db(retrieval_db)
-        for session in sessions:
-            events = (
-                db.query(AgentEvent)
-                .filter(AgentEvent.session_id == session.id)
-                .filter(durable_transcript_event_predicate())
-                .order_by(AgentEvent.timestamp, AgentEvent.id)
-                .all()
-            )
-            chunks = project_session_chunks(session, events)
-            if not chunks:
-                continue
-            indexed_chunks += replace_session_chunks(retrieval_db, str(session.id), chunks)
-            indexed_sessions += 1
-        searchable_count = child_chunk_count(retrieval_db)
+        job, created = enqueue_recall_index_job(
+            retrieval_db,
+            project=project,
+            provider=provider,
+            since_days=since_days,
+            limit=limit,
+        )
+    wake_recall_index_worker()
 
     return {
-        "status": "ok",
+        "status": "queued" if created else job.status,
         "path": str(retrieval_path),
-        "sessions_considered": len(sessions),
-        "sessions_indexed": indexed_sessions,
-        "chunks_indexed": indexed_chunks,
-        "child_chunk_count": searchable_count,
+        "created": created,
+        "job": job.as_dict(),
     }
+
+
+@router.get("/recall/index/{job_id}")
+async def recall_index_job_status(
+    job_id: str,
+    database_url: str = Depends(get_recall_database_url),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    retrieval_path = resolve_retrieval_db_path(database_url)
+    if retrieval_path is None or not retrieval_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Retrieval index unavailable.")
+    with connect_retrieval_db(retrieval_path) as retrieval_db:
+        initialize_retrieval_db(retrieval_db)
+        job = get_recall_index_job(retrieval_db, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recall index job not found.")
+    return {"job": job.as_dict()}
+
+
+@router.post("/recall/index/{job_id}/cancel")
+async def cancel_recall_index_job(
+    job_id: str,
+    database_url: str = Depends(get_recall_database_url),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    retrieval_path = resolve_retrieval_db_path(database_url)
+    if retrieval_path is None or not retrieval_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Retrieval index unavailable.")
+    with connect_retrieval_db(retrieval_path) as retrieval_db:
+        initialize_retrieval_db(retrieval_db)
+        job = request_recall_index_cancel(retrieval_db, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Recall index job not found.")
+    wake_recall_index_worker()
+    return {"job": job.as_dict()}
 
 
 @router.get("/recall", response_model=RecallResponse)
@@ -466,7 +494,8 @@ async def recall_sessions(
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     mode: str = "auto",
-    db: Session = Depends(get_db),
+    database_url: str = Depends(get_recall_database_url),
+    session_factory: sessionmaker = Depends(get_recall_session_factory),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> RecallResponse:
@@ -489,7 +518,7 @@ async def recall_sessions(
 
     if mode in {"auto", "lexical"}:
         lexical_response = _try_retrieval_index_recall(
-            db,
+            database_url,
             query=query,
             project=project,
             provider=provider,
@@ -514,131 +543,135 @@ async def recall_sessions(
 
     query_vec = await generate_embedding(query, config)
 
-    cache = EmbeddingCache()
-    if not cache._session_loaded:
-        cache.load_session_embeddings(db, config.model, config.dims)
-    if not cache._turn_loaded:
-        cache.load_turn_embeddings(db, config.model, config.dims)
+    db = session_factory()
+    try:
+        cache = EmbeddingCache()
+        if not cache._session_loaded:
+            cache.load_session_embeddings(db, config.model, config.dims)
+        if not cache._turn_loaded:
+            cache.load_turn_embeddings(db, config.model, config.dims)
 
-    since = datetime.now(timezone.utc) - timedelta(days=since_days)
-    filter_query = db.query(AgentSession.id).filter(AgentSession.started_at >= since)
-    if project:
-        filter_query = filter_query.filter(AgentSession.project == project)
-    if provider:
-        filter_query = filter_query.filter(AgentSession.provider == provider)
-    if not is_internal_canary_provider_filter(provider):
-        filter_query = filter_query.filter(~internal_canary_session_clause(AgentSession))
-    if not include_test:
-        filter_query = filter_query.filter(AgentSession.environment.notin_(["test", "e2e"]))
-        filter_query = filter_query.filter(~provider_proof_session_clause(AgentSession))
-    valid_ids = {str(row[0]) for row in filter_query.all()}
-    if valid_ids and cache.turn_embedding_count == 0:
-        raise _embedding_corpus_unavailable_response("turn")
+        since = datetime.now(timezone.utc) - timedelta(days=since_days)
+        filter_query = db.query(AgentSession.id).filter(AgentSession.started_at >= since)
+        if project:
+            filter_query = filter_query.filter(AgentSession.project == project)
+        if provider:
+            filter_query = filter_query.filter(AgentSession.provider == provider)
+        if not is_internal_canary_provider_filter(provider):
+            filter_query = filter_query.filter(~internal_canary_session_clause(AgentSession))
+        if not include_test:
+            filter_query = filter_query.filter(AgentSession.environment.notin_(["test", "e2e"]))
+            filter_query = filter_query.filter(~provider_proof_session_clause(AgentSession))
+        valid_ids = {str(row[0]) for row in filter_query.all()}
+        if valid_ids and cache.turn_embedding_count == 0:
+            raise _embedding_corpus_unavailable_response("turn")
 
-    results = cache.search_turns(query_vec, limit=max_results, session_filter=valid_ids)
+        results = cache.search_turns(query_vec, limit=max_results, session_filter=valid_ids)
 
-    store = AgentsStore(db)
-    ordered_session_ids = []
-    seen_session_ids: set[str] = set()
-    for session_id, _chunk_index, _score, _event_start, _event_end in results:
-        session_key = str(session_id)
-        if session_key in seen_session_ids:
-            continue
-        ordered_session_ids.append(session_id)
-        seen_session_ids.add(session_key)
-
-    events_by_session: dict[str, list[AgentEvent]] = {str(session_id): [] for session_id in ordered_session_ids}
-    if ordered_session_ids:
-        all_events = (
-            db.query(AgentEvent)
-            .filter(AgentEvent.session_id.in_(ordered_session_ids))
-            .filter(durable_transcript_event_predicate())
-            .order_by(AgentEvent.session_id, AgentEvent.timestamp, AgentEvent.id)
-            .all()
-        )
-        for event in all_events:
-            events_by_session.setdefault(str(event.session_id), []).append(event)
-
-    clean_events_by_session: dict[str, list[CleanTranscriptEvent]] = {
-        session_key: list(iter_clean_transcript_events([_event_to_clean_projection_dict(event) for event in events]))
-        for session_key, events in events_by_session.items()
-    }
-    event_by_session_and_id: dict[str, dict[int, AgentEvent]] = {
-        session_key: {event.id: event for event in events if event.id is not None} for session_key, events in events_by_session.items()
-    }
-
-    active_start_index_cache: dict[str, int] = {}
-    if context_mode == "active_context":
-        for session_id in ordered_session_ids:
+        store = AgentsStore(db)
+        ordered_session_ids = []
+        seen_session_ids: set[str] = set()
+        for session_id, _chunk_index, _score, _event_start, _event_end in results:
             session_key = str(session_id)
-            clean_events = clean_events_by_session.get(session_key, [])
-            total_events = len(clean_events)
-            boundary = store.get_active_context_boundary(session_id)
-            if boundary is None:
-                active_start_index_cache[session_key] = 0
+            if session_key in seen_session_ids:
                 continue
-            active_start_index = total_events
-            event_by_id = event_by_session_and_id.get(session_key, {})
-            for idx, clean_event in enumerate(clean_events):
-                event = event_by_id.get(clean_event.event_id or -1)
-                if event is not None and store.is_event_in_active_context(event, boundary):
-                    active_start_index = idx
-                    break
-            active_start_index_cache[session_key] = active_start_index
+            ordered_session_ids.append(session_id)
+            seen_session_ids.add(session_key)
 
-    matches = []
-    for session_id, chunk_index, score, event_start, event_end in results:
-        clean_events = clean_events_by_session.get(str(session_id), [])
-        total_events = len(clean_events)
-        if total_events == 0:
-            continue
-
-        active_start_index = active_start_index_cache.get(str(session_id), 0)
-        if context_mode == "active_context":
-            if active_start_index >= total_events:
-                continue
-            if event_end is not None and event_end < active_start_index:
-                continue
-
-        context = []
-        if event_start is not None and event_end is not None:
-            window_start = max(active_start_index, event_start - context_turns)
-            window_end = min(total_events, event_end + context_turns + 1)
-            for i in range(window_start, window_end):
-                if i < len(clean_events):
-                    e = clean_events[i]
-                    content = e.content
-                    if len(content) > 500:
-                        content = content[:500] + "..."
-                    context.append(
-                        {
-                            "index": i,
-                            "role": e.role,
-                            "content": content,
-                            "tool_name": e.tool_name,
-                            "is_match": event_start <= i <= event_end,
-                        }
-                    )
-
-        if context_mode == "active_context" and event_start is not None and event_start < active_start_index:
-            event_start = active_start_index
-
-        match_event_id = clean_events[event_start].event_id if event_start is not None and event_start < total_events else None
-
-        matches.append(
-            RecallMatch(
-                session_id=session_id,
-                chunk_index=chunk_index,
-                score=score,
-                event_index_start=event_start,
-                event_index_end=event_end,
-                total_events=total_events,
-                context=context,
-                match_event_id=match_event_id,
+        events_by_session: dict[str, list[AgentEvent]] = {str(session_id): [] for session_id in ordered_session_ids}
+        if ordered_session_ids:
+            all_events = (
+                db.query(AgentEvent)
+                .filter(AgentEvent.session_id.in_(ordered_session_ids))
+                .filter(durable_transcript_event_predicate())
+                .order_by(AgentEvent.session_id, AgentEvent.timestamp, AgentEvent.id)
+                .all()
             )
-        )
+            for event in all_events:
+                events_by_session.setdefault(str(event.session_id), []).append(event)
 
-    return RecallResponse(matches=matches, total=len(matches))
+        clean_events_by_session: dict[str, list[CleanTranscriptEvent]] = {
+            session_key: list(iter_clean_transcript_events([_event_to_clean_projection_dict(event) for event in events]))
+            for session_key, events in events_by_session.items()
+        }
+        event_by_session_and_id: dict[str, dict[int, AgentEvent]] = {
+            session_key: {event.id: event for event in events if event.id is not None} for session_key, events in events_by_session.items()
+        }
+
+        active_start_index_cache: dict[str, int] = {}
+        if context_mode == "active_context":
+            for session_id in ordered_session_ids:
+                session_key = str(session_id)
+                clean_events = clean_events_by_session.get(session_key, [])
+                total_events = len(clean_events)
+                boundary = store.get_active_context_boundary(session_id)
+                if boundary is None:
+                    active_start_index_cache[session_key] = 0
+                    continue
+                active_start_index = total_events
+                event_by_id = event_by_session_and_id.get(session_key, {})
+                for idx, clean_event in enumerate(clean_events):
+                    event = event_by_id.get(clean_event.event_id or -1)
+                    if event is not None and store.is_event_in_active_context(event, boundary):
+                        active_start_index = idx
+                        break
+                active_start_index_cache[session_key] = active_start_index
+
+        matches = []
+        for session_id, chunk_index, score, event_start, event_end in results:
+            clean_events = clean_events_by_session.get(str(session_id), [])
+            total_events = len(clean_events)
+            if total_events == 0:
+                continue
+
+            active_start_index = active_start_index_cache.get(str(session_id), 0)
+            if context_mode == "active_context":
+                if active_start_index >= total_events:
+                    continue
+                if event_end is not None and event_end < active_start_index:
+                    continue
+
+            context = []
+            if event_start is not None and event_end is not None:
+                window_start = max(active_start_index, event_start - context_turns)
+                window_end = min(total_events, event_end + context_turns + 1)
+                for i in range(window_start, window_end):
+                    if i < len(clean_events):
+                        e = clean_events[i]
+                        content = e.content
+                        if len(content) > 500:
+                            content = content[:500] + "..."
+                        context.append(
+                            {
+                                "index": i,
+                                "role": e.role,
+                                "content": content,
+                                "tool_name": e.tool_name,
+                                "is_match": event_start <= i <= event_end,
+                            }
+                        )
+
+            if context_mode == "active_context" and event_start is not None and event_start < active_start_index:
+                event_start = active_start_index
+
+            match_event_id = clean_events[event_start].event_id if event_start is not None and event_start < total_events else None
+
+            matches.append(
+                RecallMatch(
+                    session_id=session_id,
+                    chunk_index=chunk_index,
+                    score=score,
+                    event_index_start=event_start,
+                    event_index_end=event_end,
+                    total_events=total_events,
+                    context=context,
+                    match_event_id=match_event_id,
+                )
+            )
+
+        return RecallResponse(matches=matches, total=len(matches))
+    finally:
+        db.close()
 
 
 def _event_to_clean_projection_dict(event: AgentEvent) -> dict[str, object]:

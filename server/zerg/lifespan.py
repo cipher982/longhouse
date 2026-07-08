@@ -467,6 +467,15 @@ async def lifespan(app: FastAPI):
                 failed.append(f"projection_reconciler ({e})")
                 logger.exception("Failed to start projection_reconciler")
 
+            try:
+                from zerg.services.retrieval_index_jobs import start_recall_index_worker
+
+                start_recall_index_worker()
+                started.append("recall_index_worker")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"recall_index_worker ({e})")
+                logger.exception("Failed to start recall_index_worker")
+
             # Periodic runtime maintenance (runner-health reconcile, etc.)
             if not _settings.testing:
                 try:
@@ -570,6 +579,13 @@ async def lifespan(app: FastAPI):
                 await stop_maintenance_loop()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop maintenance loop")
+
+            try:
+                from zerg.services.retrieval_index_jobs import stop_recall_index_worker
+
+                await stop_recall_index_worker()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop recall index worker")
 
             try:
                 from zerg.tools.mcp_adapter import MCPManager

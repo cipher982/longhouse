@@ -233,6 +233,39 @@ def initialize_retrieval_db(conn: sqlite3.Connection) -> None:
           value_json TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS recall_index_jobs (
+          id TEXT PRIMARY KEY,
+          tenant TEXT NOT NULL DEFAULT 'single',
+          status TEXT NOT NULL
+            CHECK (status IN ('queued', 'running', 'done', 'error', 'canceled')),
+
+          project TEXT,
+          provider TEXT,
+          since_days INTEGER NOT NULL,
+          limit_count INTEGER NOT NULL,
+
+          progress_total INTEGER NOT NULL DEFAULT 0,
+          progress_done INTEGER NOT NULL DEFAULT 0,
+          sessions_indexed INTEGER NOT NULL DEFAULT 0,
+          chunks_indexed INTEGER NOT NULL DEFAULT 0,
+          child_chunk_count INTEGER NOT NULL DEFAULT 0,
+
+          cancel_requested INTEGER NOT NULL DEFAULT 0,
+          heartbeat_at TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_recall_index_jobs_active
+          ON recall_index_jobs(tenant)
+          WHERE status IN ('queued', 'running');
+
+        CREATE INDEX IF NOT EXISTS ix_recall_index_jobs_status_created
+          ON recall_index_jobs(status, created_at, id);
         """
     )
     set_index_state(conn, "schema_version", {"version": SCHEMA_VERSION})

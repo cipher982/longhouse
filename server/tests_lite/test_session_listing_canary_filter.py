@@ -32,6 +32,10 @@ def _make_db(tmp_path):
     return make_sessionmaker(engine)
 
 
+def _database_url(factory) -> str:
+    return str(factory.kw["bind"].url)
+
+
 def _seed_session(
     db,
     *,
@@ -284,7 +288,8 @@ def test_recall_hides_internal_canary_sessions(monkeypatch, tmp_path):
                 since_days=14,
                 context_turns=2,
                 context_mode="forensic",
-                db=db,
+                database_url=_database_url(factory),
+                session_factory=factory,
                 _auth=None,
                 _single=None,
             )
@@ -344,7 +349,8 @@ def test_recall_allows_explicit_internal_canary_provider(monkeypatch, tmp_path, 
                 since_days=14,
                 context_turns=2,
                 context_mode="forensic",
-                db=db,
+                database_url=_database_url(factory),
+                session_factory=factory,
                 _auth=None,
                 _single=None,
             )

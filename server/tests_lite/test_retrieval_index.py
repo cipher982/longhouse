@@ -24,6 +24,9 @@ from zerg.services.retrieval_index import rebuild_fts
 from zerg.services.retrieval_index import replace_session_chunks
 from zerg.services.retrieval_index import resolve_retrieval_db_path
 from zerg.services.retrieval_index import search_lexical_chunks
+from zerg.services.retrieval_index_jobs import enqueue_recall_index_job
+from zerg.services.retrieval_index_jobs import get_active_recall_index_job
+from zerg.services.retrieval_index_jobs import run_recall_index_job_once
 
 
 def _open_index(tmp_path):
@@ -110,6 +113,33 @@ def test_retrieval_db_initializes_separately_from_main_db(tmp_path):
     assert "recall_chunks" in tables
     assert "recall_chunks_fts" in tables
     assert "recall_index_state" in tables
+    assert "recall_index_jobs" in tables
+
+
+def test_retrieval_index_jobs_allow_one_active_job(tmp_path):
+    with _open_index(tmp_path) as conn:
+        first, first_created = enqueue_recall_index_job(
+            conn,
+            project=None,
+            provider=None,
+            since_days=90,
+            limit=100,
+        )
+        second, second_created = enqueue_recall_index_job(
+            conn,
+            project="longhouse",
+            provider=None,
+            since_days=30,
+            limit=10,
+        )
+
+        active = get_active_recall_index_job(conn)
+
+    assert first_created is True
+    assert second_created is False
+    assert second.id == first.id
+    assert active is not None
+    assert active.id == first.id
 
 
 def test_project_session_chunks_creates_parent_and_child_evidence():
@@ -300,11 +330,13 @@ def test_internal_canary_chunks_are_hidden_by_default(tmp_path):
 
 def test_recall_fast_path_uses_retrieval_db_without_embedding_cache(monkeypatch, tmp_path):
     main_path = tmp_path / "longhouse.db"
+    database_url = f"sqlite:///{main_path}"
     engine = make_engine(f"sqlite:///{main_path}")
     initialize_database(engine)
     SessionLocal = make_sessionmaker(engine)
 
-    retrieval_path = resolve_retrieval_db_path(f"sqlite:///{main_path}")
+    retrieval_path = resolve_retrieval_db_path(database_url)
+    monkeypatch.setenv("LONGHOUSE_RETRIEVAL_DB_PATH", str(retrieval_path))
     with connect_retrieval_db(retrieval_path) as conn:
         initialize_retrieval_db(conn)
         replace_session_chunks(
@@ -321,22 +353,22 @@ def test_recall_fast_path_uses_retrieval_db_without_embedding_cache(monkeypatch,
 
     monkeypatch.setattr("zerg.models_config.get_embedding_config", fail_embedding_config)
 
-    with SessionLocal() as db:
-        response = asyncio.run(
-            recall_sessions(
-                query="timeout",
-                project=None,
-                provider=None,
-                since_days=90,
-                max_results=5,
-                context_turns=2,
-                context_mode="forensic",
-                mode="auto",
-                db=db,
-                _auth=None,
-                _single=None,
-            )
+    response = asyncio.run(
+        recall_sessions(
+            query="timeout",
+            project=None,
+            provider=None,
+            since_days=90,
+            max_results=5,
+            context_turns=2,
+            context_mode="forensic",
+            mode="auto",
+            database_url=database_url,
+            session_factory=SessionLocal,
+            _auth=None,
+            _single=None,
         )
+    )
 
     assert response.total == 1
     match = response.matches[0]
@@ -358,11 +390,13 @@ def test_recall_fast_path_uses_retrieval_db_without_embedding_cache(monkeypatch,
 
 def test_recall_auto_ready_index_miss_does_not_fall_back_to_embeddings(monkeypatch, tmp_path):
     main_path = tmp_path / "longhouse.db"
+    database_url = f"sqlite:///{main_path}"
     engine = make_engine(f"sqlite:///{main_path}")
     initialize_database(engine)
     SessionLocal = make_sessionmaker(engine)
 
-    retrieval_path = resolve_retrieval_db_path(f"sqlite:///{main_path}")
+    retrieval_path = resolve_retrieval_db_path(database_url)
+    monkeypatch.setenv("LONGHOUSE_RETRIEVAL_DB_PATH", str(retrieval_path))
     with connect_retrieval_db(retrieval_path) as conn:
         initialize_retrieval_db(conn)
         replace_session_chunks(conn, "session-1", [_chunk("child", content="specific timeout evidence")])
@@ -372,22 +406,22 @@ def test_recall_auto_ready_index_miss_does_not_fall_back_to_embeddings(monkeypat
 
     monkeypatch.setattr("zerg.models_config.get_embedding_config", fail_embedding_config)
 
-    with SessionLocal() as db:
-        response = asyncio.run(
-            recall_sessions(
-                query="semantic-only-miss",
-                project=None,
-                provider=None,
-                since_days=90,
-                max_results=5,
-                context_turns=2,
-                context_mode="forensic",
-                mode="auto",
-                db=db,
-                _auth=None,
-                _single=None,
-            )
+    response = asyncio.run(
+        recall_sessions(
+            query="semantic-only-miss",
+            project=None,
+            provider=None,
+            since_days=90,
+            max_results=5,
+            context_turns=2,
+            context_mode="forensic",
+            mode="auto",
+            database_url=database_url,
+            session_factory=SessionLocal,
+            _auth=None,
+            _single=None,
         )
+    )
 
     assert response.total == 0
     assert response.matches == []
@@ -395,10 +429,13 @@ def test_recall_auto_ready_index_miss_does_not_fall_back_to_embeddings(monkeypat
 
 def test_recall_index_endpoint_projects_recent_sessions(monkeypatch, tmp_path):
     main_path = tmp_path / "longhouse.db"
+    database_url = f"sqlite:///{main_path}"
     engine = make_engine(f"sqlite:///{main_path}")
     initialize_database(engine)
     SessionLocal = make_sessionmaker(engine)
     session_id = uuid4()
+    retrieval_path = resolve_retrieval_db_path(database_url)
+    monkeypatch.setenv("LONGHOUSE_RETRIEVAL_DB_PATH", str(retrieval_path))
 
     with SessionLocal() as db:
         db.add(
@@ -440,12 +477,16 @@ def test_recall_index_endpoint_projects_recent_sessions(monkeypatch, tmp_path):
                 provider=None,
                 since_days=90,
                 limit=10,
-                db=db,
+                database_url=database_url,
                 _auth=None,
                 _single=None,
             )
         )
-        status_response = asyncio.run(recall_index_status(db=db, _auth=None, _single=None))
+        job = run_recall_index_job_once(
+            database_url=database_url,
+            session_factory=SessionLocal,
+        )
+        status_response = asyncio.run(recall_index_status(database_url=database_url, _auth=None, _single=None))
 
         def fail_embedding_config():
             raise AssertionError("indexed recall must not request embedding config")
@@ -461,14 +502,19 @@ def test_recall_index_endpoint_projects_recent_sessions(monkeypatch, tmp_path):
                 context_turns=2,
                 context_mode="forensic",
                 mode="auto",
-                db=db,
+                database_url=database_url,
+                session_factory=SessionLocal,
                 _auth=None,
                 _single=None,
             )
         )
 
-    assert index_response["sessions_indexed"] == 1
-    assert index_response["child_chunk_count"] > 0
+    assert index_response["status"] == "queued"
+    assert index_response["created"] is True
+    assert job is not None
+    assert job.status == "done"
+    assert job.sessions_indexed == 1
+    assert job.child_chunk_count > 0
     assert status_response["status"] == "ready"
     assert recall_response.total == 1
     assert recall_response.matches[0].session_id == str(session_id)
