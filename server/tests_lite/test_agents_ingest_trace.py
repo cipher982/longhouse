@@ -302,11 +302,11 @@ async def test_archive_ingest_admission_allows_short_non_archive_writer(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_archive_ingest_admission_rejects_when_non_archive_writer_is_long(monkeypatch):
+async def test_archive_ingest_admission_allows_non_archive_writer_to_finish(monkeypatch):
     class BusySerializer:
         is_configured = True
         writer_active = True
-        active_label = "heartbeat"
+        active_label = "ingest-live"
         active_age_ms = 5000.0
         queue_depth = 0
 
@@ -316,14 +316,15 @@ async def test_archive_ingest_admission_rejects_when_non_archive_writer_is_long(
     )
     response = Response()
 
-    with pytest.raises(HTTPException) as exc:
-        await _acquire_archive_ingest_slot("ingest-replay", response)
-
-    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-    assert response.headers["Retry-After"] == "5"
-    assert response.headers["X-Ingest-Admission-State"] == "writer_pressure"
-    assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
-    assert response.headers["X-Ingest-Writer-Active-Label"] == "heartbeat"
+    acquired = await _acquire_archive_ingest_slot("ingest-replay", response)
+    try:
+        assert acquired is True
+        assert "Retry-After" not in response.headers
+        assert "X-Ingest-Admission-State" not in response.headers
+        assert "X-Ingest-Backpressure" not in response.headers
+        assert "X-Ingest-Writer-Active-Label" not in response.headers
+    finally:
+        _release_archive_ingest_slot(acquired)
 
 
 @pytest.mark.asyncio

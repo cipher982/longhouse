@@ -122,7 +122,6 @@ _ARCHIVE_INGEST_MAX_RETRY_AFTER_SECONDS = 60
 _ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS = 15
 _ARCHIVE_INGEST_MAX_IN_FLIGHT = 4
 _ARCHIVE_INGEST_WRITER_QUEUE_HARD_LIMIT = 50
-_ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 1000.0
 _LIVE_INGEST_WRITER_QUEUE_HARD_LIMIT = 10
 _LIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 5_000.0
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
@@ -391,7 +390,6 @@ async def _check_archive_ingest_writer_pressure(write_label: str, response: Resp
         writer_active = bool(getattr(ws, "writer_active", False))
         active_label = str(getattr(ws, "active_label", "") or "")
         active_age_ms = float(getattr(ws, "active_age_ms", 0.0) or 0.0)
-        active_writer_is_stale = active_age_ms >= _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS
         active_label_is_archive = active_label in _ARCHIVE_INGEST_LABELS
         if queue_depth > 0:
             response.headers["X-Ingest-Writer-Queue-Depth"] = str(queue_depth)
@@ -409,11 +407,6 @@ async def _check_archive_ingest_writer_pressure(write_label: str, response: Resp
                 admission_state="archive_writer_busy",
                 retry_after_seconds=_ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS,
             )
-        active_non_archive_writer_is_stale = writer_active and not active_label_is_archive and active_writer_is_stale
-        if active_non_archive_writer_is_stale:
-            response.headers["X-Ingest-Writer-Active-Label"] = active_label
-            response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
-            _raise_archive_ingest_backpressure(response, admission_state="writer_pressure")
 
 
 async def _check_live_ingest_writer_pressure(write_label: str, response: Response) -> None:
