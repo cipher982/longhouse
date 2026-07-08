@@ -3,7 +3,7 @@
 **Status:** Dogfood/canary implementation in progress
 **Owner:** Longhouse core
 **Created:** 2026-07-07
-**Review:** Hatch DeepSeek first-principles reviews, 2026-07-07
+**Review:** First-principles architecture reviews, 2026-07-07
 **Related:** `docs/specs/hot-cold-ingest-isolation.md`,
 `docs/specs/reliability-data-plane.md`, `docs/specs/archive-backlog-repair.md`,
 `docs/specs/machine-control-truth.md`

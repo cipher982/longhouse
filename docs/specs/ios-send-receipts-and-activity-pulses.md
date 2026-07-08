@@ -195,9 +195,9 @@ Recommended sequence: build Signal Rail first. Keep Packet Crackle as a preview
 experiment on the same derived signal after the rail proves the data coupling.
 The Provider Reactor idea is intentionally deferred for launch.
 
-## Hatch Opus Review Synthesis
+## Architecture Review Synthesis
 
-Hatch Opus agreed with the broad order: truth before polish. It tightened the
+Independent review agreed with the broad order: truth before polish. It tightened the
 plan in four important ways:
 
 1. **Reframe this as a legibility projection, not a new subsystem.** Delivery

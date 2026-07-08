@@ -39,7 +39,7 @@ Current recall is coupled to raw durable state:
   clean transcript events to slice a small window;
 - active-context recall adds more request-time boundary work.
 
-On david010 the source database is large enough that this shape crosses request
+a large hosted tenant source database is big enough that this shape crosses request
 timeouts on cold paths and makes every recall request fight the main SQLite
 database.
 
@@ -386,7 +386,7 @@ Local baseline on 2026-07-08 with `scripts/dev/profile_retrieval_index.py
 - main DB write probe during retrieval load p95: 0.060ms, max 540.393ms.
 
 The max write outlier needs real-DB follow-up; the p95 result supports the core
-separation thesis on synthetic load, but does not replace david010 profiling.
+separation thesis on synthetic load, but does not replace large-tenant profiling.
 
 ## Test Plan
 
@@ -417,7 +417,7 @@ Planned coverage:
 4. Lexical query service plus tests.
 5. Recall endpoint integration plus compatibility tests.
 6. Profiling script and recorded local timing notes.
-7. Review cleanup after hatch DeepSeek/Opus feedback.
+7. Review cleanup after independent architecture feedback.
 
 ## Later Vector Path
 
