@@ -19,6 +19,7 @@ from zerg.routers.agents_search import recall_index_status
 from zerg.services.retrieval_index import RetrievalChunk
 from zerg.services.retrieval_index import check_fts_integrity
 from zerg.services.retrieval_index import connect_retrieval_db
+from zerg.services.retrieval_index import connect_retrieval_db_readonly
 from zerg.services.retrieval_index import initialize_retrieval_db
 from zerg.services.retrieval_index import project_session_chunks
 from zerg.services.retrieval_index import rebuild_fts
@@ -122,6 +123,21 @@ def test_retrieval_db_initializes_separately_from_main_db(tmp_path):
     assert "recall_chunks_fts" in tables
     assert "recall_index_state" in tables
     assert "recall_index_jobs" in tables
+
+
+def test_retrieval_db_readonly_connection_cannot_write(tmp_path):
+    retrieval_path = tmp_path / "retrieval.db"
+    with connect_retrieval_db(retrieval_path) as conn:
+        initialize_retrieval_db(conn)
+
+    with connect_retrieval_db_readonly(retrieval_path) as conn:
+        assert conn.execute("SELECT count(*) FROM recall_chunks").fetchone()[0] == 0
+        try:
+            conn.execute("INSERT INTO recall_index_state(key, value_json, updated_at) VALUES('x', '{}', 'now')")
+        except sqlite3.OperationalError as exc:
+            assert "readonly" in str(exc).lower() or "read-only" in str(exc).lower()
+        else:  # pragma: no cover - proves the connection is actually read-only
+            raise AssertionError("read-only retrieval connection accepted a write")
 
 
 def test_retrieval_index_jobs_allow_one_active_job(tmp_path):

@@ -28,6 +28,7 @@ from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.retrieval_index import child_chunk_count
 from zerg.services.retrieval_index import connect_retrieval_db
+from zerg.services.retrieval_index import connect_retrieval_db_readonly
 from zerg.services.retrieval_index import get_chunks_by_ids
 from zerg.services.retrieval_index import initialize_retrieval_db
 from zerg.services.retrieval_index import resolve_retrieval_db_path
@@ -104,7 +105,7 @@ def _try_retrieval_index_recall(
         return None
 
     since = datetime.now(timezone.utc) - timedelta(days=since_days)
-    with connect_retrieval_db(retrieval_path) as retrieval_db:
+    with connect_retrieval_db_readonly(retrieval_path) as retrieval_db:
         if not retrieval_schema_ready(retrieval_db):
             return None
         if child_chunk_count(retrieval_db) <= 0:
@@ -393,7 +394,7 @@ async def recall_index_status(
         return {"status": "unavailable", "reason": "main database is not file-backed SQLite"}
     if not retrieval_path.exists():
         return {"status": "missing", "path": str(retrieval_path), "chunk_count": 0, "child_chunk_count": 0}
-    with connect_retrieval_db(retrieval_path) as retrieval_db:
+    with connect_retrieval_db_readonly(retrieval_path) as retrieval_db:
         if not retrieval_schema_ready(retrieval_db):
             return {"status": "uninitialized", "path": str(retrieval_path), "chunk_count": 0, "child_chunk_count": 0}
         chunk_count = int(retrieval_db.execute("SELECT count(*) FROM recall_chunks").fetchone()[0])

@@ -469,10 +469,7 @@ async def _worker_loop() -> None:
         try:
             job = await asyncio.to_thread(run_recall_index_job_once)
             if job is None:
-                try:
-                    await asyncio.wait_for(_wake_event.wait(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    pass
+                await _wake_event.wait()
                 _wake_event.clear()
             else:
                 await asyncio.sleep(0)

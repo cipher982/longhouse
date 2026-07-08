@@ -157,6 +157,15 @@ def connect_retrieval_db(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def connect_retrieval_db_readonly(path: Path) -> sqlite3.Connection:
+    """Open retrieval.db for serving reads without acquiring write intent."""
+
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=1.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout=1000")
+    return conn
+
+
 def initialize_retrieval_db(conn: sqlite3.Connection) -> None:
     """Create retrieval index schema if needed."""
 
