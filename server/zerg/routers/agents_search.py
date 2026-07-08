@@ -96,6 +96,15 @@ def _try_retrieval_index_recall(
 ) -> RecallResponse | None:
     """Serve recall from retrieval.db when a ready lexical index exists."""
 
+    phase_started = time.perf_counter()
+    phases: dict[str, float] = {}
+
+    def mark_phase(name: str) -> None:
+        nonlocal phase_started
+        now = time.perf_counter()
+        phases[name] = (now - phase_started) * 1000
+        phase_started = now
+
     if context_mode != "forensic":
         if explicit:
             raise HTTPException(
@@ -105,15 +114,22 @@ def _try_retrieval_index_recall(
         return None
 
     retrieval_path = resolve_retrieval_db_path(database_url)
+    mark_phase("resolve")
     if retrieval_path is None or not retrieval_path.exists():
         return None
 
     since = datetime.now(timezone.utc) - timedelta(days=since_days)
-    with connect_retrieval_db_readonly(retrieval_path) as retrieval_db:
+    retrieval_db = connect_retrieval_db_readonly(retrieval_path)
+    mark_phase("connect")
+    try:
         if not retrieval_schema_ready(retrieval_db):
+            mark_phase("schema")
             return None
+        mark_phase("schema")
         if child_chunk_count(retrieval_db) <= 0:
+            mark_phase("count")
             return None
+        mark_phase("count")
 
         hits = search_lexical_chunks(
             retrieval_db,
@@ -124,8 +140,13 @@ def _try_retrieval_index_recall(
             hide_internal_canary=not is_internal_canary_provider_filter(provider),
             limit=max_results,
         )
+        mark_phase("search")
         parent_ids = [hit.parent_chunk_id for hit in hits if hit.parent_chunk_id is not None]
         parents = get_chunks_by_ids(retrieval_db, parent_ids)
+        mark_phase("parents")
+    finally:
+        retrieval_db.close()
+    mark_phase("close")
 
     matches = []
     for hit in hits:
@@ -157,7 +178,17 @@ def _try_retrieval_index_recall(
             )
         )
 
-    return RecallResponse(matches=matches, total=len(matches))
+    response = RecallResponse(matches=matches, total=len(matches))
+    mark_phase("format")
+    total_ms = sum(phases.values())
+    if total_ms > 1000:
+        logger.warning(
+            "Slow retrieval recall phases total_ms=%.1f hits=%d phases=%s",
+            total_ms,
+            len(hits),
+            " ".join(f"{name}={value:.1f}" for name, value in phases.items()),
+        )
+    return response
 
 
 def _bounded_context_text(value: str | None) -> str:
