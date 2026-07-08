@@ -2219,10 +2219,12 @@ def _ensure_agents_fts(engine: Engine) -> None:
 _wal_checkpoint_task = None
 _wal_checkpoint_metrics_lock = Lock()
 _wal_checkpoint_metrics: dict[str, dict[str, Any]] = {}
+_sqlite_optimize_last_run_at: dict[str, float] = {}
 
 WAL_CHECKPOINT_INTERVAL = int(os.getenv("SQLITE_WAL_CHECKPOINT_INTERVAL", "60"))
 WAL_TRUNCATE_BYTES = int(os.getenv("SQLITE_WAL_TRUNCATE_BYTES", str(512 * 1024 * 1024)))
 LIVE_WAL_TRUNCATE_BYTES = int(os.getenv("LONGHOUSE_LIVE_WAL_TRUNCATE_BYTES", str(64 * 1024 * 1024)))
+SQLITE_PRAGMA_OPTIMIZE_INTERVAL_SECONDS = int(os.getenv("SQLITE_PRAGMA_OPTIMIZE_INTERVAL_SECONDS", "600"))
 
 
 def _sqlite_wal_path_for_engine(engine: Engine | None) -> Path | None:
@@ -2295,6 +2297,38 @@ def get_wal_checkpoint_metrics() -> dict[str, dict[str, Any]]:
         return {label: dict(payload) for label, payload in _wal_checkpoint_metrics.items()}
 
 
+def _run_sqlite_optimize_if_due(conn, *, label: str, payload: dict[str, Any]) -> None:
+    """Run a bounded SQLite planner-stat maintenance pass on a coarse interval."""
+
+    interval_seconds = int(os.getenv("SQLITE_PRAGMA_OPTIMIZE_INTERVAL_SECONDS", str(SQLITE_PRAGMA_OPTIMIZE_INTERVAL_SECONDS)))
+    payload["optimize_attempted"] = False
+    if interval_seconds <= 0:
+        payload["optimize_skipped_reason"] = "disabled"
+        return
+
+    now = time.monotonic()
+    with _wal_checkpoint_metrics_lock:
+        last_run_at = _sqlite_optimize_last_run_at.get(label)
+        if last_run_at is not None and now - last_run_at < interval_seconds:
+            payload["optimize_skipped_reason"] = "not_due"
+            payload["optimize_due_in_seconds"] = round(interval_seconds - (now - last_run_at), 1)
+            return
+        _sqlite_optimize_last_run_at[label] = now
+
+    started = time.monotonic()
+    try:
+        conn.exec_driver_sql("PRAGMA optimize")
+    except Exception as exc:
+        payload["optimize_error"] = str(exc)
+        logger.warning("%s SQLite PRAGMA optimize failed (non-fatal): %s", label, exc)
+        return
+
+    optimize_ms = (time.monotonic() - started) * 1000
+    payload["optimize_attempted"] = True
+    payload["optimize_ms"] = round(optimize_ms, 1)
+    logger.info("%s SQLite PRAGMA optimize complete elapsed_ms=%.1f", label, optimize_ms)
+
+
 def _run_wal_checkpoint(engine: Engine | None, *, label: str, truncate_bytes: int) -> dict[str, Any]:
     """Run one non-blocking WAL checkpoint pass for a SQLite engine."""
     if engine is None:
@@ -2310,7 +2344,7 @@ def _run_wal_checkpoint(engine: Engine | None, *, label: str, truncate_bytes: in
                 checkpointed_frames,
                 remaining_frames,
             )
-        payload: dict[str, int | bool | str] = {
+        payload: dict[str, Any] = {
             "label": label,
             "skipped": False,
             "busy": busy,
@@ -2321,8 +2355,12 @@ def _run_wal_checkpoint(engine: Engine | None, *, label: str, truncate_bytes: in
             "truncated": False,
         }
         if busy or remaining_frames:
+            payload["optimize_skipped_reason"] = "checkpoint_busy"
             return _record_wal_checkpoint_result(payload)
         wal_path = _sqlite_wal_path_for_engine(engine)
+        wal_size = wal_path.stat().st_size if wal_path is not None and wal_path.exists() else 0
+        payload["wal_bytes"] = wal_size
+        _run_sqlite_optimize_if_due(conn, label=label, payload=payload)
         wal_size = wal_path.stat().st_size if wal_path is not None and wal_path.exists() else 0
         payload["wal_bytes"] = wal_size
         if truncate_bytes <= 0 or wal_size < truncate_bytes:

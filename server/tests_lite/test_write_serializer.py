@@ -1127,6 +1127,13 @@ def test_wal_checkpoint_records_last_result(tmp_path):
     assert metrics["archive-test"]["checkpointed_frames"] >= 0
     assert metrics["archive-test"]["remaining_frames"] >= 0
     assert metrics["archive-test"]["checked_at_unix"] > 0
+    assert metrics["archive-test"]["optimize_attempted"] is True
+    assert metrics["archive-test"]["optimize_ms"] >= 0
 
     metrics["archive-test"]["busy"] = 999
     assert database_mod.get_wal_checkpoint_metrics()["archive-test"]["busy"] != 999
+
+    database_mod._run_wal_checkpoint(engine, label="archive-test", truncate_bytes=0)
+    metrics = database_mod.get_wal_checkpoint_metrics()
+    assert metrics["archive-test"]["optimize_attempted"] is False
+    assert metrics["archive-test"]["optimize_skipped_reason"] == "not_due"
