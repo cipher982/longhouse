@@ -5,6 +5,7 @@ final class SessionTranscriptCache {
     struct Snapshot {
         let detail: SessionDetail
         let events: [SessionEvent]
+        let projectionItems: [SessionProjectionItem]?
         let loadedProjectionItemCount: Int
         let totalProjectionItemCount: Int
         let tailSnapshotEventId: Int?
@@ -52,6 +53,7 @@ final class SessionTranscriptCache {
         sessionId: String,
         detail: SessionDetail,
         events: [SessionEvent],
+        projectionItems: [SessionProjectionItem]? = nil,
         loadedProjectionItemCount: Int,
         totalProjectionItemCount: Int,
         tailSnapshotEventId: Int?,
@@ -60,7 +62,7 @@ final class SessionTranscriptCache {
     ) {
         guard maxBytes > 0 else { return }
         let date = now()
-        let estimatedBytes = Self.estimateBytes(detail: detail, events: events)
+        let estimatedBytes = Self.estimateBytes(detail: detail, events: events, projectionItems: projectionItems)
         let key = cacheKey(serverURL: serverURL, sessionId: sessionId)
 
         remove(key)
@@ -69,6 +71,7 @@ final class SessionTranscriptCache {
         entries[key] = Snapshot(
             detail: detail,
             events: events,
+            projectionItems: projectionItems,
             loadedProjectionItemCount: loadedProjectionItemCount,
             totalProjectionItemCount: totalProjectionItemCount,
             tailSnapshotEventId: tailSnapshotEventId,
@@ -115,10 +118,15 @@ final class SessionTranscriptCache {
         totalBytes = max(0, totalBytes - removed.estimatedBytes)
     }
 
-    private static func estimateBytes(detail: SessionDetail, events: [SessionEvent]) -> Int {
+    private static func estimateBytes(
+        detail: SessionDetail,
+        events: [SessionEvent],
+        projectionItems: [SessionProjectionItem]?
+    ) -> Int {
         let encoder = JSONEncoder()
         let detailBytes = (try? encoder.encode(detail).count) ?? 1024
         let encodedEventBytes = try? encoder.encode(events).count
+        let projectionBytes = projectionItems.flatMap { try? encoder.encode($0).count } ?? 0
         let fallbackEventBytes = events.reduce(0) { partial, event in
             let contentBytes = event.contentText?.utf8.count ?? 0
             let toolNameBytes = event.toolName?.utf8.count ?? 0
@@ -127,6 +135,6 @@ final class SessionTranscriptCache {
             return partial + 256 + contentBytes + toolNameBytes + toolOutputBytes + timestampBytes
         }
         let eventBytes = encodedEventBytes ?? fallbackEventBytes
-        return max(1024, detailBytes + eventBytes)
+        return max(1024, detailBytes + eventBytes + projectionBytes)
     }
 }

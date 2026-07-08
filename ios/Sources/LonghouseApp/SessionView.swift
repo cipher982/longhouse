@@ -2524,7 +2524,8 @@ final class SessionViewModel: ObservableObject {
     private func applyCachedSnapshot(_ snapshot: SessionTranscriptCache.Snapshot) {
         detail = snapshot.detail
         lastWorkspaceEvents = snapshot.events
-        lastWorkspaceProjectionItems = projectionItemsFromEvents(snapshot.events)
+        let projectionItems = snapshot.projectionItems ?? projectionItemsFromEvents(snapshot.events)
+        lastWorkspaceProjectionItems = projectionItems
         loadedProjectionItemCount = snapshot.loadedProjectionItemCount
         totalProjectionItemCount = snapshot.totalProjectionItemCount
         tailSnapshotEventId = snapshot.tailSnapshotEventId
@@ -2536,7 +2537,7 @@ final class SessionViewModel: ObservableObject {
         prefetchInFlightOffset = nil
         prefetchInFlightSnapshotEventId = nil
         prefetchInFlightToken = nil
-        items = TimelineBuilder.build(events: snapshot.events)
+        items = TimelineBuilder.build(items: projectionItems)
         isInitialLoading = false
         errorMessage = nil
         refreshErrorMessage = nil
@@ -2546,7 +2547,8 @@ final class SessionViewModel: ObservableObject {
     private func applyDiskSnapshot(_ snapshot: TranscriptSnapshotStore.Snapshot) {
         detail = snapshot.detail
         lastWorkspaceEvents = snapshot.events
-        lastWorkspaceProjectionItems = projectionItemsFromEvents(snapshot.events)
+        let projectionItems = snapshot.projectionItems ?? projectionItemsFromEvents(snapshot.events)
+        lastWorkspaceProjectionItems = projectionItems
         loadedProjectionItemCount = snapshot.loadedProjectionItemCount
         totalProjectionItemCount = snapshot.totalProjectionItemCount
         tailSnapshotEventId = snapshot.tailSnapshotEventId
@@ -2558,7 +2560,7 @@ final class SessionViewModel: ObservableObject {
         prefetchInFlightOffset = nil
         prefetchInFlightSnapshotEventId = nil
         prefetchInFlightToken = nil
-        items = TimelineBuilder.build(events: snapshot.events)
+        items = TimelineBuilder.build(items: projectionItems)
         isInitialLoading = false
         errorMessage = nil
         refreshErrorMessage = nil
@@ -2592,6 +2594,7 @@ final class SessionViewModel: ObservableObject {
             sessionId: activeSessionId,
             detail: storedDetail,
             events: lastWorkspaceEvents,
+            projectionItems: lastWorkspaceProjectionItems,
             loadedProjectionItemCount: loadedProjectionItemCount,
             totalProjectionItemCount: totalProjectionItemCount,
             tailSnapshotEventId: tailSnapshotEventId,
@@ -2603,6 +2606,7 @@ final class SessionViewModel: ObservableObject {
             sessionId: activeSessionId,
             detail: storedDetail,
             events: lastWorkspaceEvents,
+            projectionItems: lastWorkspaceProjectionItems,
             loadedProjectionItemCount: loadedProjectionItemCount,
             totalProjectionItemCount: totalProjectionItemCount,
             tailSnapshotEventId: tailSnapshotEventId,

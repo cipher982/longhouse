@@ -220,6 +220,38 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func startRestoresCachedProjectionActionBeforeRefresh() async throws {
+        let cached = try makeWorkspace(eventId: 20, content: "Message after interrupt")
+        let fresh = try makeWorkspace(eventId: 21, content: "Network tail")
+        let projectionItems = [makeActionItem()] + cached.projection.items
+        let cache = SessionTranscriptCache()
+        cache.store(
+            serverURL: "https://example.longhouse.ai",
+            sessionId: "session-1",
+            detail: cached.session,
+            events: cached.events,
+            projectionItems: projectionItems,
+            loadedProjectionItemCount: projectionItems.count,
+            totalProjectionItemCount: projectionItems.count,
+            tailSnapshotEventId: cached.events.map(\.id).max()
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [fresh])
+        await api.pauseNextTailResponse(offset: 0)
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, transcriptCache: cache)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForTailRequestCount(api, atLeast: 1)
+
+        #expect(model.items.map(\.id) == ["action:interrupt-1", "user:20"])
+
+        await api.resumePausedTailResponses()
+        await waitForTailResponseCount(api, atLeast: 1)
+        model.stop()
+    }
+
+    @Test
     func cachedHookPlaceholderIsReplacedByStructuredPauseRequestOnRefresh() async throws {
         let cachedPauseRequestJSON = """
         {
@@ -1079,6 +1111,29 @@ struct SessionViewModelTests {
             inActiveContext: true,
             isHeadBranch: true,
             inputOrigin: nil
+        )
+    }
+
+    private func makeActionItem() -> SessionProjectionItem {
+        SessionProjectionItem(
+            kind: "action",
+            sessionId: "session-1",
+            timestamp: "2026-05-02T19:59:59Z",
+            event: nil,
+            action: SessionAction(
+                id: "action:interrupt-1",
+                kind: "turn_interrupted",
+                provider: "codex",
+                source: "user",
+                providerReason: "interrupted",
+                eventId: 19
+            ),
+            continuedFromSessionId: nil,
+            continuationKind: nil,
+            originLabel: nil,
+            parentOriginLabel: nil,
+            parentContinuationKind: nil,
+            branchedFromEventId: nil
         )
     }
 }

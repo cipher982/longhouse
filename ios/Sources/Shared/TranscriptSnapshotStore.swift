@@ -26,6 +26,7 @@ struct TranscriptSnapshotStore: Sendable {
         var sessionId: String
         var detail: SessionDetail
         var events: [SessionEvent]
+        var projectionItems: [SessionProjectionItem]?
         var loadedProjectionItemCount: Int
         var totalProjectionItemCount: Int
         var tailSnapshotEventId: Int?
@@ -113,6 +114,7 @@ struct TranscriptSnapshotStore: Sendable {
         sessionId: String,
         detail: SessionDetail,
         events: [SessionEvent],
+        projectionItems: [SessionProjectionItem]? = nil,
         loadedProjectionItemCount: Int,
         totalProjectionItemCount: Int,
         tailSnapshotEventId: Int?,
@@ -126,6 +128,7 @@ struct TranscriptSnapshotStore: Sendable {
             sessionId: sessionId,
             detail: detail,
             events: events,
+            projectionItems: projectionItems,
             loadedProjectionItemCount: loadedProjectionItemCount,
             totalProjectionItemCount: totalProjectionItemCount,
             tailSnapshotEventId: tailSnapshotEventId,

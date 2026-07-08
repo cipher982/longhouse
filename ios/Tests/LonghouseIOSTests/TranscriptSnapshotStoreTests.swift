@@ -75,20 +75,58 @@ struct TranscriptSnapshotStoreTests {
         )
     }
 
+    private func makeActionItem(timestamp: String = "2026-05-02T19:59:59Z") -> SessionProjectionItem {
+        SessionProjectionItem(
+            kind: "action",
+            sessionId: "session-1",
+            timestamp: timestamp,
+            event: nil,
+            action: SessionAction(
+                id: "action:interrupt-1",
+                kind: "turn_interrupted",
+                provider: "codex",
+                source: "user",
+                providerReason: "interrupted",
+                eventId: 9
+            ),
+            continuedFromSessionId: nil,
+            continuationKind: nil,
+            originLabel: nil,
+            parentOriginLabel: nil,
+            parentContinuationKind: nil,
+            branchedFromEventId: nil
+        )
+    }
+
     @Test
     func roundTripsSnapshotThroughDisk() throws {
         let dir = tempDirectory()
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = makeStore(directory: dir)
         let events = [makeEvent(id: 10, content: "Hello"), makeEvent(id: 11, content: "World")]
+        let projectionItems = [makeActionItem()] + events.map { event in
+            SessionProjectionItem(
+                kind: "event",
+                sessionId: "session-1",
+                timestamp: event.timestamp,
+                event: event,
+                continuedFromSessionId: nil,
+                continuationKind: nil,
+                originLabel: nil,
+                parentOriginLabel: nil,
+                parentContinuationKind: nil,
+                branchedFromEventId: nil
+            )
+        }
 
         store.save(
             serverURL: "https://example.longhouse.ai",
             sessionId: "session-1",
             detail: makeDetail(),
             events: events,
-            loadedProjectionItemCount: 2,
-            totalProjectionItemCount: 2,
+            projectionItems: projectionItems,
+            loadedProjectionItemCount: 3,
+            totalProjectionItemCount: 3,
             tailSnapshotEventId: 11,
             lastPubsubSeq: 42,
             workspaceRevisionFingerprint: "sha256:cached"
@@ -98,6 +136,7 @@ struct TranscriptSnapshotStoreTests {
         let loaded = store.load(serverURL: "https://example.longhouse.ai", sessionId: "session-1")
         #expect(loaded != nil)
         #expect(loaded?.events.map(\.id) == [10, 11])
+        #expect(loaded?.projectionItems?.map(\.id) == ["action:interrupt-1", "event:10", "event:11"])
         #expect(loaded?.detail.id == "session-1")
         #expect(loaded?.tailSnapshotEventId == 11)
         #expect(loaded?.lastPubsubSeq == 42)

@@ -364,10 +364,9 @@ export function useSessionWorkspace(
     return mergeProjectionItems(historicalItems, evictedTailItems, tailPage.items);
   }, [sortedProjectionPages, evictedTailItems]);
 
-  // Count only actual event items (not seam dividers) so the "X/Y loaded"
-  // counter matches what the backend reports as entries.
-  const loadedEventCount = useMemo(
-    () => projectionItems.filter((item) => item.kind === "event").length,
+  // Count rendered transcript entries (events and actions), not seam dividers.
+  const loadedEntryCount = useMemo(
+    () => projectionItems.filter((item) => item.kind === "event" || item.kind === "action").length,
     [projectionItems],
   );
 
@@ -586,7 +585,7 @@ export function useSessionWorkspace(
     setShowAbandonedBranches,
     events,
     totalEntries,
-    loadedEntryCount: loadedEventCount,
+    loadedEntryCount,
     abandonedEvents,
     eventsLoading: projectionLoading,
     eventsError: projectionError,

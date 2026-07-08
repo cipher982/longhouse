@@ -806,6 +806,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/refresh-native-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refresh Native Session */
+        post: operations["refresh_native_session_auth_refresh_native_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/revoke-native-session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Native Session */
+        post: operations["revoke_native_session_auth_revoke_native_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/refresh-runtime-token": {
         parameters: {
             query?: never;
@@ -5837,6 +5871,16 @@ export interface components {
             code: string;
             /** Tenant State */
             tenant_state: string;
+        };
+        /** NativeRefreshRequest */
+        NativeRefreshRequest: {
+            /** Refresh Token */
+            refresh_token: string;
+        };
+        /** NativeRevokeRequest */
+        NativeRevokeRequest: {
+            /** Refresh Token */
+            refresh_token: string;
         };
         /** ObservabilityOverviewResponse */
         ObservabilityOverviewResponse: {
@@ -11284,6 +11328,72 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["NativeHandoffRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_native_session_auth_refresh_native_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NativeRefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_native_session_auth_revoke_native_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NativeRevokeRequest"];
             };
         };
         responses: {
