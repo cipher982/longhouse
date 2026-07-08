@@ -21,6 +21,7 @@ from zerg.models.agents import AgentHeartbeat
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.services.maintenance import _drain_live_archive_outbox_once
+from zerg.services.write_serializer import WriteQueueTimeoutError
 
 
 @pytest.mark.asyncio
@@ -161,6 +162,14 @@ async def test_live_archive_drain_timeout_defers_pending_rows(tmp_path, monkeypa
     LiveSession = sessionmaker(bind=live_engine)
 
     with LiveSession() as live_db:
+        live_db.add(
+            LiveArchiveOutbox(
+                idempotency_key="old-drained-on-timeout",
+                kind="heartbeat_stamp.v1",
+                payload_json="{}",
+                drained_at=datetime.now(timezone.utc) - timedelta(days=8),
+            )
+        )
         enqueue_heartbeat_stamp_outbox(
             live_db,
             {
@@ -193,6 +202,61 @@ async def test_live_archive_drain_timeout_defers_pending_rows(tmp_path, monkeypa
     monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
     monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
     monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: TimeoutSerializer())
+
+    try:
+        result = await _drain_live_archive_outbox_once()
+
+        assert result == {"processed": 0, "drained": 0, "failed": 0, "cleaned": 1, "deferred": 1}
+        with LiveSession() as live_db:
+            outbox = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.drained_at.is_(None)).one()
+            assert outbox.drained_at is None
+            assert outbox.attempts == 0
+    finally:
+        live_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_live_archive_drain_queue_timeout_defers_pending_rows(tmp_path, monkeypatch):
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live_queue_timeout.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+
+    with LiveSession() as live_db:
+        enqueue_heartbeat_stamp_outbox(
+            live_db,
+            {
+                "device_id": "maintenance-queue-timeout",
+                "received_at": datetime.now(timezone.utc),
+                "version": "0.5.0",
+                "spool_pending": 0,
+                "spool_dead": 0,
+                "parse_errors_1h": 0,
+                "consecutive_failures": 0,
+                "ship_attempts_1h": 1,
+                "ship_successes_1h": 1,
+                "ship_rate_limited_1h": 0,
+                "ship_server_errors_1h": 0,
+                "ship_payload_rejections_1h": 0,
+                "ship_payload_too_large_1h": 0,
+                "ship_retryable_client_errors_1h": 0,
+                "ship_connect_errors_1h": 0,
+                "disk_free_bytes": 1,
+                "is_offline": 0,
+                "raw_json": "{}",
+            },
+        )
+        live_db.commit()
+
+    class QueueTimeoutSerializer:
+        async def execute(self, *_args, **kwargs):
+            raise WriteQueueTimeoutError(
+                label=str(kwargs.get("label") or ""),
+                queue_timeout_seconds=float(kwargs.get("queue_timeout_seconds") or 2.0),
+            )
+
+    monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
+    monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: QueueTimeoutSerializer())
 
     try:
         result = await _drain_live_archive_outbox_once()

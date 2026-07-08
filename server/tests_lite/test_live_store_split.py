@@ -996,6 +996,7 @@ def test_live_archive_outbox_drains_runtime_event_to_archive(tmp_path):
                 device_id="cinder",
                 started_at=now,
                 last_activity_at=now,
+                user_state="snoozed",
             )
             archive_db.add(session)
             archive_db.commit()
@@ -1047,6 +1048,9 @@ def test_live_archive_outbox_drains_runtime_event_to_archive(tmp_path):
             )
             assert state.phase == "running"
             assert state.active_tool == "Shell"
+            session = archive_db.query(AgentSession).filter(AgentSession.id == session_id).one()
+            assert session.user_state == "active"
+            assert session.user_state_at is not None
             assert (
                 archive_db.query(SessionObservation)
                 .filter(SessionObservation.runtime_key == event.runtime_key)

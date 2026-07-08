@@ -55,6 +55,7 @@ from zerg.services.write_serializer import post_write_fallback_db
 router = APIRouter(prefix="/agents/runtime", tags=["agents"])
 
 _HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS = 2.0
+_AUTO_RESUME_PHASES = {"thinking", "running"}
 
 
 @router.post("/events/batch", response_model=RuntimeEventBatchResult)
@@ -132,6 +133,13 @@ async def ingest_runtime_observation_batch(
                 {
                     "session_id": sid,
                     "tool": tool_by_session.get(sid),
+                    "auto_resume": any(
+                        ev.session_id == sid
+                        and ev.runtime_key in updated_runtime_keys
+                        and ev.kind == "phase_signal"
+                        and ev.phase in _AUTO_RESUME_PHASES
+                        for ev in events
+                    ),
                 }
                 for sid in updated_session_ids
             ]
@@ -212,6 +220,9 @@ async def ingest_runtime_observation_batch(
                         ).presence_state
                         sid = session_row.id
                         context = push_context_by_session.get(sid, {})
+                        if context.get("auto_resume") and canonical_state in _AUTO_RESUME_PHASES and session_row.user_state == "snoozed":
+                            session_row.user_state = "active"
+                            session_row.user_state_at = now_utc
                         previous_attention_state = _previous_attention_state_from_session(session_row)
                         active_pause_request = pause_request_map.get(sid)
                         use_needs_answer = (

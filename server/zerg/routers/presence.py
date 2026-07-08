@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
+from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.services.apns_sender import NOTIFICATION_CHANNEL_APNS_IOS
@@ -64,6 +65,7 @@ from zerg.services.apns_sender import send_widget_timeline_push
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
+from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import coerce_session_uuid
@@ -161,6 +163,19 @@ async def upsert_presence(
         session_uuid = UUID(payload.session_id)
     except ValueError:
         session_uuid = None
+
+    if live_store_configured():
+        from zerg.routers.runtime import ingest_runtime_observation_batch
+
+        runtime_response = Response()
+        await ingest_runtime_observation_batch(
+            RuntimeEventBatchIngest(events=[runtime_event]),
+            runtime_response,
+            db,
+            _token,
+            None,
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT, headers=dict(runtime_response.headers))
 
     owner_id = resolve_session_message_owner_id(db, _token)
 

@@ -185,6 +185,57 @@ def test_runtime_batch_uses_live_store_and_outbox_without_archive_observations(t
     asyncio.run(run_test())
 
 
+def test_presence_live_store_delegates_to_runtime_batch_without_archive_wait(monkeypatch):
+    import zerg.routers.presence as presence_router
+    import zerg.routers.runtime as runtime_router
+
+    async def run_test():
+        calls = {}
+
+        async def fake_runtime_batch(payload, response, db, token, single):
+            calls["payload"] = payload
+            calls["db"] = db
+            calls["token"] = token
+            calls["single"] = single
+            response.headers["X-Runtime-Label"] = "presence-live-state"
+
+        def fail_archive_serializer():  # pragma: no cover - regression guard
+            raise AssertionError("live-configured presence must not wait on archive serializer")
+
+        monkeypatch.setattr(presence_router, "live_store_configured", lambda: True)
+        monkeypatch.setattr(presence_router, "get_write_serializer", fail_archive_serializer)
+        monkeypatch.setattr(runtime_router, "ingest_runtime_observation_batch", fake_runtime_batch)
+
+        token = SimpleNamespace(device_id="cinder", id="token-1", owner_id=1)
+        request_db = SimpleNamespace()
+        response = await presence_router.upsert_presence(
+            presence_router.PresenceIn(
+                session_id="019f3e77-2532-77d0-b9ba-2f24b1ca1cea",
+                state="running",
+                tool_name="Shell",
+                provider="codex",
+                occurred_at="2026-01-01T00:00:00Z",
+                dedupe_key="presence-live-route-fixture",
+            ),
+            SimpleNamespace(),
+            request_db,
+            token,
+        )
+
+        assert response.status_code == 204
+        assert response.headers["X-Runtime-Label"] == "presence-live-state"
+        assert calls["db"] is request_db
+        assert calls["token"] is token
+        assert calls["single"] is None
+        [event] = calls["payload"].events
+        assert event.runtime_key == "codex:019f3e77-2532-77d0-b9ba-2f24b1ca1cea"
+        assert event.phase == "running"
+        assert event.tool_name == "Shell"
+        assert event.dedupe_key == "presence-live-route-fixture"
+
+    asyncio.run(run_test())
+
+
 def test_runtime_batch_skips_bridge_live_transcript_delta_outbox(tmp_path, monkeypatch):
     import zerg.routers.runtime as runtime_router
 

@@ -48,6 +48,7 @@ REMOTE_LAUNCH_KIND = REMOTE_LAUNCH_OUTBOX_KIND
 REMOTE_LAUNCH_OUTCOME_KIND = REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND
 RUNTIME_EVENT_KIND = "runtime_event.v1"
 SESSION_INPUT_RECEIPT_KIND = "session_input_receipt.v1"
+AUTO_RESUME_PHASES = {"thinking", "running"}
 ONE_SHOT_CONTROL_PLANE_BY_PROVIDER = {
     "codex": "codex_exec",
     "cursor": "cursor_acp",
@@ -461,6 +462,15 @@ def _drain_runtime_event(row: LiveArchiveOutbox, archive_db: Session) -> None:
     event_payload = _restore_jsonable(payload.get("event") or {})
     event = RuntimeEventIngest.model_validate(event_payload)
     ingest_runtime_events(archive_db, [event])
+    if event.session_id is not None and event.kind == "phase_signal" and event.phase in AUTO_RESUME_PHASES:
+        occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+        archive_db.query(AgentSession).filter(
+            AgentSession.id == event.session_id,
+            AgentSession.user_state == "snoozed",
+        ).update(
+            {"user_state": "active", "user_state_at": occurred_at},
+            synchronize_session=False,
+        )
 
 
 def _drain_managed_local_launch(row: LiveArchiveOutbox, archive_db: Session) -> None:
