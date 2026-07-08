@@ -1127,6 +1127,7 @@ async def ingest_session(
                     except Exception:
                         if not settings.legacy_raw_write_enabled:
                             if write_label == "ingest-live":
+                                write_db.rollback()
                                 archive_primary_state = "failed"
                                 legacy_raw_effective = False
                                 logger.warning(
