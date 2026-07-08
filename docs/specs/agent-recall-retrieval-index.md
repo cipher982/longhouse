@@ -155,12 +155,17 @@ Important indexes:
 
 ### `recall_chunks_fts`
 
-FTS5 over child evidence rows by default. The table is external-content, so the
-projector must maintain it explicitly:
+FTS5 over child evidence rows by default. Use a standalone FTS table inside
+`retrieval.db`, not external-content FTS. It duplicates child text inside the
+rebuildable cache, but it avoids ghost-row/rebuild hazards and keeps parent rows
+out of search cleanly.
+
+The projector must maintain it explicitly:
 
 - delete old FTS rows before deleting/replacing projected chunks for a session;
 - insert FTS rows for new child chunks only;
-- provide a full `rebuild` path using `INSERT INTO recall_chunks_fts(recall_chunks_fts) VALUES('rebuild')`;
+- provide a full `rebuild` path by deleting FTS rows and reinserting child rows
+  from `recall_chunks`;
 - provide an integrity check that compares child chunk counts with FTS row
   counts and records failures in `recall_index_state`.
 
@@ -173,8 +178,6 @@ CREATE VIRTUAL TABLE recall_chunks_fts USING fts5(
   cwd,
   git_repo,
   git_branch,
-  content='recall_chunks',
-  content_rowid='id',
   tokenize='unicode61 tokenchars ''._/-:''
 );
 ```
