@@ -6,7 +6,8 @@
 **Related:** `docs/specs/hot-cold-runtime-reliability-hardening.md`,
 `docs/specs/hot-cold-ingest-isolation.md`,
 `docs/specs/reliability-data-plane.md`,
-`docs/specs/archive-backlog-repair.md`
+`docs/specs/archive-backlog-repair.md`,
+`docs/specs/hosted-archive-restart-control.md`
 
 ## Context
 
@@ -191,6 +192,9 @@ Acceptance:
 
 **Decision:** Hosted runtime and Machine Agent restarts must not silently resume
 full archive drain.
+
+Detailed implementation spec:
+`docs/specs/hosted-archive-restart-control.md`.
 
 Prelaunch scope:
 
