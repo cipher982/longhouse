@@ -199,6 +199,20 @@ def _merge_ingest_results(results: list[IngestResult]) -> IngestResult:
     )
 
 
+def _merge_archive_primary_states(states: list[str]) -> str:
+    """Return a compact response state for per-batch archive-primary writes."""
+
+    if not states:
+        return "disabled"
+    if any(state == "fallback" for state in states):
+        return "fallback"
+    if any(state == "written" for state in states):
+        return "written"
+    if any(state == "prepared" for state in states):
+        return "prepared"
+    return "disabled"
+
+
 def _sync_session_counts_for_label(label: str) -> bool:
     return label in _SYNC_SESSION_COUNT_LABELS
 
@@ -1039,43 +1053,20 @@ async def ingest_session(
                         transcript_preview=transcript_preview,
                     )
 
-            archive_primary_prepared = None
-            archive_primary_state = "disabled"
-            archive_primary_records_written = 0
-            legacy_raw_effective = settings.legacy_raw_write_enabled
-            if settings.archive_primary_write_enabled:
-                archive_primary_prepared = await _prepare_archive_primary_before_ingest(
-                    data=data,
-                    fallback_db=db,
-                    settings=settings,
-                )
-                if archive_primary_prepared.error:
-                    if not settings.legacy_raw_write_enabled:
-                        request_status_label = "archive_primary_failed"
-                        raise HTTPException(
-                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                            detail="Archive-primary write failed and legacy raw fallback is disabled",
-                            headers={"X-Ingest-Archive-Primary": "failed"},
-                        )
-                    archive_primary_state = "fallback"
-                    legacy_raw_effective = True
-                    logger.warning(
-                        "Archive-primary prepare failed for session %s; falling back to legacy raw writes: %s",
-                        data.id,
-                        archive_primary_prepared.error,
-                    )
-                else:
-                    archive_primary_state = "prepared"
-                    archive_primary_records_written = archive_primary_prepared.records_written
-
             from zerg.services.write_serializer import get_write_serializer
 
             ws = get_write_serializer()
             ingest_chunk = _ingest_chunk_for_label(write_label)
 
-            def _do_ingest(write_db, ingest_data: SessionIngest = data, batch_index: int = 0):
-                nonlocal archive_primary_state
-                nonlocal legacy_raw_effective
+            def _do_ingest(
+                write_db,
+                ingest_data: SessionIngest = data,
+                batch_index: int = 0,
+                archive_primary_prepared=None,
+                archive_primary_state: str = "disabled",
+                archive_primary_records_written: int = 0,
+                legacy_raw_effective: bool = settings.legacy_raw_write_enabled,
+            ) -> tuple[IngestResult, str, bool]:
                 if write_label in _ARCHIVE_INGEST_LABELS:
                     set_active_stage = getattr(ws, "set_active_stage", None)
                     if callable(set_active_stage):
@@ -1145,7 +1136,7 @@ async def ingest_session(
                         },
                     },
                 )
-                return result
+                return result, archive_primary_state, legacy_raw_effective
 
             with tracer.start_as_current_span("longhouse.ingest.write") as write_span:
                 write_started = time.monotonic()
@@ -1155,21 +1146,68 @@ async def ingest_session(
                     else [data]
                 )
                 write_results: list[IngestResult] = []
+                archive_primary_states: list[str] = []
+                legacy_raw_states: list[bool] = []
                 for batch_index, ingest_batch in enumerate(ingest_batches):
                     if batch_index > 0 and write_label in _ARCHIVE_INGEST_LABELS:
                         await asyncio.sleep(0)
                         await _check_archive_ingest_writer_pressure(write_label, response)
-                    batch_result = await ws.execute_after_closing_request_session(
-                        lambda write_db, ingest_batch=ingest_batch, batch_index=batch_index: _do_ingest(
+
+                    archive_primary_prepared = None
+                    archive_primary_state = "disabled"
+                    archive_primary_records_written = 0
+                    legacy_raw_effective = settings.legacy_raw_write_enabled
+                    if settings.archive_primary_write_enabled:
+                        archive_primary_prepared = await _prepare_archive_primary_before_ingest(
+                            data=ingest_batch,
+                            fallback_db=db,
+                            settings=settings,
+                        )
+                        if archive_primary_prepared.error:
+                            if not settings.legacy_raw_write_enabled:
+                                request_status_label = "archive_primary_failed"
+                                raise HTTPException(
+                                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                    detail="Archive-primary write failed and legacy raw fallback is disabled",
+                                    headers={"X-Ingest-Archive-Primary": "failed"},
+                                )
+                            archive_primary_state = "fallback"
+                            legacy_raw_effective = True
+                            logger.warning(
+                                "Archive-primary prepare failed for session %s batch=%s; falling back to legacy raw writes: %s",
+                                data.id,
+                                batch_index + 1,
+                                archive_primary_prepared.error,
+                            )
+                        else:
+                            archive_primary_state = "prepared"
+                            archive_primary_records_written = archive_primary_prepared.records_written
+
+                    batch_result, batch_archive_primary_state, batch_legacy_raw_effective = await ws.execute_after_closing_request_session(
+                        lambda write_db,
+                        ingest_batch=ingest_batch,
+                        batch_index=batch_index,
+                        archive_primary_prepared=archive_primary_prepared,
+                        archive_primary_state=archive_primary_state,
+                        archive_primary_records_written=archive_primary_records_written,
+                        legacy_raw_effective=legacy_raw_effective: _do_ingest(
                             write_db,
                             ingest_batch,
                             batch_index,
+                            archive_primary_prepared,
+                            archive_primary_state,
+                            archive_primary_records_written,
+                            legacy_raw_effective,
                         ),
                         db,
                         label=write_label,
                     )
                     write_results.append(batch_result)
+                    archive_primary_states.append(batch_archive_primary_state)
+                    legacy_raw_states.append(batch_legacy_raw_effective)
                 result = _merge_ingest_results(write_results)
+                archive_primary_state = _merge_archive_primary_states(archive_primary_states)
+                legacy_raw_effective = any(legacy_raw_states) if legacy_raw_states else settings.legacy_raw_write_enabled
                 write_ms = round((time.monotonic() - write_started) * 1000, 1)
                 agents_ingest_write_seconds.labels(provider=provider_label).observe(write_ms / 1000.0)
 

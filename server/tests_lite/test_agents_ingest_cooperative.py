@@ -15,6 +15,7 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-long-enough")
 os.environ.setdefault("AUTH_DISABLED", "1")
 
 from zerg.routers.agents_ingest import _archive_ingest_batches
+from zerg.routers.agents_ingest import _merge_archive_primary_states
 from zerg.routers.agents_ingest import _merge_ingest_results
 from zerg.services.agents import EventIngest
 from zerg.services.agents import IngestResult
@@ -120,3 +121,11 @@ def test_merge_ingest_results_sums_counts_and_keeps_latest_event_id():
     assert merged.commit_ms_total == 3.5
     assert merged.source_lines_inserted == 3
     assert merged.store_stage_ms == {"events": 3.0, "source_lines": 3.0}
+
+
+def test_merge_archive_primary_states_prioritizes_fallback_then_written():
+    assert _merge_archive_primary_states([]) == "disabled"
+    assert _merge_archive_primary_states(["disabled"]) == "disabled"
+    assert _merge_archive_primary_states(["written", "disabled"]) == "written"
+    assert _merge_archive_primary_states(["written", "fallback"]) == "fallback"
+    assert _merge_archive_primary_states(["prepared"]) == "prepared"

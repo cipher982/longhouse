@@ -27,6 +27,7 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.routers.agents_ingest import _ARCHIVE_INGEST_MAX_IN_FLIGHT
@@ -609,6 +610,188 @@ def test_archive_ingest_does_not_pass_serializer_timeout(tmp_path, monkeypatch):
         assert response.headers["X-Ingest-Lane"] == "archive"
         assert response.headers["X-Ingest-Admission-State"] == "archive_slot_acquired"
         assert response.headers["X-Ingest-Sub-Batches"] == "1"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_archive_primary_prepare_is_bounded_to_archive_sub_batches(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
+    prepared_sizes: list[int] = []
+
+    async def fake_prepare(*, data, fallback_db, settings):  # noqa: ARG001
+        prepared_sizes.append(max(len(data.events), len(data.source_lines or [])))
+        return SimpleNamespace(error=None, chunks=(), records_written=0)
+
+    monkeypatch.setattr(
+        "zerg.routers.agents_ingest._prepare_archive_primary_before_ingest",
+        fake_prepare,
+    )
+    client, _ = _make_client(tmp_path)
+    try:
+        session_id = "41111111-2222-3333-4444-555555555555"
+        payload = {
+            "id": session_id,
+            "provider": "codex",
+            "environment": "test",
+            "project": "zerg",
+            "started_at": "2026-01-01T00:00:00Z",
+            "events": [
+                {
+                    "role": "assistant",
+                    "content_text": f"hi {idx}",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "source_path": "/tmp/archive-primary-batched.jsonl",
+                    "source_offset": idx,
+                    "raw_json": json.dumps({"type": "assistant", "text": f"hi {idx}"}),
+                }
+                for idx in range(130)
+            ],
+            "source_lines": [
+                {
+                    "source_path": "/tmp/archive-primary-batched.jsonl",
+                    "source_offset": idx,
+                    "raw_json": json.dumps({"type": "assistant", "text": f"hi {idx}"}),
+                }
+                for idx in range(130)
+            ],
+        }
+        response = client.post(
+            "/agents/ingest",
+            json=payload,
+            headers={
+                "X-Agents-Token": "dev",
+                "X-Longhouse-Ship-Trace": json.dumps(
+                    {
+                        "schema": "ship_trace.v1",
+                        "trace_id": f"{session_id}:0:8192:1778220000000",
+                        "provider": "codex",
+                        "session_id": session_id,
+                        "work_context": "spool_replay",
+                    },
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        assert response.headers["X-Ingest-Sub-Batches"] == "3"
+        assert response.headers["X-Ingest-Archive-Primary"] == "written"
+        assert prepared_sizes == [64, 64, 2]
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def _batched_archive_primary_payload(session_id: str, count: int) -> dict:
+    return {
+        "id": session_id,
+        "provider": "codex",
+        "environment": "test",
+        "project": "zerg",
+        "started_at": "2026-01-01T00:00:00Z",
+        "events": [
+            {
+                "role": "assistant",
+                "content_text": f"hi {idx}",
+                "timestamp": "2026-01-01T00:00:01Z",
+                "source_path": "/tmp/archive-primary-batched.jsonl",
+                "source_offset": idx,
+                "raw_json": json.dumps({"type": "assistant", "text": f"hi {idx}"}),
+            }
+            for idx in range(count)
+        ],
+        "source_lines": [
+            {
+                "source_path": "/tmp/archive-primary-batched.jsonl",
+                "source_offset": idx,
+                "raw_json": json.dumps({"type": "assistant", "text": f"hi {idx}"}),
+            }
+            for idx in range(count)
+        ],
+    }
+
+
+def _spool_replay_trace_header(session_id: str) -> dict[str, str]:
+    return {
+        "X-Agents-Token": "dev",
+        "X-Longhouse-Ship-Trace": json.dumps(
+            {
+                "schema": "ship_trace.v1",
+                "trace_id": f"{session_id}:0:8192:1778220000000",
+                "provider": "codex",
+                "session_id": session_id,
+                "work_context": "spool_replay",
+            },
+            separators=(",", ":"),
+        ),
+    }
+
+
+def test_archive_primary_later_batch_prepare_failure_falls_back_when_legacy_raw_enabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
+    prepared_sizes: list[int] = []
+
+    async def fake_prepare(*, data, fallback_db, settings):  # noqa: ARG001
+        prepared_sizes.append(max(len(data.events), len(data.source_lines or [])))
+        if len(prepared_sizes) == 2:
+            return SimpleNamespace(error="synthetic_prepare_failure", chunks=(), records_written=0)
+        return SimpleNamespace(error=None, chunks=(), records_written=0)
+
+    monkeypatch.setattr(
+        "zerg.routers.agents_ingest._prepare_archive_primary_before_ingest",
+        fake_prepare,
+    )
+    client, SessionLocal = _make_client(tmp_path)
+    try:
+        session_id = "51111111-2222-3333-4444-555555555555"
+        response = client.post(
+            "/agents/ingest",
+            json=_batched_archive_primary_payload(session_id, 65),
+            headers=_spool_replay_trace_header(session_id),
+        )
+
+        assert response.status_code == status.HTTP_200_OK, response.text
+        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
+        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
+        assert response.headers["X-Ingest-Sub-Batches"] == "2"
+        assert prepared_sizes == [64, 1]
+        with SessionLocal() as db:
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 65
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_archive_primary_later_batch_prepare_failure_fails_closed_without_legacy_raw(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "0")
+    monkeypatch.delenv("LONGHOUSE_DISABLE_LEGACY_RAW_WRITES", raising=False)
+    prepared_sizes: list[int] = []
+
+    async def fake_prepare(*, data, fallback_db, settings):  # noqa: ARG001
+        prepared_sizes.append(max(len(data.events), len(data.source_lines or [])))
+        if len(prepared_sizes) == 2:
+            return SimpleNamespace(error="synthetic_prepare_failure", chunks=(), records_written=0)
+        return SimpleNamespace(error=None, chunks=(), records_written=0)
+
+    monkeypatch.setattr(
+        "zerg.routers.agents_ingest._prepare_archive_primary_before_ingest",
+        fake_prepare,
+    )
+    client, SessionLocal = _make_client(tmp_path)
+    try:
+        session_id = "61111111-2222-3333-4444-555555555555"
+        response = client.post(
+            "/agents/ingest",
+            json=_batched_archive_primary_payload(session_id, 65),
+            headers=_spool_replay_trace_header(session_id),
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert response.headers["X-Ingest-Archive-Primary"] == "failed"
+        assert prepared_sizes == [64, 1]
+        with SessionLocal() as db:
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 64
     finally:
         api_app.dependency_overrides.clear()
 
