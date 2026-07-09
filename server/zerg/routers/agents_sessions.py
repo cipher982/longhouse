@@ -1,6 +1,7 @@
 """Agents API — session CRUD, listing, and export endpoints."""
 
 import logging
+from datetime import date as date_type
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -106,6 +107,8 @@ from zerg.services.startup_context import STARTUP_CONTEXT_MAX_DAYS_BACK
 from zerg.services.startup_context import STARTUP_CONTEXT_MAX_LIMIT
 from zerg.services.startup_context import load_startup_context_items
 from zerg.services.startup_context import render_startup_context
+from zerg.services.worklog_day_export import WorklogDayExportResponse
+from zerg.services.worklog_day_export import build_worklog_day_export
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
 
@@ -141,6 +144,27 @@ def _owner_id_from_agents_auth(db: Session, auth: object) -> int | None:
     if not isinstance(auth, DeviceToken):
         return None
     return _resolve_agents_owner_id(db, auth)
+
+
+@router.get("/worklog/day", response_model=WorklogDayExportResponse)
+def export_worklog_day(
+    date: date_type = Query(..., description="Digest day in the supplied timezone, YYYY-MM-DD"),
+    timezone_name: str = Query("America/New_York", alias="timezone", description="IANA timezone for day boundaries"),
+    include_test: bool = Query(False, description="Include test/e2e sessions"),
+    db: Session = Depends(get_db),
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> WorklogDayExportResponse:
+    """Return one day of session messages for machine worklog consumers."""
+    try:
+        return build_worklog_day_export(
+            db,
+            day=date,
+            timezone_name=timezone_name,
+            include_test=include_test,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 def _active_live_session_candidates(*, limit: int, days_back: int, now: datetime) -> list[UUID] | None:
