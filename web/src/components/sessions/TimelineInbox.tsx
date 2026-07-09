@@ -1,16 +1,13 @@
 /**
  * TimelineInbox — inbox-style timeline render.
  *
- * Two tiers (Active, then Closed), each grouped by repo. Repo order =
- * newest session start desc. Sessions inside a repo = start time desc.
- * Layout is anchored to start time so live runtime updates never reflow
- * the page. See lib/timelineInbox.ts for the pure layout function.
+ * Three tiers: Shelf (steerable/recent, flat), Active archive (repo-grouped
+ * non-shelf open sessions), then Closed (repo-grouped). Layout is anchored to
+ * start time so live runtime updates never reflow the page.
+ * See lib/timelineInbox.ts for the pure layout function.
  *
- * Drag-to-reorder: hold and drag any row or any repo header. Threshold-
- * based (5px), so a normal click still navigates. Live preview via dnd-kit
- * — rows physically follow the cursor and siblings animate aside. Order
- * persists per-browser via localStorage. New sessions/repos slot to the
- * top (default order).
+ * Drag-to-reorder: hold and drag any row or repo header. Threshold-based (5px),
+ * so a normal click still navigates. Order persists per-browser via localStorage.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -65,7 +62,26 @@ export function TimelineInbox({
     writeInboxOrder(order);
   }, [order]);
 
-  const layout = useMemo(() => buildInboxLayout(sessions, order), [sessions, order]);
+  const layout = useMemo(
+    () => buildInboxLayout(sessions, order, relativeNowMs),
+    [sessions, order, relativeNowMs],
+  );
+
+  const moveShelf = useCallback(
+    (from: number, to: number) => {
+      if (from === to) return;
+      const visibleIds = layout.shelf.map((s) => s.thread_id);
+      const reorderedVisible = arrayMove(visibleIds, from, to);
+      setOrder((prev) => ({
+        ...prev,
+        shelfOrder: applyOrder(
+          prev.shelfOrder.length ? prev.shelfOrder : visibleIds,
+          reorderedVisible,
+        ),
+      }));
+    },
+    [layout.shelf],
+  );
 
   const moveRepo = useCallback(
     (tier: "active" | "closed", from: number, to: number) => {
@@ -99,12 +115,32 @@ export function TimelineInbox({
     [layout.active, layout.closed],
   );
 
-  if (layout.active.length === 0 && layout.closed.length === 0) {
+  if (layout.shelf.length === 0 && layout.active.length === 0 && layout.closed.length === 0) {
     return null;
   }
 
+  const showArchiveDivider = layout.shelf.length > 0 && layout.active.length > 0;
+
   return (
     <div className="inbox" data-testid="timeline-inbox">
+      {layout.shelf.length > 0 ? (
+        <ShelfSection
+          sessions={layout.shelf}
+          onSessionClick={onSessionClick}
+          onSessionPrefetch={onSessionPrefetch}
+          allowHoverPrefetch={allowHoverPrefetch}
+          relativeNowMs={relativeNowMs}
+          highlightQuery={highlightQuery}
+          onMoveSession={moveShelf}
+        />
+      ) : null}
+
+      {showArchiveDivider ? (
+        <div className="inbox-archive-divider" role="separator">
+          <span className="inbox-archive-divider-label">Archive</span>
+        </div>
+      ) : null}
+
       {layout.active.length > 0 ? (
         <RepoTier
           tier="active"
@@ -138,6 +174,61 @@ export function TimelineInbox({
           />
         </>
       ) : null}
+    </div>
+  );
+}
+
+interface ShelfSectionProps {
+  sessions: TimelineSessionCard[];
+  onSessionClick: (thread: TimelineSessionCard) => void;
+  onSessionPrefetch?: (thread: TimelineSessionCard) => void;
+  allowHoverPrefetch?: () => boolean;
+  relativeNowMs: number;
+  highlightQuery?: string;
+  onMoveSession: (from: number, to: number) => void;
+}
+
+function ShelfSection(props: ShelfSectionProps) {
+  const { sessions, onMoveSession } = props;
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: POINTER_ACTIVATION_DISTANCE } }),
+  );
+
+  const ids = sessions.map((s) => `shelf:${s.thread_id}`);
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      const from = ids.indexOf(String(active.id));
+      const to = ids.indexOf(String(over.id));
+      if (from < 0 || to < 0) return;
+      onMoveSession(from, to);
+    },
+    [ids, onMoveSession],
+  );
+
+  return (
+    <div className="inbox-section inbox-section--shelf" data-testid="timeline-shelf">
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={ids} strategy={verticalListSortingStrategy}>
+          <div className="inbox-repo-rows">
+            {sessions.map((thread) => (
+              <SortableSessionRow
+                key={thread.thread_id}
+                id={`shelf:${thread.thread_id}`}
+                thread={thread}
+                tier="active"
+                onSessionClick={props.onSessionClick}
+                onSessionPrefetch={props.onSessionPrefetch}
+                allowHoverPrefetch={props.allowHoverPrefetch}
+                relativeNowMs={props.relativeNowMs}
+                highlightQuery={props.highlightQuery}
+              />
+            ))}
+          </div>
+        </SortableContext>
+      </DndContext>
     </div>
   );
 }

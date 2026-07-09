@@ -9,10 +9,14 @@ export interface InboxRepoGroup {
 }
 
 export interface InboxLayout {
+  shelf: TimelineSessionCard[];
   active: InboxRepoGroup[];
   closed: InboxRepoGroup[];
   closedCount: number;
+  shelfCount?: number;
 }
+
+export const SHELF_RECENCY_MS = 24 * 60 * 60 * 1000;
 
 function parseMs(value: string | null | undefined): number {
   if (!value) return 0;
@@ -20,7 +24,7 @@ function parseMs(value: string | null | undefined): number {
   return Number.isFinite(ms) ? ms : 0;
 }
 
-function startedAtMs(card: TimelineSessionCard): number {
+export function startedAtMs(card: TimelineSessionCard): number {
   return parseMs(card.root?.started_at || card.head?.started_at);
 }
 
@@ -42,39 +46,59 @@ function isCardClosed(card: TimelineSessionCard): boolean {
   return isSessionClosed(session);
 }
 
+export function isOnShelf(card: TimelineSessionCard, nowMs: number): boolean {
+  if (isCardClosed(card)) return false;
+  const caps = card.head?.capabilities;
+  if (caps?.live_control_available || caps?.host_reattach_available) return true;
+  return (nowMs - startedAtMs(card)) < SHELF_RECENCY_MS;
+}
+
 /**
- * Build the two-tier inbox layout:
- *   - Active repos at the top, ordered by their newest session start (desc)
- *   - Closed repos below, ordered by their most-recently-closed session (desc)
- *   - Active sessions inside a repo sort by start time desc (frozen).
- *   - Closed sessions inside a repo sort by close time desc.
+ * Build the three-tier inbox layout:
+ *   - Shelf: flat list of steerable or recent (<24h) open sessions,
+ *     sorted by start time desc (frozen). Ordered by shelfOrder.
+ *   - Active (archive): repo-grouped non-shelf open sessions,
+ *     sorted by start time desc (frozen).
+ *   - Closed: repo-grouped closed sessions, sorted by close time desc.
  *
  * Active ordering is intentionally anchored to start time so in-flight runtime
  * updates never reflow the page — that's what kills the timeline jitter when
  * several agents are churning. Closed sessions are terminal (no churn risk), so
  * we sort them by exit time instead: the thing you just stepped away from lands
- * on top, which is the whole point of the resume loop.
+ * on top.
  *
  * Optional `order` override applies user-driven reordering on top of the
  * default sort. Repo names / session ids absent from the override keep
- * their default-relative position. The override is shared across both
- * tiers — a repo that lives in both Active and Closed gets the same slot
- * within each.
+ * their default-relative position.
  */
 export function buildInboxLayout(
   cards: TimelineSessionCard[],
   order?: InboxOrderState,
+  nowMs?: number,
 ): InboxLayout {
+  const now = nowMs ?? Date.now();
+
+  const shelfCards: TimelineSessionCard[] = [];
   const activeByRepo = new Map<string, TimelineSessionCard[]>();
   const closedByRepo = new Map<string, TimelineSessionCard[]>();
 
   for (const card of cards) {
-    const repo = getProjectLabel(card.head);
-    const bucket = isCardClosed(card) ? closedByRepo : activeByRepo;
-    const list = bucket.get(repo);
-    if (list) list.push(card);
-    else bucket.set(repo, [card]);
+    if (isCardClosed(card)) {
+      const repo = getProjectLabel(card.head);
+      const list = closedByRepo.get(repo);
+      if (list) list.push(card);
+      else closedByRepo.set(repo, [card]);
+    } else if (isOnShelf(card, now)) {
+      shelfCards.push(card);
+    } else {
+      const repo = getProjectLabel(card.head);
+      const list = activeByRepo.get(repo);
+      if (list) list.push(card);
+      else activeByRepo.set(repo, [card]);
+    }
   }
+
+  shelfCards.sort((a, b) => startedAtMs(b) - startedAtMs(a));
 
   const toGroups = (
     byRepo: Map<string, TimelineSessionCard[]>,
@@ -116,5 +140,26 @@ export function buildInboxLayout(
   const closed = toGroups(closedByRepo, closedAtMs);
   const closedCount = closed.reduce((n, g) => n + g.sessions.length, 0);
 
-  return { active, closed, closedCount };
+  const shelfOrdered = applyShelfOrder(shelfCards, order?.shelfOrder);
+
+  return {
+    shelf: shelfOrdered,
+    active,
+    closed,
+    closedCount,
+    shelfCount: shelfCards.length,
+  };
+}
+
+function applyShelfOrder(
+  cards: TimelineSessionCard[],
+  shelfOrder?: string[],
+): TimelineSessionCard[] {
+  if (!shelfOrder?.length) return cards;
+  const defaultIds = cards.map((s) => s.thread_id);
+  const orderedIds = applyOrder(defaultIds, shelfOrder);
+  const byId = new Map(cards.map((s) => [s.thread_id, s]));
+  return orderedIds
+    .map((id) => byId.get(id))
+    .filter((s): s is TimelineSessionCard => s != null);
 }

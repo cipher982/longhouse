@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildInboxLayout } from "../timelineInbox";
+import { buildInboxLayout, isOnShelf, SHELF_RECENCY_MS } from "../timelineInbox";
 import type {
   AgentSession,
+  SessionCapabilities,
   SessionRuntimeDisplay,
   TimelineSessionCard,
 } from "../../services/api/agents";
@@ -57,6 +58,17 @@ function makeSession(overrides: Partial<AgentSession> & { id: string }): AgentSe
   } as AgentSession;
 }
 
+function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
+  return {
+    live_control_available: false,
+    host_reattach_available: false,
+    reply_to_live_session_available: false,
+    observe_only: false,
+    search_only: false,
+    ...overrides,
+  };
+}
+
 function makeCard(args: {
   id: string;
   repo: string;
@@ -64,6 +76,7 @@ function makeCard(args: {
   closed?: boolean;
   endedAt?: string;
   lastActivityAt?: string;
+  capabilities?: SessionCapabilities;
 }): TimelineSessionCard {
   const session = makeSession({
     id: args.id,
@@ -71,6 +84,7 @@ function makeCard(args: {
     ended_at: args.endedAt ?? null,
     last_activity_at: args.lastActivityAt ?? null,
     project: args.repo,
+    capabilities: args.capabilities,
     runtime_display: makeRuntimeDisplay(args.closed ? { lifecycle: "closed" } : {}),
   });
   return {
@@ -85,7 +99,75 @@ function makeCard(args: {
   };
 }
 
+describe("isOnShelf", () => {
+  const now = Date.parse("2026-05-18T12:00:00Z");
+
+  it("returns false for closed sessions", () => {
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: "2026-05-18T11:00:00Z",
+      closed: true,
+      capabilities: makeCapabilities({ live_control_available: true }),
+    });
+    expect(isOnShelf(card, now)).toBe(false);
+  });
+
+  it("returns true for live-control sessions even if old", () => {
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: "2026-05-01T10:00:00Z",
+      capabilities: makeCapabilities({ live_control_available: true }),
+    });
+    expect(isOnShelf(card, now)).toBe(true);
+  });
+
+  it("returns true for host-reattach sessions even if old", () => {
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: "2026-05-01T10:00:00Z",
+      capabilities: makeCapabilities({ host_reattach_available: true }),
+    });
+    expect(isOnShelf(card, now)).toBe(true);
+  });
+
+  it("returns true for recent Shadow (<24h) without capabilities", () => {
+    const recent = now - SHELF_RECENCY_MS + 60000; // 1 min inside window
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: new Date(recent).toISOString(),
+    });
+    expect(isOnShelf(card, now)).toBe(true);
+  });
+
+  it("returns false for old Shadow (>24h) without capabilities", () => {
+    const old = now - SHELF_RECENCY_MS - 60000; // 1 min outside window
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: new Date(old).toISOString(),
+    });
+    expect(isOnShelf(card, now)).toBe(false);
+  });
+
+  it("returns false for sessions with capabilities unset and old", () => {
+    const card = makeCard({
+      id: "c1",
+      repo: "zerg",
+      startedAt: "2026-05-01T10:00:00Z",
+    });
+    expect(isOnShelf(card, now)).toBe(false);
+  });
+});
+
 describe("buildInboxLayout", () => {
+  // Use a fixed now far enough past all session dates that non-shelf
+  // sessions (>24h old, no capabilities) stay in archive.
+  const fixedNow = Date.parse("2026-05-20T12:00:00Z");
+
   it("groups sessions by repo and splits active from closed", () => {
     const cards = [
       makeCard({ id: "a1", repo: "floodmap", startedAt: "2026-05-18T12:00:00Z" }),
@@ -93,7 +175,7 @@ describe("buildInboxLayout", () => {
       makeCard({ id: "a3", repo: "zerg", startedAt: "2026-05-18T13:00:00Z" }),
     ];
 
-    const layout = buildInboxLayout(cards);
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
 
     expect(layout.active.map((g) => g.repo)).toEqual(["zerg", "floodmap"]);
     expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual(["a3"]);
@@ -111,7 +193,7 @@ describe("buildInboxLayout", () => {
       makeCard({ id: "mid", repo: "zerg", startedAt: "2026-05-18T05:00:00Z" }),
     ];
 
-    const layout = buildInboxLayout(cards);
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
 
     expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual([
       "new",
@@ -121,8 +203,6 @@ describe("buildInboxLayout", () => {
   });
 
   it("sorts closed sessions by close time descending, not start time", () => {
-    // The just-closed session started EARLIER than a long-running one that
-    // closed hours ago. It must still land on top — this is the bug David hit.
     const cards = [
       makeCard({
         id: "long-runner",
@@ -147,7 +227,7 @@ describe("buildInboxLayout", () => {
       }),
     ];
 
-    const layout = buildInboxLayout(cards);
+    const layout = buildInboxLayout(cards, undefined, fixedNow);
 
     expect(layout.closed[0].sessions.map((s) => s.thread_id)).toEqual([
       "just-closed",
@@ -174,8 +254,7 @@ describe("buildInboxLayout", () => {
       }),
     ];
 
-    // floodmap started earlier but closed later — it should lead.
-    expect(buildInboxLayout(cards).closed.map((g) => g.repo)).toEqual([
+    expect(buildInboxLayout(cards, undefined, fixedNow).closed.map((g) => g.repo)).toEqual([
       "floodmap",
       "zerg",
     ]);
@@ -183,14 +262,12 @@ describe("buildInboxLayout", () => {
 
   it("falls back to last_activity_at then start time when ended_at is null", () => {
     const cards = [
-      // No ended_at, no last_activity_at: falls back to start time (09:00).
       makeCard({
         id: "start-only",
         repo: "zerg",
         startedAt: "2026-05-18T09:00:00Z",
         closed: true,
       }),
-      // No ended_at but has last_activity_at (11:00) — beats start-only's 09:00.
       makeCard({
         id: "activity-fallback",
         repo: "zerg",
@@ -198,7 +275,6 @@ describe("buildInboxLayout", () => {
         lastActivityAt: "2026-05-18T11:00:00Z",
         closed: true,
       }),
-      // ended_at (13:00) wins outright over any fallback.
       makeCard({
         id: "ended",
         repo: "zerg",
@@ -208,7 +284,7 @@ describe("buildInboxLayout", () => {
       }),
     ];
 
-    expect(buildInboxLayout(cards).closed[0].sessions.map((s) => s.thread_id)).toEqual([
+    expect(buildInboxLayout(cards, undefined, fixedNow).closed[0].sessions.map((s) => s.thread_id)).toEqual([
       "ended",
       "activity-fallback",
       "start-only",
@@ -222,7 +298,7 @@ describe("buildInboxLayout", () => {
       makeCard({ id: "s-mid", repo: "stopsign", startedAt: "2026-05-18T11:00:00Z" }),
     ];
 
-    expect(buildInboxLayout(cards).active.map((g) => g.repo)).toEqual([
+    expect(buildInboxLayout(cards, undefined, fixedNow).active.map((g) => g.repo)).toEqual([
       "zerg",
       "stopsign",
       "floodmap",
@@ -235,8 +311,8 @@ describe("buildInboxLayout", () => {
       makeCard({ id: "b", repo: "zerg", startedAt: "2026-05-18T11:00:00Z" }),
     ];
 
-    const first = buildInboxLayout(cards);
-    const second = buildInboxLayout(cards);
+    const first = buildInboxLayout(cards, undefined, fixedNow);
+    const second = buildInboxLayout(cards, undefined, fixedNow);
 
     expect(second.active[0].sessions.map((s) => s.thread_id)).toEqual(
       first.active[0].sessions.map((s) => s.thread_id),
@@ -245,6 +321,7 @@ describe("buildInboxLayout", () => {
 
   it("returns empty layout for empty input", () => {
     const layout = buildInboxLayout([]);
+    expect(layout.shelf).toEqual([]);
     expect(layout.active).toEqual([]);
     expect(layout.closed).toEqual([]);
     expect(layout.closedCount).toBe(0);
@@ -257,11 +334,11 @@ describe("buildInboxLayout", () => {
       makeCard({ id: "c", repo: "gamma", startedAt: "2026-05-18T12:00:00Z" }),
     ];
 
-    // Default order would be gamma > beta > alpha. Override pulls alpha to top.
     const layout = buildInboxLayout(cards, {
+      shelfOrder: [],
       repoOrder: ["alpha"],
       sessionOrder: {},
-    });
+    }, fixedNow);
 
     expect(layout.active.map((g) => g.repo)).toEqual(["alpha", "gamma", "beta"]);
   });
@@ -273,11 +350,11 @@ describe("buildInboxLayout", () => {
       makeCard({ id: "third", repo: "zerg", startedAt: "2026-05-18T10:00:00Z" }),
     ];
 
-    // Default: first, second, third. Override pins third to top.
     const layout = buildInboxLayout(cards, {
+      shelfOrder: [],
       repoOrder: [],
       sessionOrder: { zerg: ["third"] },
-    });
+    }, fixedNow);
 
     expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual([
       "third",
@@ -292,11 +369,149 @@ describe("buildInboxLayout", () => {
     ];
 
     const layout = buildInboxLayout(cards, {
+      shelfOrder: [],
       repoOrder: ["ghost-repo", "zerg"],
       sessionOrder: { zerg: ["ghost-session", "a"] },
-    });
+    }, fixedNow);
 
     expect(layout.active.map((g) => g.repo)).toEqual(["zerg"]);
     expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual(["a"]);
+  });
+
+  describe("shelf", () => {
+    it("puts steerable (live control) sessions on shelf even if old", () => {
+      const cards = [
+        makeCard({
+          id: "steerable",
+          repo: "zerg",
+          startedAt: "2026-05-01T10:00:00Z",
+          capabilities: makeCapabilities({ live_control_available: true }),
+        }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["steerable"]);
+      expect(layout.active).toEqual([]);
+    });
+
+    it("puts host-reattach sessions on shelf even if old", () => {
+      const cards = [
+        makeCard({
+          id: "reattachable",
+          repo: "zerg",
+          startedAt: "2026-05-01T10:00:00Z",
+          capabilities: makeCapabilities({ host_reattach_available: true }),
+        }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["reattachable"]);
+      expect(layout.active).toEqual([]);
+    });
+
+    it("puts recent Shadow (<24h) on shelf", () => {
+      const recentIso = new Date(fixedNow - 60 * 60 * 1000).toISOString(); // 1h ago
+      const cards = [
+        makeCard({ id: "recent", repo: "zerg", startedAt: recentIso }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["recent"]);
+      expect(layout.active).toEqual([]);
+    });
+
+    it("puts old quiet Shadow in active archive, not shelf", () => {
+      const cards = [
+        makeCard({ id: "old-shadow", repo: "zerg", startedAt: "2026-05-01T10:00:00Z" }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf).toEqual([]);
+      expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual(["old-shadow"]);
+    });
+
+    it("never puts closed sessions on shelf", () => {
+      const cards = [
+        makeCard({
+          id: "closed-steerable",
+          repo: "zerg",
+          startedAt: "2026-05-18T11:59:00Z", // just before now
+          closed: true,
+          capabilities: makeCapabilities({ live_control_available: true }),
+        }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf).toEqual([]);
+      expect(layout.closed[0].sessions.map((s) => s.thread_id)).toEqual(["closed-steerable"]);
+    });
+
+    it("sorts shelf by start time desc by default", () => {
+      const cards = [
+        makeCard({
+          id: "old",
+          repo: "zerg",
+          startedAt: "2026-05-01T10:00:00Z",
+          capabilities: makeCapabilities({ live_control_available: true }),
+        }),
+        makeCard({
+          id: "new",
+          repo: "zerg",
+          startedAt: "2026-05-18T10:00:00Z",
+          capabilities: makeCapabilities({ live_control_available: true }),
+        }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["new", "old"]);
+    });
+
+    it("applies shelf order override", () => {
+      const cards = [
+        makeCard({
+          id: "alpha",
+          repo: "zerg",
+          startedAt: "2026-05-18T10:00:00Z",
+          capabilities: makeCapabilities({ live_control_available: true }),
+        }),
+        makeCard({
+          id: "beta",
+          repo: "zerg",
+          startedAt: "2026-05-18T11:00:00Z",
+          capabilities: makeCapabilities({ live_control_available: true }),
+        }),
+      ];
+      const layout = buildInboxLayout(cards, {
+        shelfOrder: ["alpha"],
+        repoOrder: [],
+        sessionOrder: {},
+      }, fixedNow);
+      // beta is newer so default would be [beta, alpha], but override pins alpha first
+      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["alpha", "beta"]);
+    });
+
+    it("shelf plus archive plus closed coexist correctly", () => {
+      const recentIso = new Date(fixedNow - 60 * 60 * 1000).toISOString();
+      const cards = [
+        makeCard({ id: "shelf-recent", repo: "zerg", startedAt: recentIso }),
+        makeCard({
+          id: "shelf-steerable",
+          repo: "floodmap",
+          startedAt: "2026-05-01T10:00:00Z",
+          capabilities: makeCapabilities({ live_control_available: true }),
+        }),
+        makeCard({ id: "active-old", repo: "stopsign", startedAt: "2026-05-01T10:00:00Z" }),
+        makeCard({ id: "closed", repo: "alpha", startedAt: "2026-05-01T10:00:00Z", closed: true }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf.map((s) => s.thread_id)).toEqual(["shelf-recent", "shelf-steerable"]);
+      expect(layout.active.map((g) => g.repo)).toEqual(["stopsign"]);
+      expect(layout.active[0].sessions.map((s) => s.thread_id)).toEqual(["active-old"]);
+      expect(layout.closed.map((g) => g.repo)).toEqual(["alpha"]);
+      expect(layout.shelfCount).toBe(2);
+    });
+
+    it("shelfCount is set even when zero", () => {
+      const cards = [
+        makeCard({ id: "old-shadow", repo: "zerg", startedAt: "2026-05-01T10:00:00Z" }),
+      ];
+      const layout = buildInboxLayout(cards, undefined, fixedNow);
+      expect(layout.shelf).toEqual([]);
+      expect(layout.shelfCount).toBe(0);
+    });
   });
 });
