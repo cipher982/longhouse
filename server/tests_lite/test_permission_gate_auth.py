@@ -34,6 +34,7 @@ from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.enums import UserRole
 from zerg.models.user import User
@@ -60,6 +61,10 @@ def _make_db(tmp_path):
 def _make_client(session_local):
     from zerg.main import api_app
     from zerg.main import app
+
+    # This module tests the real auth boundary. Other route tests use the shared
+    # FastAPI app and may leave a token dependency override behind in this worker.
+    api_app.dependency_overrides.pop(verify_agents_token, None)
 
     def override_get_db():
         db = session_local()
