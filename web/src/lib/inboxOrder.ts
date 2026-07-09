@@ -35,14 +35,21 @@ export function readInboxOrder(): InboxOrderState {
       repoOrder: Array.isArray(parsed.repoOrder)
         ? parsed.repoOrder.filter((s) => typeof s === "string")
         : [],
-      sessionOrder:
-        parsed.sessionOrder && typeof parsed.sessionOrder === "object"
-          ? parsed.sessionOrder
-          : {},
+      sessionOrder: sanitizeSessionOrder(parsed.sessionOrder),
     };
   } catch {
     return empty;
   }
+}
+
+function sanitizeSessionOrder(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== "object") return {};
+  const out: Record<string, string[]> = {};
+  for (const [repo, ids] of Object.entries(value as Record<string, unknown>)) {
+    if (!Array.isArray(ids)) continue;
+    out[repo] = ids.filter((s): s is string => typeof s === "string");
+  }
+  return out;
 }
 
 export function writeInboxOrder(state: InboxOrderState): void {

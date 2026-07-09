@@ -1,9 +1,9 @@
 /**
  * Timeline Inbox Layout
  *
- * Two-tier (Active, Closed) inbox grouped by repo. Reserved geometry on
- * every row so live runtime updates never reflow. Only opacity/color
- * changes when status transitions.
+ * Three-tier inbox: flat working-set shelf, then Active archive and Closed
+ * grouped by repo. Reserved geometry on every row so live runtime updates
+ * never reflow. Only opacity/color changes when status transitions.
  */
 
   /* Tunable defaults — kept on :root so the InboxTuner debug panel (writes
