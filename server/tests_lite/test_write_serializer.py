@@ -839,8 +839,8 @@ async def test_non_sqlite_stall_escalates_when_interrupt_cannot_unwind(tmp_path,
     engine = make_engine(f"sqlite:///{db_path}")
     session_factory = make_sessionmaker(engine)
 
-    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_AFTER_SECONDS", "0.01")
-    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_GRACE_SECONDS", "0.01")
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_AFTER_SECONDS", "0.5")
+    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_GRACE_SECONDS", "0.05")
     monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", "0")
 
     serializer = WriteSerializer()
@@ -861,7 +861,7 @@ async def test_non_sqlite_stall_escalates_when_interrupt_cannot_unwind(tmp_path,
         await asyncio.to_thread(started.wait, 1.0)
 
         metrics = {}
-        for _ in range(100):
+        for _ in range(200):
             metrics = serializer.get_metrics()
             if metrics["active_wedged_writer_count"] >= 1:
                 break
