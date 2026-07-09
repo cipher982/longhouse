@@ -1,16 +1,14 @@
 # Longhouse
 
-Self-hosted mission control for the CLI coding agents you already run. One searchable timeline for every Claude Code, Codex, Antigravity, and OpenCode session across the machines you own — with live remote control where the provider CLI supports it.
+Install and continue to use your coding agents like normal. This tracks, controls, and intercepts all the best coding agent CLIs so that you can view and control the sessions remotely on web or ios. One searchable timeline for every Claude Code, Codex, Antigravity, OpenCode, and Cursor session across the machines you own with live remote control. 
 
-Not sandboxed cloud agents. Not a single-vendor dashboard. Yours.
-
-Works on your laptop. Shines on a machine that stays on.
+Loca rust daemon monitors and parses all the coding agent transcript and session logs into a unified database format by default, and then just launch your agents with longhouse in front like `longhouse claude` to get full remote control
 
 ![Longhouse timeline — one searchable view of your coding-agent sessions across providers and machines](web/public/images/landing/timeline-preview.png)
 
 ## Why
 
-If you run coding agents seriously, you run a lot of them — across a laptop and maybe an always-on box. Today that history is scattered across `~/.claude`, terminal scrollback, and one local log dir per tool, and a session dies when the laptop sleeps.
+If you run coding agents often it gets messy quick across the terminal tabs and transcripts. Today that history is scattered across `~/.claude`, terminal scrollback, and one local log dir per tool.
 
 Longhouse fixes that:
 
@@ -93,41 +91,20 @@ longhouse connect --install   # first install or force reinstall
 `longhouse --help` lists every subcommand. Full docs: <https://longhouse.ai/docs>.
 
 ## Architecture
-
-Two public components, one product:
-
 - **Machine Agent** — Rust engine on each dev machine. Ships session events.
 - **Runtime Host** — FastAPI + bundled web UI + SQLite. Lives where durability should live.
 
-On a laptop both run together for trial use. For durability, separate them. See `VISION.md` for the full product thesis.
+On a laptop both run together for trial use. But you will want a VPS you self host or just pay me $5 and i will do it. See `VISION.md` for the full product thesis.
 
 ## How It Compares
 
 There are great tools for spinning up sandboxed cloud agents, and the model labs now ship their own single-vendor dashboards. Longhouse sits in a different spot: the sessions you *already run*, on hardware you own, across every provider.
 
-| | Longhouse | Lab dashboards (Agent View, Codex, Antigravity) | Cloud agents (Devin, Cursor, Jules) |
-|---|:---:|:---:|:---:|
-| Cross-provider (Claude Code + Codex + more) | ✅ | ❌ single vendor | ❌ |
-| Runs on machines you own | ✅ | ⚠️ cloud-tethered | ❌ cloud VM |
-| Live remote control of real sessions | ✅ managed | ✅ own provider only | n/a |
-| Self-hostable | ✅ | ❌ | ❌ |
-| You own & can export the raw history | ✅ | ❌ | ❌ |
-
-Honest scope today: managed live control is strongest for **Claude Code and Codex**; **OpenCode supports managed send, interrupt, launch, and terminate, but not active-turn steer or pause-answer**; **Antigravity is observe-only** at the control layer. Bare CLI runs are imported and searchable but not steerable. See **Managed vs Unmanaged** in the docs.
-
 ## Self-host (free) vs Hosted (paid)
 
-The Apache-2.0 core in this repo is fully usable on your own machines — no account, no control plane, no time limit. Self-host is the default truth, not a crippled tier.
+The Apache-2.0 core in this repo is fully usable on your own machines.
 
-Hosted (<https://control.longhouse.ai/signup>) exists for people who don't want to run an always-on box. We run the Runtime Host for you: always-on durability, zero-setup multi-machine sync, and iOS push when a session needs you — the things a sleeping laptop can't do. Same product, we just operate the box.
-
-## Open Core
-
-This repository is the Apache-2.0 Longhouse core: CLI, Machine Agent, Runtime Host, web UI, self-hosting, and client surfaces over the same machine contracts.
-
-Longhouse Cloud's hosted signup, billing, provisioning, fleet operations, and deployment automation are proprietary and live outside this repository. The public Runtime Host can integrate with a hosted control plane by URL, but self-hosted Longhouse does not require it.
-
-See `EDITIONS.md` and `TRADEMARKS.md` for the boundary, and `NOTICE` for attribution.
+Hosted (<https://control.longhouse.ai/signup>) exists for people who don't want to run an always-on box. We run the Runtime Host for you: always-on durability, zero-setup multi-machine sync, and iOS push when a session needs you, the things a sleeping laptop can't do. Same product but we just operate the box.
 
 ## Contributing
 
