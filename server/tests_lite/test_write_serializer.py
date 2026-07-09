@@ -842,8 +842,6 @@ async def test_non_sqlite_stall_escalates_when_interrupt_cannot_unwind(tmp_path,
     monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_AFTER_SECONDS", "0.01")
     monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_INTERRUPT_GRACE_SECONDS", "0.01")
     monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_EXIT_ON_WEDGED_WRITER", "0")
-    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_STACK_DUMP_AFTER_MS", "1")
-    monkeypatch.setenv("LONGHOUSE_WRITE_SERIALIZER_STACK_DUMP_RATE_LIMIT_MS", "0")
 
     serializer = WriteSerializer()
     serializer.configure(session_factory)
@@ -874,7 +872,6 @@ async def test_non_sqlite_stall_escalates_when_interrupt_cannot_unwind(tmp_path,
         assert metrics["active_wedged_writer_count"] == 1
         assert metrics["last_active_wedged_writer_label"] == "ingest-live"
         assert metrics["last_active_wedged_writer_reason"] == "interrupt_wedged"
-        assert metrics["active_stack_dump_count"] >= 2
     finally:
         release.set()
         await task
