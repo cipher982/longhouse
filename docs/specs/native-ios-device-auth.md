@@ -83,7 +83,7 @@ Existing request remains:
 ```json
 {
   "code": "one-use-code",
-  "tenant": "david010",
+  "tenant": "example",
   "tenant_state": "handoff-verifier"
 }
 ```
@@ -117,7 +117,7 @@ Body:
 ```json
 {
   "refresh_token": "opaque",
-  "tenant": "david010"
+  "tenant": "example"
 }
 ```
 
@@ -421,7 +421,7 @@ make test-ios
 
 Acceptance criteria:
 
-- Hatch DeepSeek reviews each implementation phase before the next phase.
+- Review each implementation phase before starting the next phase.
 - Full control-plane tests pass.
 - Longhouse relevant tests pass.
 - Branches are pushed.

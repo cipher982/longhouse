@@ -11,7 +11,7 @@ opens `/data/longhouse.db`, and runs private SQLite queries against `events`.
 That made the job fresh again, but it coupled Sauron to Longhouse deployment
 details and SQLite planner choices.
 
-The hosted `david010` database is large enough that the wrong plan is fatal:
+Large hosted databases make the wrong query plan prohibitively expensive:
 the day count is fast when anchored on `events.timestamp`, while the text-message
 query can choose `ix_events_role`, scan historical user/assistant rows, and hit
 the SSH timeout.
@@ -46,7 +46,7 @@ Response shape:
       "project": "longhouse",
       "provider": "codex",
       "git_repo": "https://github.com/cipher982/longhouse.git",
-      "cwd": "/Users/davidrose/git/zerg/longhouse",
+      "cwd": "/home/example/longhouse",
       "started_at": "2026-07-07T12:00:00Z",
       "user_messages": 4,
       "assistant_messages": 8,

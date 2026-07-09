@@ -1,6 +1,6 @@
 # Renderable Session Launch Pipeline
 
-Status: Draft, refined by Hatch Fable
+Status: Draft
 
 ## Goal
 
@@ -254,7 +254,7 @@ Exit criteria:
 ## Risks and Unknowns
 
 - **Archive write latency:** hosted first paint now includes one small archive DB
-  transaction. If this is slower than expected on the large `david010` DB, that
+  transaction. If this is slower than expected on a large hosted DB, that
   is the load-bearing risk.
 - **Outbox migration tolerance:** old launch outbox rows may drain after durable
   shells already exist. Drain logic must remain upsert/idempotent.

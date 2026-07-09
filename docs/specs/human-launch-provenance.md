@@ -5,14 +5,13 @@ Owner: Longhouse session core
 Created: 2026-07-09
 Related:
 - `VISION.md`
-- `docs/specs/hatch-automation-session-origin.md`
 - `docs/specs/renderable-session-launch-pipeline.md`
 - `docs/specs/agents-machine-surface.md`
 
 ## Problem
 
 Longhouse currently protects the main timeline mostly by identifying things that
-should be hidden after the fact: provider subagents, Hatch automation, and
+should be hidden after the fact: provider subagents, delegated automation, and
 test/canary runs. That works for known classes, but it is the wrong long-term
 polarity. Agents can call agents for review, testing, benchmarks, CI proofs, or
 their own helper workflows. Trying to name every non-user launch shape creates a
@@ -21,15 +20,15 @@ automation path.
 
 The dogfood failure that motivated this spec had two leak classes:
 
-- Hatch review/audit sessions such as "Final code review..." showing as normal
+- Automated review/audit sessions such as "Final code review..." showing as normal
   root sessions.
-- Hatch integration-test Codex sessions such as "What is 5+5? Reply with just
+- Automated integration-test sessions such as "What is 5+5? Reply with just
   the number." and "What is the largest planet? Reply with just the planet
   name." showing as searchable user work.
 
-Both are real archive artifacts, but neither is a session David intentionally
+Both are real archive artifacts, but neither is a session the user intentionally
 started as his own work item. The better root fix is to positively label the
-sessions David did start: typing `longhouse codex` / `longhouse claude` in a
+sessions the user did start: typing `longhouse codex` / `longhouse claude` in a
 terminal, or launching from Longhouse web/iOS. Automation can still be archived
 and searchable, but user-facing default surfaces should eventually prefer
 positive human-intent provenance over negative heuristics.
@@ -203,7 +202,7 @@ bearing distinction is `human_ui` versus automation.
 
 ### Automation
 
-Hatch and explicit probes should keep using hidden origins:
+Delegated automation and explicit probes should keep using hidden origins:
 
 ```text
 origin_kind = hatch_automation | test_or_canary
