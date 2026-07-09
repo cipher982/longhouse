@@ -20,11 +20,9 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.metrics import managed_codex_bridge_freshness_total
-from zerg.metrics import managed_codex_liveness_invariant_sessions
 from zerg.metrics import managed_codex_runtime_observations_total
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
-from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.live_store import LiveRuntimeState
@@ -67,7 +65,6 @@ ATTENTION_PHASES = {"blocked"}
 KNOWN_PHASES = {"thinking", "running", "blocked", "stalled", "needs_user", "idle", "finished", "syncing_transcript"}
 MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
 MANAGED_CODEX_RUNTIME_SOURCES = {MANAGED_SESSION_LEASE_SOURCE, "codex_bridge", "codex_bridge_live", "codex_exec"}
-MANAGED_CODEX_INVARIANTS = ("ended_without_session_ended", "short_freshness")
 
 
 def session_is_closed_for_input(db: Session, session_id: UUID | None) -> bool:
@@ -601,107 +598,6 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
         and event.kind == "progress_signal"
         and payload.get("progress_kind") == "bridge_live_transcript_delta"
     )
-
-
-def _managed_codex_session_ids(db: Session) -> list[UUID]:
-    # Session-identity-kernel cleanup: ``execution_home`` /
-    # ``managed_transport`` were dropped. Use SessionConnection rows on the
-    # ``codex_bridge``/``codex_app_server`` control plane to identify managed
-    # Codex sessions.
-    from zerg.models.agents import SessionConnection
-    from zerg.models.agents import SessionRun
-    from zerg.models.agents import SessionThread
-
-    rows = (
-        db.query(AgentSession.id)
-        .join(SessionThread, SessionThread.id == AgentSession.primary_thread_id)
-        .join(SessionRun, SessionRun.thread_id == SessionThread.id)
-        .join(SessionConnection, SessionConnection.run_id == SessionRun.id)
-        .filter(AgentSession.provider == "codex")
-        .filter(SessionConnection.control_plane.in_(["codex_bridge", "codex_app_server"]))
-        .distinct()
-        .all()
-    )
-    return [row[0] for row in rows]
-
-
-def managed_codex_liveness_invariant_counts(db: Session) -> dict[str, int]:
-    """Return SQL-reconstructable managed Codex liveness invariant counts."""
-    managed_session_ids = _managed_codex_session_ids(db)
-    if not managed_session_ids:
-        return {invariant: 0 for invariant in MANAGED_CODEX_INVARIANTS}
-
-    final_session_ids = {
-        row[0]
-        for row in db.query(SessionRuntimeState.session_id)
-        .filter(SessionRuntimeState.session_id.in_(managed_session_ids))
-        .filter(SessionRuntimeState.terminal_state == "session_ended")
-        .all()
-        if row[0] is not None
-    }
-    parser_ended_ids = {
-        row[0]
-        for row in db.query(AgentSession.id)
-        .filter(AgentSession.id.in_(managed_session_ids))
-        .filter(AgentSession.ended_at.isnot(None))
-        .all()
-    }
-    ended_without_session_ended = len(parser_ended_ids - final_session_ids)
-
-    short_freshness = 0
-    states = (
-        db.query(SessionRuntimeState)
-        .filter(SessionRuntimeState.session_id.in_(managed_session_ids))
-        .filter(SessionRuntimeState.terminal_state.is_(None))
-        .filter(SessionRuntimeState.freshness_expires_at.isnot(None))
-        .filter(SessionRuntimeState.last_runtime_signal_at.isnot(None))
-        .all()
-    )
-    latest_managed_observation_by_runtime_key: dict[str, SessionObservation] = {}
-    runtime_keys = [state.runtime_key for state in states]
-    if runtime_keys:
-        latest_managed_observations = (
-            db.query(SessionObservation)
-            .filter(SessionObservation.runtime_key.in_(runtime_keys))
-            .filter(SessionObservation.provider == "codex")
-            .filter(SessionObservation.source.in_(MANAGED_CODEX_RUNTIME_SOURCES))
-            .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
-            .filter(SessionObservation.payload_json.like('%"kind":"phase_signal"%'))
-            .order_by(
-                SessionObservation.runtime_key.asc(),
-                SessionObservation.observed_at.desc(),
-                SessionObservation.id.desc(),
-            )
-            .all()
-        )
-        for observation in latest_managed_observations:
-            latest_managed_observation_by_runtime_key.setdefault(observation.runtime_key, observation)
-
-    for state in states:
-        last_signal_at = normalize_utc(state.last_runtime_signal_at)
-        freshness_expires_at = normalize_utc(state.freshness_expires_at)
-        if last_signal_at is None or freshness_expires_at is None:
-            continue
-        latest_managed_observation = latest_managed_observation_by_runtime_key.get(state.runtime_key)
-        if latest_managed_observation is None:
-            continue
-        latest_managed_observation_at = normalize_utc(latest_managed_observation.observed_at)
-        if latest_managed_observation_at is None or latest_managed_observation_at != last_signal_at:
-            continue
-        if freshness_expires_at - last_signal_at < MANAGED_CODEX_FRESHNESS:
-            short_freshness += 1
-
-    return {
-        "ended_without_session_ended": ended_without_session_ended,
-        "short_freshness": short_freshness,
-    }
-
-
-def refresh_managed_codex_liveness_metrics(db: Session) -> dict[str, int]:
-    counts = managed_codex_liveness_invariant_counts(db)
-    for invariant in MANAGED_CODEX_INVARIANTS:
-        managed_codex_liveness_invariant_sessions.labels(invariant=invariant).set(counts.get(invariant, 0))
-    return counts
 
 
 def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> RuntimeEventBatchResult:

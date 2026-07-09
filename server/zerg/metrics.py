@@ -204,12 +204,6 @@ try:
         labelnames=("outcome",),
     )
 
-    managed_codex_liveness_invariant_sessions = Gauge(
-        "managed_codex_liveness_invariant_sessions",
-        "Managed Codex sessions currently violating liveness invariants",
-        labelnames=("invariant",),
-    )
-
     session_input_attachments_total = Counter(
         "session_input_attachments_total",
         "Image-attach multipart submissions by client and outcome",
@@ -449,8 +443,6 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
 
         def labels(self, *args, **kwargs):  # type: ignore
             return self
-
-    managed_codex_liveness_invariant_sessions = _NoopGauge()  # type: ignore[assignment]
 
     # Provide *noop* Histogram so code can call ``observe`` without importing
     # the optional dependency in minimal CI images.
