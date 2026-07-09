@@ -305,7 +305,7 @@ struct SessionView: View {
     @ViewBuilder
     private var composer: some View {
         if let detail = viewModel.detail {
-            if detail.activePauseRequest != nil || detail.canSendLive {
+            if detail.activePauseRequest != nil || detail.canSendLive || detail.canDraftBeforeSendReady {
                 composerField(detail: detail)
             } else {
                 unavailableComposerFooter(detail: detail)
@@ -405,6 +405,13 @@ struct SessionView: View {
             }
 
             if pauseRequest == nil {
+                let sendIsEnabled = detail.canSendLive
+                    && composerHasContent
+                    && !viewModel.isSending
+                    && !viewModel.isDrafting
+                    && !attachmentStore.isProcessing
+                    && !isLoadingPickerItems
+                    && !attachmentSendBlocked
                 HStack(alignment: .bottom, spacing: 8) {
                     composerActionMenu(detail: detail)
 
@@ -428,16 +435,16 @@ struct SessionView: View {
                         } else {
                             Image(systemName: sendIcon)
                                 .font(.subheadline.weight(.bold))
-                                .foregroundStyle(composerHasContent ? Color(.systemBackground) : Color(.systemGray))
+                                .foregroundStyle(sendIsEnabled ? Color(.systemBackground) : Color(.systemGray))
                                 .frame(width: 30, height: 30)
                                 .background(
-                                    Circle().fill(composerHasContent
+                                    Circle().fill(sendIsEnabled
                                         ? AnyShapeStyle(Color.primary)
                                         : AnyShapeStyle(Color(.tertiarySystemFill)))
                                 )
                         }
                     }
-                    .disabled(!composerHasContent || viewModel.isSending || viewModel.isDrafting || attachmentStore.isProcessing || isLoadingPickerItems || attachmentSendBlocked)
+                    .disabled(!sendIsEnabled)
                     .accessibilityLabel(sendAccessibilityLabel)
                     .accessibilityIdentifier("session-chat-send")
                     .contextMenu {
@@ -514,7 +521,7 @@ struct SessionView: View {
             && attachmentSlotsLeft > 0
             && !attachmentIsProcessing
             && !viewModel.isSending
-        let canDraft = !composerHasText && !viewModel.isSending && !viewModel.isDrafting
+        let canDraft = detail.canSendLive && !composerHasText && !viewModel.isSending && !viewModel.isDrafting
 
         return Menu {
             Button {
@@ -643,6 +650,9 @@ struct SessionView: View {
     }
 
     private var sendAccessibilityLabel: String {
+        if viewModel.detail?.canSendLive != true {
+            return viewModel.detail?.controlHealthMessage ?? "Send unavailable"
+        }
         switch primaryIntent {
         case "steer": return "Send update mid-turn"
         case "queue": return "Queue for next turn"
@@ -654,6 +664,7 @@ struct SessionView: View {
         guard !viewModel.isSending else { return }
         guard !attachmentStore.isProcessing else { return }
         guard !isLoadingPickerItems else { return }
+        guard viewModel.detail?.canSendLive == true else { return }
         let trimmed = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         let pendingAttachments = attachmentStore.snapshot()
         guard !trimmed.isEmpty || !pendingAttachments.isEmpty else { return }

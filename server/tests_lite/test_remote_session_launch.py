@@ -1389,6 +1389,8 @@ def test_live_launch_workspace_uses_placeholder_while_shell_is_catching_up(tmp_p
         assert workspace.session.id == str(result.session_id)
         assert workspace.session.launch_state == "launching_unknown"
         assert workspace.session.capabilities.display_label == "Launching"
+        assert workspace.session.capabilities.display_detail == "Setting up Codex on cinder."
+        assert workspace.session.capabilities.composer_disabled_reason == "Setting up Codex."
         assert workspace.session.capabilities.staleness_reason == "archive_catching_up"
         assert workspace.thread.root_session_id == str(result.session_id)
         assert workspace.projection.items == []
@@ -1436,6 +1438,8 @@ def test_live_launch_mobile_tail_uses_placeholder_while_shell_is_catching_up(tmp
         assert mobile_tail.session.id == str(result.session_id)
         assert mobile_tail.session.launch_state == "launching_unknown"
         assert mobile_tail.session.capabilities.display_label == "Launching"
+        assert mobile_tail.session.capabilities.display_detail == "Setting up Codex on cinder."
+        assert mobile_tail.session.capabilities.composer_disabled_reason == "Setting up Codex."
         assert mobile_tail.session.capabilities.staleness_reason == "archive_catching_up"
         assert mobile_tail.projection.items == []
         assert mobile_tail.projection.total == 0

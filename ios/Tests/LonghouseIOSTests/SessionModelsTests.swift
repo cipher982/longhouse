@@ -1973,6 +1973,78 @@ struct SessionModelsTests {
     }
 
     @Test
+    func managedLaunchPlaceholderCanDraftBeforeSendIsReady() throws {
+        let json = """
+        {
+          "id": "launching-session",
+          "title": "codex",
+          "provider": "codex",
+          "project": "zerg",
+          "cwd": null,
+          "git_branch": null,
+          "summary": null,
+          "summary_title": null,
+          "presence_state": "syncing_transcript",
+          "presence_tool": null,
+          "user_state": "active",
+          "status": "syncing_transcript",
+          "last_activity_at": "2026-07-09T00:05:20Z",
+          "display_phase": "Launching",
+          "active_tool": null,
+          "home_label": "cinder",
+          "origin_label": "iOS",
+          "capabilities": {
+            "live_control_available": false,
+            "host_reattach_available": false,
+            "reply_to_live_session_available": false,
+            "can_queue_next_input": false,
+            "can_steer_active_turn": false,
+            "display_label": "Launching",
+            "display_detail": "Setting up Codex on cinder.",
+            "display_tone": "accent",
+            "input_mode": "read_only",
+            "default_input_intent": "none",
+            "composer_enabled": false,
+            "composer_placeholder": "Message Codex",
+            "composer_disabled_reason": "Setting up Codex.",
+            "send_disabled_reason": "read_only"
+          },
+          "runtime_display": {
+            "truth_tier": "fresh",
+            "signal_tier": "none",
+            "state": "syncing_transcript",
+            "tone": "active",
+            "headline": "Launching",
+            "detail": "Waiting for the machine to start the session.",
+            "phase_label": "Launching",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": true,
+            "needs_attention": false,
+            "is_idle": false,
+            "is_stalled": false,
+            "is_managed_local_truth": false,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "recent",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": null,
+            "pause_request": null
+          },
+          "loop_mode": "manual"
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+
+        #expect(!detail.canSendLive)
+        #expect(detail.canDraftBeforeSendReady)
+        #expect(detail.runtimeCapabilityLabel == "Launching")
+        #expect(detail.controlHealthMessage == "Setting up Codex.")
+    }
+
+    @Test
     func sessionInputResponseDecodesSentOutcome() throws {
         let json = """
         {

@@ -1827,6 +1827,12 @@ def build_live_launch_placeholder_response(
     current_now = normalize_utc(now) or datetime.now(timezone.utc)
     started_at = normalize_utc(launch_readiness.created_at) or normalize_utc(launch_readiness.updated_at) or current_now
     provider = (launch_readiness.provider or "unknown").strip() or "unknown"
+    provider_label = {
+        "claude": "Claude",
+        "codex": "Codex",
+        "opencode": "OpenCode",
+    }.get(provider.lower(), provider[:1].upper() + provider[1:] if provider else "session")
+    machine_label = (launch_readiness.device_id or "").strip() or "the machine"
     project = (launch_readiness.project or "").strip() or None
     title = project or f"{provider} launch"
     session_id = str(launch_readiness.session_id)
@@ -1835,14 +1841,16 @@ def build_live_launch_placeholder_response(
     headline = "Launching"
     detail = "Waiting for the machine to start the session."
     capability_label = "Launching"
-    capability_detail = "Live launch state is available; archive details are catching up."
-    composer_disabled_reason = "Session is still starting."
+    capability_detail = f"Setting up {provider_label} on {machine_label}."
+    composer_disabled_reason = f"Setting up {provider_label}."
     confidence = "live"
     user_state = "active"
     if launch_readiness.launch_state == "live":
         phase_label = "Live"
         headline = "Session launched"
-        detail = "Archive is catching up."
+        detail = f"{provider_label} launched; controls are connecting."
+        capability_detail = f"Connecting to {provider_label} on {machine_label}."
+        composer_disabled_reason = f"Connecting to {provider_label}."
     elif launch_readiness.launch_state == "launching_unknown":
         phase_label = "Dispatching"
         headline = "Launch dispatched"
