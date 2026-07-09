@@ -86,23 +86,16 @@ async def seed_demo_sessions(_admin=Depends(require_admin)) -> Dict[str, Any]:
     if _settings.environment and _settings.environment.lower() == "production" and not _settings.demo_mode:
         return {"error": "Demo seeding disabled in production"}
 
-    from zerg.services.agents import AgentsStore
-    from zerg.services.demo_sessions import build_demo_agent_sessions
+    from zerg.services.demo_seed import seed_missing_demo_sessions
 
     session_factory = get_session_factory()
 
-    # Build demo sessions
-    demo_sessions = build_demo_agent_sessions()
-
-    # Ingest each session
     with session_factory() as db:  # type: ignore[arg-type]
-        store = AgentsStore(db)
-        for session in demo_sessions:
-            store.ingest_session(session)
-        db.commit()
+        seeded_count, failed_count = seed_missing_demo_sessions(db)
 
     return {
         "status": "ok",
-        "sessions_seeded": len(demo_sessions),
+        "sessions_seeded": seeded_count,
+        "sessions_failed": failed_count,
         "message": "Demo sessions seeded successfully",
     }

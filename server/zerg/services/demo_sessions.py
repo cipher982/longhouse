@@ -729,7 +729,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
     # Session 6: Claude — Production incident: OOM on zerg server (ops)
     # Urgent debug session, 16 events
     # -------------------------------------------------------------------------
-    t6 = anchor - timedelta(days=1, hours=8)
+    t6 = anchor - timedelta(hours=9)
     s6 = [
         EventIngest(
             role="user",
@@ -831,7 +831,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
     # Session 7: Antigravity - Add Recall panel to sessions page (longhouse)
     # Medium feature session, 15 events
     # -------------------------------------------------------------------------
-    t7 = anchor - timedelta(days=1, hours=3)
+    t7 = anchor - timedelta(hours=6)
     s7 = [
         EventIngest(
             role="user",
@@ -921,7 +921,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
     # Session 8: Claude — Multi-repo research (various projects)
     # Short research/MCP-heavy session, 10 events
     # -------------------------------------------------------------------------
-    t8 = anchor - timedelta(hours=5)
+    t8 = anchor - timedelta(hours=3)
     s8 = [
         EventIngest(
             role="user",
@@ -1050,36 +1050,40 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
     ]
 
     # -------------------------------------------------------------------------
-    # Session 10: Claude — Current session (in progress, no ended_at)
+    # Session 10: Claude — Current managed session (in progress, no ended_at)
     # Today, active work, 12 events
     # -------------------------------------------------------------------------
     t10 = anchor - timedelta(hours=1)
     s10 = [
-        EventIngest(role="user", content_text="we need to update landing page images, i have made some changes to the UI.", timestamp=t10),
+        EventIngest(
+            role="user",
+            content_text="Users get logged out when two browser tabs refresh at the same time. Trace the race and make refresh idempotent.",
+            timestamp=t10,
+        ),
         EventIngest(
             role="assistant",
-            content_text="Let me check the current screenshot setup and what's changed in the UI.",
+            content_text="I'll trace the refresh-token rotation path and find where concurrent requests invalidate each other.",
             timestamp=t10 + timedelta(seconds=9),
         ),
         EventIngest(
             role="assistant",
             tool_name="Bash",
             tool_call_id="call_s10_01",
-            tool_input_json={"command": "ls -lh web/public/images/landing/"},
+            tool_input_json={"command": "rg -n 'refresh.token|refresh_token|rotate' server/zerg web/src | head -50"},
             timestamp=t10 + timedelta(minutes=1),
         ),
         EventIngest(
             role="assistant",
             tool_name="Read",
             tool_call_id="call_s10_02",
-            tool_input_json={"file_path": "scripts/screenshots.yaml"},
+            tool_input_json={"file_path": "server/zerg/routers/auth_browser.py"},
             timestamp=t10 + timedelta(minutes=1),
         ),
         EventIngest(
             role="assistant",
             tool_name="Read",
             tool_call_id="call_s10_03",
-            tool_input_json={"file_path": "scripts/capture_marketing.py"},
+            tool_input_json={"file_path": "server/zerg/services/browser_sessions.py"},
             timestamp=t10 + timedelta(minutes=1),
         ),
         EventIngest(
@@ -1089,33 +1093,42 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
                 "0.031",
                 0,
                 112,
-                "-rw-r--r--  1 user  staff  803K Feb 27 timeline-preview.png\n-rw-r--r--  1 user  staff  683K Feb 27 session-detail-preview.png\n-rw-r--r--  1 user  staff  787K Feb 27 search-preview.png",
+                "server/zerg/routers/auth_browser.py:188: async def refresh_browser_session(...)\n"
+                "server/zerg/services/browser_sessions.py:94: def rotate_refresh_token(...)\n"
+                "web/src/lib/auth.ts:71: await refreshSession()",
             ),
             timestamp=t10 + timedelta(minutes=1, seconds=1),
         ),
         EventIngest(
             role="tool",
             tool_call_id="call_s10_02",
-            tool_output_text="base_url: http://localhost:30080\nscreenshots:\n  timeline-preview:\n    url: /timeline?marketing=true\n    viewport: { width: 1400, height: 900 }",
+            tool_output_text="async def refresh_browser_session(refresh_token: str) -> BrowserSession:\n"
+            "    current = store.get_by_refresh_token(refresh_token)\n"
+            "    return rotate_refresh_token(current)",
             timestamp=t10 + timedelta(minutes=1, seconds=1),
         ),
         EventIngest(
             role="tool",
             tool_call_id="call_s10_03",
-            tool_output_text="# Marketing screenshot capture script\n# Requires dev stack running on base_url port",
+            tool_output_text="def rotate_refresh_token(session: BrowserSession) -> BrowserSession:\n"
+            "    session.refresh_token = secrets.token_urlsafe(32)\n"
+            "    db.commit()\n"
+            "    return session",
             timestamp=t10 + timedelta(minutes=1, seconds=2),
         ),
         EventIngest(
             role="assistant",
-            content_text="Images are from Feb 27, need refreshing. The capture script expects Docker stack on :30080 but you're running SQLite dev on :47200. I'll create a self-contained script and a `make marketing-screenshots` target.",
+            content_text="Found the race: both requests load the same refresh token, then each rotates it. The second commit invalidates the first tab's newly-issued token. I'll make rotation a compare-and-swap and return the winning session to concurrent callers.",
             timestamp=t10 + timedelta(minutes=2),
         ),
         EventIngest(
             role="assistant",
             tool_name="Write",
             tool_input_json={
-                "file_path": "scripts/marketing-screenshots.sh",
-                "content": "#!/usr/bin/env bash\n# Self-contained: starts demo stack, captures, exits\n...",
+                "file_path": "server/zerg/services/browser_sessions.py",
+                "content": "def rotate_refresh_token(session: BrowserSession, expected_version: int) -> BrowserSession:\n"
+                "    updated = update_where_version_matches(session.id, expected_version)\n"
+                "    return updated or store.get_by_session_id(session.id)",
             },
             timestamp=t10 + timedelta(minutes=5),
         ),
@@ -1123,7 +1136,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Bash",
-            tool_input_json={"command": "make marketing-screenshots"},
+            tool_input_json={"command": "cd server && uv run pytest tests_lite/test_browser_auth.py -q"},
             timestamp=t10 + timedelta(minutes=6),
         ),
         EventIngest(
@@ -1132,7 +1145,9 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
                 "47.221",
                 0,
                 445,
-                "Building demo database...\nBackend ready\nFrontend ready\n\nCapturing 3 screenshots...\n  timeline-preview (820 KB)\n  search-preview (817 KB)\n  session-detail-preview (706 KB)\n\nDone! Captured 3 screenshots.",
+                "..............................\n30 passed in 4.8s\n"
+                "test_concurrent_refresh_returns_winner PASSED\n"
+                "test_rotated_token_rejects_replay PASSED",
             ),
             timestamp=t10 + timedelta(minutes=6, seconds=50),
         ),
@@ -1238,7 +1253,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             events=s7,
         ),
         SessionIngest(
-            provider="claude",
+            provider="opencode",
             environment="production",
             project=None,
             device_id="shipper-laptop",

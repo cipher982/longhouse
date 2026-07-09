@@ -16,6 +16,8 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionThread
+from zerg.models.agents import SessionThreadAlias
 from zerg.services.demo_sessions import build_demo_agent_sessions
 
 
@@ -33,8 +35,6 @@ def _seed_session(factory, *, provider_session_id: str | None):
     as a ``session_thread_aliases`` row, not a column on ``AgentSession``.
     """
     from uuid import uuid4
-
-    from zerg.models.agents import SessionThread, SessionThreadAlias
 
     db = factory()
     session = AgentSession(
@@ -99,8 +99,6 @@ def _count_demo_sessions(factory) -> int:
     Post session-identity-kernel cleanup: ``provider_session_id`` is not a
     column on ``AgentSession``, it is a SessionThreadAlias row.
     """
-    from zerg.models.agents import SessionThread, SessionThreadAlias
-
     db = factory()
     try:
         return (
@@ -193,3 +191,41 @@ def test_demo_seed_replace_blocked_when_auth_enabled(tmp_path):
         from zerg.main import api_app
 
         api_app.dependency_overrides.clear()
+
+
+def test_demo_seed_projects_truthful_live_control_mix(tmp_path):
+    """The first marketing viewport must prove control, not only archive search."""
+    from zerg.models.agents import SessionThreadAlias
+    from zerg.services.agents.kernel_capabilities import project_session_capabilities
+    from zerg.services.demo_seed import seed_missing_demo_sessions
+
+    factory = _make_db(tmp_path, "demo_runtime_mix.db")
+    db = factory()
+    try:
+        seeded_count, failed_count = seed_missing_demo_sessions(db)
+        assert (seeded_count, failed_count) == (10, 0)
+
+        rows = (
+            db.query(AgentSession, SessionThreadAlias.alias_value)
+            .join(SessionThread, SessionThread.session_id == AgentSession.id)
+            .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+            .filter(SessionThread.is_primary == 1)
+            .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+            .all()
+        )
+        capabilities_by_provider = {
+            provider_session_id: project_session_capabilities(db, session_id=session.id)
+            for session, provider_session_id in rows
+        }
+
+        for provider_session_id in (
+            "demo-claude-05",
+            "demo-codex-03",
+            "demo-claude-04",
+            "demo-antigravity-02",
+        ):
+            assert capabilities_by_provider[provider_session_id].control_label == "live"
+        assert capabilities_by_provider["demo-claude-03"].control_label == "reattach"
+        assert capabilities_by_provider["demo-antigravity-01"].observe_only is True
+    finally:
+        db.close()

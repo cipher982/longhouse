@@ -306,8 +306,7 @@ def _build_demo_db(db_path: Path) -> None:
 
     from zerg.database import Base
     from zerg.database import make_engine
-    from zerg.services.agents import AgentsStore
-    from zerg.services.demo_sessions import build_demo_agent_sessions
+    from zerg.services.demo_seed import seed_missing_demo_sessions
 
     db_url = f"sqlite:///{db_path}"
     engine = make_engine(db_url).execution_options(schema_translate_map={"zerg": None, "agents": None})
@@ -316,11 +315,11 @@ def _build_demo_db(db_path: Path) -> None:
     SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
     db = SessionLocal()
     try:
-        store = AgentsStore(db)
-        for session in build_demo_agent_sessions():
-            # Demo fixtures are already curated. Avoid spawning title-generation
-            # threads immediately before ``--daemon`` forks the runtime process.
-            store.ingest_session(session, trigger_initial_title_generation=False)
+        seeded_count, failed_count = seed_missing_demo_sessions(db)
+        if failed_count:
+            raise RuntimeError(f"failed to seed {failed_count} demo sessions")
+        if seeded_count:
+            db.commit()
     finally:
         db.close()
         engine.dispose()

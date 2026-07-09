@@ -40,7 +40,7 @@ screenshots:
 
   session-detail-preview:
     description: Session detail view with events, tool calls expanded
-    # Resolves {featured_session_id} to the transcript with the most tool calls
+    # Resolves {featured_session_id} to the densest live-managed transcript
     url: /timeline/{featured_session_id}?marketing=true
     clock: live
     viewport: { width: 1400, height: 900 }

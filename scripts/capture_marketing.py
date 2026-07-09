@@ -82,11 +82,18 @@ def _tool_call_count(session: dict) -> int:
     return 0
 
 
+def _has_live_control(session: dict) -> bool:
+    detail = session.get("detail")
+    capabilities = detail.get("capabilities") if isinstance(detail, dict) else None
+    return bool(capabilities.get("live_control_available")) if isinstance(capabilities, dict) else False
+
+
 def resolve_url_templates(url: str, base_url: str) -> str:
     """Replace {featured_session_id} / {first_session_id} placeholders.
 
-    {featured_session_id} picks the session with the most tool_calls — better
-    for marketing as it shows a dense, interesting event timeline.
+    {featured_session_id} picks the densest live-managed session when one is
+    available. This keeps the detail capture honest about Longhouse's control
+    loop instead of showcasing an archive-only transcript.
     """
     # Screenshot base URLs are UI origins with /api available via the same host
     # (Vite proxy in dev, nginx in demo/prod-like capture flows).
@@ -95,11 +102,8 @@ def resolve_url_templates(url: str, base_url: str) -> str:
     if "{featured_session_id}" in url:
         try:
             sessions = load_timeline_sessions(api_url, limit=50)
-            # Ingested provider transcripts do not necessarily have a durable
-            # ended_at marker, even when their transcript is complete. Density
-            # is the useful marketing signal; do not silently fall back to the
-            # newest (usually still-active) session just because ended_at is null.
-            best = max(sessions, key=_tool_call_count, default=None)
+            live_sessions = [session for session in sessions if _has_live_control(session)]
+            best = max(live_sessions or sessions, key=_tool_call_count, default=None)
             if best:
                 return url.replace("{featured_session_id}", str(_session_id(best)))
         except Exception as e:

@@ -676,7 +676,8 @@ demo-render: ## Render the wedge demo (mp4 + hero poster) from real captured sho
 	@cd video && bun run render:wedge && bun run render:wedge-poster
 	@cp video/out/wedge-demo.mp4 web/public/videos/wedge-demo.mp4
 	@cp video/out/wedge-poster.png web/public/images/landing/wedge-poster.png
-	@echo "Wedge demo rendered and copied into web/public"
+	@node scripts/generate-og-image.mjs
+	@echo "Wedge demo, poster, and social card rendered into web/public"
 
 qa-ui-workbench: ## Capture fixture-backed timeline/session workbench screenshots
 	@set -e; \
