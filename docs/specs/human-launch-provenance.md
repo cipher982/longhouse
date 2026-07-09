@@ -80,6 +80,11 @@ rows and keep it sticky when archive ingest later refreshes the same session.
 control capability. A session can be `launch_actor=human_shell` and currently
 search-only if the control channel is gone.
 
+`launch_actor` is product provenance, not an integrity boundary. In V1 the
+managed-local terminal stamp is asserted by the Longhouse CLI request under a
+TTY/no-automation guard; the server normalizes it but does not cryptographically
+prove the local foreground shell.
+
 ## V1 Goals
 
 1. Persist positive human-launch provenance for Longhouse-owned launch paths.
@@ -175,10 +180,11 @@ AND LONGHOUSE_IS_SIDECHAIN is not true
 ```
 
 Nested automation must be able to override or unset these variables. If a
-payload has `origin_kind=hatch_automation` or `test_or_canary`, that hidden
-origin wins and human env provenance from inheritance is ignored. Bare `codex`
-or `claude` Shadow ingest remains unlabeled until a separate shell-integration
-or process-lineage proof lands.
+payload has `origin_kind=hatch_automation` or `test_or_canary`, or the payload
+is a provider sidechain/subagent, that automation signal wins and human env
+provenance from inheritance is ignored. Bare `codex` or `claude` Shadow ingest
+remains unlabeled until a separate shell-integration or process-lineage proof
+lands.
 
 ### Web / iOS / API Launch
 
@@ -225,7 +231,7 @@ Use this ordering when multiple signals are present:
    launches stamp `human_ui`; managed terminal wrappers stamp `human_shell`;
    agents-token launch routes stamp `automation`.
 3. Env or transcript metadata may fill missing launch provenance, but only when
-   no hidden origin is present.
+   no hidden origin or sidechain signal is present.
 4. `NULL` means unlabeled legacy/Shadow history and remains visible in V1 unless
    some other existing filter hides it.
 
@@ -259,6 +265,11 @@ fully labeled.
 3. Incoming `NULL` must never clear existing launch provenance.
 4. Explicit hidden origin always keeps the row hidden and blocks storing a
    human actor from the same inherited-env payload.
+5. If a later ingest changes the row into a hidden origin, an existing human
+   launch actor is cleared. This handles classification sidecars that arrive
+   after a first archive ingest.
+6. Provider sidechain/subagent ingest blocks inherited human actors the same way
+   hidden origins do.
 
 ## Implementation Plan
 
@@ -267,8 +278,9 @@ fully labeled.
 3. Normalize/persist the fields in `AgentsStore.ingest_session`, including
    existing-session refresh and timeline card updates.
 4. Set managed-local browser-auth launch shells to `human_shell` / `terminal`.
-5. Set remote browser/iOS launch shells to `human_ui` / `api`; agents-token
-   launch routes stamp `automation` / `api`.
+5. Set remote browser/iOS launch shells to `human_ui` / `api`, accepting a
+   validated `web`/`ios` client surface hint when present; agents-token launch
+   routes stamp `automation` / `api`.
 6. Pass `LONGHOUSE_LAUNCH_ACTOR` and `LONGHOUSE_LAUNCH_SURFACE` from managed
    local provider wrappers only under the interactive/no-automation guard.
 7. Extend engine compressor metadata/env propagation.
@@ -278,9 +290,12 @@ fully labeled.
    - agents-token remote launch rows do not get human-ui provenance;
    - ingest persists provenance and does not clear it on later unlabeled ingest;
    - ingest does not overwrite existing conflicting provenance;
-   - hidden origins still hide even when provenance exists;
+   - hidden origins still hide and clear inherited human provenance when they
+     arrive after a first ingest;
+   - sidechains/subagents suppress inherited human provenance;
    - engine compressor ignores inherited human provenance when hidden origin is
-     present and ships clean env-derived launch provenance otherwise.
+     or sidechain evidence is present and ships clean env-derived launch
+     provenance otherwise.
 
 ## Open Questions
 

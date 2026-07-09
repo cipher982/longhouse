@@ -96,6 +96,9 @@ from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_launch_provenance import LAUNCH_ACTOR_HUMAN_UI
 from zerg.services.session_launch_provenance import LAUNCH_SURFACE_API
+from zerg.services.session_launch_provenance import LAUNCH_SURFACE_IOS
+from zerg.services.session_launch_provenance import LAUNCH_SURFACE_WEB
+from zerg.services.session_launch_provenance import normalize_launch_surface
 from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_pause_requests import PENDING_STATUS as PAUSE_PENDING_STATUS
 from zerg.services.session_pause_requests import get_pause_request_for_session
@@ -156,6 +159,7 @@ class RemoteSessionLaunchRequest(BaseModel):
         max_length=64,
         description="Optional idempotency key; repeated calls with the same value return the same session",
     )
+    launch_surface: str | None = Field(None, description="Optional client launch surface: web, ios, or api")
 
 
 class RemoteSessionLaunchResponse(BaseModel):
@@ -1365,6 +1369,14 @@ async def launch_remote_session_endpoint(
     records a ``SessionLaunchAttempt(state=pending)``, and dispatches
     ``session.launch`` over the existing control WebSocket.
     """
+    launch_surface = LAUNCH_SURFACE_API
+    if body.launch_surface is not None:
+        launch_surface = normalize_launch_surface(body.launch_surface) or ""
+        if launch_surface not in {LAUNCH_SURFACE_API, LAUNCH_SURFACE_WEB, LAUNCH_SURFACE_IOS}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="launch_surface must be one of: api, web, ios",
+            )
     try:
         result = await launch_remote_session(
             db,
@@ -1381,7 +1393,7 @@ async def launch_remote_session_endpoint(
                 execution_lifetime=body.execution_lifetime or DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME,
                 client_request_id=body.client_request_id,
                 launch_actor=LAUNCH_ACTOR_HUMAN_UI,
-                launch_surface=LAUNCH_SURFACE_API,
+                launch_surface=launch_surface,
             ),
         )
     except RemoteLaunchError as exc:

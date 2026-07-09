@@ -65,6 +65,7 @@ from zerg.services.session_graph_projection import workflow_run_projection
 from zerg.services.session_graph_projection import workflow_runs_for_session
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_launch_provenance import HIDDEN_FROM_DEFAULT_ORIGIN_KINDS
+from zerg.services.session_launch_provenance import HUMAN_LAUNCH_ACTORS
 from zerg.services.session_launch_provenance import sanitize_launch_provenance
 from zerg.services.session_observation_reducers import ProviderEventReduction
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
@@ -134,9 +135,15 @@ def _hidden_from_default_timeline_for_origin(origin_kind: str | None) -> int:
     return 1 if origin_kind in HIDDEN_FROM_DEFAULT_ORIGIN_KINDS else 0
 
 
-def _launch_provenance_from_ingest(data: SessionIngest, *, origin_kind: str | None) -> tuple[str | None, str | None]:
+def _launch_provenance_from_ingest(
+    data: SessionIngest,
+    *,
+    origin_kind: str | None,
+    is_sidechain: bool,
+) -> tuple[str | None, str | None]:
     return sanitize_launch_provenance(
         origin_kind=origin_kind,
+        is_sidechain=is_sidechain,
         launch_actor=data.launch_actor,
         launch_surface=data.launch_surface,
     )
@@ -152,6 +159,20 @@ def _fill_session_launch_provenance(
         session.launch_actor = launch_actor
     if launch_surface and not session.launch_surface:
         session.launch_surface = launch_surface
+
+
+def _clear_blocked_human_launch_provenance(
+    session: AgentSession,
+    *,
+    origin_kind: str | None,
+    is_sidechain: bool,
+) -> None:
+    if session.launch_actor not in HUMAN_LAUNCH_ACTORS:
+        return
+    if origin_kind not in HIDDEN_FROM_DEFAULT_ORIGIN_KINDS and not is_sidechain:
+        return
+    session.launch_actor = None
+    session.launch_surface = None
 
 
 def _source_path_looks_like_subagent(source_path: str | None) -> bool:
@@ -769,9 +790,15 @@ class AgentsStore:
             session.origin_kind = incoming_origin_kind
             session.hidden_from_default_timeline = _hidden_from_default_timeline_for_origin(incoming_origin_kind)
         effective_origin_kind = incoming_origin_kind or session.origin_kind
+        _clear_blocked_human_launch_provenance(
+            session,
+            origin_kind=effective_origin_kind,
+            is_sidechain=data.is_sidechain,
+        )
         incoming_launch_actor, incoming_launch_surface = _launch_provenance_from_ingest(
             data,
             origin_kind=effective_origin_kind,
+            is_sidechain=data.is_sidechain,
         )
         _fill_session_launch_provenance(
             session,
@@ -2043,7 +2070,6 @@ class AgentsStore:
         first_user_text_from_ingest = _first_user_text_from_ingest(data)
         origin_kind = _normalize_origin_kind(data.origin_kind)
         origin_hidden_from_default_timeline = _hidden_from_default_timeline_for_origin(origin_kind)
-        launch_actor, launch_surface = _launch_provenance_from_ingest(data, origin_kind=origin_kind)
         lineage_parent_provider_session_id = _hatch_lineage_parent_provider_session_id(data, primary_source_path)
         lineage_is_sidechain = data.is_sidechain
         if origin_kind == HATCH_AUTOMATION_ORIGIN_KIND and not _hatch_origin_has_provider_lineage_evidence(
@@ -2051,6 +2077,11 @@ class AgentsStore:
             primary_source_path,
         ):
             lineage_is_sidechain = False
+        launch_actor, launch_surface = _launch_provenance_from_ingest(
+            data,
+            origin_kind=origin_kind,
+            is_sidechain=lineage_is_sidechain,
+        )
 
         # Dynamic-workflow `journal.jsonl` is a control ledger, not a session.
         # The engine now skips it at discovery, but guard here too: an ingest

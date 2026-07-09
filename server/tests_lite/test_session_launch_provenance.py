@@ -100,6 +100,71 @@ def test_hidden_origin_drops_inherited_human_launch_provenance(tmp_path):
         assert session.launch_surface is None
 
 
+def test_sidechain_drops_inherited_human_launch_provenance(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    session_id = uuid4()
+
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="development",
+                started_at=datetime(2026, 7, 9, tzinfo=timezone.utc),
+                is_sidechain=True,
+                launch_actor="human_shell",
+                launch_surface="terminal",
+                events=[_event("child task")],
+            )
+        )
+        db.commit()
+
+    with SessionLocal() as db:
+        session = db.get(AgentSession, session_id)
+        assert session.launch_actor is None
+        assert session.launch_surface is None
+
+
+def test_late_hidden_origin_clears_prior_human_launch_provenance(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    session_id = uuid4()
+
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="opencode",
+                environment="development",
+                started_at=datetime(2026, 7, 9, tzinfo=timezone.utc),
+                launch_actor="human_shell",
+                launch_surface="terminal",
+                events=[_event("first ingest before sidecar")],
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="opencode",
+                environment="development",
+                started_at=datetime(2026, 7, 9, tzinfo=timezone.utc),
+                origin_kind="hatch_automation",
+                launch_actor="human_shell",
+                launch_surface="terminal",
+                events=[_event("second ingest after sidecar")],
+            )
+        )
+        db.commit()
+
+    with SessionLocal() as db:
+        session = db.get(AgentSession, session_id)
+        assert session.origin_kind == "hatch_automation"
+        assert session.hidden_from_default_timeline == 1
+        assert session.launch_actor is None
+        assert session.launch_surface is None
+
+
 def test_ingest_launch_provenance_is_fill_only(tmp_path):
     SessionLocal = _make_db(tmp_path)
     session_id = uuid4()

@@ -73,6 +73,7 @@ def hidden_origin_blocks_launch_actor(origin_kind: str | None, launch_actor: str
 def sanitize_launch_provenance(
     *,
     origin_kind: str | None,
+    is_sidechain: bool = False,
     launch_actor: str | None,
     launch_surface: str | None,
 ) -> tuple[str | None, str | None]:
@@ -83,7 +84,7 @@ def sanitize_launch_provenance(
     hidden_origin = normalize_hidden_origin_kind(origin_kind)
     if actor is None:
         return None, None
-    if hidden_origin_blocks_launch_actor(hidden_origin, actor):
+    if hidden_origin_blocks_launch_actor(hidden_origin, actor) or (is_sidechain and actor in HUMAN_LAUNCH_ACTORS):
         return None, None
     return actor, surface
 

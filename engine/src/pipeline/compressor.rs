@@ -150,6 +150,7 @@ fn normalize_launch_surface(value: &str) -> Option<String> {
 
 fn sanitize_launch_provenance(
     origin_kind: Option<&str>,
+    is_sidechain: bool,
     launch_actor: Option<String>,
     launch_surface: Option<String>,
 ) -> (Option<String>, Option<String>) {
@@ -158,6 +159,9 @@ fn sanitize_launch_provenance(
     if matches!(origin_kind, Some("hatch_automation" | "test_or_canary"))
         && matches!(actor.as_deref(), Some("human_shell" | "human_ui"))
     {
+        return (None, None);
+    }
+    if is_sidechain && matches!(actor.as_deref(), Some("human_shell" | "human_ui")) {
         return (None, None);
     }
     if actor.is_none() {
@@ -315,8 +319,11 @@ pub fn build_payload_with_source_lines<'a>(
         .as_deref()
         .and_then(normalize_hidden_origin_kind)
         .or_else(hidden_origin_kind_from_env);
+    let is_sidechain = metadata.is_sidechain
+        || std::env::var("LONGHOUSE_IS_SIDECHAIN").as_deref() == Ok("1");
     let (launch_actor, launch_surface) = sanitize_launch_provenance(
         origin_kind.as_deref(),
+        is_sidechain,
         metadata
             .launch_actor
             .clone()
@@ -370,8 +377,7 @@ pub fn build_payload_with_source_lines<'a>(
             .unwrap_or(&metadata.session_id),
         // Allow env var override: agent-mesh sets LONGHOUSE_IS_SIDECHAIN=1 before
         // running sub-agents; the Stop hook inherits it, marking the session as automated.
-        is_sidechain: metadata.is_sidechain
-            || std::env::var("LONGHOUSE_IS_SIDECHAIN").as_deref() == Ok("1"),
+        is_sidechain,
         origin_kind,
         launch_actor,
         launch_surface,
@@ -774,6 +780,35 @@ mod tests {
         let value = serde_json::to_value(&payload).unwrap();
 
         assert_eq!(value["origin_kind"], "hatch_automation");
+        assert!(value.get("launch_actor").is_none());
+        assert!(value.get("launch_surface").is_none());
+    }
+
+    #[test]
+    fn test_sidechain_suppresses_inherited_human_launch_provenance() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _origin = EnvGuard::remove("LONGHOUSE_ORIGIN_KIND");
+        let _actor = EnvGuard::set("LONGHOUSE_LAUNCH_ACTOR", "human_shell");
+        let _surface = EnvGuard::set("LONGHOUSE_LAUNCH_SURFACE", "terminal");
+        let _legacy_sidechain = EnvGuard::remove("LONGHOUSE_IS_SIDECHAIN");
+
+        let events = make_test_events();
+        let meta = SessionMetadata {
+            session_id: "sidechain-provider-id".to_string(),
+            is_sidechain: true,
+            ..Default::default()
+        };
+
+        let payload = build_payload(
+            "33333333-3333-4333-8333-333333333333",
+            &events,
+            &meta,
+            "/path",
+            "claude",
+        );
+        let value = serde_json::to_value(&payload).unwrap();
+
+        assert_eq!(value["is_sidechain"], true);
         assert!(value.get("launch_actor").is_none());
         assert!(value.get("launch_surface").is_none());
     }
