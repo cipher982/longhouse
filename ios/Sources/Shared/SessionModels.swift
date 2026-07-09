@@ -837,6 +837,21 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return detail
     }
 
+    var launchSetupStatusLabel: String {
+        let providerName = provider.trimmingCharacters(in: .whitespacesAndNewlines)
+        let providerLabel = providerName.isEmpty ? "session" : providerName.prefix(1).uppercased() + providerName.dropFirst()
+        let fallback = providerLabel == "session" ? "Setting up session" : "Setting up \(providerLabel)"
+        guard canDraftBeforeSendReady else { return fallback }
+        guard var message = controlHealthMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !message.isEmpty else {
+            return fallback
+        }
+        while message.last == "." {
+            message.removeLast()
+        }
+        return message.isEmpty ? fallback : message
+    }
+
     var runtimeTone: String { runtimeDisplay.tone }
 
     var isSessionExecuting: Bool { runtimeDisplay.isExecuting }

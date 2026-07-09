@@ -1372,6 +1372,21 @@ struct SessionRuntimeDock: View {
         // One quiet monochrome status line. The state dot is the only color;
         // headline/detail/capability are a flat type hierarchy. No background or
         // divider — the fused control card owns the surface.
+        Group {
+            if detail.canDraftBeforeSendReady {
+                launchSetupLine
+            } else {
+                standardLine
+            }
+        }
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var style: RuntimeChromeStyle { RuntimeChromeStyle(detail: detail) }
+
+    private var standardLine: some View {
         HStack(spacing: 7) {
             indicator
             Text(detail.runtimeHeadline)
@@ -1388,12 +1403,18 @@ struct SessionRuntimeDock: View {
             Spacer(minLength: 8)
             capabilityPill
         }
-        .padding(.horizontal, 4)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(accessibilityLabel)
     }
 
-    private var style: RuntimeChromeStyle { RuntimeChromeStyle(detail: detail) }
+    private var launchSetupLine: some View {
+        HStack(spacing: 7) {
+            indicator
+            Text(detail.launchSetupStatusLabel)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+    }
 
     // State dot — color is the signal; motion (breathing ring) marks "live".
     @ViewBuilder
@@ -1436,7 +1457,10 @@ struct SessionRuntimeDock: View {
     }
 
     private var accessibilityLabel: String {
-        [detail.runtimeHeadline, detail.runtimeDetail, capabilityLabel]
+        if detail.canDraftBeforeSendReady {
+            return detail.launchSetupStatusLabel
+        }
+        return [detail.runtimeHeadline, detail.runtimeDetail, capabilityLabel]
             .compactMap { $0 }
             .joined(separator: ", ")
     }
@@ -2054,13 +2078,15 @@ final class SessionViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: Self.visiblePollDelayNanoseconds(completedTicks: ticks))
                 if Task.isCancelled { break }
                 ticks += 1
-                let (connected, hasRunningTool) = await MainActor.run {
+                let (connected, hasRunningTool, setupPending) = await MainActor.run {
                     (
                         self.streamConnected,
-                        self.lastWorkspaceEvents.contains { $0.toolCallState == .running }
+                        self.lastWorkspaceEvents.contains { $0.toolCallState == .running },
+                        self.detail?.canDraftBeforeSendReady == true
                     )
                 }
                 let managed = await MainActor.run {
+                    if self.detail?.canDraftBeforeSendReady == true { return true }
                     guard let caps = self.detail?.capabilities else { return false }
                     return caps.liveControlAvailable == true || caps.hostReattachAvailable == true
                 }
@@ -2074,6 +2100,7 @@ final class SessionViewModel: ObservableObject {
                     connected: connected,
                     hasRunningTool: hasRunningTool,
                     managed: managed,
+                    setupPending: setupPending,
                     ticks: ticks
                 ) {
                     await self.pollTick(sessionId: sessionId, appState: appState)
@@ -2086,9 +2113,11 @@ final class SessionViewModel: ObservableObject {
         connected: Bool,
         hasRunningTool: Bool,
         managed: Bool,
+        setupPending: Bool = false,
         ticks: Int
     ) -> Bool {
         if ticks <= 3 { return true }
+        if setupPending { return true }
         if !connected { return true }
         if hasRunningTool, ticks % 12 == 0 { return true }
         if managed, ticks % 3 == 0 { return true }

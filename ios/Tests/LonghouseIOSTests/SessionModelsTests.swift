@@ -2042,6 +2042,7 @@ struct SessionModelsTests {
         #expect(detail.canDraftBeforeSendReady)
         #expect(detail.runtimeCapabilityLabel == "Launching")
         #expect(detail.controlHealthMessage == "Setting up Codex.")
+        #expect(detail.launchSetupStatusLabel == "Setting up Codex")
     }
 
     @Test
