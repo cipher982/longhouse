@@ -34,7 +34,6 @@ ios:
   - 'ios/**'
   - 'scripts/build/generate_build_identity.py'
   - 'scripts/build/stage_ios_build_identity.sh'
-  - 'Makefile'
   - 'scripts/ci/run_ios_tests.sh'
   - 'scripts/ci/select_ios_simulator.py'
 
