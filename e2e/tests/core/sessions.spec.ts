@@ -287,9 +287,9 @@ test.describe("Sessions Page", () => {
     await searchInput.fill(magicToken);
     await expect(page).toHaveURL(new RegExp(`query=${magicToken}`));
 
+    // Fresh ingest lands on the working-set shelf (flat, no repo header).
     const sessionRow = page
-      .locator('section.inbox-repo[data-repo="fts-e2e"]')
-      .getByTestId("session-row")
+      .locator(`[data-testid="session-row"][data-session-id="${sessionId}"]`)
       .first();
     await expect(sessionRow).toBeVisible();
 
@@ -1351,12 +1351,12 @@ test.describe("Machine Filter", () => {
     await enrollTestMachine(request, machineToken);
     await enrollTestMachine(request, otherToken);
 
-    await ingestSession(request, {
+    const keptId = await ingestSession(request, {
       environment: machineToken,
       device_id: machineToken,
       project: "machine-filter-sessions",
     });
-    await ingestSession(request, {
+    const otherId = await ingestSession(request, {
       environment: otherToken,
       device_id: otherToken,
       project: "machine-filter-other",
@@ -1366,13 +1366,13 @@ test.describe("Machine Filter", () => {
     await page.goto(`/timeline?device_id=${machineToken}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
-    // Should show the filtered machine's sessions
-    const repoHeader = page.locator(".inbox-repo-name", {
-      hasText: "machine-filter-sessions",
-    });
-    await expect(repoHeader).toBeVisible({ timeout: 10000 });
+    // Fresh/open sessions land on the flat shelf (no repo header). Assert by
+    // session id so the filter contract stays independent of inbox tiering.
     await expect(
-      page.locator(".inbox-repo-name", { hasText: "machine-filter-other" }),
+      page.locator(`[data-testid="session-row"][data-session-id="${keptId}"]`),
+    ).toBeVisible({ timeout: 10000 });
+    await expect(
+      page.locator(`[data-testid="session-row"][data-session-id="${otherId}"]`),
     ).toHaveCount(0);
   });
 });
