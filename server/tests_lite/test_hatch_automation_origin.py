@@ -37,7 +37,9 @@ from zerg.services.apns_sender import APNSDeviceTarget
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.session_coordination import query_wall_sessions
 
-NOW = datetime(2026, 7, 8, 17, 31, tzinfo=timezone.utc)
+# These fixtures exercise live timeline and wall windows, so keep their
+# activity anchored to the current test run instead of a date that ages out.
+NOW = datetime.now(timezone.utc)
 PARENT_ID = UUID("aaaaaaaa-1111-4111-8111-111111111111")
 HATCH_ID = UUID("bbbbbbbb-2222-4222-8222-222222222222")
 PROVIDER_CHILD_ID = UUID("cccccccc-3333-4333-8333-333333333333")
