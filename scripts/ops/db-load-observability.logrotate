@@ -1,0 +1,9 @@
+/var/lib/longhouse-db-observability/*.ndjson {
+    daily
+    rotate 21
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root root
+}

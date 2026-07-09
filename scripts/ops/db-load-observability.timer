@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Longhouse SQLite load observability sampler every two minutes
+
+[Timer]
+OnCalendar=*:0/2
+Persistent=true
+RandomizedDelaySec=15s
+Unit=db-load-observability.service
+
+[Install]
+WantedBy=timers.target
