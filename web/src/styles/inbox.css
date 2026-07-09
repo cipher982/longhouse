@@ -124,11 +124,13 @@
     cursor: pointer;
 
     display: grid;
+    /* Fixed meta tracks — never shrink for short labels like "idle" /
+     * "Reattach", or the whole right cluster drifts left of neighboring rows. */
     grid-template-columns:
       minmax(0, 1fr)
-      minmax(0, var(--inbox-status-width))
-      minmax(0, var(--inbox-source-width))
-      minmax(0, var(--inbox-time-width));
+      var(--inbox-status-width)
+      var(--inbox-source-width)
+      var(--inbox-time-width);
     grid-template-areas: "main status source time";
     align-items: center;
     gap: var(--space-2);
@@ -279,8 +281,12 @@
     align-items: center;
     justify-content: center;
     flex: 0 0 auto;
-    height: 20px;
+    /* Match longest label ("Live control" / "Observe only") so shorter
+     * pills like "Reattach" don't pull the provider glyph left. */
+    width: 13ch;
+    min-width: 13ch;
     max-width: 13ch;
+    height: 20px;
     padding: 0 var(--space-2);
     border: 1px solid var(--color-border-muted);
     border-radius: var(--radius-sm);
@@ -292,6 +298,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    box-sizing: border-box;
   }
 
   .inbox-row-control[data-tone="live"] {
@@ -535,7 +542,7 @@
 
   @media (max-width: 720px) {
     .inbox-row {
-      grid-template-columns: minmax(0, 1fr) minmax(0, var(--inbox-time-width));
+      grid-template-columns: minmax(0, 1fr) var(--inbox-time-width);
       grid-template-areas:
         "main main"
         "status time";

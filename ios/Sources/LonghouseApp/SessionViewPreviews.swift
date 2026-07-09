@@ -4,10 +4,12 @@ import SwiftUI
 
 private extension SessionDetail {
     static func mock(
+        provider: String = "claude",
         headline: String = "Idle",
         runtimeDetail: String? = "Waiting for next prompt",
         tone: String = "idle",
         capabilityLabel: String = "Live on cinder",
+        composerDisabledReason: String? = nil,
         live: Bool = true,
         canSteer: Bool = false,
         canQueue: Bool = false,
@@ -17,7 +19,7 @@ private extension SessionDetail {
         let json = """
         {
           "id": "preview-1",
-          "provider": "claude",
+          "provider": "\(provider)",
           "project": "my-project",
           "cwd": "/Users/example/code",
           "gitBranch": "main",
@@ -32,7 +34,8 @@ private extension SessionDetail {
             "canQueueNextInput": \(canQueue),
             "canSteerActiveTurn": \(canSteer),
             "displayLabel": "\(capabilityLabel)",
-            "displayTone": "\(live ? "success" : "warning")"
+            "displayTone": "\(live ? "success" : "warning")",
+            "composerDisabledReason": \(composerDisabledReason.map { "\"\($0)\"" } ?? "null")
           },
           "runtimeDisplay": {
             "truthTier": "managed-local",
@@ -185,6 +188,22 @@ private struct ComposerPreviewChrome: View {
         tone: "running",
         canSteer: true,
         canQueue: true,
+        executing: true
+    ))
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Launch setup · Dark") {
+    ComposerPreviewChrome(detail: .mock(
+        provider: "codex",
+        headline: "Launch dispatch",
+        runtimeDetail: "Waiting for the host",
+        tone: "running",
+        capabilityLabel: "Launching",
+        composerDisabledReason: "Setting up Codex.",
+        live: false,
+        canSteer: false,
+        canQueue: false,
         executing: true
     ))
     .preferredColorScheme(.dark)

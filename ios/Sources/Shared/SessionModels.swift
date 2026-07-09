@@ -725,6 +725,21 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return capabilities.composerEnabled ?? (capabilities.liveControlAvailable || capabilities.replyToLiveSessionAvailable)
     }
 
+    var canDraftBeforeSendReady: Bool {
+        guard !isClosed, !canSendLive else { return false }
+        guard runtimeDisplay.controlPath == "managed" else { return false }
+        let label = runtimeCapabilityLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let phase = runtimePhaseLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let disabledReason = capabilities.composerDisabledReason?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() ?? ""
+        return label == "launching"
+            || phase == "launching"
+            || phase == "dispatching"
+            || disabledReason.hasPrefix("setting up")
+            || disabledReason == "session is still starting."
+    }
+
     /// Codex managed sessions advertise `attach_images=true` once both the
     /// backend and the engine on this device support the attach pipeline.
     var attachImagesEnabled: Bool {
@@ -820,6 +835,21 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return nil
         }
         return detail
+    }
+
+    var launchSetupStatusLabel: String {
+        let providerName = provider.trimmingCharacters(in: .whitespacesAndNewlines)
+        let providerLabel = providerName.isEmpty ? "session" : providerName.prefix(1).uppercased() + providerName.dropFirst()
+        let fallback = providerLabel == "session" ? "Setting up session" : "Setting up \(providerLabel)"
+        guard canDraftBeforeSendReady else { return fallback }
+        guard var message = controlHealthMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !message.isEmpty else {
+            return fallback
+        }
+        while message.last == "." {
+            message.removeLast()
+        }
+        return message.isEmpty ? fallback : message
     }
 
     var runtimeTone: String { runtimeDisplay.tone }

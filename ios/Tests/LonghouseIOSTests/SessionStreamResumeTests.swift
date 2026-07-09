@@ -229,6 +229,7 @@ struct SessionStreamResumeTests {
         #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 1))
         #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 3))
         #expect(SessionViewModel.shouldPollVisibleSession(connected: false, hasRunningTool: false, managed: false, ticks: 1))
+        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, setupPending: true, ticks: 30))
         #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: true, managed: false, ticks: 12))
         #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 6))
         #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 30))

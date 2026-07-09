@@ -89,6 +89,8 @@ Use it for directed session actions such as:
 - `GET /api/agents/sessions/{session_id}/export`
 - `GET /api/agents/sessions/{session_id}/turns`
 - `GET /api/agents/sessions/{session_id}/turns/{turn_id}`
+- `GET /api/agents/worklog/day` — one timestamp-anchored day export for
+  machine worklog consumers; see `worklog-day-export-api.md`
 
 ### Machine health and transport summaries
 
