@@ -2033,6 +2033,7 @@ class AgentsStore:
         incremental_session_counts: bool = False,
         write_legacy_raw: bool = True,
         raw_source_archived: bool = False,
+        trigger_initial_title_generation: bool = True,
     ) -> IngestResult:
         """Ingest a session with events, handling deduplication.
 
@@ -2053,6 +2054,8 @@ class AgentsStore:
                 after archive-primary has stored source fidelity.
             raw_source_archived: True when this ingest's source payload was
                 written to the archive before the store write.
+            trigger_initial_title_generation: Whether a first user message may
+                enqueue title generation. Demo fixture seeding disables this.
 
         Returns:
             IngestResult with counts of inserted/skipped events plus commit
@@ -2852,7 +2855,7 @@ class AgentsStore:
             _commit_with_telemetry()
             _record_stage("commit_after_turns", stage_started)
 
-        if user_count_delta > 0 and user_messages_before_ingest == 0:
+        if trigger_initial_title_generation and user_count_delta > 0 and user_messages_before_ingest == 0:
             from zerg.services.session_title_trigger import maybe_start_initial_title_generation
 
             maybe_start_initial_title_generation(str(session_id), reason="first_user_event")

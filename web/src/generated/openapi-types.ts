@@ -2872,6 +2872,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/worklog/day": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Worklog Day
+         * @description Return one day of session messages for machine worklog consumers.
+         */
+        get: operations["export_worklog_day_agents_worklog_day_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/sessions": {
         parameters: {
             query?: never;
@@ -5653,6 +5673,16 @@ export interface components {
              * @default bypass
              */
             permission_mode: string;
+            /**
+             * Launch Actor
+             * @description Positive launch actor provenance when known
+             */
+            launch_actor?: string | null;
+            /**
+             * Launch Surface
+             * @description Launch surface provenance when known
+             */
+            launch_surface?: string | null;
         };
         /** ManagedSessionLeaseIn */
         ManagedSessionLeaseIn: {
@@ -6803,6 +6833,11 @@ export interface components {
              * @description Optional idempotency key; repeated calls with the same value return the same session
              */
             client_request_id?: string | null;
+            /**
+             * Launch Surface
+             * @description Optional client launch surface: web, ios, or api
+             */
+            launch_surface?: string | null;
         };
         /**
          * RemoteSessionLaunchResponse
@@ -10196,6 +10231,92 @@ export interface components {
              */
             tool_calls: number;
         };
+        /** WorklogDayEvent */
+        WorklogDayEvent: {
+            /** Session Id */
+            session_id: string;
+            /** Role */
+            role: string;
+            /** Content Text */
+            content_text: string;
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+        };
+        /** WorklogDayExportResponse */
+        WorklogDayExportResponse: {
+            /** Date */
+            date: string;
+            /** Timezone */
+            timezone: string;
+            /** Window Start */
+            window_start: string;
+            /** Window End */
+            window_end: string;
+            /** Source */
+            source: string;
+            /** Sessions */
+            sessions: components["schemas"]["WorklogDaySession"][];
+            /** Events */
+            events: components["schemas"]["WorklogDayEvent"][];
+            stats: components["schemas"]["WorklogDayStats"];
+        };
+        /** WorklogDaySession */
+        WorklogDaySession: {
+            /** Id */
+            id: string;
+            /** Project */
+            project?: string | null;
+            /** Provider */
+            provider: string;
+            /** Git Repo */
+            git_repo?: string | null;
+            /** Cwd */
+            cwd?: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** User Messages */
+            user_messages: number;
+            /** Assistant Messages */
+            assistant_messages: number;
+            /** Tool Calls */
+            tool_calls: number;
+            /**
+             * Is Sidechain
+             * @default false
+             */
+            is_sidechain: boolean;
+            /** First Event At */
+            first_event_at?: string | null;
+            /** Last Event At */
+            last_event_at?: string | null;
+            /** First Message At */
+            first_message_at?: string | null;
+            /**
+             * Message Count
+             * @default 0
+             */
+            message_count: number;
+            /**
+             * Event Count
+             * @default 0
+             */
+            event_count: number;
+        };
+        /** WorklogDayStats */
+        WorklogDayStats: {
+            /** Session Count */
+            session_count: number;
+            /** Message Count */
+            message_count: number;
+            /** Event Count */
+            event_count: number;
+        };
         /** WorkspaceSuggestion */
         WorkspaceSuggestion: {
             /**
@@ -13403,6 +13524,8 @@ export interface operations {
                 include_test?: boolean;
                 /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
                 hide_autonomous?: boolean;
+                /** @description Include Hatch automation sessions in otherwise default-hidden streams */
+                include_automation?: boolean;
                 /** @description Filter by device ID */
                 device_id?: string | null;
                 /** @description Days to look back */
@@ -13645,6 +13768,8 @@ export interface operations {
                 include_test?: boolean;
                 /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
                 hide_autonomous?: boolean;
+                /** @description Include Hatch automation sessions in otherwise default-hidden lists */
+                include_automation?: boolean;
                 /** @description Filter by device ID */
                 device_id?: string | null;
                 /** @description Days to look back */
@@ -13711,6 +13836,8 @@ export interface operations {
                 offset?: number;
                 /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
                 hide_autonomous?: boolean;
+                /** @description Include Hatch automation sessions in otherwise default-hidden summaries */
+                include_automation?: boolean;
             };
             header?: never;
             path?: never;
@@ -15166,6 +15293,8 @@ export interface operations {
                 context_turns?: number;
                 /** @description Context projection mode: forensic|active_context */
                 context_mode?: string;
+                /** @description Include Hatch automation sessions in recall results */
+                include_automation?: boolean;
                 mode?: string;
             };
             header?: never;
@@ -15194,6 +15323,42 @@ export interface operations {
             };
         };
     };
+    export_worklog_day_agents_worklog_day_get: {
+        parameters: {
+            query: {
+                /** @description Digest day in the supplied timezone, YYYY-MM-DD */
+                date: string;
+                /** @description IANA timezone for day boundaries */
+                timezone?: string;
+                /** @description Include test/e2e sessions */
+                include_test?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorklogDayExportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_sessions_agents_sessions_get: {
         parameters: {
             query?: {
@@ -15207,6 +15372,8 @@ export interface operations {
                 include_test?: boolean;
                 /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
                 hide_autonomous?: boolean;
+                /** @description Include Hatch automation sessions in otherwise default-hidden lists */
+                include_automation?: boolean;
                 /** @description Filter by device ID */
                 device_id?: string | null;
                 /** @description Days to look back */
@@ -15257,6 +15424,8 @@ export interface operations {
                 include_test?: boolean;
                 /** @description Hide autonomous sessions from archive enumeration */
                 hide_autonomous?: boolean;
+                /** @description Include Hatch automation sessions in archive enumeration when hiding automation */
+                include_automation?: boolean;
                 /** @description Days to look back */
                 days_back?: number;
                 /** @description Max results */
@@ -15349,6 +15518,8 @@ export interface operations {
                 offset?: number;
                 /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
                 hide_autonomous?: boolean;
+                /** @description Include Hatch automation sessions in otherwise default-hidden summaries */
+                include_automation?: boolean;
             };
             header?: never;
             path?: never;
@@ -15387,6 +15558,8 @@ export interface operations {
                 days?: number;
                 /** @description Max results */
                 limit?: number;
+                /** @description Include Hatch automation sessions in wall results */
+                include_automation?: boolean;
             };
             header?: never;
             path?: never;
@@ -15632,6 +15805,8 @@ export interface operations {
                 limit?: number;
                 /** @description Days to look back */
                 days_back?: number;
+                /** @description Include hidden Hatch automation sessions */
+                include_automation?: boolean;
             };
             header?: never;
             path?: never;

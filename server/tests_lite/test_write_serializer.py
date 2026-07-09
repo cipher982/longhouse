@@ -853,27 +853,29 @@ async def test_non_sqlite_stall_escalates_when_interrupt_cannot_unwind(tmp_path,
 
     def _blocked_python(_db):
         started.set()
-        release.wait(1.0)
+        release.wait()
 
     task = asyncio.create_task(serializer.execute(_blocked_python, label="ingest-live"))
-    await asyncio.to_thread(started.wait, 1.0)
+    try:
+        await asyncio.to_thread(started.wait, 1.0)
 
-    metrics = {}
-    for _ in range(100):
-        metrics = serializer.get_metrics()
-        if metrics["active_wedged_writer_count"] >= 1:
-            break
-        await asyncio.sleep(0.01)
+        metrics = {}
+        for _ in range(100):
+            metrics = serializer.get_metrics()
+            if metrics["active_wedged_writer_count"] >= 1:
+                break
+            await asyncio.sleep(0.01)
 
-    assert serializer.writer_active is True
-    assert metrics["active_interrupt_count"] == 1
-    assert metrics["active_wedged_writer_count"] == 1
-    assert metrics["last_active_wedged_writer_label"] == "ingest-live"
-    assert metrics["last_active_wedged_writer_reason"] == "interrupt_wedged"
-    assert metrics["active_stack_dump_count"] >= 2
+        assert serializer.writer_active is True
+        assert metrics["active_interrupt_count"] == 1
+        assert metrics["active_wedged_writer_count"] == 1
+        assert metrics["last_active_wedged_writer_label"] == "ingest-live"
+        assert metrics["last_active_wedged_writer_reason"] == "interrupt_wedged"
+        assert metrics["active_stack_dump_count"] >= 2
+    finally:
+        release.set()
+        await task
 
-    release.set()
-    await task
     assert serializer.writer_active is False
 
 

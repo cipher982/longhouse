@@ -230,8 +230,10 @@ jobs:
           (cd e2e && bun install --silent)
           ./scripts/ci/install-playwright.sh chromium
 
-      - name: Run launch gate locally
-        run: make launch-gate-local
+      # The installer matrix above already runs the first-run smoke on Linux
+      # and macOS. Keep this job focused on its distinct browser funnel.
+      - name: Run onboarding funnel
+        run: make onboarding-funnel
 
       - name: Upload onboarding artifacts
         if: failure()

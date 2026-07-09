@@ -318,9 +318,12 @@ def _build_demo_db(db_path: Path) -> None:
     try:
         store = AgentsStore(db)
         for session in build_demo_agent_sessions():
-            store.ingest_session(session)
+            # Demo fixtures are already curated. Avoid spawning title-generation
+            # threads immediately before ``--daemon`` forks the runtime process.
+            store.ingest_session(session, trigger_initial_title_generation=False)
     finally:
         db.close()
+        engine.dispose()
 
 
 @app.command()

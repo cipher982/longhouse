@@ -45,7 +45,7 @@ jobs:
 
   validate:
     needs: changes
-    if: ${{ (needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ (needs.changes.outputs.backend == 'true' || needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     name: "Validation"
     timeout-minutes: 15
@@ -215,15 +215,18 @@ jobs:
       run: ./scripts/ci/ensure-make.sh
 
     - name: Run Rust Engine Tests (unit + golden + adversarial)
+      if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
       run: make test-engine
 
     - name: Run Shipper Pipeline E2E (fixture → engine ship → API → DB)
       run: make test-shipper-e2e
 
     - name: Run Synthetic Shipper Bench
+      if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
       run: make test-shipper-synthetic-bench
 
     - name: Run Synthetic Mixed Live/Archive Bench
+      if: ${{ needs.changes.outputs.engine == 'true' || github.event_name == 'workflow_dispatch' }}
       run: make test-shipper-synthetic-live-bench
 
   frontend-tests:
