@@ -56,19 +56,11 @@ def _metrics_access_allowed(request: Request) -> bool:
 
 
 def _refresh_dynamic_gauges() -> None:
-    try:
-        from zerg.database import get_session_factory
-        from zerg.services.session_runtime import refresh_managed_codex_liveness_metrics
-
-        session_factory = get_session_factory()
-        with session_factory() as db:
-            refresh_managed_codex_liveness_metrics(db)
-    except Exception:
-        logger.exception("Failed to refresh dynamic metrics gauges")
-
-    # God-view gauges: WriteSerializer + WAL state and per-device heartbeat
-    # state. The helper guards its own failures so a bad read never blocks the
-    # rest of the scrape.
+    # Scrapes must remain bounded. In particular, do not run historical
+    # session-observation/liveness audits here: the runtime's /metrics endpoint
+    # is also the lightweight load-observability input during a busy ingest.
+    # God-view only reads current serializer/WAL/live-store state and guards its
+    # own failures so a bad read never blocks the rest of the scrape.
     try:
         from zerg.services.godview_metrics import refresh_godview_gauges
 

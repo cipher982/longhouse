@@ -168,6 +168,25 @@ def test_metrics_access_helper_allows_metrics_token(monkeypatch):
     assert metrics_mod._metrics_access_allowed(_Req()) is True
 
 
+def test_metrics_refresh_skips_historical_liveness_audit(monkeypatch):
+    """A metrics scrape is a cheap snapshot, never a monolith-wide audit."""
+    from zerg.routers import metrics as metrics_mod
+    from zerg.services import godview_metrics
+    from zerg.services import session_runtime
+
+    refreshed: list[bool] = []
+    monkeypatch.setattr(godview_metrics, "refresh_godview_gauges", lambda: refreshed.append(True))
+    monkeypatch.setattr(
+        session_runtime,
+        "refresh_managed_codex_liveness_metrics",
+        lambda _db: (_ for _ in ()).throw(AssertionError("must not run during a scrape")),
+    )
+
+    metrics_mod._refresh_dynamic_gauges()
+
+    assert refreshed == [True]
+
+
 # ---------------------------------------------------------------------------
 # /api/ops/beacon — body cap
 # ---------------------------------------------------------------------------
