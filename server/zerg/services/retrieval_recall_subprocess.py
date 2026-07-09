@@ -102,6 +102,7 @@ def retrieval_recall_payload(
     max_results: int,
     context_turns: int,
     hide_internal_canary: bool,
+    include_automation: bool = False,
 ) -> dict[str, Any] | None:
     retrieval_path = resolve_retrieval_db_path(database_url)
     if retrieval_path is None or not retrieval_path.exists():
@@ -122,6 +123,9 @@ def retrieval_recall_payload(
             hide_internal_canary=hide_internal_canary,
             limit=max_results,
         )
+        if hits and not include_automation:
+            visible_ids = _visible_recall_session_ids(database_url, [hit.session_id for hit in hits])
+            hits = [hit for hit in hits if hit.session_id in visible_ids]
         parent_ids = [hit.parent_chunk_id for hit in hits if hit.parent_chunk_id is not None]
         parents = get_chunks_by_ids(retrieval_db, parent_ids)
 
@@ -154,6 +158,38 @@ def retrieval_recall_payload(
             }
         )
     return {"matches": matches, "total": len(matches)}
+
+
+def _visible_recall_session_ids(database_url: str, session_ids: list[str]) -> set[str]:
+    if not session_ids:
+        return set()
+    from sqlalchemy import or_
+    from sqlalchemy.exc import OperationalError
+
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+    from zerg.models.agents import AgentSession
+
+    engine = make_engine(database_url)
+    SessionLocal = make_sessionmaker(engine)
+    try:
+        with SessionLocal() as db:
+            rows = (
+                db.query(AgentSession.id)
+                .filter(AgentSession.id.in_(session_ids))
+                .filter(
+                    or_(
+                        AgentSession.hidden_from_default_timeline.is_(None),
+                        AgentSession.hidden_from_default_timeline == 0,
+                    )
+                )
+                .all()
+            )
+            return {str(row[0]) for row in rows}
+    except OperationalError:
+        return set(session_ids)
+    finally:
+        engine.dispose()
 
 
 def main() -> None:

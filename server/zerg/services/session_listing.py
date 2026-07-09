@@ -66,6 +66,7 @@ def _validate_managed_hook_scope(auth: object, params: SessionListParams) -> Non
         params.provider is not None
         or params.environment is not None
         or params.include_test
+        or params.include_automation
         or params.device_id is not None
         or params.query is not None
         or params.offset != 0
@@ -124,6 +125,7 @@ def _list_lexical_sessions(
         limit=params.limit,
         offset=params.offset,
         hide_autonomous=params.hide_autonomous,
+        include_automation=params.include_automation,
         context_mode=params.context_mode,
         anchor_on_activity=effective_sort == "recency",
     )

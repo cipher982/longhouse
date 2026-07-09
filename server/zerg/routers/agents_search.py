@@ -17,6 +17,8 @@ from fastapi import HTTPException
 from fastapi import Query
 from fastapi import Request
 from fastapi import status
+from sqlalchemy import or_
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
@@ -71,6 +73,7 @@ async def _run_retrieval_index_recall(
     context_turns: int,
     context_mode: str,
     explicit: bool,
+    include_automation: bool = False,
 ) -> RecallResponse | None:
     """Run retrieval.db recall without sharing the live server SQLite process."""
 
@@ -86,6 +89,7 @@ async def _run_retrieval_index_recall(
             context_turns=context_turns,
             context_mode=context_mode,
             explicit=explicit,
+            include_automation=include_automation,
         )
 
     if context_mode != "forensic":
@@ -100,6 +104,7 @@ async def _run_retrieval_index_recall(
         "max_results": max_results,
         "context_turns": context_turns,
         "hide_internal_canary": not is_internal_canary_provider_filter(provider),
+        "include_automation": include_automation,
     }
     proc = await asyncio.create_subprocess_exec(
         sys.executable,
@@ -166,6 +171,7 @@ def _try_retrieval_index_recall(
     context_turns: int,
     context_mode: str,
     explicit: bool,
+    include_automation: bool = False,
 ) -> RecallResponse | None:
     """Serve recall from retrieval.db when a ready lexical index exists."""
 
@@ -214,6 +220,14 @@ def _try_retrieval_index_recall(
             limit=max_results,
         )
         mark_phase("search")
+        if hits and not include_automation:
+            visible_ids = _visible_recall_session_ids(
+                database_url,
+                [hit.session_id for hit in hits],
+                include_automation=include_automation,
+            )
+            hits = [hit for hit in hits if hit.session_id in visible_ids]
+            mark_phase("visibility")
         parent_ids = [hit.parent_chunk_id for hit in hits if hit.parent_chunk_id is not None]
         parents = get_chunks_by_ids(retrieval_db, parent_ids)
         mark_phase("parents")
@@ -262,6 +276,39 @@ def _try_retrieval_index_recall(
             " ".join(f"{name}={value:.1f}" for name, value in phases.items()),
         )
     return response
+
+
+def _visible_recall_session_ids(
+    database_url: str,
+    session_ids: list[str],
+    *,
+    include_automation: bool,
+) -> set[str]:
+    if include_automation or not session_ids:
+        return set(session_ids)
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+
+    engine = make_engine(database_url)
+    SessionLocal = make_sessionmaker(engine)
+    try:
+        with SessionLocal() as db:
+            rows = (
+                db.query(AgentSession.id)
+                .filter(AgentSession.id.in_(session_ids))
+                .filter(
+                    or_(
+                        AgentSession.hidden_from_default_timeline.is_(None),
+                        AgentSession.hidden_from_default_timeline == 0,
+                    )
+                )
+                .all()
+            )
+            return {str(row[0]) for row in rows}
+    except OperationalError:
+        return set(session_ids)
+    finally:
+        engine.dispose()
 
 
 def _bounded_context_text(value: str | None) -> str:
@@ -603,6 +650,7 @@ async def recall_sessions(
     max_results: int = Query(5, ge=1, le=20, description="Max matches"),
     context_turns: int = Query(2, ge=0, le=10, description="Context turns before/after match"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
+    include_automation: bool = Query(False, description="Include Hatch automation sessions in recall results"),
     mode: str = "auto",
     database_url: str = Depends(get_recall_database_url),
     session_factory: sessionmaker = Depends(get_recall_session_factory),
@@ -642,6 +690,7 @@ async def recall_sessions(
             context_turns=context_turns,
             context_mode=context_mode,
             explicit=mode == "lexical",
+            include_automation=include_automation,
         )
         lexical_ms = (time.perf_counter() - lexical_started) * 1000
         if lexical_response is not None:
@@ -687,6 +736,10 @@ async def recall_sessions(
         if not include_test:
             filter_query = filter_query.filter(AgentSession.environment.notin_(["test", "e2e"]))
             filter_query = filter_query.filter(~provider_proof_session_clause(AgentSession))
+        if not include_automation:
+            filter_query = filter_query.filter(
+                or_(AgentSession.hidden_from_default_timeline.is_(None), AgentSession.hidden_from_default_timeline == 0)
+            )
         valid_ids = {str(row[0]) for row in filter_query.all()}
         if valid_ids and cache.turn_embedding_count == 0:
             raise _embedding_corpus_unavailable_response("turn")

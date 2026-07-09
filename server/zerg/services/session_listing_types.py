@@ -23,6 +23,7 @@ class SessionListParams:
     sort: str | None
     mode: str | None
     context_mode: str
+    include_automation: bool = False
 
 
 @dataclass(frozen=True)

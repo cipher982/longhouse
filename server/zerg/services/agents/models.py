@@ -85,6 +85,19 @@ class SessionIngest(BaseModel):
         description="Event ID where this continuation branched from its parent",
     )
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (isSidechain:true in JSONL)")
+    origin_kind: Optional[str] = Field(
+        None,
+        description="Longhouse launch-origin classification, e.g. hatch_automation. Independent from provider lineage.",
+    )
+    hatch_run_id: Optional[str] = Field(None, description="Hatch-generated automation run id when available")
+    parent_longhouse_session_id: Optional[UUID] = Field(
+        None,
+        description="Calling Longhouse session id for automation child runs when available",
+    )
+    parent_thread_id: Optional[UUID] = Field(
+        None,
+        description="Calling Longhouse thread id for automation child runs when available",
+    )
     parent_provider_session_id: Optional[str] = Field(
         None,
         description="Provider session/thread id of the parent when this payload is a subagent/fork",

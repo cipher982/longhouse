@@ -71,6 +71,11 @@ struct OpenCodeSessionClassificationSidecar {
     provider: Option<String>,
     provider_session_id: Option<String>,
     environment: Option<String>,
+    origin_kind: Option<String>,
+    hatch_run_id: Option<String>,
+    parent_longhouse_session_id: Option<String>,
+    parent_thread_id: Option<String>,
+    parent_provider_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -336,6 +341,7 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
         .or(session.agent.as_deref())
         .map(str::to_string);
     let lineage_kind = opencode_lineage_kind(&session, task_child.is_some());
+    let classification = opencode_session_classification_sidecar(provider_session_id);
 
     Ok(ParseResult {
         events,
@@ -364,7 +370,24 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
             },
             cwd: session.directory.clone(),
             project: project_label(&session),
-            environment: opencode_session_environment_override(provider_session_id),
+            environment: classification
+                .as_ref()
+                .and_then(opencode_session_environment_override_from_sidecar),
+            origin_kind: classification
+                .as_ref()
+                .and_then(|sidecar| sidecar.origin_kind.clone()),
+            hatch_run_id: classification
+                .as_ref()
+                .and_then(|sidecar| sidecar.hatch_run_id.clone()),
+            parent_longhouse_session_id: classification
+                .as_ref()
+                .and_then(|sidecar| sidecar.parent_longhouse_session_id.clone()),
+            parent_thread_id: classification
+                .as_ref()
+                .and_then(|sidecar| sidecar.parent_thread_id.clone()),
+            parent_provider_session_id: classification
+                .as_ref()
+                .and_then(|sidecar| sidecar.parent_provider_session_id.clone()),
             version: session.version.clone(),
             started_at: Some(timestamp_from_ms(session.time_created)),
             is_sidechain: task_child.is_some(),
@@ -848,19 +871,13 @@ fn path_basename(path: &str) -> Option<&str> {
         .filter(|value| !value.is_empty())
 }
 
-fn opencode_session_environment_override(provider_session_id: &str) -> Option<String> {
-    opencode_session_environment_override_from_roots(
-        provider_session_id,
-        &opencode_session_classification_roots(),
-    )
-}
-
 fn opencode_session_classification_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Some(root) = std::env::var_os("LONGHOUSE_OPENCODE_SESSION_METADATA_ROOT") {
         roots.push(PathBuf::from(root));
     }
     if let Ok(home) = get_longhouse_home() {
+        roots.push(home.join("provider-session-metadata").join("opencode"));
         roots.push(
             home.join("provider-live-proof")
                 .join("sessions")
@@ -870,10 +887,39 @@ fn opencode_session_classification_roots() -> Vec<PathBuf> {
     roots
 }
 
+#[cfg(test)]
 fn opencode_session_environment_override_from_roots(
     provider_session_id: &str,
     roots: &[PathBuf],
 ) -> Option<String> {
+    opencode_session_classification_sidecar_from_roots(provider_session_id, roots)
+        .as_ref()
+        .and_then(opencode_session_environment_override_from_sidecar)
+}
+
+fn opencode_session_environment_override_from_sidecar(
+    sidecar: &OpenCodeSessionClassificationSidecar,
+) -> Option<String> {
+    let environment = sidecar.environment.as_deref()?.trim();
+    if matches!(environment, "test" | "e2e") {
+        return Some(environment.to_string());
+    }
+    None
+}
+
+fn opencode_session_classification_sidecar(
+    provider_session_id: &str,
+) -> Option<OpenCodeSessionClassificationSidecar> {
+    opencode_session_classification_sidecar_from_roots(
+        provider_session_id,
+        &opencode_session_classification_roots(),
+    )
+}
+
+fn opencode_session_classification_sidecar_from_roots(
+    provider_session_id: &str,
+    roots: &[PathBuf],
+) -> Option<OpenCodeSessionClassificationSidecar> {
     for root in roots {
         let path = root.join(format!("{provider_session_id}.json"));
         let Ok(text) = fs::read_to_string(&path) else {
@@ -889,12 +935,7 @@ fn opencode_session_environment_override_from_roots(
         if sidecar.provider_session_id.as_deref() != Some(provider_session_id) {
             continue;
         }
-        let Some(environment) = sidecar.environment.as_deref().map(str::trim) else {
-            continue;
-        };
-        if matches!(environment, "test" | "e2e") {
-            return Some(environment.to_string());
-        }
+        return Some(sidecar);
     }
     None
 }
@@ -1145,8 +1186,36 @@ fn timestamp_from_ms(ms: i64) -> DateTime<Utc> {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::sync::Mutex;
+
     use super::*;
     use base64::{engine::general_purpose, Engine as _};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     fn create_fixture_db(path: &Path) {
         let conn = Connection::open(path).unwrap();
@@ -1407,6 +1476,94 @@ mod tests {
             opencode_session_environment_override_from_roots("ses_test", &[sidecar_root]);
 
         assert_eq!(environment.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn opencode_session_classification_sidecar_carries_hatch_origin() {
+        let temp = tempfile::tempdir().unwrap();
+        let sidecar_root = temp.path().join("sidecars");
+        fs::create_dir_all(&sidecar_root).unwrap();
+        fs::write(
+            sidecar_root.join("ses_test.json"),
+            json!({
+                "provider": "opencode",
+                "provider_session_id": "ses_test",
+                "origin_kind": "hatch_automation",
+                "hatch_run_id": "hatch-run-1",
+                "parent_longhouse_session_id": "11111111-1111-4111-8111-111111111111",
+                "parent_thread_id": "22222222-2222-4222-8222-222222222222",
+                "parent_provider_session_id": "ses_parent"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let sidecar =
+            opencode_session_classification_sidecar_from_roots("ses_test", &[sidecar_root])
+                .unwrap();
+
+        assert_eq!(sidecar.origin_kind.as_deref(), Some("hatch_automation"));
+        assert_eq!(sidecar.hatch_run_id.as_deref(), Some("hatch-run-1"));
+        assert_eq!(
+            sidecar.parent_longhouse_session_id.as_deref(),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
+        assert_eq!(
+            sidecar.parent_thread_id.as_deref(),
+            Some("22222222-2222-4222-8222-222222222222")
+        );
+        assert_eq!(
+            sidecar.parent_provider_session_id.as_deref(),
+            Some("ses_parent")
+        );
+    }
+
+    #[test]
+    fn parse_opencode_session_reads_hatch_origin_sidecar_from_metadata_root() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_fixture_db(&db_path);
+        let sidecar_root = temp.path().join("sidecars");
+        fs::create_dir_all(&sidecar_root).unwrap();
+        let _root = EnvGuard::set(
+            "LONGHOUSE_OPENCODE_SESSION_METADATA_ROOT",
+            sidecar_root.to_str().unwrap(),
+        );
+        fs::write(
+            sidecar_root.join("ses_test.json"),
+            json!({
+                "provider": "opencode",
+                "provider_session_id": "ses_test",
+                "origin_kind": "hatch_automation",
+                "hatch_run_id": "hatch-run-1",
+                "parent_longhouse_session_id": "11111111-1111-4111-8111-111111111111",
+                "parent_thread_id": "22222222-2222-4222-8222-222222222222",
+                "parent_provider_session_id": "ses_parent"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let result = parse_opencode_session(&db_path, "ses_test").unwrap();
+
+        assert_eq!(
+            result.metadata.origin_kind.as_deref(),
+            Some("hatch_automation")
+        );
+        assert_eq!(result.metadata.hatch_run_id.as_deref(), Some("hatch-run-1"));
+        assert_eq!(
+            result.metadata.parent_longhouse_session_id.as_deref(),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
+        assert_eq!(
+            result.metadata.parent_thread_id.as_deref(),
+            Some("22222222-2222-4222-8222-222222222222")
+        );
+        assert_eq!(
+            result.metadata.parent_provider_session_id.as_deref(),
+            Some("ses_parent")
+        );
     }
 
     #[test]

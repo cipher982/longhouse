@@ -95,6 +95,7 @@ _SESSION_FIRST_USER_PREVIEW_CHARS = 300
 _SESSION_LAST_VISIBLE_PREVIEW_CHARS = 500
 _SESSION_LAST_USER_PREVIEW_CHARS = 300
 _SESSION_LAST_ASSISTANT_PREVIEW_CHARS = 500
+HATCH_AUTOMATION_ORIGIN_KIND = "hatch_automation"
 
 
 def _bounded_session_preview(value: str | None, *, max_len: int) -> str | None:
@@ -116,6 +117,49 @@ def _first_user_text_from_ingest(data: SessionIngest) -> str | None:
         )
         if preview:
             return preview
+    return None
+
+
+def _normalize_origin_kind(value: str | None) -> str | None:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized == HATCH_AUTOMATION_ORIGIN_KIND:
+        return HATCH_AUTOMATION_ORIGIN_KIND
+    return None
+
+
+def _hidden_from_default_timeline_for_origin(origin_kind: str | None) -> int:
+    return 1 if origin_kind == HATCH_AUTOMATION_ORIGIN_KIND else 0
+
+
+def _source_path_looks_like_subagent(source_path: str | None) -> bool:
+    return bool(source_path and "/subagents/" in str(source_path).replace("\\", "/"))
+
+
+def _hatch_origin_has_provider_lineage_evidence(data: SessionIngest, primary_source_path: str | None) -> bool:
+    """Return true when a Hatch-launched transcript also carries provider child evidence.
+
+    Hatch passes parent context for Longhouse linkage, but that parent context
+    must not be mistaken for provider-native subagent lineage. Explicit provider
+    lineage still wins when present.
+    """
+
+    explicit = str(data.lineage_kind or "").strip()
+    if explicit:
+        return True
+    return bool(
+        data.subagent_id
+        or data.subagent_prompt_id
+        or data.subagent_tool_use_id
+        or data.workflow_run_id
+        or _source_path_looks_like_subagent(primary_source_path)
+    )
+
+
+def _hatch_lineage_parent_provider_session_id(data: SessionIngest, primary_source_path: str | None) -> str | None:
+    if _normalize_origin_kind(data.origin_kind) != HATCH_AUTOMATION_ORIGIN_KIND:
+        return data.parent_provider_session_id
+    if _hatch_origin_has_provider_lineage_evidence(data, primary_source_path):
+        return data.parent_provider_session_id
     return None
 
 
@@ -697,6 +741,10 @@ class AgentsStore:
     ) -> None:
         """Backfill richer session metadata when the same session is ingested again."""
         incoming_execution_home = _infer_execution_home_from_ingest(data)
+        incoming_origin_kind = _normalize_origin_kind(data.origin_kind)
+        if incoming_origin_kind and session.origin_kind != incoming_origin_kind:
+            session.origin_kind = incoming_origin_kind
+            session.hidden_from_default_timeline = _hidden_from_default_timeline_for_origin(incoming_origin_kind)
 
         incoming_started_at = _normalize_utc_naive(data.started_at)
         existing_started_at = _normalize_utc_naive(session.started_at)
@@ -1218,6 +1266,45 @@ class AgentsStore:
             target_thread=target_thread,
             provider_edge_id=provider_edge_id,
             metadata={key: value for key, value in metadata.items() if value},
+        )
+
+    def _record_hatch_automation_edge_for_ingest(
+        self,
+        *,
+        provider: str,
+        target_thread: SessionThread,
+        data: SessionIngest,
+    ) -> None:
+        source_thread: SessionThread | None = None
+        if data.parent_thread_id is not None:
+            source_thread = self.db.query(SessionThread).filter(SessionThread.id == data.parent_thread_id).first()
+        if source_thread is None and data.parent_longhouse_session_id is not None:
+            parent_session = self.db.query(AgentSession).filter(AgentSession.id == data.parent_longhouse_session_id).first()
+            if parent_session is not None:
+                source_thread = ensure_primary_thread(self.db, parent_session)
+
+        hatch_run_id = str(data.hatch_run_id or "").strip() or None
+        child_provider_id = str(data.provider_session_id or "").strip() or None
+        provider_edge_id = hatch_run_id or child_provider_id or str(target_thread.id)
+        record_session_edge(
+            self.db,
+            provider=provider,
+            edge_kind="automation_child",
+            visibility="hidden",
+            evidence_kind="hatch_origin",
+            source_thread=source_thread,
+            target_thread=target_thread,
+            provider_edge_id=provider_edge_id,
+            metadata={
+                "origin_kind": HATCH_AUTOMATION_ORIGIN_KIND,
+                "hatch_run_id": hatch_run_id,
+                "launcher": "hatch",
+                "provider": provider,
+                "parent_longhouse_session_id": (str(data.parent_longhouse_session_id) if data.parent_longhouse_session_id else None),
+                "parent_thread_id": str(data.parent_thread_id) if data.parent_thread_id else None,
+                "parent_provider_session_id": data.parent_provider_session_id,
+                "child_provider_session_id": child_provider_id,
+            },
         )
 
     def _record_provider_binding_conflict(
@@ -1921,6 +2008,15 @@ class AgentsStore:
         source_lines = self._normalize_source_lines_for_ingest(data)
         primary_source_path = self._primary_source_path_for_ingest(data, source_lines)
         first_user_text_from_ingest = _first_user_text_from_ingest(data)
+        origin_kind = _normalize_origin_kind(data.origin_kind)
+        origin_hidden_from_default_timeline = _hidden_from_default_timeline_for_origin(origin_kind)
+        lineage_parent_provider_session_id = _hatch_lineage_parent_provider_session_id(data, primary_source_path)
+        lineage_is_sidechain = data.is_sidechain
+        if origin_kind == HATCH_AUTOMATION_ORIGIN_KIND and not _hatch_origin_has_provider_lineage_evidence(
+            data,
+            primary_source_path,
+        ):
+            lineage_is_sidechain = False
 
         # Dynamic-workflow `journal.jsonl` is a control ledger, not a session.
         # The engine now skips it at discovery, but guard here too: an ingest
@@ -1941,9 +2037,9 @@ class AgentsStore:
         observed_lineage = observed_lineage_from_evidence(
             provider=data.provider,
             explicit_kind=data.lineage_kind,
-            is_sidechain=data.is_sidechain,
+            is_sidechain=lineage_is_sidechain,
             source_path=primary_source_path,
-            parent_provider_session_id=data.parent_provider_session_id,
+            parent_provider_session_id=lineage_parent_provider_session_id,
             child_provider_session_id=data.provider_session_id,
             parent_tool_call_id=data.subagent_tool_use_id,
             evidence_kind="ingest",
@@ -2097,6 +2193,8 @@ class AgentsStore:
                 ended_at=None,
                 last_activity_at=(_normalize_utc_naive(data.ended_at) or _normalize_utc_naive(data.started_at)),
                 loop_mode="assist",
+                origin_kind=origin_kind,
+                hidden_from_default_timeline=origin_hidden_from_default_timeline,
             )
             self.db.add(session)
             self.db.flush()
@@ -2107,6 +2205,11 @@ class AgentsStore:
         # any provider_session_id evidence as a thread alias. Reducers below
         # use observation.thread_id to stamp child rows.
         primary_thread = ensure_primary_thread(self.db, existing)
+        if origin_kind == HATCH_AUTOMATION_ORIGIN_KIND and resolved_child_thread is None:
+            existing.origin_kind = origin_kind
+            existing.hidden_from_default_timeline = origin_hidden_from_default_timeline
+            primary_thread.origin_kind = origin_kind
+            primary_thread.hidden_from_default_timeline = origin_hidden_from_default_timeline
         record_thread_alias(
             self.db,
             thread=primary_thread,
@@ -2195,6 +2298,17 @@ class AgentsStore:
 
         thread = resolved_child_thread or resolved_provider_thread or primary_thread
         thread_id = thread.id
+        if origin_kind == HATCH_AUTOMATION_ORIGIN_KIND:
+            thread.origin_kind = origin_kind
+            thread.hidden_from_default_timeline = origin_hidden_from_default_timeline
+            if data.hatch_run_id:
+                record_thread_alias(
+                    self.db,
+                    thread=thread,
+                    provider=existing.provider,
+                    alias_kind="hatch_run_id",
+                    alias_value=str(data.hatch_run_id),
+                )
         if resolved_child_thread is not None:
             self._record_lineage_edge_for_ingest(
                 provider=existing.provider,
@@ -2237,6 +2351,12 @@ class AgentsStore:
                     session_id = conflict_session.id
                     thread = conflict_thread
                     thread_id = conflict_thread.id
+        if origin_kind == HATCH_AUTOMATION_ORIGIN_KIND:
+            self._record_hatch_automation_edge_for_ingest(
+                provider=existing.provider,
+                target_thread=thread,
+                data=data,
+            )
         self.db.flush()
         user_messages_before_ingest = int(existing.user_messages or 0)
         _record_stage("session_setup", stage_started)
@@ -2782,6 +2902,7 @@ class AgentsStore:
         offset: int = 0,
         exclude_user_states: Optional[list[str]] = None,
         hide_autonomous: bool = True,
+        include_automation: bool = False,
         context_mode: str = "forensic",
         branch_mode: str = "head",
         anchor_on_activity: bool = False,
@@ -2808,6 +2929,7 @@ class AgentsStore:
                 offset=offset,
                 exclude_user_states=exclude_user_states,
                 hide_autonomous=hide_autonomous,
+                include_automation=include_automation,
                 anchor_on_activity=anchor_on_activity,
             )
 
@@ -2832,6 +2954,7 @@ class AgentsStore:
             query=query,
             exclude_user_states=exclude_user_states,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
             context_mode=context_mode,
             branch_mode=branch_mode,
             time_anchor=activity_anchor if anchor_on_activity else AgentSession.started_at,
@@ -2866,6 +2989,7 @@ class AgentsStore:
         offset: int,
         exclude_user_states: Optional[list[str]],
         hide_autonomous: bool,
+        include_automation: bool,
         anchor_on_activity: bool,
     ) -> tuple[List[AgentSession], int]:
         runtime_signal_subq = self._runtime_signal_subquery()
@@ -2896,6 +3020,7 @@ class AgentsStore:
             until=until,
             exclude_user_states=exclude_user_states,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
             time_anchor=time_anchor,
         )
         if stmt is None:
@@ -2925,6 +3050,7 @@ class AgentsStore:
         offset: int = 0,
         exclude_user_states: Optional[list[str]] = None,
         hide_autonomous: bool = True,
+        include_automation: bool = False,
         context_mode: str = "forensic",
         branch_mode: str = "head",
         include_total: bool = False,
@@ -2946,6 +3072,7 @@ class AgentsStore:
                 offset=offset,
                 exclude_user_states=exclude_user_states,
                 hide_autonomous=hide_autonomous,
+                include_automation=include_automation,
                 include_total=include_total,
             )
 
@@ -2980,6 +3107,7 @@ class AgentsStore:
             query=query,
             exclude_user_states=exclude_user_states,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
             context_mode=context_mode,
             branch_mode=branch_mode,
             time_anchor=activity_anchor,
@@ -3021,6 +3149,7 @@ class AgentsStore:
         offset: int,
         exclude_user_states: Optional[list[str]],
         hide_autonomous: bool,
+        include_automation: bool,
         include_total: bool,
     ) -> tuple[
         int | None,
@@ -3056,6 +3185,7 @@ class AgentsStore:
             until=until,
             exclude_user_states=exclude_user_states,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
             time_anchor=activity_anchor,
         )
         if stmt is None:
@@ -3096,6 +3226,7 @@ class AgentsStore:
         query: Optional[str],
         exclude_user_states: Optional[list[str]],
         hide_autonomous: bool,
+        include_automation: bool,
         context_mode: str,
         branch_mode: str,
     ):
@@ -3137,6 +3268,7 @@ class AgentsStore:
             query=query,
             exclude_user_states=exclude_user_states,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
             context_mode=context_mode,
             branch_mode=branch_mode,
             time_anchor=activity_anchor,
@@ -3184,6 +3316,7 @@ class AgentsStore:
         offset: int = 0,
         exclude_user_states: Optional[list[str]] = None,
         hide_autonomous: bool = True,
+        include_automation: bool = False,
         context_mode: str = "forensic",
         branch_mode: str = "head",
     ) -> tuple[int, tuple[tuple[str, str, datetime | None], ...]]:
@@ -3200,6 +3333,7 @@ class AgentsStore:
                 offset=offset,
                 exclude_user_states=exclude_user_states,
                 hide_autonomous=hide_autonomous,
+                include_automation=include_automation,
             )
 
         ranked_subq = self._timeline_thread_ranked_subquery(
@@ -3213,6 +3347,7 @@ class AgentsStore:
             query=query,
             exclude_user_states=exclude_user_states,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
             context_mode=context_mode,
             branch_mode=branch_mode,
         )
@@ -3251,6 +3386,7 @@ class AgentsStore:
         offset: int,
         exclude_user_states: Optional[list[str]],
         hide_autonomous: bool,
+        include_automation: bool,
     ) -> tuple[int, tuple[tuple[str, str, datetime | None], ...]]:
         ranked_subq = self._timeline_card_thread_ranked_subquery(
             project=project,
@@ -3262,6 +3398,7 @@ class AgentsStore:
             until=until,
             exclude_user_states=exclude_user_states,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
         )
         if ranked_subq is None:
             return 0, ()
@@ -3298,6 +3435,7 @@ class AgentsStore:
         offset: int = 0,
         exclude_user_states: Optional[list[str]] = None,
         hide_autonomous: bool = True,
+        include_automation: bool = False,
         context_mode: str = "forensic",
         branch_mode: str = "head",
         include_total: bool = False,
@@ -3318,6 +3456,7 @@ class AgentsStore:
                 offset=offset,
                 exclude_user_states=exclude_user_states,
                 hide_autonomous=hide_autonomous,
+                include_automation=include_automation,
                 include_total=include_total,
             )
 
@@ -3332,6 +3471,7 @@ class AgentsStore:
             query=query,
             exclude_user_states=exclude_user_states,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
             context_mode=context_mode,
             branch_mode=branch_mode,
         )
@@ -3386,6 +3526,7 @@ class AgentsStore:
         offset: int,
         exclude_user_states: Optional[list[str]],
         hide_autonomous: bool,
+        include_automation: bool,
         include_total: bool,
     ) -> tuple[
         int | None,
@@ -3401,6 +3542,7 @@ class AgentsStore:
             until=until,
             exclude_user_states=exclude_user_states,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
         )
         if ranked_subq is None:
             return (0 if include_total else None), ()
@@ -3466,6 +3608,7 @@ class AgentsStore:
         until: Optional[datetime],
         exclude_user_states: Optional[list[str]],
         hide_autonomous: bool,
+        include_automation: bool,
     ):
         runtime_signal_subq = self._runtime_signal_subquery()
         activity_anchor = self._recent_activity_anchor_expr(
@@ -3500,6 +3643,7 @@ class AgentsStore:
             until=until,
             exclude_user_states=exclude_user_states,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
             time_anchor=activity_anchor,
         )
         if stmt is None:
@@ -3560,6 +3704,7 @@ class AgentsStore:
         query: Optional[str],
         exclude_user_states: Optional[list[str]],
         hide_autonomous: bool,
+        include_automation: bool,
         context_mode: str,
         branch_mode: str,
         time_anchor,
@@ -3590,6 +3735,14 @@ class AgentsStore:
             stmt = stmt.where(time_anchor >= since)
         if until:
             stmt = stmt.where(time_anchor <= until)
+
+        if not include_automation:
+            stmt = stmt.where(
+                or_(
+                    AgentSession.hidden_from_default_timeline.is_(None),
+                    AgentSession.hidden_from_default_timeline == 0,
+                )
+            )
 
         if hide_autonomous:
             # Session-identity-kernel cleanup: ``execution_home`` and
@@ -3634,6 +3787,7 @@ class AgentsStore:
         until: Optional[datetime],
         exclude_user_states: Optional[list[str]],
         hide_autonomous: bool,
+        include_automation: bool,
         time_anchor,
     ):
         if environment:
@@ -3655,6 +3809,14 @@ class AgentsStore:
             stmt = stmt.where(time_anchor >= since)
         if until:
             stmt = stmt.where(time_anchor <= until)
+
+        if not include_automation:
+            stmt = stmt.where(
+                or_(
+                    TimelineCard.hidden_from_default_timeline.is_(None),
+                    TimelineCard.hidden_from_default_timeline == 0,
+                )
+            )
 
         if hide_autonomous:
             stmt = stmt.where(or_(TimelineCard.user_messages > 0, AgentSession.ended_at.is_(None)))

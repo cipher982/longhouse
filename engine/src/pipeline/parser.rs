@@ -119,6 +119,11 @@ pub struct SessionMetadata {
     pub git_repo: Option<String>,
     pub project: Option<String>,
     pub environment: Option<String>,
+    pub origin_kind: Option<String>,
+    pub hatch_run_id: Option<String>,
+    pub parent_longhouse_session_id: Option<String>,
+    pub parent_thread_id: Option<String>,
+    pub parent_provider_session_id: Option<String>,
     pub version: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
@@ -4273,10 +4278,7 @@ mod tests {
             result.events[3].tool_output_text.as_deref(),
             Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
         );
-        assert_eq!(
-            result.events[4].tool_call_id.as_deref(),
-            Some("toolu_null")
-        );
+        assert_eq!(result.events[4].tool_call_id.as_deref(), Some("toolu_null"));
         assert_eq!(
             result.events[4].tool_output_text.as_deref(),
             Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
@@ -4698,11 +4700,7 @@ mod tests {
         let path = write_antigravity_transcript(dir.path(), conversation_id, &lines);
 
         let result = parse_session_file(&path, 0).unwrap();
-        let tool = result
-            .events
-            .iter()
-            .find(|e| e.role == Role::Tool)
-            .unwrap();
+        let tool = result.events.iter().find(|e| e.role == Role::Tool).unwrap();
         assert_eq!(tool.tool_call_id, None);
     }
 
@@ -4734,11 +4732,7 @@ mod tests {
         let path = write_antigravity_transcript(dir.path(), conversation_id, &lines);
 
         let result = parse_session_file(&path, 0).unwrap();
-        let tool = result
-            .events
-            .iter()
-            .find(|e| e.role == Role::Tool)
-            .unwrap();
+        let tool = result.events.iter().find(|e| e.role == Role::Tool).unwrap();
         assert_eq!(tool.tool_call_id, None);
     }
 
@@ -4770,11 +4764,7 @@ mod tests {
         let path = write_antigravity_transcript(dir.path(), conversation_id, &lines);
 
         let result = parse_session_file(&path, 0).unwrap();
-        let tool = result
-            .events
-            .iter()
-            .find(|e| e.role == Role::Tool)
-            .unwrap();
+        let tool = result.events.iter().find(|e| e.role == Role::Tool).unwrap();
         assert_eq!(tool.tool_call_id, None);
     }
 
@@ -4801,11 +4791,7 @@ mod tests {
         let path = write_antigravity_transcript(dir.path(), conversation_id, &lines);
 
         let result = parse_session_file(&path, 0).unwrap();
-        let tool = result
-            .events
-            .iter()
-            .find(|e| e.role == Role::Tool)
-            .unwrap();
+        let tool = result.events.iter().find(|e| e.role == Role::Tool).unwrap();
         assert_eq!(tool.tool_call_id, None);
     }
 

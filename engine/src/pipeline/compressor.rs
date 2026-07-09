@@ -76,7 +76,15 @@ pub struct IngestPayload<'a> {
     pub provider_session_id: &'a str,
     pub is_sidechain: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parent_provider_session_id: Option<&'a str>,
+    pub origin_kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hatch_run_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_longhouse_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_provider_session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lineage_kind: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -96,6 +104,26 @@ pub struct IngestPayload<'a> {
     pub source_lines: Vec<SourceLineIngest<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rewind_hints: Vec<SourceRewindHint>,
+}
+
+fn env_trimmed(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalize_hatch_origin_kind(value: &str) -> Option<String> {
+    let normalized = value.trim().replace('-', "_").to_ascii_lowercase();
+    if normalized == "hatch_automation" {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
+fn hatch_origin_kind_from_env() -> Option<String> {
+    normalize_hatch_origin_kind(&env_trimmed("LONGHOUSE_ORIGIN_KIND")?)
 }
 
 #[derive(Serialize)]
@@ -242,6 +270,38 @@ pub fn build_payload_with_source_lines<'a>(
         Some(value) => value,
         None => get_machine_name(),
     };
+    let origin_kind = metadata
+        .origin_kind
+        .as_deref()
+        .and_then(normalize_hatch_origin_kind)
+        .or_else(hatch_origin_kind_from_env);
+    let (
+        hatch_run_id,
+        parent_longhouse_session_id,
+        parent_thread_id,
+        hatch_parent_provider_session_id,
+    ) = if origin_kind.as_deref() == Some("hatch_automation") {
+        (
+            metadata
+                .hatch_run_id
+                .clone()
+                .or_else(|| env_trimmed("LONGHOUSE_HATCH_RUN_ID")),
+            metadata
+                .parent_longhouse_session_id
+                .clone()
+                .or_else(|| env_trimmed("LONGHOUSE_PARENT_SESSION_ID")),
+            metadata
+                .parent_thread_id
+                .clone()
+                .or_else(|| env_trimmed("LONGHOUSE_PARENT_THREAD_ID")),
+            metadata
+                .parent_provider_session_id
+                .clone()
+                .or_else(|| env_trimmed("LONGHOUSE_PARENT_PROVIDER_SESSION_ID")),
+        )
+    } else {
+        (None, None, None, None)
+    };
 
     IngestPayload {
         id: session_id,
@@ -261,7 +321,14 @@ pub fn build_payload_with_source_lines<'a>(
         // running sub-agents; the Stop hook inherits it, marking the session as automated.
         is_sidechain: metadata.is_sidechain
             || std::env::var("LONGHOUSE_IS_SIDECHAIN").as_deref() == Ok("1"),
-        parent_provider_session_id: metadata.forked_from_session_id.as_deref(),
+        origin_kind,
+        hatch_run_id,
+        parent_longhouse_session_id,
+        parent_thread_id,
+        parent_provider_session_id: metadata
+            .forked_from_session_id
+            .clone()
+            .or(hatch_parent_provider_session_id),
         lineage_kind: metadata.lineage_kind.as_deref(),
         subagent_id: metadata.subagent_id.as_deref(),
         subagent_prompt_id: metadata.subagent_prompt_id.as_deref(),
@@ -387,13 +454,46 @@ pub fn content_encoding(algo: CompressionAlgo) -> &'static str {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::ffi::OsString;
     use std::io::{BufRead, BufReader, Read};
     use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
 
     use super::*;
     use crate::pipeline::parser::Role;
     use chrono::Utc;
     use flate2::read::GzDecoder;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
 
     fn make_test_events() -> Vec<ParsedEvent> {
         vec![
@@ -479,6 +579,95 @@ mod tests {
             "be1331ba-91c3-4670-a113-7f1c63773df8"
         );
         assert_eq!(value["subagent_tool_use_id"], "toolu_spawned_child");
+    }
+
+    #[test]
+    fn test_build_payload_includes_hatch_origin_env_without_legacy_sidechain() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _origin = EnvGuard::set("LONGHOUSE_ORIGIN_KIND", "hatch-automation");
+        let _run = EnvGuard::set("LONGHOUSE_HATCH_RUN_ID", "hatch-run-1");
+        let _parent_session = EnvGuard::set(
+            "LONGHOUSE_PARENT_SESSION_ID",
+            "11111111-1111-4111-8111-111111111111",
+        );
+        let _parent_thread = EnvGuard::set(
+            "LONGHOUSE_PARENT_THREAD_ID",
+            "22222222-2222-4222-8222-222222222222",
+        );
+        let _parent_provider = EnvGuard::set("LONGHOUSE_PARENT_PROVIDER_SESSION_ID", "ses_parent");
+        let _legacy_sidechain = EnvGuard::remove("LONGHOUSE_IS_SIDECHAIN");
+
+        let events = make_test_events();
+        let meta = SessionMetadata {
+            session_id: "hatch-child-provider-id".to_string(),
+            ..Default::default()
+        };
+
+        let payload = build_payload(
+            "33333333-3333-4333-8333-333333333333",
+            &events,
+            &meta,
+            "/path",
+            "opencode",
+        );
+        let value = serde_json::to_value(&payload).unwrap();
+
+        assert_eq!(value["origin_kind"], "hatch_automation");
+        assert_eq!(value["hatch_run_id"], "hatch-run-1");
+        assert_eq!(
+            value["parent_longhouse_session_id"],
+            "11111111-1111-4111-8111-111111111111"
+        );
+        assert_eq!(
+            value["parent_thread_id"],
+            "22222222-2222-4222-8222-222222222222"
+        );
+        assert_eq!(value["parent_provider_session_id"], "ses_parent");
+        assert_eq!(value["is_sidechain"], false);
+    }
+
+    #[test]
+    fn test_build_payload_includes_hatch_origin_from_parser_metadata() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _origin = EnvGuard::remove("LONGHOUSE_ORIGIN_KIND");
+        let _run = EnvGuard::remove("LONGHOUSE_HATCH_RUN_ID");
+        let _parent_session = EnvGuard::remove("LONGHOUSE_PARENT_SESSION_ID");
+        let _parent_thread = EnvGuard::remove("LONGHOUSE_PARENT_THREAD_ID");
+        let _parent_provider = EnvGuard::remove("LONGHOUSE_PARENT_PROVIDER_SESSION_ID");
+        let _legacy_sidechain = EnvGuard::remove("LONGHOUSE_IS_SIDECHAIN");
+
+        let events = make_test_events();
+        let meta = SessionMetadata {
+            session_id: "hatch-child-provider-id".to_string(),
+            origin_kind: Some("hatch_automation".to_string()),
+            hatch_run_id: Some("hatch-run-sidecar".to_string()),
+            parent_longhouse_session_id: Some("11111111-1111-4111-8111-111111111111".to_string()),
+            parent_thread_id: Some("22222222-2222-4222-8222-222222222222".to_string()),
+            parent_provider_session_id: Some("ses_parent_sidecar".to_string()),
+            ..Default::default()
+        };
+
+        let payload = build_payload(
+            "33333333-3333-4333-8333-333333333333",
+            &events,
+            &meta,
+            "/path",
+            "opencode",
+        );
+        let value = serde_json::to_value(&payload).unwrap();
+
+        assert_eq!(value["origin_kind"], "hatch_automation");
+        assert_eq!(value["hatch_run_id"], "hatch-run-sidecar");
+        assert_eq!(
+            value["parent_longhouse_session_id"],
+            "11111111-1111-4111-8111-111111111111"
+        );
+        assert_eq!(
+            value["parent_thread_id"],
+            "22222222-2222-4222-8222-222222222222"
+        );
+        assert_eq!(value["parent_provider_session_id"], "ses_parent_sidecar");
+        assert_eq!(value["is_sidechain"], false);
     }
 
     #[test]

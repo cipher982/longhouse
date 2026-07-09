@@ -131,6 +131,12 @@ class AgentSession(AgentsBase):
     # plain column so PATCH /loop-mode survives restart and refresh.
     loop_mode = Column(String(32), nullable=False, default="assist", server_default=text("'assist'"))
     notification_muted = Column(Boolean, nullable=False, default=False, server_default=text("0"))
+    # Launch-origin classification for Longhouse-owned automation. This is not
+    # provider lineage: provider subagents/forks still live in session_threads
+    # and session_edges. V1 uses "hatch_automation" to keep delegated Hatch
+    # one-shots archived but hidden from default human timelines.
+    origin_kind = Column(String(64), nullable=True, index=True)
+    hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
     # Managed permission policy: "bypass" (default, autonomous/skip-permissions) or
     # "remote_approve" (pause on permission prompts, answerable via Longhouse). Has
     # a server_default so _auto_add_missing_columns adds it without a migrator.
@@ -487,6 +493,8 @@ class TimelineCard(AgentsBase):
     archive_state = Column(String(32), nullable=False, server_default=text("'current'"))
     archive_lag_records = Column(Integer, nullable=False, server_default=text("0"))
     archive_last_source_offset = Column(BigInteger, nullable=True)
+    origin_kind = Column(String(64), nullable=True, index=True)
+    hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
     derived_state = Column(String(32), nullable=False, server_default=text("'unknown'"))
     derived_revision = Column(String(128), nullable=True)
     parser_revision = Column(String(128), nullable=False)
@@ -1147,6 +1155,11 @@ class SessionThread(AgentsBase):
         nullable=False,
         server_default=text("'root'"),
     )  # root | subagent | continuation | fork
+    # Durable Longhouse launch-origin label for the thread. This is independent
+    # from branch_kind so Hatch automation can remain a root provider transcript
+    # while staying hidden from default top-level product surfaces.
+    origin_kind = Column(String(64), nullable=True, index=True)
+    hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
 
     # Denormalized "is this the session's primary thread" — matches
     # sessions.primary_thread_id. Defaults 0 so subagent/continuation threads

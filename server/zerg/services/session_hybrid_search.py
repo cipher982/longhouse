@@ -50,6 +50,7 @@ async def list_hybrid_sessions(
         days_back=params.days_back,
         exclude_user_states=["archived"],
         hide_autonomous=params.hide_autonomous,
+        include_automation=params.include_automation,
         context_mode=params.context_mode,
     )
 
@@ -131,6 +132,8 @@ def _hybrid_semantic_candidate_ids(db: Session, params: SessionListParams) -> se
         filter_q = filter_q.filter(~internal_canary_session_clause(AgentSession))
     if not params.include_test:
         filter_q = filter_q.filter(~provider_proof_session_clause(AgentSession))
+    if not params.include_automation:
+        filter_q = filter_q.filter((AgentSession.hidden_from_default_timeline.is_(None)) | (AgentSession.hidden_from_default_timeline == 0))
     if params.hide_autonomous:
         # Session-identity-kernel cleanup: ``is_sidechain`` was dropped.
         filter_q = filter_q.filter(AgentSession.user_messages > 0)

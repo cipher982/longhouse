@@ -274,6 +274,7 @@ async def list_sessions(
         True,
         description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)",
     ),
+    include_automation: bool = Query(False, description="Include Hatch automation sessions in otherwise default-hidden lists"),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
@@ -297,6 +298,7 @@ async def list_sessions(
             environment=environment,
             include_test=include_test,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
             device_id=device_id,
             days_back=days_back,
             query=query,
@@ -331,6 +333,7 @@ async def list_sessions(
 def list_archive_manifest(
     include_test: bool = Query(False, description="Include test/e2e sessions in archive enumeration"),
     hide_autonomous: bool = Query(False, description="Hide autonomous sessions from archive enumeration"),
+    include_automation: bool = Query(False, description="Include Hatch automation sessions in archive enumeration when hiding automation"),
     days_back: int = Query(90, ge=1, le=3650, description="Days to look back"),
     limit: int = Query(100, ge=1, le=200, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
@@ -353,6 +356,7 @@ def list_archive_manifest(
             limit=limit,
             offset=offset,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
             anchor_on_activity=True,
         )
         return SessionArchiveManifestResponse(
@@ -446,6 +450,7 @@ def list_session_summaries(
         True,
         description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)",
     ),
+    include_automation: bool = Query(False, description="Include Hatch automation sessions in otherwise default-hidden summaries"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -466,6 +471,7 @@ def list_session_summaries(
             limit=limit,
             offset=offset,
             hide_autonomous=hide_autonomous,
+            include_automation=include_automation,
             anchor_on_activity=query is None,
         )
 
@@ -509,6 +515,7 @@ def wall_query(
     project: Optional[str] = Query(None, description="Filter by project name"),
     days: int = Query(7, ge=1, le=90, description="Days to look back"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
+    include_automation: bool = Query(False, description="Include Hatch automation sessions in wall results"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -518,7 +525,7 @@ def wall_query(
     Schema-on-read: returns raw timestamps and facts. The consuming agent
     or UI decides what's relevant — no status bucketing, no pre-computed summaries.
     """
-    items = query_wall_sessions(db, repo=repo, project=project, days=days, limit=limit)
+    items = query_wall_sessions(db, repo=repo, project=project, days=days, limit=limit, include_automation=include_automation)
     return WallResponse(sessions=items, total=len(items))
 
 
@@ -679,6 +686,7 @@ def list_active_sessions(
     attention: Optional[str] = Query(None, description="Filter by attention (auto)"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
+    include_automation: bool = Query(False, description="Include hidden Hatch automation sessions"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -719,6 +727,8 @@ def list_active_sessions(
             )
             for session in hydrated_live_sessions:
                 if (session.user_state or "active") in {"archived", "snoozed"}:
+                    continue
+                if not include_automation and int(session.hidden_from_default_timeline or 0) == 1:
                     continue
                 if project and session.project != project:
                     continue

@@ -61,6 +61,7 @@ class TimelineSessionListParams:
     sort: str | None
     mode: str | None
     context_mode: str
+    include_automation: bool = False
 
     def to_agent_params(self) -> SessionListParams:
         return SessionListParams(
@@ -69,6 +70,7 @@ class TimelineSessionListParams:
             environment=self.environment,
             include_test=self.include_test,
             hide_autonomous=self.hide_autonomous,
+            include_automation=self.include_automation,
             device_id=self.device_id,
             days_back=self.days_back,
             query=self.query,
@@ -150,6 +152,7 @@ def _list_timeline_sessions_for_browser_sync(
             limit=params.limit,
             offset=params.offset,
             hide_autonomous=params.hide_autonomous,
+            include_automation=params.include_automation,
             context_mode=params.context_mode,
         )
     with _timing_span(timing, "build_cards"):

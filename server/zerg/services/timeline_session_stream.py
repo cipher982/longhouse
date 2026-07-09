@@ -329,6 +329,7 @@ def _load_timeline_stream_window_signature(
         limit=params.limit,
         offset=params.offset,
         hide_autonomous=params.hide_autonomous,
+        include_automation=params.include_automation,
         context_mode=params.context_mode,
         include_total=False,
     )

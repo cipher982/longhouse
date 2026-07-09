@@ -519,6 +519,77 @@ def db_detect_provider_duplicates(
         typer.echo(f"    evidence: {group.evidence}")
 
 
+@db_app.command(name="classify-automation")
+def db_classify_automation(
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="SQLite DATABASE_URL override (defaults to env).",
+    ),
+    session_ids: list[str] | None = typer.Option(
+        None,
+        "--session-id",
+        help="Reviewed session id to mark as Hatch automation. Repeat for multiple ids.",
+    ),
+    apply_changes: bool = typer.Option(
+        False,
+        "--apply",
+        help="Apply reviewed --session-id classifications. Heuristic candidates remain report-only.",
+    ),
+    candidate_limit: int = typer.Option(
+        100,
+        "--candidate-limit",
+        min=1,
+        max=500,
+        help="Maximum report-only heuristic candidates to include.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Report Hatch-shaped rows and optionally hide reviewed ids."""
+    from zerg.database import make_sessionmaker
+    from zerg.services.agents.automation_backfill import classify_reviewed_hatch_automation_sessions
+
+    if apply_changes and not session_ids:
+        typer.echo("--apply requires at least one reviewed --session-id.", err=True)
+        raise typer.Exit(code=2)
+
+    engine, resolved_database_url = _resolve_db_engine(database_url)
+    SessionLocal = make_sessionmaker(engine)
+    db = SessionLocal()
+    try:
+        result = classify_reviewed_hatch_automation_sessions(
+            db,
+            session_ids=session_ids or [],
+            apply=apply_changes,
+            candidate_limit=candidate_limit,
+        )
+    finally:
+        db.close()
+
+    payload = {
+        "status": "ok",
+        "database_url": resolved_database_url,
+        "mode": "apply_reviewed_ids" if apply_changes else "dry_run_report",
+        "note": "Heuristic Hatch candidates are report-only; only explicit reviewed --session-id rows are applied.",
+        **result.to_dict(),
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    if apply_changes:
+        typer.echo(f"Applied Hatch automation origin to {len(result.applied_session_ids)} reviewed session(s).")
+    else:
+        typer.echo("Dry run only. Pass --apply with reviewed --session-id values to hide rows.")
+    if result.missing_session_ids:
+        typer.echo(f"Missing session ids: {', '.join(result.missing_session_ids)}")
+    if result.already_marked_session_ids:
+        typer.echo(f"Already marked: {', '.join(result.already_marked_session_ids)}")
+    typer.echo(f"Heuristic candidates (report-only): {len(result.heuristic_candidates)}")
+    for candidate in result.heuristic_candidates[:10]:
+        typer.echo(f"  {candidate['session_id']} {candidate['provider']} {candidate['prompt_preview'][:100]}")
+
+
 app.add_typer(messages_app, name="messages", help="Durable session inbox commands")
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")

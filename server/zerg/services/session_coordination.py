@@ -54,6 +54,7 @@ def query_wall_sessions(
     project: str | None = None,
     days: int = 7,
     limit: int = 50,
+    include_automation: bool = False,
 ) -> list[WallSessionResponse]:
     """Return raw wall sessions for repo/project coordination queries."""
     store = AgentsStore(db)
@@ -70,6 +71,7 @@ def query_wall_sessions(
         query=None,
         limit=fetch_limit,
         offset=0,
+        include_automation=include_automation,
         anchor_on_activity=True,
     )
 

@@ -56,6 +56,8 @@ def upsert_timeline_card_from_session(
         "archive_state": "legacy_hot",
         "archive_lag_records": 0,
         "archive_last_source_offset": None,
+        "origin_kind": session.origin_kind,
+        "hidden_from_default_timeline": int(session.hidden_from_default_timeline or 0),
         "derived_state": "pending" if int(session.needs_projection or 0) else "current",
         "derived_revision": str(session.summary_revision or 0),
         "parser_revision": parser_revision,

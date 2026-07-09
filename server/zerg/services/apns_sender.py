@@ -540,6 +540,8 @@ def prepare_session_attention_push(
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
         return None
+    if int(session.hidden_from_default_timeline or 0) == 1:
+        return None
 
     last_attention_push_at = _as_aware_utc(session.last_attention_push_at)
     last_attention_push_state = _base_attention_state(session.last_attention_push_state)
