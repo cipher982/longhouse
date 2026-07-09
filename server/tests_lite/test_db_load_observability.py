@@ -55,3 +55,20 @@ def test_serializer_summary_uses_counter_delta_not_lifetime_total() -> None:
     assert summary["write_count_delta_by_label"] == {"ingest": 15, "heartbeat": 3}
     assert summary["exec_ms"]["ingest"]["p95"] == 17
     assert summary["wal_bytes"] == {"min": 4096.0, "max": 4096.0}
+
+
+def test_sample_keeps_resource_capture_running_after_runtime_error(monkeypatch, tmp_path: Path) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(sampler, "runtime_sample", lambda _args: calls.append("runtime") or 1)
+    monkeypatch.setattr(sampler, "resource_sample", lambda _args: calls.append("resources") or 0)
+
+    args = type("Args", (), {
+        "data_dir": tmp_path,
+        "runtime_container": "runtime",
+        "containers": "runtime,neighbor",
+        "mountpoint": "/data",
+    })()
+
+    assert sampler.sample(args) == 0
+    assert calls == ["runtime", "resources"]

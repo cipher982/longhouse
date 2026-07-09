@@ -118,15 +118,22 @@ def runtime_sample(args: argparse.Namespace) -> int:
         "container": {"requested_name": args.runtime_container},
         "status": "ok",
     }
+    errors: dict[str, str] = {}
     try:
         payload["container"] = docker_inspect(args.runtime_container)
-        metrics = docker_curl(args.runtime_container, "/metrics", "X-Internal-Token")
-        health = docker_curl(args.runtime_container, "/api/health", "X-Internal-Token")
-        payload["metrics"] = parse_prometheus(metrics)
-        payload["health"] = json.loads(health)
     except Exception as exc:
-        payload["status"] = "error"
-        payload["error"] = str(exc)
+        errors["container"] = str(exc)
+    try:
+        payload["metrics"] = parse_prometheus(docker_curl(args.runtime_container, "/metrics", "X-Internal-Token"))
+    except Exception as exc:
+        errors["metrics"] = str(exc)
+    try:
+        payload["health"] = json.loads(docker_curl(args.runtime_container, "/api/health", "X-Internal-Token"))
+    except Exception as exc:
+        errors["health"] = str(exc)
+    if errors:
+        payload["status"] = "partial" if ("metrics" in payload or "health" in payload) else "error"
+        payload["errors"] = errors
     append_ndjson(args.data_dir / "runtime.ndjson", payload)
     return 0 if payload["status"] == "ok" else 1
 
@@ -308,6 +315,25 @@ def analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def sample(args: argparse.Namespace) -> int:
+    """Capture both lanes without letting a degraded runtime block host evidence."""
+    runtime_args = argparse.Namespace(
+        data_dir=args.data_dir,
+        runtime_container=args.runtime_container,
+    )
+    resource_args = argparse.Namespace(
+        data_dir=args.data_dir,
+        container=[],
+        containers=args.containers,
+        mountpoint=args.mountpoint,
+    )
+    runtime_sample(runtime_args)
+    resource_sample(resource_args)
+    # Individual records carry the truthful status. A timer failure would hide
+    # subsequent host samples and turn one slow endpoint into a data gap.
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--data-dir", type=Path, default=Path("/var/lib/longhouse-db-observability"))
@@ -322,6 +348,11 @@ def parser() -> argparse.ArgumentParser:
     resources.set_defaults(handler=resource_sample)
     analysis = commands.add_parser("analyze", help="summarize retained NDJSON")
     analysis.set_defaults(handler=analyze)
+    capture = commands.add_parser("sample", help="capture runtime and host lanes independently")
+    capture.add_argument("--runtime-container", required=True)
+    capture.add_argument("--containers", required=True, help="comma-separated container names")
+    capture.add_argument("--mountpoint", default="/data")
+    capture.set_defaults(handler=sample)
     return result
 
 

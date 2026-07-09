@@ -6,5 +6,4 @@ Wants=docker.service
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/longhouse-db-observability.env
-ExecStart=/usr/bin/python3 /usr/local/lib/longhouse/db-load-observability.py runtime --runtime-container ${OBSERVABILITY_RUNTIME_CONTAINER}
-ExecStart=/usr/bin/python3 /usr/local/lib/longhouse/db-load-observability.py resources --containers ${OBSERVABILITY_RESOURCE_CONTAINERS}
+ExecStart=/usr/bin/python3 /usr/local/lib/longhouse/db-load-observability.py sample --runtime-container ${OBSERVABILITY_RUNTIME_CONTAINER} --containers ${OBSERVABILITY_RESOURCE_CONTAINERS}
