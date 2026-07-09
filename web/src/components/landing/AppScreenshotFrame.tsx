@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface AppScreenshotFrameProps {
   src: string;
@@ -8,6 +8,8 @@ interface AppScreenshotFrameProps {
   showChrome?: boolean;
   theme?: "warm" | "cool-pop";
   className?: string;
+  loading?: "eager" | "lazy";
+  fetchPriority?: "high" | "low" | "auto";
 }
 
 export function AppScreenshotFrame({
@@ -18,9 +20,16 @@ export function AppScreenshotFrame({
   showChrome = true,
   theme = "warm",
   className = "",
+  loading = "lazy",
+  fetchPriority = "low",
 }: AppScreenshotFrameProps) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState(false);
+
+  useEffect(() => {
+    setLoaded(false);
+    setError(false);
+  }, [src]);
 
   return (
     <div className={`app-screenshot-frame app-screenshot-frame--${theme} ${className}`}>
@@ -54,9 +63,9 @@ export function AppScreenshotFrame({
           alt={alt}
           onLoad={() => setLoaded(true)}
           onError={() => setError(true)}
-          loading="lazy"
+          loading={loading}
           decoding="async"
-          fetchPriority="low"
+          fetchPriority={fetchPriority}
           style={{ opacity: loaded ? 1 : 0 }}
         />
       </div>

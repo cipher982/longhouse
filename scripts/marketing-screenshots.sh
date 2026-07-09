@@ -96,3 +96,10 @@ else
     uv run --with playwright --with pyyaml scripts/capture_marketing.py \
         --base-url "$BASE_URL"
 fi
+
+# Keep lossless-ish PNG masters for README/docs and derive the compact assets
+# used by the landing tabs. At their rendered size WebP saves more than 70%
+# without making product text visibly soft.
+for NAME in timeline-preview search-preview session-detail-preview; do
+    magick "web/public/images/landing/$NAME.png" -quality 82 "web/public/images/landing/$NAME.webp"
+done

@@ -5,7 +5,7 @@
  * Shows Timeline and Session Detail views.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
 
 type Tab = "timeline" | "search" | "session";
@@ -23,21 +23,21 @@ const tabs: TabConfig[] = [
     id: "timeline",
     label: "Timeline",
     description: "See imported and Longhouse-launched sessions in one archive across providers and machines.",
-    image: "/images/landing/timeline-preview.png?v=20260709-2",
+    image: "/images/landing/timeline-preview.webp?v=20260709-3",
     alt: "Session timeline showing Claude Code sessions with timestamps and summaries",
   },
   {
     id: "search",
     label: "Search",
     description: "Find the session where auth, retries, or that migration was already solved.",
-    image: "/images/landing/search-preview.png?v=20260709-2",
+    image: "/images/landing/search-preview.webp?v=20260709-3",
     alt: "Search results filtering sessions by keyword with highlighted matches",
   },
   {
     id: "session",
     label: "Session Detail",
     description: "Read the raw transcript, tool calls, and exact context you want to continue from.",
-    image: "/images/landing/session-detail-preview.png?v=20260709-2",
+    image: "/images/landing/session-detail-preview.webp?v=20260709-3",
     alt: "Detailed session view showing tool calls and conversation",
   },
 ];
@@ -49,6 +49,27 @@ interface ProductShowcaseProps {
 export function ProductShowcase({ screenshotTheme }: ProductShowcaseProps) {
   const [activeTab, setActiveTab] = useState<Tab>("timeline");
   const activeConfig = tabs.find((t) => t.id === activeTab)!;
+
+  useEffect(() => {
+    // These are presentation assets, not user data. Fetch their compact WebP
+    // variants after first paint so a tab click never waits on the network.
+    const warmScreenshots = () => tabs.forEach(({ image }) => {
+      const preload = new Image();
+      preload.src = image;
+    });
+
+    const idleWindow = window as Window & {
+      requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    };
+    if (idleWindow.requestIdleCallback) {
+      const id = idleWindow.requestIdleCallback(warmScreenshots, { timeout: 1500 });
+      return () => idleWindow.cancelIdleCallback?.(id);
+    }
+
+    const id = window.setTimeout(warmScreenshots, 300);
+    return () => window.clearTimeout(id);
+  }, []);
 
   return (
     <div className="product-showcase">
@@ -75,6 +96,8 @@ export function ProductShowcase({ screenshotTheme }: ProductShowcaseProps) {
             aspectRatio="16/9"
             showChrome={true}
             theme={screenshotTheme}
+            loading="eager"
+            fetchPriority="high"
           />
         </div>
       </div>
