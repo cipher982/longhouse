@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   # Self-hosted runners can have global pip config pointing at private indexes.
   # Force public PyPI for CI so setup-python's pip step doesn't fail.
