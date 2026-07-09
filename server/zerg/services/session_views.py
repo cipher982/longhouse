@@ -77,6 +77,7 @@ from zerg.services.session_runtime_display import Tone
 from zerg.services.session_runtime_display import TruthTier
 from zerg.services.session_runtime_display import build_session_runtime_display
 from zerg.services.session_title import resolve_timeline_title
+from zerg.services.session_title import resolve_title_provenance
 from zerg.services.session_turns import hash_user_text
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
@@ -832,6 +833,14 @@ class SessionResponse(UTCBaseModel):
             "summary_title, else sanitized first message, else 'Summarizing…'/structured fallback. "
             "Always non-empty. Clients render this verbatim — no client-side fallback ladder."
         ),
+    )
+    title_state: Optional[str] = Field(
+        None,
+        description="AI-title lifecycle: awaiting_input|pending|degraded|ready.",
+    )
+    title_source: Optional[str] = Field(
+        None,
+        description="Title provenance: ai|prompt|project. Non-ai sources are fallback context.",
     )
     summary_status: Optional[str] = Field(
         None,
@@ -1648,6 +1657,12 @@ def build_session_response(
     continue_target = _native_continue_target(store.db, session)
     continue_targets = [continue_target] if continue_target is not None else []
     lineage_projection = kernel_projection.lineage
+    title_state, title_source = resolve_title_provenance(
+        anchor_title=session.anchor_title,
+        first_user_message=first_user_message,
+        user_messages=session.user_messages,
+        title_retry_at=getattr(session, "title_retry_at", None),
+    )
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -1689,6 +1704,8 @@ def build_session_response(
             project=session.project,
             git_branch=session.git_branch,
         ),
+        title_state=title_state,
+        title_source=title_source,
         summary_status=summary_status,
         first_user_message=first_user_message,
         match_event_id=match_event_id,

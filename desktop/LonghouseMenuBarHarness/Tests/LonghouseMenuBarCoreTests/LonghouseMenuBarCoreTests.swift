@@ -2068,6 +2068,8 @@ struct LonghouseMenuBarCoreTests {
                     sessionId: "sess-\(item.rawPhase)",
                     provider: "claude",
                     workspaceLabel: "phase-\(item.rawPhase.replacingOccurrences(of: "_", with: "-"))",
+                    timelineTitle: "phase-\(item.rawPhase.replacingOccurrences(of: "_", with: "-"))",
+                    titleState: "ready",
                     branch: nil,
                     state: "attached",
                     phase: contractDisplayPhase(for: item),

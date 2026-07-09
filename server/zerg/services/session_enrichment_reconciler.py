@@ -103,22 +103,19 @@ def select_initial_title_session_ids(
     limit: int,
     exclude_session_ids: Collection[str] = (),
 ) -> list[str]:
-    """Return low-content sessions that still deserve a fast first-prompt title."""
+    """Return eligible title debt, irrespective of summary progress or fallbacks."""
     if limit <= 0:
         return []
 
-    meaningful_count = _meaningful_count_expr()
+    now = datetime.now(timezone.utc)
     query = (
         db.query(AgentSession.id)
-        .filter(*_revision_lag_filter())
-        .filter(meaningful_count < SUMMARY_MIN_MEANINGFUL_MESSAGES)
+        .filter(func.coalesce(AgentSession.user_messages, 0) > 0)
         .filter(AgentSession.environment.notin_(["test", "e2e"]))
         .filter(~internal_canary_session_clause(AgentSession))
         .filter(~provider_proof_session_clause(AgentSession))
         .filter(or_(AgentSession.anchor_title.is_(None), AgentSession.anchor_title == ""))
-        .filter(or_(AgentSession.summary_title.is_(None), AgentSession.summary_title == ""))
-        .filter(AgentSession.first_user_message_preview.isnot(None))
-        .filter(func.trim(AgentSession.first_user_message_preview) != "")
+        .filter(or_(AgentSession.title_retry_at.is_(None), AgentSession.title_retry_at <= now))
         .order_by(
             AgentSession.last_activity_at.desc().nullslast(),
             AgentSession.started_at.desc().nullslast(),

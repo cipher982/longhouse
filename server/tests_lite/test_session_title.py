@@ -2,6 +2,7 @@
 
 from zerg.services.session_title import freeze_anchor_title
 from zerg.services.session_title import resolve_timeline_title
+from zerg.services.session_title import resolve_title_provenance
 from zerg.services.session_title import sanitize_title
 from zerg.services.session_title import structured_fallback_title
 
@@ -64,7 +65,7 @@ class TestSanitizeTitle:
 
     def test_punctuation_only_line_skipped(self):
         # A leftover quote/bullet line must not become the headline.
-        assert sanitize_title('>\n\nactually fix the thing') == "actually fix the thing"
+        assert sanitize_title(">\n\nactually fix the thing") == "actually fix the thing"
 
 
 class TestStructuredFallback:
@@ -100,8 +101,8 @@ class TestResolveTimelineTitle:
         out = self._resolve(anchor_title="Refresh Token Rotation", summary_title="Completely Different Topic")
         assert out == "Refresh Token Rotation"
 
-    def test_falls_to_ready_summary_when_no_anchor(self):
-        assert self._resolve(summary_title="Debug Bedrock Race") == "Debug Bedrock Race"
+    def test_summary_never_counts_as_a_session_title(self):
+        assert self._resolve(summary_title="Debug Bedrock Race") == "zerg · main"
 
     def test_falls_to_sanitized_first_message(self):
         out = self._resolve(first_user_message='"""\nhelp me debug this thing')
@@ -111,8 +112,8 @@ class TestResolveTimelineTitle:
         out = self._resolve(first_user_message="add a new endpoint", summary_status="pending")
         assert out == "add a new endpoint"
 
-    def test_summarizing_placeholder_when_pending_and_no_message(self):
-        assert self._resolve(summary_status="pending") == "Summarizing…"
+    def test_summary_pending_does_not_mask_title_debt(self):
+        assert self._resolve(summary_status="pending") == "zerg · main"
 
     def test_structured_fallback_last(self):
         assert self._resolve() == "zerg · main"
@@ -120,7 +121,31 @@ class TestResolveTimelineTitle:
     def test_never_freezes_garbage_via_anchor(self):
         # An anchor that sanitizes to nothing must fall through, not render blank.
         out = self._resolve(anchor_title='"""', summary_title="Real Title")
-        assert out == "Real Title"
+        assert out == "zerg · main"
+
+
+class TestTitleProvenance:
+    def test_anchor_is_the_only_ready_title(self):
+        assert resolve_title_provenance(
+            anchor_title="Fix Refresh Token",
+            first_user_message="Please fix refresh token rotation.",
+            user_messages=1,
+            title_retry_at=None,
+        ) == ("ready", "ai")
+
+    def test_prompt_and_project_fallbacks_remain_non_ready(self):
+        assert resolve_title_provenance(
+            anchor_title=None,
+            first_user_message="Please fix refresh token rotation.",
+            user_messages=1,
+            title_retry_at=None,
+        ) == ("pending", "prompt")
+        assert resolve_title_provenance(
+            anchor_title=None,
+            first_user_message=None,
+            user_messages=1,
+            title_retry_at=object(),
+        ) == ("degraded", "project")
 
 
 class TestFreezeAnchorTitle:

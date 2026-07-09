@@ -1349,6 +1349,8 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     public let timelineTitle: String?
     public let summaryTitle: String?
     public let firstUserMessage: String?
+    public let titleState: String?
+    public let titleSource: String?
     public let branch: String?
     public let state: String?
     public let phase: String?
@@ -1370,6 +1372,8 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         timelineTitle: String? = nil,
         summaryTitle: String? = nil,
         firstUserMessage: String? = nil,
+        titleState: String? = nil,
+        titleSource: String? = nil,
         branch: String?,
         state: String?,
         phase: String?,
@@ -1390,6 +1394,8 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         self.timelineTitle = timelineTitle
         self.summaryTitle = summaryTitle
         self.firstUserMessage = firstUserMessage
+        self.titleState = titleState
+        self.titleSource = titleSource
         self.branch = branch
         self.state = state
         self.phase = phase

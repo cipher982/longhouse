@@ -20,8 +20,6 @@ import re
 _MAX_TITLE_WORDS = 8
 _MAX_TITLE_CHARS = 80
 
-_SUMMARIZING_PLACEHOLDER = "Summarizing…"
-
 # Noise we strip before extracting words. Order matters: fenced blocks and
 # images go first so their contents never leak into the headline.
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -96,6 +94,26 @@ def structured_fallback_title(project: str | None, git_branch: str | None = None
     return "Untitled session"
 
 
+def resolve_title_provenance(
+    *,
+    anchor_title: str | None,
+    first_user_message: str | None,
+    user_messages: int | None,
+    title_retry_at: object | None,
+) -> tuple[str, str]:
+    """Return the API-visible title state and source.
+
+    Display fallbacks remain useful, but they are intentionally distinguishable
+    from an AI title so operational title debt cannot disappear in a readable
+    timeline row.
+    """
+    if sanitize_title(anchor_title):
+        return "ready", "ai"
+    if (user_messages or 0) > 0:
+        return ("degraded" if title_retry_at is not None else "pending"), ("prompt" if sanitize_title(first_user_message) else "project")
+    return "awaiting_input", "project"
+
+
 def resolve_timeline_title(
     *,
     anchor_title: str | None,
@@ -108,30 +126,21 @@ def resolve_timeline_title(
     """Resolve the stable headline a client should render. Always non-empty.
 
     Ladder (highest signal + most stable first):
-      1. frozen ``anchor_title`` — the muscle-memory anchor, set once
-      2. a ready ``summary_title`` not yet frozen (first render before freeze)
-      3. a sanitized ``first_user_message`` — real signal beats a placeholder
-      4. ``"Summarizing…"`` while a summary is genuinely pending
-      5. structured ``{project} · {branch}`` fallback
+      1. frozen ``anchor_title`` — the durable AI title, set once
+      2. a sanitized ``first_user_message`` — temporary recovery display only
+      3. structured ``{project} · {branch}`` context fallback
 
-    Note: this prefers a usable first-message over the "Summarizing…" placeholder
-    (a deliberate deviation from the spec's literal ordering) so a brand-new row
-    shows real content instead of a spinner-word whenever it can.
+    ``summary_title`` is deliberately not a title candidate. It is a drifting
+    summary/search artifact; allowing it here would make a summary race look
+    like a successfully generated session title and hide title debt.
     """
     frozen = sanitize_title(anchor_title)
     if frozen:
         return frozen
 
-    ready = sanitize_title(summary_title)
-    if ready:
-        return ready
-
     from_message = sanitize_title(first_user_message)
     if from_message:
         return from_message
-
-    if summary_status == "pending":
-        return _SUMMARIZING_PLACEHOLDER
 
     return structured_fallback_title(project, git_branch)
 

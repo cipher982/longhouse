@@ -79,11 +79,17 @@ class AgentSession(AgentsBase):
 
     summary = Column(Text, nullable=True)
     summary_title = Column(String(255), nullable=True)
-    # Frozen, write-once headline for the timeline card. Snapshotted from the
-    # first ready summary_title (and promoted from the final title on close) so
-    # the row keeps a stable "what is this about" anchor while summary_title
-    # itself keeps drifting as the transcript grows. See services/session_title.py.
+    # Frozen, write-once AI title for the timeline card. It is owned by the
+    # first-durable-user-message title pipeline; summaries may drift but must
+    # never claim or replace this field. See services/session_title.py.
     anchor_title = Column(String(255), nullable=True)
+    # Durable retry evidence for the AI title obligation. A non-null retry time
+    # means an eligible session is title debt, even when a display fallback is
+    # available from project or prompt context.
+    title_attempt_count = Column(Integer, nullable=False, server_default=text("0"))
+    title_last_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    title_retry_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    title_last_error = Column(String(128), nullable=True)
     first_user_message_preview = Column(Text, nullable=True)
     last_visible_text_preview = Column(Text, nullable=True)
     last_user_message_preview = Column(Text, nullable=True)
@@ -316,7 +322,7 @@ class AgentEvent(AgentsBase):
             "session_id",
             "branch_id",
             "tool_call_id",
-            sqlite_where=text("event_origin = 'durable' AND role = 'assistant' " "AND tool_name IS NOT NULL AND tool_call_id IS NOT NULL"),
+            sqlite_where=text("event_origin = 'durable' AND role = 'assistant' AND tool_name IS NOT NULL AND tool_call_id IS NOT NULL"),
         ),
         Index(
             "ix_events_tool_result_pair",

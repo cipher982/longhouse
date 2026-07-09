@@ -1,18 +1,10 @@
-"""Tests for _set_structured_title_if_empty and session title fallback behaviour.
-
-Covers:
-- Structured title is set from project · branch when no LLM title exists
-- Existing LLM title is NOT overwritten (WHERE summary_title IS NULL guard)
-- No title set when session has no project or branch
-- first_user_message included in sessions list response
-"""
+"""Session response fallback behaviour and first-message projections."""
 
 import os
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
 from cryptography.fernet import Fernet
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -84,115 +76,6 @@ def _seed_event(factory, session_id, *, role="user", content="hello"):
     db.commit()
     db.close()
     return e
-
-
-# ---------------------------------------------------------------------------
-# Tests: _set_structured_title_if_empty
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_structured_title_set_from_project_and_branch(tmp_path):
-    """Sets summary_title from project · branch when no title exists."""
-    from zerg.services.session_summaries import set_structured_title_if_empty as _set_structured_title_if_empty
-
-    factory = _make_db(tmp_path, "proj_branch.db")
-    session = _seed_session(factory, project="myproject", git_branch="main")
-
-    with patch("zerg.database.get_session_factory", return_value=factory):
-        await _set_structured_title_if_empty(str(session.id))
-
-    db = factory()
-    updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-    db.close()
-    assert updated.summary_title == "myproject · main"
-
-
-@pytest.mark.asyncio
-async def test_structured_title_project_only(tmp_path):
-    """Sets summary_title from project alone when no branch."""
-    from zerg.services.session_summaries import set_structured_title_if_empty as _set_structured_title_if_empty
-
-    factory = _make_db(tmp_path, "proj_only.db")
-    session = _seed_session(factory, project="myproject", git_branch=None)
-
-    with patch("zerg.database.get_session_factory", return_value=factory):
-        await _set_structured_title_if_empty(str(session.id))
-
-    db = factory()
-    updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-    db.close()
-    assert updated.summary_title == "myproject"
-
-
-@pytest.mark.asyncio
-async def test_structured_title_does_not_overwrite_existing(tmp_path):
-    """WHERE summary_title IS NULL: existing title must not be overwritten."""
-    from zerg.services.session_summaries import set_structured_title_if_empty as _set_structured_title_if_empty
-
-    factory = _make_db(tmp_path, "existing_title.db")
-    session = _seed_session(
-        factory,
-        project="myproject",
-        git_branch="main",
-        summary_title="Real LLM Title",
-    )
-
-    with patch("zerg.database.get_session_factory", return_value=factory):
-        await _set_structured_title_if_empty(str(session.id))
-
-    db = factory()
-    updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-    db.close()
-    assert updated.summary_title == "Real LLM Title"
-
-
-@pytest.mark.asyncio
-async def test_structured_title_date_fallback_when_no_project_or_branch(tmp_path):
-    """Falls back to 'Session · {date}' when session has neither project nor branch."""
-    from zerg.services.session_summaries import set_structured_title_if_empty as _set_structured_title_if_empty
-
-    factory = _make_db(tmp_path, "no_meta.db")
-    session = _seed_session(factory, project=None, git_branch=None)
-
-    with patch("zerg.database.get_session_factory", return_value=factory):
-        await _set_structured_title_if_empty(str(session.id))
-
-    db = factory()
-    updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-    db.close()
-    assert updated.summary_title is not None
-    assert updated.summary_title.startswith("Session · ")
-
-
-@pytest.mark.asyncio
-async def test_structured_title_routes_write_through_serializer(tmp_path):
-    """Structured title fallback should use the write serializer when configured."""
-    from zerg.services.session_summaries import set_structured_title_if_empty as _set_structured_title_if_empty
-
-    factory = _make_db(tmp_path, "serializer.db")
-    session = _seed_session(factory, project="myproject", git_branch="main")
-    serializer_labels: list[str] = []
-
-    class _FakeSerializer:
-        async def execute_or_direct(self, fn, fallback_db, *, label="", auto_commit=True):
-            serializer_labels.append(label)
-            result = fn(fallback_db)
-            if auto_commit:
-                fallback_db.commit()
-            return result
-
-    with (
-        patch("zerg.database.get_session_factory", return_value=factory),
-        patch("zerg.services.write_serializer.get_write_serializer", return_value=_FakeSerializer()),
-    ):
-        await _set_structured_title_if_empty(str(session.id))
-
-    db = factory()
-    updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
-    db.close()
-    assert serializer_labels == ["summary-title"]
-    assert updated.summary_title == "myproject · main"
 
 
 # ---------------------------------------------------------------------------

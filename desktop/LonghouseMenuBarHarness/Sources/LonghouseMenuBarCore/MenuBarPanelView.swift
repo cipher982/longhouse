@@ -801,18 +801,16 @@ public struct MenuBarPanelView: View {
     }
 
     private func managedSessionTitle(_ session: ManagedSessionSnapshot, fallbackProvider: String?) -> String {
+        let titleState = session.titleState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let titleState, titleState != "ready" {
+            return "Naming session…"
+        }
         for raw in [session.timelineTitle, session.summaryTitle, session.firstUserMessage] {
             if let title = compactSessionText(raw, maxCharacters: 72) {
                 return title
             }
         }
-
-        let workspace = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !workspace.isEmpty {
-            return workspace
-        }
-        let provider = (fallbackProvider ?? session.provider ?? "unknown").trimmingCharacters(in: .whitespacesAndNewlines)
-        return HealthSnapshot.providerDisplayName(provider.isEmpty ? "unknown" : provider)
+        return "Naming session…"
     }
 
     private func managedSessionWorkspaceContext(_ session: ManagedSessionSnapshot) -> String {

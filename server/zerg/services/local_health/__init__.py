@@ -402,6 +402,8 @@ def _fetch_managed_session_title(
         "summary_title": _normalize_optional_string(payload.get("summary_title")),
         "timeline_title": _normalize_optional_string(payload.get("timeline_title")),
         "first_user_message": _normalize_optional_string(payload.get("first_user_message")),
+        "title_state": _normalize_optional_string(payload.get("title_state")),
+        "title_source": _normalize_optional_string(payload.get("title_source")),
     }
 
 

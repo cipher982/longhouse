@@ -69,6 +69,8 @@ _PLACEHOLDER_SUMMARY = "No summary generated."
 SUMMARY_EVENT_LOAD_LIMIT = int(os.getenv("SESSION_SUMMARY_EVENT_LOAD_LIMIT", "200"))
 SUMMARY_EVENT_TEXT_MAX_CHARS = int(os.getenv("SESSION_SUMMARY_EVENT_TEXT_MAX_CHARS", "4000"))
 INITIAL_TITLE_WRITE_TIMEOUT_SECONDS = float(os.getenv("SESSION_INITIAL_TITLE_WRITE_TIMEOUT_SECONDS", "5"))
+INITIAL_TITLE_RETRY_BASE_SECONDS = int(os.getenv("SESSION_INITIAL_TITLE_RETRY_BASE_SECONDS", "30"))
+INITIAL_TITLE_RETRY_MAX_SECONDS = int(os.getenv("SESSION_INITIAL_TITLE_RETRY_MAX_SECONDS", "900"))
 
 
 @dataclass(frozen=True)
@@ -239,12 +241,6 @@ async def summarize_and_persist(
     if not content_values:
         logger.warning("Discarding placeholder summary result for session %s", session.id)
 
-    # Freeze the muscle-memory anchor the first time a usable title appears.
-    # Write-once (COALESCE) so the card never moves while summary_title keeps
-    # drifting for search. The final title is promoted to anchor_title in the
-    # session-close path (session_runtime.py), not here.
-    frozen_anchor = freeze_anchor_title(content_values.get("summary_title"))
-
     def _do_persist(write_db: Session) -> int:
         values = dict(
             summary_event_count=len(events),
@@ -252,8 +248,6 @@ async def summarize_and_persist(
             summary_revision=target_revision,
             **content_values,
         )
-        if frozen_anchor:
-            values["anchor_title"] = func.coalesce(AgentSession.anchor_title, frozen_anchor)
         result = write_db.execute(sa_update(AgentSession).where(AgentSession.id == session.id).values(**values))
         return int(result.rowcount or 0)
 
@@ -264,51 +258,41 @@ async def summarize_and_persist(
             session.summary = content_values["summary"]
         if "summary_title" in content_values:
             session.summary_title = content_values["summary_title"]
-        if frozen_anchor and not session.anchor_title:
-            session.anchor_title = frozen_anchor
         session.summary_event_count = len(events)
         session.last_summarized_event_id = new_last_event_id
         session.summary_revision = target_revision
     return summary
 
 
-async def set_structured_title_if_empty(session_id: str) -> None:
-    """Set a structured fallback title from project/branch when no LLM title exists."""
-    from sqlalchemy import update as sa_update
-
+async def record_initial_title_failure(session_id: str, reason: str) -> None:
+    """Persist bounded retry evidence without treating a fallback as completion."""
     from zerg.database import get_session_factory
     from zerg.services.write_serializer import get_write_serializer
 
     factory = get_session_factory()
     db = factory()
+    now = datetime.now(timezone.utc)
     try:
-        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-        if not session or session.summary_title:
-            return
-        parts = [p for p in [session.project, session.git_branch] if p]
-        if parts:
-            title = " · ".join(parts)
-        else:
-            date_str = (session.started_at or datetime.now(timezone.utc)).strftime("%b %-d")
-            title = f"Session · {date_str}"
 
         def _do_update(write_db: Session) -> int:
-            result = write_db.execute(
-                sa_update(AgentSession)
-                .where(AgentSession.id == session_id)
-                .where(AgentSession.summary_title.is_(None))
-                .values(summary_title=title)
+            target = write_db.query(AgentSession).filter(AgentSession.id == session_id).first()
+            if target is None or sanitize_title(target.anchor_title):
+                return 0
+            attempts = int(target.title_attempt_count or 0) + 1
+            delay_seconds = min(
+                INITIAL_TITLE_RETRY_MAX_SECONDS,
+                INITIAL_TITLE_RETRY_BASE_SECONDS * (2 ** min(attempts - 1, 8)),
             )
-            return int(result.rowcount or 0)
+            target.title_attempt_count = attempts
+            target.title_last_attempt_at = now
+            target.title_retry_at = now + timedelta(seconds=delay_seconds)
+            target.title_last_error = reason[:128]
+            return 1
 
         ws = get_write_serializer()
-        updated = await ws.execute_or_direct(_do_update, db, label="summary-title")
-        if updated == 0:
-            logger.debug("Structured title skipped for session %s (title set concurrently)", session_id)
-            return
-        logger.debug("Set structured title %r for session %s", title, session_id)
+        await ws.execute_or_direct(_do_update, db, label="initial-title-failure")
     except Exception:
-        logger.exception("Failed to set structured title for session %s", session_id)
+        logger.exception("Failed to record initial-title failure for session %s", session_id)
         db.rollback()
     finally:
         db.close()
@@ -321,7 +305,10 @@ async def generate_initial_title_impl(session_id: str) -> bool:
     from zerg.services.title_generator import generate_initial_session_title
 
     settings = get_settings()
-    if settings.testing or settings.llm_disabled:
+    if settings.testing:
+        return False
+    if settings.llm_disabled:
+        await record_initial_title_failure(session_id, "llm_disabled")
         return False
 
     factory = get_session_factory()
@@ -331,7 +318,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if not session:
             return False
-        if sanitize_title(session.anchor_title) or sanitize_title(session.summary_title):
+        if sanitize_title(session.anchor_title):
             return False
         if session.environment in {"test", "e2e"}:
             return False
@@ -356,6 +343,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
                 or ""
             ).strip()
         if not first_user_message:
+            await record_initial_title_failure(session_id, "missing_durable_user_message")
             return False
 
         metadata = {
@@ -371,6 +359,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
             client, model, _provider = get_llm_client_for_use_case("session_title")
         except ValueError as exc:
             logger.warning("Initial title generation misconfigured for session %s: %s", session_id, exc)
+            await record_initial_title_failure(session_id, "model_unconfigured")
             return False
 
         db.close()
@@ -387,6 +376,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
         title = sanitize_title(raw_title, max_words=6)
         if not title:
             logger.info("Initial title generation returned no title for session %s in %dms", session_id, elapsed_ms)
+            await record_initial_title_failure(session_id, "empty_model_response")
             return False
 
         def _persist_direct() -> int:
@@ -395,10 +385,13 @@ async def generate_initial_title_impl(session_id: str) -> bool:
                 target = write_db.query(AgentSession).filter(AgentSession.id == session_id).first()
                 if not target:
                     return 0
-                if sanitize_title(target.anchor_title) or sanitize_title(target.summary_title):
+                if sanitize_title(target.anchor_title):
                     return 0
                 target.summary_title = title
                 target.anchor_title = freeze_anchor_title(title)
+                target.title_retry_at = None
+                target.title_last_error = None
+                target.title_last_attempt_at = datetime.now(timezone.utc)
                 if transcript_revision > 0:
                     target.summary_revision = max(int(target.summary_revision or 0), transcript_revision)
                 upsert_timeline_card_from_session(write_db, target)
@@ -421,6 +414,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
                 session_id,
                 INITIAL_TITLE_WRITE_TIMEOUT_SECONDS,
             )
+            await record_initial_title_failure(session_id, "write_timeout")
             return False
         if updated:
             from zerg.services.session_pubsub import publish_session_title_update
@@ -436,6 +430,7 @@ async def generate_initial_title_impl(session_id: str) -> bool:
         if db is not None:
             db.rollback()
         logger.exception("Failed to generate initial title for session %s", session_id)
+        await record_initial_title_failure(session_id, "generation_error")
         return False
     finally:
         if db is not None:
@@ -492,7 +487,6 @@ async def generate_summary_impl(session_id: str) -> None:
 
         if settings.llm_disabled:
             logger.debug("LLM disabled, marking summary current for %s", session_id)
-            await set_structured_title_if_empty(session_id)
             await _advance_session_revision(
                 db=db,
                 session_id=session_id,
@@ -522,7 +516,6 @@ async def generate_summary_impl(session_id: str) -> None:
         meaningful_count = sum(1 for e in new_event_dicts if e["role"] in meaningful_roles and e.get("content_text"))
         if meaningful_count < 2:
             logger.debug("Only %d new messages for session %s, waiting for more", meaningful_count, session_id)
-            await set_structured_title_if_empty(session_id)
             await _advance_session_revision(
                 db=db,
                 session_id=session_id,
@@ -554,7 +547,6 @@ async def generate_summary_impl(session_id: str) -> None:
                     session_id,
                     e,
                 )
-                await set_structured_title_if_empty(session_id)
                 await _advance_session_revision(
                     db=db,
                     session_id=session_id,
@@ -598,10 +590,6 @@ async def generate_summary_impl(session_id: str) -> None:
                 content_values = _summary_content_values(summary)
                 if content_values:
                     values.update(content_values)
-                    # Write-once freeze of the timeline anchor (see summarize_and_persist).
-                    frozen_anchor = freeze_anchor_title(content_values.get("summary_title"))
-                    if frozen_anchor:
-                        values["anchor_title"] = func.coalesce(AgentSession.anchor_title, frozen_anchor)
                 else:
                     logger.warning("Discarding placeholder summary result for session %s", session_id)
 

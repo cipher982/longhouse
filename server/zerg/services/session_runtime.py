@@ -34,7 +34,6 @@ from zerg.services.session_live_previews import upsert_session_live_preview
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_observations import decode_observation_payload_json
 from zerg.services.session_observations import record_runtime_observation
-from zerg.services.session_title import freeze_anchor_title
 from zerg.utils.time import normalize_utc
 
 RuntimeEventKind = Literal[
@@ -798,7 +797,14 @@ def runtime_event_from_observation(observation) -> RuntimeEventIngest | None:
         return None
     payload = _observation_payload(observation)
     kind = str(payload.get("kind") or "").strip()
-    valid_kinds = {"phase_signal", "progress_signal", "terminal_signal", "binding_signal", "pause_request", "pause_resolution"}
+    valid_kinds = {
+        "phase_signal",
+        "progress_signal",
+        "terminal_signal",
+        "binding_signal",
+        "pause_request",
+        "pause_resolution",
+    }
     if kind not in valid_kinds:
         raise ValueError(f"runtime_signal observation {observation.observation_id} has invalid kind {kind!r}")
     return RuntimeEventIngest(
@@ -1244,12 +1250,6 @@ def _apply_runtime_event(
             session = db.query(AgentSession).filter(AgentSession.id == event.session_id).first()
             if session is not None and session.ended_at is None:
                 session.ended_at = occurred_at
-                # Promote the final summary title to the frozen anchor: a closed
-                # session is the stable thing a user revisits, so overwrite any
-                # anchor that froze too early on a tiny opening transcript.
-                promoted = freeze_anchor_title(session.summary_title)
-                if promoted:
-                    session.anchor_title = promoted
             from zerg.services.session_pause_requests import expire_pending_pause_requests_for_session
 
             pause_changed = (

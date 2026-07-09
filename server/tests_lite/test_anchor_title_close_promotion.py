@@ -1,10 +1,4 @@
-"""Integration test: closing a session promotes its final title to anchor_title.
-
-This is the slice-2 contract. The freeze is write-once while a session is live
-(covered by the summary persist tests), but a session that froze its anchor too
-early on a tiny opening transcript should adopt its final summary title once it
-closes, since a closed session is the stable thing the user revisits.
-"""
+"""Closing a session must not let a drifting summary replace its AI title."""
 
 from __future__ import annotations
 
@@ -67,30 +61,30 @@ def _terminal(session_id, occurred_at):
     )
 
 
-def test_close_promotes_final_summary_title_to_anchor(tmp_path):
+def test_close_keeps_initial_ai_title_when_summary_changes(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "anchor_close_promote.db")
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        # Anchor froze early ("Initial Setup"); the session's final title is better.
+        # A later summary is useful for search, but not allowed to rename this session.
         session = _seed(db, anchor_title="Initial Setup", summary_title="Fix Refresh Token Rotation")
         ingest_runtime_events(db, [_terminal(session.id, now)])
         db.commit()
 
         stored = db.query(AgentSession).filter(AgentSession.id == session.id).one()
         assert stored.ended_at is not None
-        assert stored.anchor_title == "Fix Refresh Token Rotation"
+        assert stored.anchor_title == "Initial Setup"
     engine.dispose()
 
 
-def test_close_sanitizes_final_title_before_promoting(tmp_path):
+def test_close_does_not_create_anchor_from_summary(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "anchor_close_sanitize.db")
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
-        session = _seed(db, anchor_title="Old", summary_title='"""\nDebug Bedrock Channel Race')
+        session = _seed(db, anchor_title=None, summary_title='"""\nDebug Bedrock Channel Race')
         ingest_runtime_events(db, [_terminal(session.id, now)])
         db.commit()
         stored = db.query(AgentSession).filter(AgentSession.id == session.id).one()
-        assert stored.anchor_title == "Debug Bedrock Channel Race"
+        assert stored.anchor_title is None
     engine.dispose()
 
 

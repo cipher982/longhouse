@@ -15,6 +15,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTask
 from zerg.services.session_enrichment_reconciler import active_summary_session_ids
 from zerg.services.session_enrichment_reconciler import reconcile_summaries_once
+from zerg.services.session_enrichment_reconciler import select_initial_title_session_ids
 from zerg.services.session_enrichment_reconciler import select_stale_summary_session_ids
 from zerg.services.write_serializer import get_write_serializer
 
@@ -114,8 +115,34 @@ def test_select_stale_summary_sessions_skips_test_and_provider_proof_rows(tmp_pa
         db.close()
 
 
+def test_select_initial_title_debt_ignores_summary_completion_and_honors_retry(tmp_path):
+    _, factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            summary_title="zerg",
+            user_messages=1,
+            assistant_messages=1,
+            transcript_revision=3,
+            summary_revision=3,
+        )
+
+        assert select_initial_title_session_ids(db, limit=10) == [str(session.id)]
+
+        session.title_retry_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+        db.commit()
+        assert select_initial_title_session_ids(db, limit=10) == []
+
+        session.title_retry_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.commit()
+        assert select_initial_title_session_ids(db, limit=10) == [str(session.id)]
+    finally:
+        db.close()
+
+
 @pytest.mark.asyncio
-async def test_low_content_stale_sessions_fast_forward_without_provider_call(tmp_path):
+async def test_low_content_title_debt_is_not_hidden_by_summary_fast_forward(tmp_path):
     _, factory = _make_db(tmp_path)
     db = factory()
     try:
@@ -133,20 +160,28 @@ async def test_low_content_stale_sessions_fast_forward_without_provider_call(tmp
     async def _generate(_session_id: str) -> None:
         raise AssertionError("low-content session should not call summary provider")
 
+    async def _generate_initial_title(selected_session_id: str) -> bool:
+        assert selected_session_id == session_id
+        return False
+
     result = await reconcile_summaries_once(
         session_factory=factory,
         limit=10,
         concurrency=2,
         generate_summary=_generate,
+        generate_initial_title=_generate_initial_title,
     )
-    assert result.fast_forwarded == 1
+    assert result.initial_selected == 1
+    assert result.initial_started == 1
+    assert result.initial_titled == 0
+    assert result.fast_forwarded == 0
     assert result.started == 0
 
     verify = factory()
     try:
         refreshed = verify.get(AgentSession, session_id)
         assert refreshed is not None
-        assert refreshed.summary_revision == 4
+        assert refreshed.summary_revision == 0
     finally:
         verify.close()
 

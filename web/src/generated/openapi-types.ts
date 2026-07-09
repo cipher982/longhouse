@@ -8580,6 +8580,16 @@ export interface components {
              */
             timeline_title?: string | null;
             /**
+             * Title State
+             * @description AI-title lifecycle: awaiting_input|pending|degraded|ready.
+             */
+            title_state?: string | null;
+            /**
+             * Title Source
+             * @description Title provenance: ai|prompt|project. Non-ai sources are fallback context.
+             */
+            title_source?: string | null;
+            /**
              * Summary Status
              * @description Honest summarization state: ready (summary present), pending (task queued/running), failed (terminal — won't auto-retry), unavailable (no task / too little content). Tiebreaker: ready > pending > failed > unavailable.
              */

@@ -107,7 +107,7 @@ async def test_generate_summary_impl_marks_summary_current_when_llm_disabled(tmp
     try:
         refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
         assert refreshed.summary_revision == 2
-        assert refreshed.summary_title == "zerg"
+        assert refreshed.summary_title is None
         assert select_stale_summary_session_ids(verify, limit=10) == []
     finally:
         verify.close()
@@ -168,7 +168,7 @@ async def test_generate_summary_impl_marks_summary_current_when_llm_misconfigure
     try:
         refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
         assert refreshed.summary_revision == 2
-        assert refreshed.summary_title == "zerg"
+        assert refreshed.summary_title is None
         assert select_stale_summary_session_ids(verify, limit=10) == []
     finally:
         verify.close()
@@ -236,6 +236,7 @@ async def test_generate_initial_title_impl_persists_stable_title(tmp_path, monke
         project="zerg",
         git_branch="main",
         started_at=datetime.now(timezone.utc),
+        summary_title="zerg",
         first_user_message_preview="Can we make menu bar rows clearly clickable?",
         user_messages=1,
         assistant_messages=0,
@@ -360,6 +361,16 @@ async def test_generate_initial_title_impl_does_not_publish_when_title_empty(tmp
     assert updated is False
     assert get_pubsub().peek_latest_seq(topic_session(session_id)) == 0
     assert get_pubsub().peek_latest_seq(TOPIC_TIMELINE) == 0
+
+    verify = factory()
+    try:
+        refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert refreshed.anchor_title is None
+        assert refreshed.title_attempt_count == 1
+        assert refreshed.title_last_error == "empty_model_response"
+        assert refreshed.title_retry_at is not None
+    finally:
+        verify.close()
     reset_pubsub_for_test()
 
 
@@ -430,6 +441,9 @@ async def test_generate_initial_title_impl_times_out_optional_persist(tmp_path, 
         assert refreshed.summary_title is None
         assert refreshed.anchor_title is None
         assert refreshed.summary_revision == 0
+        assert refreshed.title_attempt_count == 1
+        assert refreshed.title_last_error == "write_timeout"
+        assert refreshed.title_retry_at is not None
     finally:
         verify.close()
     reset_pubsub_for_test()
@@ -633,7 +647,7 @@ async def test_generate_initial_title_impl_does_not_overwrite_existing_title(tmp
         project="zerg",
         started_at=datetime.now(timezone.utc),
         first_user_message_preview="Rename should not happen.",
-        summary_title="Existing Title",
+        anchor_title="Existing AI Title",
         transcript_revision=1,
         summary_revision=0,
     )
