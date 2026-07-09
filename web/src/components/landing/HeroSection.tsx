@@ -146,8 +146,8 @@ export function HeroSection() {
       <div className="landing-hero-devices">
         <video
           className="landing-hero-video"
-          src="/videos/wedge-demo.mp4"
-          poster="/images/landing/wedge-poster.png"
+          src="/videos/wedge-demo.mp4?v=20260709-1"
+          poster="/images/landing/wedge-poster.png?v=20260709-1"
           autoPlay
           muted
           loop
