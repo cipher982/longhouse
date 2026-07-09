@@ -15,6 +15,8 @@ from zerg.models.agents import SessionThread
 from zerg.models.agents import TimelineCard
 
 HATCH_AUTOMATION_ORIGIN_KIND = "hatch_automation"
+TEST_OR_CANARY_ORIGIN_KIND = "test_or_canary"
+REVIEWABLE_HIDDEN_ORIGIN_KINDS = frozenset({HATCH_AUTOMATION_ORIGIN_KIND, TEST_OR_CANARY_ORIGIN_KIND})
 _HATCH_BACKED_PROVIDERS = {"opencode", "claude", "codex", "cursor"}
 _HATCH_PROMPT_HINTS = (
     "code review",
@@ -50,6 +52,13 @@ def _normalize_session_id(value: str | UUID) -> UUID:
     if isinstance(value, UUID):
         return value
     return UUID(str(value))
+
+
+def _normalize_reviewed_origin_kind(value: str) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized not in REVIEWABLE_HIDDEN_ORIGIN_KINDS:
+        raise ValueError(f"unsupported hidden origin kind: {value}")
+    return normalized
 
 
 def _event_preview(db: Session, session_id: UUID) -> str:
@@ -122,10 +131,12 @@ def classify_reviewed_hatch_automation_sessions(
     *,
     session_ids: list[str | UUID],
     apply: bool,
+    origin_kind: str = HATCH_AUTOMATION_ORIGIN_KIND,
     candidate_limit: int = 100,
 ) -> AutomationBackfillResult:
-    """Mark explicit reviewed rows as Hatch automation; heuristics stay report-only."""
+    """Mark explicit reviewed rows with a hidden origin; heuristics stay report-only."""
 
+    reviewed_origin_kind = _normalize_reviewed_origin_kind(origin_kind)
     normalized_ids = [_normalize_session_id(value) for value in session_ids]
     sessions_by_id: dict[UUID, AgentSession] = {}
     if normalized_ids:
@@ -141,18 +152,18 @@ def classify_reviewed_hatch_automation_sessions(
             session = sessions_by_id.get(session_id)
             if session is None:
                 continue
-            if session.origin_kind == HATCH_AUTOMATION_ORIGIN_KIND and session.hidden_from_default_timeline == 1:
+            if session.origin_kind == reviewed_origin_kind and session.hidden_from_default_timeline == 1:
                 already_marked.append(str(session_id))
                 continue
 
-            session.origin_kind = HATCH_AUTOMATION_ORIGIN_KIND
+            session.origin_kind = reviewed_origin_kind
             session.hidden_from_default_timeline = 1
             for thread in db.query(SessionThread).filter(SessionThread.session_id == session_id).all():
-                thread.origin_kind = HATCH_AUTOMATION_ORIGIN_KIND
+                thread.origin_kind = reviewed_origin_kind
                 thread.hidden_from_default_timeline = 1
             card = db.get(TimelineCard, session_id)
             if card is not None:
-                card.origin_kind = HATCH_AUTOMATION_ORIGIN_KIND
+                card.origin_kind = reviewed_origin_kind
                 card.hidden_from_default_timeline = 1
             applied.append(str(session_id))
         db.commit()

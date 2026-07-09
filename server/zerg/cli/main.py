@@ -529,7 +529,12 @@ def db_classify_automation(
     session_ids: list[str] | None = typer.Option(
         None,
         "--session-id",
-        help="Reviewed session id to mark as Hatch automation. Repeat for multiple ids.",
+        help="Reviewed session id to mark hidden by --origin-kind. Repeat for multiple ids.",
+    ),
+    origin_kind: str = typer.Option(
+        "hatch_automation",
+        "--origin-kind",
+        help="Reviewed hidden origin kind to apply: hatch_automation or test_or_canary.",
     ),
     apply_changes: bool = typer.Option(
         False,
@@ -545,12 +550,17 @@ def db_classify_automation(
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
 ) -> None:
-    """Report Hatch-shaped rows and optionally hide reviewed ids."""
+    """Report Hatch-shaped rows and optionally hide reviewed hidden ids."""
     from zerg.database import make_sessionmaker
+    from zerg.services.agents.automation_backfill import REVIEWABLE_HIDDEN_ORIGIN_KINDS
     from zerg.services.agents.automation_backfill import classify_reviewed_hatch_automation_sessions
 
     if apply_changes and not session_ids:
         typer.echo("--apply requires at least one reviewed --session-id.", err=True)
+        raise typer.Exit(code=2)
+    normalized_origin_kind = str(origin_kind or "").strip().lower().replace("-", "_")
+    if normalized_origin_kind not in REVIEWABLE_HIDDEN_ORIGIN_KINDS:
+        typer.echo("--origin-kind must be hatch_automation or test_or_canary.", err=True)
         raise typer.Exit(code=2)
 
     engine, resolved_database_url = _resolve_db_engine(database_url)
@@ -561,6 +571,7 @@ def db_classify_automation(
             db,
             session_ids=session_ids or [],
             apply=apply_changes,
+            origin_kind=normalized_origin_kind,
             candidate_limit=candidate_limit,
         )
     finally:
@@ -570,6 +581,7 @@ def db_classify_automation(
         "status": "ok",
         "database_url": resolved_database_url,
         "mode": "apply_reviewed_ids" if apply_changes else "dry_run_report",
+        "origin_kind": normalized_origin_kind,
         "note": "Heuristic Hatch candidates are report-only; only explicit reviewed --session-id rows are applied.",
         **result.to_dict(),
     }
@@ -578,7 +590,7 @@ def db_classify_automation(
         return
 
     if apply_changes:
-        typer.echo(f"Applied Hatch automation origin to {len(result.applied_session_ids)} reviewed session(s).")
+        typer.echo(f"Applied {normalized_origin_kind} origin to {len(result.applied_session_ids)} reviewed session(s).")
     else:
         typer.echo("Dry run only. Pass --apply with reviewed --session-id values to hide rows.")
     if result.missing_session_ids:

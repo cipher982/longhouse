@@ -96,6 +96,13 @@ _SESSION_LAST_VISIBLE_PREVIEW_CHARS = 500
 _SESSION_LAST_USER_PREVIEW_CHARS = 300
 _SESSION_LAST_ASSISTANT_PREVIEW_CHARS = 500
 HATCH_AUTOMATION_ORIGIN_KIND = "hatch_automation"
+TEST_OR_CANARY_ORIGIN_KIND = "test_or_canary"
+HIDDEN_FROM_DEFAULT_ORIGIN_KINDS = frozenset(
+    {
+        HATCH_AUTOMATION_ORIGIN_KIND,
+        TEST_OR_CANARY_ORIGIN_KIND,
+    }
+)
 
 
 def _bounded_session_preview(value: str | None, *, max_len: int) -> str | None:
@@ -122,13 +129,13 @@ def _first_user_text_from_ingest(data: SessionIngest) -> str | None:
 
 def _normalize_origin_kind(value: str | None) -> str | None:
     normalized = str(value or "").strip().lower().replace("-", "_")
-    if normalized == HATCH_AUTOMATION_ORIGIN_KIND:
-        return HATCH_AUTOMATION_ORIGIN_KIND
+    if normalized in HIDDEN_FROM_DEFAULT_ORIGIN_KINDS:
+        return normalized
     return None
 
 
 def _hidden_from_default_timeline_for_origin(origin_kind: str | None) -> int:
-    return 1 if origin_kind == HATCH_AUTOMATION_ORIGIN_KIND else 0
+    return 1 if origin_kind in HIDDEN_FROM_DEFAULT_ORIGIN_KINDS else 0
 
 
 def _source_path_looks_like_subagent(source_path: str | None) -> bool:

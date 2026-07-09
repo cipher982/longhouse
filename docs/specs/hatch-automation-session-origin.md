@@ -103,21 +103,24 @@ Do not use "sidechain" for Hatch.
 ## Identity Model
 
 The missing model is not another session type and not a broad new taxonomy. V1
-needs one durable fact:
+needs one durable origin fact:
 
 ```text
 origin_kind:
   hatch_automation
+  test_or_canary
 ```
 
-Absent `origin_kind` means "normal product session" for this spec. Existing
-axes continue to own their domains:
+Absent `origin_kind` means "normal product session" for this spec.
+`hatch_automation` covers delegated Hatch child work. `test_or_canary` covers
+synthetic provider probes, integration tests, and proof runs such as "What is
+5+5? Reply with just the number." Existing axes continue to own their domains:
 
 - provider lineage uses `branch_kind`, `SessionEdge`, and provider aliases;
-- test/provider-proof sessions use existing environment/canary filters;
 - managed/user control state uses the session kernel capability projection.
 
-Default timeline visibility is derived from `origin_kind=hatch_automation`.
+Default timeline visibility is hidden for `origin_kind in
+(hatch_automation, test_or_canary)`.
 There is no separate V1 `relationship_kind` or `timeline_visibility` enum.
 Parent linkage uses the existing `SessionEdge.edge_kind`.
 
@@ -141,7 +144,7 @@ session_edges
   hatch_run_id = <optional hatch-generated run UUID>
 ```
 
-Fail-visible rule: unknown or ambiguous rows stay visible. Only explicit Hatch
+Fail-visible rule: unknown or ambiguous rows stay visible. Only explicit hidden
 origin, or an approved high-confidence repair, may hide a row.
 
 Sticky refresh rule: once a session/thread is marked `hatch_automation`, later

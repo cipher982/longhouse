@@ -255,6 +255,37 @@ def test_hatch_automation_hides_from_timeline_api_and_wall_by_default(tmp_path):
         api_ref.dependency_overrides = {}
 
 
+def test_test_or_canary_origin_hides_from_default_timeline(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_root_payload())
+        store.ingest_session(
+            _root_payload(
+                session_id=HATCH_ID,
+                provider_session_id="ses_codex_probe",
+                text="What is 5+5? Reply with just the number.",
+            ).model_copy(update={"origin_kind": "test_or_canary"})
+        )
+
+        probe_session = db.get(AgentSession, HATCH_ID)
+        assert probe_session.origin_kind == "test_or_canary"
+        assert probe_session.hidden_from_default_timeline == 1
+        assert db.get(TimelineCard, HATCH_ID).hidden_from_default_timeline == 1
+
+        total, rows = store.list_timeline_thread_page(hide_autonomous=False, include_test=True)
+        assert total == 1
+        assert rows[0][1] == str(PARENT_ID)
+
+        include_total, include_rows = store.list_timeline_thread_page(
+            hide_autonomous=False,
+            include_test=True,
+            include_automation=True,
+        )
+        assert include_total == 2
+        assert {row[1] for row in include_rows} == {str(PARENT_ID), str(HATCH_ID)}
+
+
 def test_hatch_automation_hides_from_active_sessions_live_path(tmp_path, monkeypatch):
     SessionLocal = _session_factory(tmp_path)
     with SessionLocal() as db:
@@ -449,4 +480,47 @@ def test_db_classify_automation_cli_applies_reviewed_session_ids(tmp_path):
 
     with SessionLocal() as db:
         assert db.get(AgentSession, HATCH_ID).origin_kind == "hatch_automation"
+        assert db.get(TimelineCard, HATCH_ID).hidden_from_default_timeline == 1
+
+
+def test_db_classify_automation_cli_applies_reviewed_test_or_canary_ids(tmp_path):
+    from zerg.cli.main import app as cli_app
+
+    db_path = tmp_path / "test-canary-cli.db"
+    db_url = f"sqlite:///{db_path}"
+    engine = make_engine(db_url).execution_options(schema_translate_map={"agents": None})
+    initialize_database(engine)
+    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+    with SessionLocal() as db:
+        AgentsStore(db).ingest_session(
+            _root_payload(
+                session_id=HATCH_ID,
+                provider_session_id="ses_cli_reviewed_probe",
+                text="What is the largest planet? Reply with just the planet name.",
+            )
+        )
+
+    result = CliRunner().invoke(
+        cli_app,
+        [
+            "db",
+            "classify-automation",
+            "--database-url",
+            db_url,
+            "--origin-kind",
+            "test_or_canary",
+            "--session-id",
+            str(HATCH_ID),
+            "--apply",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["origin_kind"] == "test_or_canary"
+    assert payload["applied_session_ids"] == [str(HATCH_ID)]
+
+    with SessionLocal() as db:
+        assert db.get(AgentSession, HATCH_ID).origin_kind == "test_or_canary"
         assert db.get(TimelineCard, HATCH_ID).hidden_from_default_timeline == 1
