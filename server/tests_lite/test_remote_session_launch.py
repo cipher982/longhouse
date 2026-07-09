@@ -1351,7 +1351,7 @@ def test_failed_live_launch_detail_uses_durable_shell(tmp_path, monkeypatch):
         live_engine.dispose()
 
 
-def test_live_launch_workspace_uses_durable_shell_before_archive_drain(tmp_path, monkeypatch):
+def test_live_launch_workspace_uses_placeholder_while_shell_is_catching_up(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
     registry = _StubRegistry()
@@ -1388,15 +1388,17 @@ def test_live_launch_workspace_uses_durable_shell_before_archive_drain(tmp_path,
 
         assert workspace.session.id == str(result.session_id)
         assert workspace.session.launch_state == "launching_unknown"
+        assert workspace.session.capabilities.display_label == "Launching"
+        assert workspace.session.capabilities.staleness_reason == "archive_catching_up"
         assert workspace.thread.root_session_id == str(result.session_id)
         assert workspace.projection.items == []
         assert workspace.projection.total == 0
-        assert not workspace.workspace_revision.fingerprint.startswith("live-launch:")
+        assert workspace.workspace_revision.fingerprint.startswith("live-launch:")
     finally:
         live_engine.dispose()
 
 
-def test_live_launch_mobile_tail_uses_durable_shell_before_archive_drain(tmp_path, monkeypatch):
+def test_live_launch_mobile_tail_uses_placeholder_while_shell_is_catching_up(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
     registry = _StubRegistry()
@@ -1433,10 +1435,12 @@ def test_live_launch_mobile_tail_uses_durable_shell_before_archive_drain(tmp_pat
 
         assert mobile_tail.session.id == str(result.session_id)
         assert mobile_tail.session.launch_state == "launching_unknown"
+        assert mobile_tail.session.capabilities.display_label == "Launching"
+        assert mobile_tail.session.capabilities.staleness_reason == "archive_catching_up"
         assert mobile_tail.projection.items == []
         assert mobile_tail.projection.total == 0
         assert mobile_tail.snapshot_event_id is None
-        assert not mobile_tail.workspace_revision.fingerprint.startswith("live-launch:")
+        assert mobile_tail.workspace_revision.fingerprint.startswith("live-launch:")
     finally:
         live_engine.dispose()
 
