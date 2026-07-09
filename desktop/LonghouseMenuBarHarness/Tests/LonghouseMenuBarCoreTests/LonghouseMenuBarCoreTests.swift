@@ -441,6 +441,9 @@ struct LonghouseMenuBarCoreTests {
         let opencode = sink.stopCommandDescriptionForTesting(sessionID: "s1", provider: "opencode")
         #expect(opencode == "longhouse opencode-channel stop --session-id s1")
 
+        let cursor = sink.stopCommandDescriptionForTesting(sessionID: "s1b", provider: "cursor")
+        #expect(cursor == "longhouse-engine cursor-helm stop --session-id s1b")
+
         let codex = sink.stopCommandDescriptionForTesting(sessionID: "s2", provider: "codex")
         #expect(codex == "longhouse-engine codex-bridge stop --session-id s2")
 
@@ -453,6 +456,7 @@ struct LonghouseMenuBarCoreTests {
     func stopTransportRoutesKnownProvidersAndRejectsUnsupported() throws {
         let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
         #expect(sink.stopTransportForTesting(provider: "opencode") == "opencode")
+        #expect(sink.stopTransportForTesting(provider: "cursor") == "cursor")
         #expect(sink.stopTransportForTesting(provider: "codex") == "codex")
         // Legacy rows with no provider stay on the codex bridge path.
         #expect(sink.stopTransportForTesting(provider: nil) == "codex")
@@ -1631,6 +1635,44 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.timelineTitle == "Fix menu bar links")
         #expect(session.summaryTitle == "Fix menu bar links")
         #expect(session.firstUserMessage == "Can we open rows?")
+    }
+
+    @Test
+    func cursorManagedSessionProjectsForegroundPresenceAndStopTransport() throws {
+        let data = Data("""
+        {
+          "health_state": "healthy",
+          "severity": "green",
+          "headline": "Longhouse shipping healthy",
+          "reasons": [],
+          "suggested_actions": [],
+          "managed_sessions": [
+            {
+              "session_id": "sess-cursor",
+              "provider": "cursor",
+              "workspace_label": "zerg",
+              "timeline_title": "Fix Reattach Row Alignment",
+              "state": "attached",
+              "phase": "idle",
+              "last_activity_at": "2026-07-09T00:49:49Z",
+              "launch_mode": "tui",
+              "ui_attached": true,
+              "ui_presence": "foreground_tui"
+            }
+          ]
+        }
+        """.utf8)
+
+        let snapshot = try HealthSnapshotDecoder.decode(data: data)
+        let session = try #require(snapshot.currentManagedSessions.first)
+
+        #expect(session.provider == "cursor")
+        #expect(session.workspaceLabel == "zerg")
+        #expect(session.timelineTitle == "Fix Reattach Row Alignment")
+        #expect(session.normalizedUIPresence == "foreground_tui")
+        #expect(session.isConsoleManagedSession == false)
+        #expect(session.needsManagedSessionAttention == false)
+        #expect(HealthSnapshot.providerDisplayName("cursor") == "Cursor")
     }
 
     @Test

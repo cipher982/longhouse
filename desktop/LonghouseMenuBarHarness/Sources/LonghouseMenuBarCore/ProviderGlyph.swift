@@ -36,6 +36,8 @@ struct ProviderGlyph: View {
             return ("opencode", "ProviderAssets.xcassets/ProviderOpencode.imageset")
         case "antigravity":
             return ("antigravity", "ProviderAssets.xcassets/ProviderAntigravity.imageset")
+        case "cursor":
+            return ("cursor", "ProviderAssets.xcassets/ProviderCursor.imageset")
         default: return nil
         }
     }
@@ -50,6 +52,9 @@ struct ProviderGlyph: View {
             return Color(red: 0.08, green: 0.09, blue: 0.09)
         case "opencode":
             return Color(red: 0.12, green: 0.17, blue: 0.22)
+        case "cursor":
+            // Match Cursor's dark app-icon plate (#14120B).
+            return Color(red: 0.08, green: 0.07, blue: 0.04)
         default:
             return brand.opacity(0.16)
         }
@@ -61,6 +66,8 @@ struct ProviderGlyph: View {
             return Color.white.opacity(0.32)
         case "opencode":
             return Color(red: 0.40, green: 0.74, blue: 0.92).opacity(0.45)
+        case "cursor":
+            return Color.white.opacity(0.28)
         default:
             return brand.opacity(0.22)
         }
@@ -83,6 +90,10 @@ struct ProviderGlyph: View {
             return Color.white.opacity(0.92)
         case "opencode":
             return Color(red: 0.52, green: 0.82, blue: 0.98)
+        case "cursor":
+            // Official cube is a single-color mark; cream on the dark plate
+            // matches cursor.com favicon / brand avatar treatment.
+            return Color(red: 0xED / 255, green: 0xEC / 255, blue: 0xEC / 255)
         default:
             return nil
         }

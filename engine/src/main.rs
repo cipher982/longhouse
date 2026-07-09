@@ -554,6 +554,12 @@ enum Commands {
         command: ClaudeChannelCommands,
     },
 
+    /// Native managed Cursor Helm control utilities
+    CursorHelm {
+        #[command(subcommand)]
+        command: CursorHelmCommands,
+    },
+
     /// Native device command surface scaffold
     Device {
         #[command(subcommand)]
@@ -682,6 +688,40 @@ enum ClaudeChannelCommands {
 
         #[arg(long, default_value = "10.0")]
         wait_secs: f64,
+    },
+}
+
+#[derive(Subcommand)]
+enum CursorHelmCommands {
+    /// Terminate a live Cursor Helm session via its control socket
+    Stop {
+        #[arg(long)]
+        session_id: String,
+
+        /// Override the cursor-helm state directory (tests / isolation)
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+
+    /// Send text into a live Cursor Helm session
+    Send {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        text: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+
+    /// Interrupt the active Cursor Helm turn
+    Interrupt {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
     },
 }
 
@@ -1018,6 +1058,11 @@ fn command_name(command: &Commands) -> &'static str {
             ClaudeChannelCommands::Send { .. } => "claude-channel-send",
             ClaudeChannelCommands::Interrupt { .. } => "claude-channel-interrupt",
             ClaudeChannelCommands::Inspect { .. } => "claude-channel-inspect",
+        },
+        Commands::CursorHelm { command } => match command {
+            CursorHelmCommands::Stop { .. } => "cursor-helm-stop",
+            CursorHelmCommands::Send { .. } => "cursor-helm-send",
+            CursorHelmCommands::Interrupt { .. } => "cursor-helm-interrupt",
         },
     }
 }
@@ -1500,6 +1545,73 @@ fn main() -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&state)?);
             }
         },
+        Commands::CursorHelm { command } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            match command {
+                CursorHelmCommands::Stop {
+                    session_id,
+                    state_root,
+                } => {
+                    let summary = rt
+                        .block_on(cursor_helm_control::terminate(
+                            &session_id,
+                            state_root.as_deref(),
+                        ))
+                        .map_err(|err| anyhow::anyhow!("{err}"))?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "exit_code": summary.exit_code,
+                            "stdout": summary.stdout,
+                            "stderr": summary.stderr,
+                        }))?
+                    );
+                }
+                CursorHelmCommands::Send {
+                    session_id,
+                    text,
+                    state_root,
+                } => {
+                    let summary = rt
+                        .block_on(cursor_helm_control::send_text(
+                            &session_id,
+                            &text,
+                            state_root.as_deref(),
+                        ))
+                        .map_err(|err| anyhow::anyhow!("{err}"))?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "exit_code": summary.exit_code,
+                            "stdout": summary.stdout,
+                            "stderr": summary.stderr,
+                        }))?
+                    );
+                }
+                CursorHelmCommands::Interrupt {
+                    session_id,
+                    state_root,
+                } => {
+                    let summary = rt
+                        .block_on(cursor_helm_control::interrupt(
+                            &session_id,
+                            state_root.as_deref(),
+                        ))
+                        .map_err(|err| anyhow::anyhow!("{err}"))?;
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&serde_json::json!({
+                            "ok": true,
+                            "exit_code": summary.exit_code,
+                            "stdout": summary.stdout,
+                            "stderr": summary.stderr,
+                        }))?
+                    );
+                }
+            }
+        }
         Commands::CodexBridge { command } => {
             let rt = tokio::runtime::Runtime::new()?;
             match command {

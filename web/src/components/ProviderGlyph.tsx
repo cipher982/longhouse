@@ -16,6 +16,7 @@ import { canonicalProvider } from "../lib/providers";
  *   Claude  — terracotta sunburst (#D97757)
  *   OpenCode— grayscale bracket-frame mark (no brand hue)
  *   Antigravity — geometric orbit mark, brand blue (#3186FF)
+ *   Cursor — official 2D cube from cursor.com/brand
  */
 
 export type ProviderGlyphTone = "brand" | "mono";
@@ -26,7 +27,7 @@ const PROVIDER_BRAND: Record<string, string> = {
   openai: "#F3EAD9",
   opencode: "#C9C4C4",
   antigravity: "#4F87ED",
-  cursor: "#6E56CF",
+  cursor: "#EDECEC",
   zai: "#B06E8A",
 };
 
@@ -91,11 +92,14 @@ function AntigravityMark() {
   );
 }
 
-/** Cursor — the mouse-pointer arrow mark (Cursor's icon-only identity). */
+/**
+ * Cursor — official 2D cube mark from cursor.com/brand (square avatar / favicon).
+ * Remapped from brand-logo-8.svg into a 24×24 currentColor path.
+ */
 function CursorMark() {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
-      <path d="M5 2.5 5 16.8 8.6 13.2 11 19.3 13 18.4 10.7 12.7 15.6 12.7Z" />
+      <path d="M19.201 7.497L12.355 3.545C12.135 3.418 11.864 3.418 11.644 3.545L4.799 7.497C4.614 7.604 4.5 7.801 4.5 8.015V15.985C4.5 16.199 4.614 16.396 4.799 16.503L11.645 20.455C11.864 20.582 12.136 20.582 12.355 20.455L19.201 16.503C19.386 16.396 19.5 16.199 19.5 15.985V8.015C19.5 7.801 19.386 7.604 19.201 7.497H19.201ZM18.771 8.335L12.162 19.781C12.118 19.858 12 19.827 12 19.737V12.242C12 12.093 11.92 11.954 11.79 11.879L5.299 8.132C5.222 8.087 5.254 7.969 5.343 7.969H18.56C18.748 7.969 18.865 8.172 18.771 8.335H18.771V8.335Z" />
     </svg>
   );
 }

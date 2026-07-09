@@ -674,6 +674,7 @@ pub fn resolved_sessions_from_observations(
     codex_observations: &[CodexBridgeObservation],
     claude_observations: &[ClaudeChannelObservation],
     opencode_observations: &[OpenCodeServerObservation],
+    cursor_observations: &[CursorHelmObservation],
 ) -> Vec<ResolvedLocalSession> {
     let codex_by_session: HashMap<&str, &CodexBridgeObservation> = codex_observations
         .iter()
@@ -684,6 +685,10 @@ pub fn resolved_sessions_from_observations(
         .map(|obs| (obs.session_id.as_str(), obs))
         .collect();
     let opencode_by_session: HashMap<&str, &OpenCodeServerObservation> = opencode_observations
+        .iter()
+        .map(|obs| (obs.session_id.as_str(), obs))
+        .collect();
+    let cursor_by_session: HashMap<&str, &CursorHelmObservation> = cursor_observations
         .iter()
         .map(|obs| (obs.session_id.as_str(), obs))
         .collect();
@@ -702,6 +707,10 @@ pub fn resolved_sessions_from_observations(
             "opencode" => sessions.push(resolved_managed_opencode_session(
                 lease,
                 opencode_by_session.get(lease.session_id.as_str()).copied(),
+            )),
+            "cursor" => sessions.push(resolved_managed_cursor_session(
+                lease,
+                cursor_by_session.get(lease.session_id.as_str()).copied(),
             )),
             _ => sessions.push(resolved_managed_generic_session(lease)),
         }
@@ -910,6 +919,93 @@ fn claude_ui_presence(
         Some("foreground_tui")
     } else if obs.claude_alive {
         Some("background")
+    } else {
+        None
+    }
+}
+
+
+fn resolved_managed_cursor_session(
+    lease: &ManagedSessionLease,
+    obs: Option<&CursorHelmObservation>,
+) -> ResolvedLocalSession {
+    // Cursor Helm is terminal-owned: the launcher holds the PTY master and the
+    // control socket. Project workspace + UI presence from that observation so
+    // local-health / menu bar rows match Codex/Claude/OpenCode shape.
+    let cwd = obs.and_then(|obs| obs.cwd.clone());
+    let launcher_pid = obs.and_then(|obs| obs.launcher_pid);
+    let cursor_pid = obs.and_then(|obs| obs.cursor_pid);
+    let mut join_keys = vec![format!("session_id={}", lease.session_id)];
+    if let Some(pid) = launcher_pid {
+        join_keys.push(format!("launcher_pid={pid}"));
+    }
+    if let Some(pid) = cursor_pid {
+        join_keys.push(format!("cursor_pid={pid}"));
+    }
+    if let Some(state_file) = obs.map(|obs| obs.state_file.display().to_string()) {
+        if !state_file.trim().is_empty() {
+            join_keys.push(format!("state_file={state_file}"));
+        }
+    }
+
+    ResolvedLocalSession {
+        session_id: Some(lease.session_id.clone()),
+        provider: lease.provider.clone(),
+        provider_session_id: None,
+        control_path: "managed".to_string(),
+        presentation_state: managed_presentation_state(&lease.state),
+        state: lease.state.clone(),
+        phase: lease.phase.clone(),
+        tool_name: lease.tool_name.clone(),
+        phase_observed_at: Some(lease.observed_at.clone()),
+        last_activity_at: Some(lease.observed_at.clone()),
+        workspace: workspace_from_cwd(cwd),
+        process: ResolvedProcess {
+            pid: cursor_pid,
+            process_start_time: None,
+            started_at: obs
+                .map(|obs| obs.started_at.clone())
+                .filter(|value| !value.trim().is_empty()),
+        },
+        bridge: ResolvedBridge {
+            bridge_pid: launcher_pid,
+            app_server_pid: cursor_pid,
+            ws_url: None,
+            heartbeat_at: obs
+                .map(|obs| obs.updated_at.clone())
+                .filter(|value| !value.trim().is_empty()),
+            status: lease.bridge_status.clone(),
+            thread_subscription_status: None,
+            launch_mode: obs.map(|_| "tui".to_string()),
+            ui_attached: obs.map(|obs| obs.live),
+            ui_presence: cursor_ui_presence(&lease.state, obs).map(str::to_string),
+        },
+        evidence: ResolvedEvidence {
+            process_observed: obs.is_some_and(|obs| obs.live && obs.cursor_pid.is_some()),
+            transcript_observed: false,
+            bridge_state: lease.bridge_status.clone(),
+            hook_seen_at: None,
+            join_keys,
+        },
+        reason_codes: Vec::new(),
+    }
+}
+
+fn cursor_ui_presence(
+    lease_state: &str,
+    obs: Option<&CursorHelmObservation>,
+) -> Option<&'static str> {
+    match lease_state {
+        "detached" => return Some("detached"),
+        "degraded" => return Some("degraded"),
+        _ => {}
+    }
+
+    // Live Helm = launcher pid alive + control socket present. That is the
+    // terminal-attached control path; there is no detached_ui Cursor mode yet.
+    let obs = obs?;
+    if obs.live {
+        Some("foreground_tui")
     } else {
         None
     }
@@ -1683,7 +1779,7 @@ mod tests {
 
         let observations = vec![foreground, background];
         let leases = leases_from_observations(&conn, "cinder", &observations, now);
-        let sessions = resolved_sessions_from_observations(&leases, &[], &observations, &[], &[]);
+        let sessions = resolved_sessions_from_observations(&leases, &[], &observations, &[], &[], &[]);
 
         let foreground_session = sessions
             .iter()
@@ -1809,6 +1905,7 @@ mod tests {
             &[],
             &[],
             std::slice::from_ref(&obs),
+            &[],
         );
         let session = &sessions[0];
         assert_eq!(session.state, "attached");
@@ -1816,7 +1913,7 @@ mod tests {
         assert_eq!(session.bridge.ui_presence.as_deref(), Some("background"));
 
         obs.has_tui_attachment = true;
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs]);
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[]);
         let session = &sessions[0];
         assert_eq!(session.state, "attached");
         assert_eq!(session.bridge.ui_attached, Some(true));
@@ -1832,7 +1929,7 @@ mod tests {
         for (launch_mode, expected_presence) in cases {
             let lease = opencode_lease("managed-opencode");
             let obs = test_opencode_observation("managed-opencode", launch_mode);
-            let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs]);
+            let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[]);
             let session = &sessions[0];
             assert_eq!(session.state, "attached", "launch_mode={launch_mode}");
             assert_eq!(session.bridge.ui_attached, Some(false));
@@ -1855,7 +1952,7 @@ mod tests {
         // unknown rather than mislabeled, and lease state is untouched.
         let lease = opencode_lease("legacy-opencode");
         let obs = test_opencode_observation("legacy-opencode", "");
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs]);
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[]);
         let session = &sessions[0];
         assert_eq!(session.state, "attached");
         assert_eq!(session.bridge.ui_presence, None);
@@ -2163,7 +2260,7 @@ mod tests {
         let unmanaged = test_binding("claude", "claude-unmanaged", 333);
 
         let sessions =
-            resolved_sessions_from_observations(&[lease], &[unmanaged], &[obs], &[], &[]);
+            resolved_sessions_from_observations(&[lease], &[unmanaged], &[obs], &[], &[], &[]);
 
         assert_eq!(sessions.len(), 2);
         let managed = sessions
@@ -2260,7 +2357,7 @@ mod tests {
             lease_ttl_ms: 900_000,
         };
 
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[obs], &[]);
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[obs], &[], &[]);
 
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
@@ -2271,6 +2368,116 @@ mod tests {
             session.workspace.cwd.as_deref(),
             Some("/Users/test/git/acme")
         );
+    }
+
+    fn test_cursor_observation(session_id: &str) -> CursorHelmObservation {
+        CursorHelmObservation {
+            session_id: session_id.to_string(),
+            state_file: PathBuf::from(format!("/tmp/{session_id}.json")),
+            socket_path: Some(PathBuf::from(format!("/tmp/{session_id}.sock"))),
+            cwd: Some("/Users/test/git/zerg".to_string()),
+            launcher_pid: Some(4242),
+            cursor_pid: Some(4243),
+            started_at: "2026-07-08T22:50:19Z".to_string(),
+            updated_at: "2026-07-08T22:50:19Z".to_string(),
+            live: true,
+        }
+    }
+
+    fn cursor_lease(session_id: &str) -> ManagedSessionLease {
+        ManagedSessionLease {
+            session_id: session_id.to_string(),
+            provider: "cursor".to_string(),
+            machine_id: "cinder".to_string(),
+            sequence: 1,
+            state: "attached".to_string(),
+            phase: Some("idle".to_string()),
+            tool_name: None,
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: None,
+            observed_at: "2026-07-08T22:50:19Z".to_string(),
+            lease_ttl_ms: 900_000,
+        }
+    }
+
+    #[test]
+    fn resolved_sessions_project_cursor_workspace_and_ui_presence() {
+        let lease = cursor_lease("managed-cursor");
+        let obs = test_cursor_observation("managed-cursor");
+        let sessions = resolved_sessions_from_observations(
+            std::slice::from_ref(&lease),
+            &[],
+            &[],
+            &[],
+            &[],
+            std::slice::from_ref(&obs),
+        );
+        assert_eq!(sessions.len(), 1);
+        let session = &sessions[0];
+        assert_eq!(session.provider, "cursor");
+        assert_eq!(session.control_path, "managed");
+        assert_eq!(session.state, "attached");
+        assert_eq!(session.presentation_state, "managed_attached");
+        assert_eq!(session.workspace.label.as_deref(), Some("zerg"));
+        assert_eq!(
+            session.workspace.cwd.as_deref(),
+            Some("/Users/test/git/zerg")
+        );
+        assert_eq!(session.bridge.launch_mode.as_deref(), Some("tui"));
+        assert_eq!(session.bridge.ui_attached, Some(true));
+        assert_eq!(
+            session.bridge.ui_presence.as_deref(),
+            Some("foreground_tui")
+        );
+        assert_eq!(session.bridge.bridge_pid, Some(4242));
+        assert_eq!(session.process.pid, Some(4243));
+        assert!(session.evidence.process_observed);
+        assert!(session
+            .evidence
+            .join_keys
+            .iter()
+            .any(|key| key.starts_with("launcher_pid=") && key.ends_with("4242")));
+        assert!(session
+            .evidence
+            .join_keys
+            .iter()
+            .any(|key| key.starts_with("cursor_pid=") && key.ends_with("4243")));
+    }
+
+    #[test]
+    fn cursor_ui_presence_maps_live_and_lease_states() {
+        let live = test_cursor_observation("cursor-live");
+        assert_eq!(
+            cursor_ui_presence("attached", Some(&live)),
+            Some("foreground_tui")
+        );
+        assert_eq!(
+            cursor_ui_presence("detached", Some(&live)),
+            Some("detached")
+        );
+        assert_eq!(
+            cursor_ui_presence("degraded", Some(&live)),
+            Some("degraded")
+        );
+        assert_eq!(cursor_ui_presence("attached", None), None);
+
+        let mut dead = live.clone();
+        dead.live = false;
+        assert_eq!(cursor_ui_presence("attached", Some(&dead)), None);
+    }
+
+    #[test]
+    fn resolved_sessions_keep_sparse_managed_cursor_without_observation() {
+        let lease = cursor_lease("managed-cursor");
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[], &[]);
+        assert_eq!(sessions.len(), 1);
+        let session = &sessions[0];
+        assert_eq!(session.provider, "cursor");
+        assert_eq!(session.control_path, "managed");
+        assert_eq!(session.workspace, ResolvedWorkspace::default());
+        assert_eq!(session.bridge.ui_presence, None);
+        assert_eq!(session.bridge.launch_mode, None);
+        assert_eq!(session.evidence.process_observed, false);
     }
 
     #[test]
@@ -2289,7 +2496,7 @@ mod tests {
             lease_ttl_ms: 900_000,
         };
 
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[]);
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[], &[]);
 
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
@@ -2341,7 +2548,7 @@ mod tests {
             process_start_time: "Mon May  5 11:59:00 2026".to_string(),
         };
 
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs]);
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[]);
 
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];

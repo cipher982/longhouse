@@ -1572,6 +1572,7 @@ fn write_local_status_snapshot(
         observations,
         claude_observations,
         opencode_observations,
+        cursor_observations,
     );
     session_snapshot_state.annotate(&mut payload);
     // Compute the fresh ledger view up front so a read failure is both

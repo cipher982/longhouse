@@ -3946,6 +3946,85 @@ def test_collect_local_health_deep_prefers_resolved_engine_sessions(monkeypatch,
     assert snapshot["managed_sessions"][0]["liveness_model"] == "engine_status"
 
 
+def test_collect_local_health_fast_projects_cursor_workspace_and_ui_presence(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_compute_process_snapshot",
+        lambda: (_ for _ in ()).throw(AssertionError("fast local-health must not scan processes")),
+    )
+    now = datetime(2026, 7, 9, 12, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        local_health_service,
+        "_load_managed_session_phase_state",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fast local-health must not read phase overlay")),
+    )
+    managed_id = "6ad0434b-aed2-4a99-9ef3-b56cfa75e4fc"
+    _write_engine_status(
+        tmp_path,
+        age_seconds=1,
+        payload={
+            "sessions": [
+                {
+                    "session_id": managed_id,
+                    "provider": "cursor",
+                    "control_path": "managed",
+                    "presentation_state": "managed_attached",
+                    "state": "attached",
+                    "phase": "idle",
+                    "phase_observed_at": "2026-07-09T00:49:49Z",
+                    "last_activity_at": "2026-07-09T00:49:49Z",
+                    "workspace": {
+                        "cwd": "/Users/test/git/zerg",
+                        "label": "zerg",
+                    },
+                    "process": {
+                        "pid": 25084,
+                        "started_at": "2026-07-09T00:49:49Z",
+                    },
+                    "bridge": {
+                        "bridge_pid": 24161,
+                        "app_server_pid": 25084,
+                        "heartbeat_at": "2026-07-09T00:49:49Z",
+                        "status": "ready",
+                        "launch_mode": "tui",
+                        "ui_attached": True,
+                        "ui_presence": "foreground_tui",
+                    },
+                    "evidence": {
+                        "process_observed": True,
+                        "transcript_observed": False,
+                        "bridge_state": "ready",
+                        "join_keys": [
+                            "session_id=6ad0434b-aed2-4a99-9ef3-b56cfa75e4fc",
+                            "launcher_pid=24161",
+                            "cursor_pid=25084",
+                        ],
+                    },
+                    "reason_codes": [],
+                }
+            ],
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path, fast=True)
+
+    assert snapshot["collection_tier"] == "fast"
+    assert len(snapshot["managed_sessions"]) == 1
+    session = snapshot["managed_sessions"][0]
+    assert session["session_id"] == managed_id
+    assert session["provider"] == "cursor"
+    assert session["workspace_label"] == "zerg"
+    assert session["cwd"] == "/Users/test/git/zerg"
+    assert session["launch_mode"] == "tui"
+    assert session["ui_attached"] is True
+    assert session["ui_presence"] == "foreground_tui"
+    assert session["bridge_pid"] == 24161
+    assert session["app_server_pid"] == 25084
+
+
 def test_collect_local_health_deep_degrades_resolved_codex_zombie_app_server(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

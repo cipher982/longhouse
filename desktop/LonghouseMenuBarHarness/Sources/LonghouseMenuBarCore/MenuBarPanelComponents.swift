@@ -982,6 +982,9 @@ func providerColor(_ raw: String) -> Color {
         return Color(red: 0xC9 / 255, green: 0xC4 / 255, blue: 0xC4 / 255)
     case "gemini", "antigravity":
         return Color(red: 0x4F / 255, green: 0x87 / 255, blue: 0xED / 255)
+    case "cursor":
+        // Official Cursor brand ink from cursor.com/brand (#14120B).
+        return Color(red: 0x14 / 255, green: 0x12 / 255, blue: 0x0B / 255)
     case "zai":
         return Color(red: 0xB0 / 255, green: 0x6E / 255, blue: 0x8A / 255)
     default:

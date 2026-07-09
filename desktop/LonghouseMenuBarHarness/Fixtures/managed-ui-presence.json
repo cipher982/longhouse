@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "collected_at": "2026-06-16T14:05:00Z",
+  "collected_at": "2026-07-09T14:05:00Z",
   "health_state": "healthy",
   "severity": "green",
   "headline": "Managed sessions are running in background",
@@ -21,7 +21,7 @@
     "payload": {
       "version": "0.1.26-dev+presence",
       "daemon_pid": 24653,
-      "last_ship_at": "2026-06-16T03:05:00Z",
+      "last_ship_at": "2026-07-09T03:05:00Z",
       "spool_pending_count": 0,
       "spool_dead_count": 0,
       "parse_error_count_1h": 0,
@@ -29,7 +29,7 @@
       "disk_free_bytes": 42949672960,
       "is_offline": false,
       "recent_dead_letters": [],
-      "last_updated": "2026-06-16T14:05:00Z"
+      "last_updated": "2026-07-09T14:05:00Z"
     },
     "error": null
   },
@@ -56,19 +56,19 @@
       {
         "provider": "codex",
         "workspace_label": "zerg",
-        "last_updated": "2026-06-16T14:04:41Z",
+        "last_updated": "2026-07-09T14:04:41Z",
         "branch": "main"
       }
     ],
-    "latest_activity_at": "2026-06-16T14:04:41Z",
+    "latest_activity_at": "2026-07-09T14:04:41Z",
     "recent_window_minutes": 15
   },
   "managed_summary": {
-    "attached_count": 4,
+    "attached_count": 5,
     "detached_count": 1,
     "degraded_count": 0,
     "orphan_bridge_count": 0,
-    "latest_activity_at": "2026-06-16T14:04:41Z"
+    "latest_activity_at": "2026-07-09T14:04:41Z"
   },
   "managed_sessions": [
     {
@@ -79,10 +79,10 @@
       "state": "attached",
       "phase": "thinking",
       "raw_phase": "thinking",
-      "last_activity_at": "2026-06-16T14:04:41Z",
+      "last_activity_at": "2026-07-09T14:04:41Z",
       "bridge_status": "ready",
       "bridge_pid": 27771,
-      "bridge_heartbeat_at": "2026-06-16T14:04:55Z",
+      "bridge_heartbeat_at": "2026-07-09T14:04:55Z",
       "launch_mode": "tui",
       "ui_attached": true,
       "ui_presence": "foreground_tui",
@@ -96,10 +96,28 @@
       "state": "attached",
       "phase": "idle",
       "raw_phase": "idle",
-      "last_activity_at": "2026-06-16T13:48:00Z",
+      "last_activity_at": "2026-07-09T13:48:00Z",
       "bridge_status": "ready",
       "bridge_pid": 21119,
-      "bridge_heartbeat_at": "2026-06-16T14:04:55Z",
+      "bridge_heartbeat_at": "2026-07-09T14:04:55Z",
+      "reason_codes": []
+    },
+    {
+      "session_id": "sess-cursor-terminal",
+      "provider": "cursor",
+      "workspace_label": "zerg",
+      "branch": null,
+      "state": "attached",
+      "phase": "idle",
+      "raw_phase": "idle",
+      "last_activity_at": "2026-07-09T14:03:00Z",
+      "bridge_status": "ready",
+      "bridge_pid": 25084,
+      "bridge_heartbeat_at": "2026-07-09T14:04:55Z",
+      "launch_mode": "tui",
+      "ui_attached": true,
+      "ui_presence": "foreground_tui",
+      "timeline_title": "Fix Reattach Row Alignment",
       "reason_codes": []
     },
     {
@@ -110,10 +128,10 @@
       "state": "attached",
       "phase": "idle",
       "raw_phase": "idle",
-      "last_activity_at": "2026-06-15T20:58:00Z",
+      "last_activity_at": "2026-07-08T20:58:00Z",
       "bridge_status": "ready",
       "bridge_pid": 30110,
-      "bridge_heartbeat_at": "2026-06-16T14:04:20Z",
+      "bridge_heartbeat_at": "2026-07-09T14:04:20Z",
       "launch_mode": "detached_ui",
       "ui_attached": false,
       "ui_presence": "background",
@@ -127,10 +145,10 @@
       "state": "attached",
       "phase": "idle",
       "raw_phase": "idle",
-      "last_activity_at": "2026-06-14T10:13:00Z",
+      "last_activity_at": "2026-07-07T10:13:00Z",
       "bridge_status": "ready",
       "bridge_pid": 30111,
-      "bridge_heartbeat_at": "2026-06-16T14:04:20Z",
+      "bridge_heartbeat_at": "2026-07-09T14:04:20Z",
       "launch_mode": "detached_ui",
       "ui_attached": false,
       "ui_presence": "background",
@@ -144,10 +162,10 @@
       "state": "detached",
       "phase": null,
       "raw_phase": null,
-      "last_activity_at": "2026-06-16T03:11:00Z",
+      "last_activity_at": "2026-07-09T03:11:00Z",
       "bridge_status": "ready",
       "bridge_pid": 30112,
-      "bridge_heartbeat_at": "2026-06-16T03:11:00Z",
+      "bridge_heartbeat_at": "2026-07-09T03:11:00Z",
       "launch_mode": "tui",
       "ui_attached": false,
       "ui_presence": "detached",

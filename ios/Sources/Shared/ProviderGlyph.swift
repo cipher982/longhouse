@@ -31,6 +31,7 @@ public struct ProviderGlyph: View {
         case "claude": return "ProviderClaude"
         case "opencode": return "ProviderOpencode"
         case "antigravity": return "ProviderAntigravity"
+        case "cursor": return "ProviderCursor"
         default: return nil
         }
     }
@@ -42,6 +43,7 @@ public struct ProviderGlyph: View {
         case "codex", "openai": return Color(white: 0.92)
         case "opencode": return Color(white: 0.78)
         case "antigravity": return Color(red: 0x4F / 255, green: 0x87 / 255, blue: 0xED / 255)
+        case "cursor": return Color(red: 0x14 / 255, green: 0x12 / 255, blue: 0x0B / 255)
         default: return .secondary
         }
     }
@@ -91,6 +93,7 @@ public func providerDisplayLabel(_ provider: String?) -> String {
     case "openai": return "OpenAI"
     case "claude": return "Claude"
     case "opencode": return "OpenCode"
+    case "cursor": return "Cursor"
     case "gemini", "antigravity": return "Antigravity"
     default: return provider.prefix(1).uppercased() + provider.dropFirst()
     }

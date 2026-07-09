@@ -510,6 +510,16 @@ public struct SpyHealthActionSink: HealthActionSink {
                 arguments: ["opencode-channel", "stop", "--session-id", sessionID]
             )
             return url.map(ManagedStopOutcome.started) ?? .failed
+        case "cursor":
+            // Cursor Helm terminate goes through the engine control socket client.
+            guard let executable = LonghouseCLI.resolveEngineExecutable() else {
+                return .failed
+            }
+            let url = startBackgroundProcess(
+                launchPath: executable.path,
+                arguments: ["cursor-helm", "stop", "--session-id", sessionID]
+            )
+            return url.map(ManagedStopOutcome.started) ?? .failed
         case "", "codex":
             // Codex and legacy rows with no provider stop via the engine bridge.
             guard let executable = LonghouseCLI.resolveEngineExecutable() else {
@@ -532,11 +542,13 @@ public struct SpyHealthActionSink: HealthActionSink {
     }
 
     /// Test-only classifier for which stop transport a provider routes to,
-    /// without launching anything. "opencode" / "codex" / "unsupported".
+    /// without launching anything. "opencode" / "cursor" / "codex" / "unsupported".
     func stopTransportForTesting(provider: String?) -> String {
         switch (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "opencode":
             return "opencode"
+        case "cursor":
+            return "cursor"
         case "", "codex":
             return "codex"
         default:
@@ -551,6 +563,8 @@ public struct SpyHealthActionSink: HealthActionSink {
         switch normalizedProvider {
         case "opencode":
             return "longhouse opencode-channel stop --session-id \(sessionID)"
+        case "cursor":
+            return "longhouse-engine cursor-helm stop --session-id \(sessionID)"
         default:
             return "longhouse-engine codex-bridge stop --session-id \(sessionID)"
         }
