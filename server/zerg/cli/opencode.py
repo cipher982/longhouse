@@ -29,6 +29,7 @@ from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
 from zerg.cli._managed_contract import record_managed_provider_contract
 from zerg.cli._managed_contract import remove_managed_provider_contract
+from zerg.cli._managed_launch import add_interactive_human_shell_launch_env
 from zerg.provider_cli_contract import OPENCODE_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_OPENCODE_BIN_FLAG
@@ -621,6 +622,7 @@ def _run_native_opencode(
     cmd = [opencode_bin, *serve_args]
     env = os.environ.copy()
     env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+    add_interactive_human_shell_launch_env(env)
     env["LONGHOUSE_DEVICE_ID"] = machine_name
     server_password = generate_server_password()
     env["OPENCODE_SERVER_PASSWORD"] = server_password

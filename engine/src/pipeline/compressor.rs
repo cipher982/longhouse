@@ -78,6 +78,10 @@ pub struct IngestPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_actor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_surface: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub hatch_run_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_longhouse_session_id: Option<String>,
@@ -113,17 +117,53 @@ fn env_trimmed(name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-fn normalize_hatch_origin_kind(value: &str) -> Option<String> {
+fn normalize_hidden_origin_kind(value: &str) -> Option<String> {
     let normalized = value.trim().replace('-', "_").to_ascii_lowercase();
-    if normalized == "hatch_automation" {
+    if normalized == "hatch_automation" || normalized == "test_or_canary" {
         Some(normalized)
     } else {
         None
     }
 }
 
-fn hatch_origin_kind_from_env() -> Option<String> {
-    normalize_hatch_origin_kind(&env_trimmed("LONGHOUSE_ORIGIN_KIND")?)
+fn hidden_origin_kind_from_env() -> Option<String> {
+    normalize_hidden_origin_kind(&env_trimmed("LONGHOUSE_ORIGIN_KIND")?)
+}
+
+fn normalize_launch_actor(value: &str) -> Option<String> {
+    let normalized = value.trim().replace('-', "_").to_ascii_lowercase();
+    match normalized.as_str() {
+        "human_shell" | "human_ui" | "automation" => Some(normalized),
+        _ => None,
+    }
+}
+
+fn normalize_launch_surface(value: &str) -> Option<String> {
+    let normalized = value.trim().replace('-', "_").to_ascii_lowercase();
+    match normalized.as_str() {
+        "terminal" | "web" | "ios" | "api" | "hatch" | "test" | "ci" | "provider_subprocess" => {
+            Some(normalized)
+        }
+        _ => None,
+    }
+}
+
+fn sanitize_launch_provenance(
+    origin_kind: Option<&str>,
+    launch_actor: Option<String>,
+    launch_surface: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let actor = launch_actor.and_then(|value| normalize_launch_actor(&value));
+    let surface = launch_surface.and_then(|value| normalize_launch_surface(&value));
+    if matches!(origin_kind, Some("hatch_automation" | "test_or_canary"))
+        && matches!(actor.as_deref(), Some("human_shell" | "human_ui"))
+    {
+        return (None, None);
+    }
+    if actor.is_none() {
+        return (None, None);
+    }
+    (actor, surface)
 }
 
 #[derive(Serialize)]
@@ -273,8 +313,19 @@ pub fn build_payload_with_source_lines<'a>(
     let origin_kind = metadata
         .origin_kind
         .as_deref()
-        .and_then(normalize_hatch_origin_kind)
-        .or_else(hatch_origin_kind_from_env);
+        .and_then(normalize_hidden_origin_kind)
+        .or_else(hidden_origin_kind_from_env);
+    let (launch_actor, launch_surface) = sanitize_launch_provenance(
+        origin_kind.as_deref(),
+        metadata
+            .launch_actor
+            .clone()
+            .or_else(|| env_trimmed("LONGHOUSE_LAUNCH_ACTOR")),
+        metadata
+            .launch_surface
+            .clone()
+            .or_else(|| env_trimmed("LONGHOUSE_LAUNCH_SURFACE")),
+    );
     let (
         hatch_run_id,
         parent_longhouse_session_id,
@@ -322,6 +373,8 @@ pub fn build_payload_with_source_lines<'a>(
         is_sidechain: metadata.is_sidechain
             || std::env::var("LONGHOUSE_IS_SIDECHAIN").as_deref() == Ok("1"),
         origin_kind,
+        launch_actor,
+        launch_surface,
         hatch_run_id,
         parent_longhouse_session_id,
         parent_thread_id,
@@ -668,6 +721,61 @@ mod tests {
         );
         assert_eq!(value["parent_provider_session_id"], "ses_parent_sidecar");
         assert_eq!(value["is_sidechain"], false);
+    }
+
+    #[test]
+    fn test_build_payload_includes_launch_provenance_from_env() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _origin = EnvGuard::remove("LONGHOUSE_ORIGIN_KIND");
+        let _actor = EnvGuard::set("LONGHOUSE_LAUNCH_ACTOR", "human-shell");
+        let _surface = EnvGuard::set("LONGHOUSE_LAUNCH_SURFACE", "terminal");
+        let _legacy_sidechain = EnvGuard::remove("LONGHOUSE_IS_SIDECHAIN");
+
+        let events = make_test_events();
+        let meta = SessionMetadata {
+            session_id: "human-terminal-provider-id".to_string(),
+            ..Default::default()
+        };
+
+        let payload = build_payload(
+            "33333333-3333-4333-8333-333333333333",
+            &events,
+            &meta,
+            "/path",
+            "codex",
+        );
+        let value = serde_json::to_value(&payload).unwrap();
+
+        assert_eq!(value["launch_actor"], "human_shell");
+        assert_eq!(value["launch_surface"], "terminal");
+    }
+
+    #[test]
+    fn test_hidden_origin_suppresses_inherited_human_launch_provenance() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let _origin = EnvGuard::set("LONGHOUSE_ORIGIN_KIND", "hatch_automation");
+        let _actor = EnvGuard::set("LONGHOUSE_LAUNCH_ACTOR", "human_shell");
+        let _surface = EnvGuard::set("LONGHOUSE_LAUNCH_SURFACE", "terminal");
+        let _legacy_sidechain = EnvGuard::remove("LONGHOUSE_IS_SIDECHAIN");
+
+        let events = make_test_events();
+        let meta = SessionMetadata {
+            session_id: "hatch-child-provider-id".to_string(),
+            ..Default::default()
+        };
+
+        let payload = build_payload(
+            "33333333-3333-4333-8333-333333333333",
+            &events,
+            &meta,
+            "/path",
+            "opencode",
+        );
+        let value = serde_json::to_value(&payload).unwrap();
+
+        assert_eq!(value["origin_kind"], "hatch_automation");
+        assert!(value.get("launch_actor").is_none());
+        assert!(value.get("launch_surface").is_none());
     }
 
     #[test]

@@ -120,6 +120,8 @@ pub struct SessionMetadata {
     pub project: Option<String>,
     pub environment: Option<String>,
     pub origin_kind: Option<String>,
+    pub launch_actor: Option<String>,
+    pub launch_surface: Option<String>,
     pub hatch_run_id: Option<String>,
     pub parent_longhouse_session_id: Option<String>,
     pub parent_thread_id: Option<String>,

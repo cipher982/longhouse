@@ -137,6 +137,8 @@ class AgentSession(AgentsBase):
     # one-shots archived but hidden from default human timelines.
     origin_kind = Column(String(64), nullable=True, index=True)
     hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    launch_actor = Column(String(32), nullable=True, index=True)
+    launch_surface = Column(String(32), nullable=True, index=True)
     # Managed permission policy: "bypass" (default, autonomous/skip-permissions) or
     # "remote_approve" (pause on permission prompts, answerable via Longhouse). Has
     # a server_default so _auto_add_missing_columns adds it without a migrator.
@@ -495,6 +497,8 @@ class TimelineCard(AgentsBase):
     archive_last_source_offset = Column(BigInteger, nullable=True)
     origin_kind = Column(String(64), nullable=True, index=True)
     hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    launch_actor = Column(String(32), nullable=True, index=True)
+    launch_surface = Column(String(32), nullable=True, index=True)
     derived_state = Column(String(32), nullable=False, server_default=text("'unknown'"))
     derived_revision = Column(String(128), nullable=True)
     parser_revision = Column(String(128), nullable=False)

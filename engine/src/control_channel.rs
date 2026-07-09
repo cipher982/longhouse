@@ -831,6 +831,8 @@ async fn execute_command(
             let initial_prompt = payload_required_string(&payload, "initial_prompt")?;
             let run_id = payload_required_string(&payload, "run_id")?;
             let resume_target = payload_resume_target(&payload)?;
+            let launch_actor = payload_optional_string(&payload, "launch_actor");
+            let launch_surface = payload_optional_string(&payload, "launch_surface");
             let provider_prompt =
                 run_once_provider_prompt(&initial_prompt, resume_target.is_some());
             let api_token = config.api_token.clone().ok_or_else(|| CommandError {
@@ -851,6 +853,8 @@ async fn execute_command(
                     api_token,
                     cursor_bin: DEFAULT_CURSOR_BIN.to_string(),
                     prompt: provider_prompt,
+                    launch_actor: launch_actor.clone(),
+                    launch_surface: launch_surface.clone(),
                     resume_acp_session_id: resume_target
                         .as_ref()
                         .map(|target| target.thread_id.clone()),
@@ -883,6 +887,8 @@ async fn execute_command(
                 approval_policy: Some(REMOTE_CODEX_EXEC_APPROVAL_POLICY.to_string()),
                 sandbox: Some(REMOTE_CODEX_EXEC_SANDBOX.to_string()),
                 prompt: provider_prompt,
+                launch_actor,
+                launch_surface,
                 resume_thread_id: resume_target
                     .as_ref()
                     .map(|target| target.thread_id.clone()),

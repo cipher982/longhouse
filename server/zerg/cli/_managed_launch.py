@@ -23,7 +23,10 @@ before this module existed.
 
 from __future__ import annotations
 
+import os
+import sys
 from collections.abc import Callable
+from collections.abc import Mapping
 from pathlib import Path
 
 import httpx
@@ -34,6 +37,7 @@ from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli._common import git_output
 from zerg.cli._common import load_api_credentials as _common_load_api_credentials
 from zerg.cli._managed_contract import record_managed_provider_contract
+from zerg.services.session_launch_provenance import human_shell_provenance_for_interactive_tty
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 from zerg.session_loop_mode import SessionLoopMode
@@ -49,6 +53,27 @@ def infer_git_context(cwd: Path) -> tuple[str | None, str | None]:
     return git_repo, git_branch
 
 
+def interactive_human_shell_launch_provenance(
+    *,
+    env: Mapping[str, str | None] | None = None,
+    stdin_is_tty: bool | None = None,
+    stdout_is_tty: bool | None = None,
+) -> tuple[str | None, str | None]:
+    return human_shell_provenance_for_interactive_tty(
+        env=env or os.environ,
+        stdin_is_tty=sys.stdin.isatty() if stdin_is_tty is None else stdin_is_tty,
+        stdout_is_tty=sys.stdout.isatty() if stdout_is_tty is None else stdout_is_tty,
+    )
+
+
+def add_interactive_human_shell_launch_env(env: dict[str, str]) -> None:
+    launch_actor, launch_surface = interactive_human_shell_launch_provenance()
+    if launch_actor:
+        env["LONGHOUSE_LAUNCH_ACTOR"] = launch_actor
+    if launch_surface:
+        env["LONGHOUSE_LAUNCH_SURFACE"] = launch_surface
+
+
 def build_managed_local_launch_payload(
     *,
     cwd: Path,
@@ -60,6 +85,8 @@ def build_managed_local_launch_payload(
     native_claude_channels_available: bool | None = None,
     claude_launch_env: dict[str, str] | None = None,
     permission_mode: str = "bypass",
+    launch_actor: str | None = None,
+    launch_surface: str | None = None,
 ) -> dict:
     """Build the exact JSON body posted to /api/sessions/managed-local/this-device.
 
@@ -78,6 +105,10 @@ def build_managed_local_launch_payload(
         "machine_name": machine_name,
         "permission_mode": permission_mode,
     }
+    if launch_actor:
+        payload["launch_actor"] = launch_actor
+    if launch_surface:
+        payload["launch_surface"] = launch_surface
     if provider == "claude":
         payload["native_claude_channels_available"] = native_claude_channels_available
         if claude_launch_env:
@@ -100,6 +131,7 @@ def launch_managed_local_from_api(
     permission_mode: str = "bypass",
     verbose: bool = False,
 ) -> ManagedLocalLaunchResponse:
+    launch_actor, launch_surface = interactive_human_shell_launch_provenance()
     payload = build_managed_local_launch_payload(
         cwd=cwd,
         provider=provider,
@@ -110,6 +142,8 @@ def launch_managed_local_from_api(
         native_claude_channels_available=native_claude_channels_available,
         claude_launch_env=claude_launch_env,
         permission_mode=permission_mode,
+        launch_actor=launch_actor,
+        launch_surface=launch_surface,
     )
 
     launch_url = f"{url.rstrip('/')}/api/sessions/managed-local/this-device"

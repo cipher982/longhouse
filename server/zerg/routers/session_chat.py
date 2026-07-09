@@ -94,6 +94,8 @@ from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_SESSION_LAUNCH
 from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
+from zerg.services.session_launch_provenance import LAUNCH_ACTOR_HUMAN_UI
+from zerg.services.session_launch_provenance import LAUNCH_SURFACE_API
 from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_pause_requests import PENDING_STATUS as PAUSE_PENDING_STATUS
 from zerg.services.session_pause_requests import get_pause_request_for_session
@@ -295,6 +297,8 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
         "bypass",
         description="Managed permission policy: 'bypass' (autonomous, default) or 'remote_approve' (answer permission prompts via Longhouse)",
     )
+    launch_actor: str | None = Field(None, description="Positive launch actor provenance when known")
+    launch_surface: str | None = Field(None, description="Launch surface provenance when known")
 
 
 class SessionChatError(BaseModel):
@@ -1320,6 +1324,8 @@ async def launch_managed_local_this_device(
             native_claude_channels_available=body.native_claude_channels_available,
             claude_launch_env=body.claude_launch_env,
             permission_mode=body.permission_mode,
+            launch_actor=body.launch_actor,
+            launch_surface=body.launch_surface,
         )
         # Managed-local launch is user-facing and hot-path critical. Claim live
         # readiness first; the archive row converges through LiveArchiveOutbox.
@@ -1374,6 +1380,8 @@ async def launch_remote_session_endpoint(
                 initial_prompt=body.initial_prompt,
                 execution_lifetime=body.execution_lifetime or DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME,
                 client_request_id=body.client_request_id,
+                launch_actor=LAUNCH_ACTOR_HUMAN_UI,
+                launch_surface=LAUNCH_SURFACE_API,
             ),
         )
     except RemoteLaunchError as exc:

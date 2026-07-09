@@ -89,6 +89,14 @@ class SessionIngest(BaseModel):
         None,
         description="Longhouse launch-origin classification, e.g. hatch_automation. Independent from provider lineage.",
     )
+    launch_actor: Optional[str] = Field(
+        None,
+        description="Positive launch actor provenance: human_shell, human_ui, or automation.",
+    )
+    launch_surface: Optional[str] = Field(
+        None,
+        description="Launch surface provenance: terminal, web, ios, api, hatch, test, ci, or provider_subprocess.",
+    )
     hatch_run_id: Optional[str] = Field(None, description="Hatch-generated automation run id when available")
     parent_longhouse_session_id: Optional[UUID] = Field(
         None,

@@ -27,6 +27,8 @@ pub struct CodexExecRunConfig {
     pub approval_policy: Option<String>,
     pub sandbox: Option<String>,
     pub prompt: String,
+    pub launch_actor: Option<String>,
+    pub launch_surface: Option<String>,
     pub resume_thread_id: Option<String>,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
@@ -102,6 +104,12 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(launch_actor) = normalized_optional(&config.launch_actor) {
+        command.env("LONGHOUSE_LAUNCH_ACTOR", launch_actor);
+    }
+    if let Some(launch_surface) = normalized_optional(&config.launch_surface) {
+        command.env("LONGHOUSE_LAUNCH_SURFACE", launch_surface);
+    }
 
     #[cfg(unix)]
     {
@@ -428,6 +436,8 @@ mod tests {
             approval_policy: Some("never".to_string()),
             sandbox: Some("workspace-write".to_string()),
             prompt: "Do one bounded turn".to_string(),
+            launch_actor: None,
+            launch_surface: None,
             resume_thread_id: None,
             machine_name: "cinder".to_string(),
             local_db_path: None,

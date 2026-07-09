@@ -72,6 +72,8 @@ struct OpenCodeSessionClassificationSidecar {
     provider_session_id: Option<String>,
     environment: Option<String>,
     origin_kind: Option<String>,
+    launch_actor: Option<String>,
+    launch_surface: Option<String>,
     hatch_run_id: Option<String>,
     parent_longhouse_session_id: Option<String>,
     parent_thread_id: Option<String>,
@@ -376,6 +378,12 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
             origin_kind: classification
                 .as_ref()
                 .and_then(|sidecar| sidecar.origin_kind.clone()),
+            launch_actor: classification
+                .as_ref()
+                .and_then(|sidecar| sidecar.launch_actor.clone()),
+            launch_surface: classification
+                .as_ref()
+                .and_then(|sidecar| sidecar.launch_surface.clone()),
             hatch_run_id: classification
                 .as_ref()
                 .and_then(|sidecar| sidecar.hatch_run_id.clone()),
@@ -1489,6 +1497,8 @@ mod tests {
                 "provider": "opencode",
                 "provider_session_id": "ses_test",
                 "origin_kind": "hatch_automation",
+                "launch_actor": "automation",
+                "launch_surface": "hatch",
                 "hatch_run_id": "hatch-run-1",
                 "parent_longhouse_session_id": "11111111-1111-4111-8111-111111111111",
                 "parent_thread_id": "22222222-2222-4222-8222-222222222222",
@@ -1503,6 +1513,8 @@ mod tests {
                 .unwrap();
 
         assert_eq!(sidecar.origin_kind.as_deref(), Some("hatch_automation"));
+        assert_eq!(sidecar.launch_actor.as_deref(), Some("automation"));
+        assert_eq!(sidecar.launch_surface.as_deref(), Some("hatch"));
         assert_eq!(sidecar.hatch_run_id.as_deref(), Some("hatch-run-1"));
         assert_eq!(
             sidecar.parent_longhouse_session_id.as_deref(),
@@ -1536,6 +1548,8 @@ mod tests {
                 "provider": "opencode",
                 "provider_session_id": "ses_test",
                 "origin_kind": "hatch_automation",
+                "launch_actor": "automation",
+                "launch_surface": "hatch",
                 "hatch_run_id": "hatch-run-1",
                 "parent_longhouse_session_id": "11111111-1111-4111-8111-111111111111",
                 "parent_thread_id": "22222222-2222-4222-8222-222222222222",
@@ -1552,6 +1566,8 @@ mod tests {
             Some("hatch_automation")
         );
         assert_eq!(result.metadata.hatch_run_id.as_deref(), Some("hatch-run-1"));
+        assert_eq!(result.metadata.launch_actor.as_deref(), Some("automation"));
+        assert_eq!(result.metadata.launch_surface.as_deref(), Some("hatch"));
         assert_eq!(
             result.metadata.parent_longhouse_session_id.as_deref(),
             Some("11111111-1111-4111-8111-111111111111")

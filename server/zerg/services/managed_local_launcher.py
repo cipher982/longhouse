@@ -25,6 +25,7 @@ from zerg.services.managed_local_transport import build_managed_local_attach_com
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.managed_provider_contracts import require_contract_for_provider
 from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.services.session_launch_provenance import sanitize_launch_provenance
 from zerg.session_loop_mode import coerce_session_loop_mode
 
 _VALID_PROVIDERS = managed_provider_names()
@@ -74,6 +75,8 @@ class ManagedLocalLaunchParams:
     claude_launch_env: dict[str, str] | None = None
     require_runner_ready: bool = False
     permission_mode: str = "bypass"
+    launch_actor: str | None = None
+    launch_surface: str | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,8 @@ class ManagedLocalLaunchPlan:
     managed_session_name: str
     loop_mode: str
     permission_mode: str
+    launch_actor: str | None
+    launch_surface: str | None
     managed_transport: str
     attach_command: str
 
@@ -227,6 +232,11 @@ def build_managed_local_launch_plan(
     contract = require_contract_for_provider(provider)
     managed_session_name = _build_managed_session_name(display_name, fallback=f"{provider}-{plan_session_id.hex[:8]}")
     permission_mode = "remote_approve" if str(params.permission_mode).strip() == "remote_approve" else "bypass"
+    launch_actor, launch_surface = sanitize_launch_provenance(
+        origin_kind=None,
+        launch_actor=params.launch_actor,
+        launch_surface=params.launch_surface,
+    )
     loop_mode = coerce_session_loop_mode(params.loop_mode).value
     plan = ManagedLocalLaunchPlan(
         session_id=plan_session_id,
@@ -240,6 +250,8 @@ def build_managed_local_launch_plan(
         managed_session_name=managed_session_name,
         loop_mode=loop_mode,
         permission_mode=permission_mode,
+        launch_actor=launch_actor,
+        launch_surface=launch_surface,
         managed_transport=contract.managed_transport.value,
         attach_command="",
     )
@@ -284,6 +296,8 @@ def materialize_managed_local_launch_plan_sync(
         tool_calls=0,
         loop_mode=plan.loop_mode,
         permission_mode=plan.permission_mode,
+        launch_actor=plan.launch_actor,
+        launch_surface=plan.launch_surface,
     )
     db.add(session)
     db.flush()

@@ -88,6 +88,8 @@ def test_sqlite_migration_adds_role_preview_columns(tmp_path):
     timeline_card_columns = _table_columns(engine, "timeline_cards")
     assert {col.name for col in AgentSession.__table__.columns if col.name.endswith("_message_preview")} <= session_columns
     assert {col.name for col in TimelineCard.__table__.columns if col.name.endswith("_message_preview")} <= timeline_card_columns
+    assert {"launch_actor", "launch_surface"} <= session_columns
+    assert {"launch_actor", "launch_surface"} <= timeline_card_columns
 
 
 def test_sqlite_migration_renames_session_input_request_identity(tmp_path):

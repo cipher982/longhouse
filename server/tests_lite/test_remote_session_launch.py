@@ -456,6 +456,39 @@ def test_happy_path_inserts_live_session(tmp_path):
     assert sent["payload"]["execution_lifetime"] == "live_control"
 
 
+def test_remote_launch_persists_and_dispatches_human_ui_provenance(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            launch_remote_session(
+                db,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="codex",
+                    cwd="/Users/me/repo",
+                    launch_actor="human_ui",
+                    launch_surface="api",
+                ),
+                registry=registry,
+            )
+        )
+
+    with SessionLocal() as db:
+        row = db.get(AgentSession, result.session_id)
+        assert row.launch_actor == "human_ui"
+        assert row.launch_surface == "api"
+
+    assert len(registry.sent) == 1
+    sent = registry.sent[0]
+    assert sent["payload"]["launch_actor"] == "human_ui"
+    assert sent["payload"]["launch_surface"] == "api"
+
+
 def test_launch_remote_session_writes_live_launch_readiness(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)

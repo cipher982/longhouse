@@ -64,6 +64,8 @@ from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_graph_projection import workflow_run_projection
 from zerg.services.session_graph_projection import workflow_runs_for_session
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+from zerg.services.session_launch_provenance import HIDDEN_FROM_DEFAULT_ORIGIN_KINDS
+from zerg.services.session_launch_provenance import sanitize_launch_provenance
 from zerg.services.session_observation_reducers import ProviderEventReduction
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
 from zerg.services.session_observations import OBS_KIND_PROVIDER_BINDING_CONFLICT
@@ -97,12 +99,6 @@ _SESSION_LAST_USER_PREVIEW_CHARS = 300
 _SESSION_LAST_ASSISTANT_PREVIEW_CHARS = 500
 HATCH_AUTOMATION_ORIGIN_KIND = "hatch_automation"
 TEST_OR_CANARY_ORIGIN_KIND = "test_or_canary"
-HIDDEN_FROM_DEFAULT_ORIGIN_KINDS = frozenset(
-    {
-        HATCH_AUTOMATION_ORIGIN_KIND,
-        TEST_OR_CANARY_ORIGIN_KIND,
-    }
-)
 
 
 def _bounded_session_preview(value: str | None, *, max_len: int) -> str | None:
@@ -136,6 +132,26 @@ def _normalize_origin_kind(value: str | None) -> str | None:
 
 def _hidden_from_default_timeline_for_origin(origin_kind: str | None) -> int:
     return 1 if origin_kind in HIDDEN_FROM_DEFAULT_ORIGIN_KINDS else 0
+
+
+def _launch_provenance_from_ingest(data: SessionIngest, *, origin_kind: str | None) -> tuple[str | None, str | None]:
+    return sanitize_launch_provenance(
+        origin_kind=origin_kind,
+        launch_actor=data.launch_actor,
+        launch_surface=data.launch_surface,
+    )
+
+
+def _fill_session_launch_provenance(
+    session: AgentSession,
+    *,
+    launch_actor: str | None,
+    launch_surface: str | None,
+) -> None:
+    if launch_actor and not session.launch_actor:
+        session.launch_actor = launch_actor
+    if launch_surface and not session.launch_surface:
+        session.launch_surface = launch_surface
 
 
 def _source_path_looks_like_subagent(source_path: str | None) -> bool:
@@ -752,6 +768,16 @@ class AgentsStore:
         if incoming_origin_kind and session.origin_kind != incoming_origin_kind:
             session.origin_kind = incoming_origin_kind
             session.hidden_from_default_timeline = _hidden_from_default_timeline_for_origin(incoming_origin_kind)
+        effective_origin_kind = incoming_origin_kind or session.origin_kind
+        incoming_launch_actor, incoming_launch_surface = _launch_provenance_from_ingest(
+            data,
+            origin_kind=effective_origin_kind,
+        )
+        _fill_session_launch_provenance(
+            session,
+            launch_actor=incoming_launch_actor,
+            launch_surface=incoming_launch_surface,
+        )
 
         incoming_started_at = _normalize_utc_naive(data.started_at)
         existing_started_at = _normalize_utc_naive(session.started_at)
@@ -2017,6 +2043,7 @@ class AgentsStore:
         first_user_text_from_ingest = _first_user_text_from_ingest(data)
         origin_kind = _normalize_origin_kind(data.origin_kind)
         origin_hidden_from_default_timeline = _hidden_from_default_timeline_for_origin(origin_kind)
+        launch_actor, launch_surface = _launch_provenance_from_ingest(data, origin_kind=origin_kind)
         lineage_parent_provider_session_id = _hatch_lineage_parent_provider_session_id(data, primary_source_path)
         lineage_is_sidechain = data.is_sidechain
         if origin_kind == HATCH_AUTOMATION_ORIGIN_KIND and not _hatch_origin_has_provider_lineage_evidence(
@@ -2202,6 +2229,8 @@ class AgentsStore:
                 loop_mode="assist",
                 origin_kind=origin_kind,
                 hidden_from_default_timeline=origin_hidden_from_default_timeline,
+                launch_actor=launch_actor,
+                launch_surface=launch_surface,
             )
             self.db.add(session)
             self.db.flush()

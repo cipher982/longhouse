@@ -70,6 +70,7 @@ from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_launch_lifecycle import normalize_remote_execution_lifetime
 from zerg.services.session_launch_lifecycle import normalize_remote_launch_error_code
 from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
+from zerg.services.session_launch_provenance import sanitize_launch_provenance
 from zerg.services.write_serializer import get_live_write_serializer
 from zerg.session_loop_mode import SessionLoopMode
 
@@ -113,6 +114,8 @@ class RemoteLaunchParams:
     initial_prompt: str | None = None
     execution_lifetime: RemoteExecutionLifetime = DEFAULT_REMOTE_EXECUTION_LIFETIME
     client_request_id: str | None = None
+    launch_actor: str | None = None
+    launch_surface: str | None = None
 
 
 @dataclass(frozen=True)
@@ -228,6 +231,11 @@ def _create_remote_launch_shell(
     display_name = (params.display_name or project).strip() or project
     now = datetime.now(timezone.utc)
     lease_until = now + timedelta(seconds=LAUNCH_LEASE_SECS)
+    launch_actor, launch_surface = sanitize_launch_provenance(
+        origin_kind=None,
+        launch_actor=params.launch_actor,
+        launch_surface=params.launch_surface,
+    )
 
     session = AgentSession(
         id=session_uuid,
@@ -245,6 +253,8 @@ def _create_remote_launch_shell(
         assistant_messages=0,
         tool_calls=0,
         loop_mode=SessionLoopMode.ASSIST.value,
+        launch_actor=launch_actor,
+        launch_surface=launch_surface,
     )
     db.add(session)
     db.flush()
@@ -660,6 +670,11 @@ def _build_remote_launch_live_payload(
     started_at: datetime,
     expires_at: datetime,
 ) -> dict:
+    launch_actor, launch_surface = sanitize_launch_provenance(
+        origin_kind=None,
+        launch_actor=params.launch_actor,
+        launch_surface=params.launch_surface,
+    )
     payload = {
         "session_id": str(session_uuid),
         "owner_id": int(params.owner_id),
@@ -678,6 +693,10 @@ def _build_remote_launch_live_payload(
         "started_at": started_at,
         "expires_at": expires_at,
     }
+    if launch_actor:
+        payload["launch_actor"] = launch_actor
+    if launch_surface:
+        payload["launch_surface"] = launch_surface
     if run_uuid is not None:
         payload["run_id"] = str(run_uuid)
     return payload
@@ -755,6 +774,15 @@ async def _launch_remote_session_hot(
         "project": shell.project,
         "display_name": shell.display_name,
     }
+    launch_actor, launch_surface = sanitize_launch_provenance(
+        origin_kind=None,
+        launch_actor=params.launch_actor,
+        launch_surface=params.launch_surface,
+    )
+    if launch_actor:
+        payload["launch_actor"] = launch_actor
+    if launch_surface:
+        payload["launch_surface"] = launch_surface
     if execution_lifetime == "one_shot":
         payload["initial_prompt"] = initial_prompt
         if shell.one_shot_run is not None:
@@ -1158,6 +1186,11 @@ async def launch_remote_session(
     display_name = (params.display_name or project).strip() or project
     now = datetime.now(timezone.utc)
     lease_until = now + timedelta(seconds=LAUNCH_LEASE_SECS)
+    launch_actor, launch_surface = sanitize_launch_provenance(
+        origin_kind=None,
+        launch_actor=params.launch_actor,
+        launch_surface=params.launch_surface,
+    )
 
     await _write_live_launch_readiness(
         lambda live_db: upsert_live_launch_readiness(
@@ -1193,6 +1226,8 @@ async def launch_remote_session(
         assistant_messages=0,
         tool_calls=0,
         loop_mode=SessionLoopMode.ASSIST.value,
+        launch_actor=launch_actor,
+        launch_surface=launch_surface,
     )
     db.add(session)
     db.flush()
@@ -1235,6 +1270,10 @@ async def launch_remote_session(
         "project": project,
         "display_name": display_name,
     }
+    if launch_actor:
+        payload["launch_actor"] = launch_actor
+    if launch_surface:
+        payload["launch_surface"] = launch_surface
     if execution_lifetime == "one_shot":
         payload["initial_prompt"] = initial_prompt
         if one_shot_run is not None:

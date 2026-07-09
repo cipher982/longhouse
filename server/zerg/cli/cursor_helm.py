@@ -54,6 +54,7 @@ from zerg.cli._common import ensure_managed_launch_preflight
 from zerg.cli._common import git_output
 from zerg.cli._common import interactive_stdio
 from zerg.cli._common import load_api_credentials
+from zerg.cli._managed_launch import interactive_human_shell_launch_provenance
 from zerg.cli.cursor_helm_ingest import probe_ingest_path
 from zerg.cli.cursor_helm_ingest import run_helm_ingest_thread
 from zerg.services.longhouse_paths import get_managed_local_dir
@@ -198,6 +199,11 @@ def _register_session(
         "machine_name": machine_name,
         "permission_mode": permission_mode,
     }
+    launch_actor, launch_surface = interactive_human_shell_launch_provenance()
+    if launch_actor:
+        payload["launch_actor"] = launch_actor
+    if launch_surface:
+        payload["launch_surface"] = launch_surface
     launch_url = f"{url.rstrip('/')}/api/sessions/managed-local/this-device"
     if verbose:
         typer.echo(f"Creating Longhouse managed cursor session: POST {launch_url}")

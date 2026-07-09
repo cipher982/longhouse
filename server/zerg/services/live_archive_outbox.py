@@ -192,6 +192,8 @@ def enqueue_managed_local_launch_outbox(
                                 "managed_session_name": plan.managed_session_name,
                                 "loop_mode": plan.loop_mode,
                                 "permission_mode": plan.permission_mode,
+                                "launch_actor": plan.launch_actor,
+                                "launch_surface": plan.launch_surface,
                                 "managed_transport": plan.managed_transport,
                                 "attach_command": plan.attach_command,
                             },
@@ -926,6 +928,8 @@ def _restore_managed_local_launch_plan(plan_payload: dict[str, Any]) -> ManagedL
         managed_session_name=str(plan_payload.get("managed_session_name") or ""),
         loop_mode=str(plan_payload.get("loop_mode") or "assist"),
         permission_mode=str(plan_payload.get("permission_mode") or "bypass"),
+        launch_actor=str(plan_payload.get("launch_actor") or "").strip() or None,
+        launch_surface=str(plan_payload.get("launch_surface") or "").strip() or None,
         managed_transport=str(plan_payload.get("managed_transport") or ""),
         attach_command=str(plan_payload.get("attach_command") or ""),
     )

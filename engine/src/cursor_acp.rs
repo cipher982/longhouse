@@ -61,6 +61,8 @@ pub struct CursorAcpRunConfig {
     pub api_token: String,
     pub cursor_bin: String,
     pub prompt: String,
+    pub launch_actor: Option<String>,
+    pub launch_surface: Option<String>,
     /// Cursor ACP sessionId to resume (`session/load` + `session/prompt`).
     /// When None, a fresh `session/new` is created.
     pub resume_acp_session_id: Option<String>,
@@ -84,6 +86,8 @@ struct CursorAcpSink {
     api_token: String,
     machine_name: String,
     cwd: String,
+    launch_actor: Option<String>,
+    launch_surface: Option<String>,
     local_db_path: Option<PathBuf>,
     http: reqwest::Client,
 }
@@ -110,6 +114,12 @@ pub async fn start_cursor_acp_once(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(launch_actor) = normalized_optional(&config.launch_actor) {
+        command.env("LONGHOUSE_LAUNCH_ACTOR", launch_actor);
+    }
+    if let Some(launch_surface) = normalized_optional(&config.launch_surface) {
+        command.env("LONGHOUSE_LAUNCH_SURFACE", launch_surface);
+    }
 
     #[cfg(unix)]
     {
@@ -142,6 +152,8 @@ pub async fn start_cursor_acp_once(
         api_token: config.api_token.clone(),
         machine_name: config.machine_name.clone(),
         cwd: config.cwd.to_string_lossy().to_string(),
+        launch_actor: config.launch_actor.clone(),
+        launch_surface: config.launch_surface.clone(),
         local_db_path: config.local_db_path.clone(),
         http: reqwest::Client::new(),
     };
@@ -598,6 +610,8 @@ impl CursorAcpSink {
             "started_at": started.to_rfc3339(),
             "provider_session_id": provider_session_id,
             "execution_home": "managed_local",
+            "launch_actor": self.launch_actor.as_deref(),
+            "launch_surface": self.launch_surface.as_deref(),
             "events": events,
         });
         let url = format!("{}/api/agents/ingest", self.api_url.trim_end_matches('/'));
@@ -741,6 +755,8 @@ mod tests {
             api_token: "tok".to_string(),
             cursor_bin: "cursor-agent".to_string(),
             prompt: prompt.to_string(),
+            launch_actor: None,
+            launch_surface: None,
             resume_acp_session_id: resume.map(str::to_string),
             machine_name: "mac".to_string(),
             local_db_path: None,

@@ -28,6 +28,7 @@ from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
 from zerg.cli._managed_contract import record_managed_provider_contract
 from zerg.cli._managed_contract import remove_managed_provider_contract
+from zerg.cli._managed_launch import add_interactive_human_shell_launch_env
 from zerg.provider_cli_contract import ANTIGRAVITY_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_ANTIGRAVITY_BIN_FLAG
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
@@ -276,6 +277,7 @@ def _run_native_antigravity(
     cmd = [antigravity_bin, *antigravity_args]
     env = os.environ.copy()
     env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+    add_interactive_human_shell_launch_env(env)
     env["LONGHOUSE_DEVICE_ID"] = machine_name
     env["LONGHOUSE_RUNTIME_EVENTS_URL"] = _managed_runtime_events_url(url)
     env["LONGHOUSE_RUNTIME_TOKEN"] = token

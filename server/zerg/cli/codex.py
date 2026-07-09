@@ -28,6 +28,7 @@ from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import open_session_url as _open_session_url
 from zerg.cli._managed_contract import remove_managed_provider_contract
 from zerg.cli._managed_launch import EXIT_SETUP_FAILED
+from zerg.cli._managed_launch import add_interactive_human_shell_launch_env
 from zerg.cli._managed_launch import finish_managed_launch_preflight
 from zerg.cli._managed_launch import launch_managed_local_from_api
 from zerg.cli._managed_launch import maybe_open_session_url
@@ -652,6 +653,7 @@ def _run_native_codex_tui(
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]
     env = os.environ.copy()
     env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
+    add_interactive_human_shell_launch_env(env)
     if os.name == "posix" and _stdio_ttys():
         return _run_foreground_process_group(cmd=cmd, cwd=cwd, env=env)
     completed = subprocess.run(cmd, check=False, cwd=str(cwd), env=env)

@@ -26,6 +26,7 @@ from zerg.cli._managed_contract import remove_managed_provider_contract
 from zerg.cli._managed_launch import EXIT_SETUP_FAILED
 from zerg.cli._managed_launch import build_managed_local_launch_payload  # noqa: F401 (re-exported for tests)
 from zerg.cli._managed_launch import finish_managed_launch_preflight
+from zerg.cli._managed_launch import interactive_human_shell_launch_provenance
 from zerg.cli._managed_launch import launch_managed_local_from_api as _launch_managed_local_from_api
 from zerg.cli._managed_launch import maybe_open_session_url
 from zerg.cli._managed_launch import record_contract_or_warn
@@ -120,6 +121,11 @@ def _collect_claude_launch_env() -> dict[str, str]:
         value = str(os.environ.get(key) or "").strip()
         if value:
             env[key] = value
+    launch_actor, launch_surface = interactive_human_shell_launch_provenance()
+    if launch_actor:
+        env["LONGHOUSE_LAUNCH_ACTOR"] = launch_actor
+    if launch_surface:
+        env["LONGHOUSE_LAUNCH_SURFACE"] = launch_surface
     return env
 
 
