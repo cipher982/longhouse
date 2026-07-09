@@ -82,19 +82,11 @@ def _tool_call_count(session: dict) -> int:
     return 0
 
 
-def _is_ended(session: dict) -> bool:
-    """True if the session is completed (ended_at set), tolerant of card shape."""
-    detail = session.get("detail")
-    if isinstance(detail, dict) and detail.get("ended_at"):
-        return True
-    return bool(session.get("ended_at"))
-
-
 def resolve_url_templates(url: str, base_url: str) -> str:
     """Replace {featured_session_id} / {first_session_id} placeholders.
 
-    {featured_session_id} picks the completed session with the most tool_calls
-    — better for marketing as it shows a dense, interesting event timeline.
+    {featured_session_id} picks the session with the most tool_calls — better
+    for marketing as it shows a dense, interesting event timeline.
     """
     # Screenshot base URLs are UI origins with /api available via the same host
     # (Vite proxy in dev, nginx in demo/prod-like capture flows).
@@ -103,11 +95,11 @@ def resolve_url_templates(url: str, base_url: str) -> str:
     if "{featured_session_id}" in url:
         try:
             sessions = load_timeline_sessions(api_url, limit=50)
-            best = max(
-                (s for s in sessions if _is_ended(s)),
-                key=_tool_call_count,
-                default=sessions[0] if sessions else None,
-            )
+            # Ingested provider transcripts do not necessarily have a durable
+            # ended_at marker, even when their transcript is complete. Density
+            # is the useful marketing signal; do not silently fall back to the
+            # newest (usually still-active) session just because ended_at is null.
+            best = max(sessions, key=_tool_call_count, default=None)
             if best:
                 return url.replace("{featured_session_id}", str(_session_id(best)))
         except Exception as e:

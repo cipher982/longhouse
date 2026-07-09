@@ -1,6 +1,6 @@
 ---
 name: landing-hero
-description: Generate and ship the Longhouse landing hero using separate AI-rendered device assets plus CSS composition. Capture real product references, render each device, crop tightly, then assemble responsively in the hero.
+description: Refresh and ship the Longhouse landing hero video, poster, and supporting product screenshots from realistic demo data, then verify the responsive composition visually.
 ---
 
 # Landing Hero Pipeline
@@ -14,13 +14,10 @@ Use this skill when the user says things like:
 
 This skill is the whole workflow. Do not invent a separate process doc or task note.
 
-The current shipping approach is **not** one giant baked hero image. The final product is:
-
-1. three separate device assets
-2. tightly cropped
-3. assembled in CSS in the landing hero
-
-The AI output is raw material. The hero is the composed stage in code.
+The current shipping hero is a Remotion video assembled from real product
+captures, with a generated poster for loading and reduced-motion contexts.
+The tabbed showcase and README use the same captured timeline/search/session
+assets, so refresh the demo corpus before rendering any derived media.
 
 ## Entry
 
@@ -29,7 +26,7 @@ Assume the user wants the shipping hero updated unless they explicitly ask for c
 Start here:
 
 1. Inspect the current hero in `web/src/components/landing/HeroSection.tsx` and `web/src/styles/landing.css`
-2. Inspect the current device assets in `web/public/images/landing/`
+2. Inspect the screenshots, poster, and video in `web/public/images/landing/` and `web/public/videos/`
 3. Bring up local dev and capture desktop + mobile screenshots
 4. Decide whether the problem is:
    - asset quality
@@ -43,7 +40,7 @@ You are done when all of these are true:
 
 - the hero looks intentional on desktop
 - the hero still reads on mobile
-- the shipped device assets are the only image inputs
+- the hero video and poster use current product captures
 - no stale legacy hero image is still referenced or lingering
 - the skill/docs do not contradict the implementation
 - **you actually looked at the live result** — see "Vision Check Before Calling Done" below
@@ -73,12 +70,13 @@ If the result does not match what you claimed you shipped, say so out loud befor
 
 Ship and maintain these files:
 
-- `web/public/images/landing/device-laptop.webp` — MacBook render displaying the timeline
-- `web/public/images/landing/device-iphone.webp` — iPhone render displaying the widget
+- `web/public/videos/wedge-demo.mp4`
+- `web/public/images/landing/wedge-poster.png`
+- `web/public/images/landing/timeline-preview.png`
+- `web/public/images/landing/search-preview.png`
+- `web/public/images/landing/session-detail-preview.png`
 - `web/src/components/landing/HeroSection.tsx`
 - `web/src/styles/landing.css`
-
-Naming rule: the file name must match what is actually in the pixels. If the render is a MacBook, the file is `device-laptop.webp`, not `device-monitor.webp`. Agents read file names before they read images; a lying name propagates for months.
 
 ## Default Workflow
 
@@ -89,29 +87,10 @@ If the user says "update the hero image", do this exact loop:
    - Capture local desktop + mobile screenshots
    - Identify whether the problem is in the assets or the composition
 
-2. Refresh real references if needed
-   - timeline/browser reference
-   - terminal reference
-   - iOS widget/phone reference
-
-3. Generate or revise **separate device renders**
-   - one monitor
-   - one MacBook
-   - one iPhone
-   - do not stop at a giant flattened composite unless the user explicitly wants concept art only
-
-4. Crop and compress the assets for shipping
-   - remove dead black margins
-   - remove hardware elements that should not dominate the stage
-   - if the monitor stand is ugly, crop it out at the asset level instead of hiding it in CSS
-   - resize/compress to the smallest format that still holds up visually in the composed hero
-   - prefer modern formats like WebP for shipped device assets unless there is a clear reason not to
-
-5. Compose in CSS
-   - monitor is the dominant element
-   - MacBook overlaps lower-left
-   - iPhone overlaps lower-right
-   - desktop and mobile must both be intentional
+2. Refresh the deterministic demo corpus and run `make marketing-screenshots`.
+3. Refresh the iOS steer shot when the phone UI changed (`make ios-marketing`).
+4. Run `make demo-render`; it renders and copies the video + poster to `web/public`.
+5. Regenerate the social card with `bun scripts/generate-og-image.mjs`.
 
 6. Verify locally
    - capture a desktop screenshot
@@ -124,35 +103,29 @@ If the user says "update the hero image", do this exact loop:
 
 ## Non-Goals
 
-- Do not ship one big promo render just because it looks good in isolation.
-- Do not keep empty-margin assets and try to compensate with increasingly weird CSS.
+- Do not hand-edit frames that should come from product captures.
+- Do not use sparse or repetitive test-fixture copy in public screenshots.
 - Do not create a script unless the workflow is truly deterministic and worth automating.
 - Do not leave the skill describing an old process after the implementation changes.
 
 ## Current Canonical Output
 
-These are the production-facing hero assets:
-
-- `web/public/images/landing/device-laptop.webp`
-- `web/public/images/landing/device-iphone.webp`
-
-(`device-macbook.webp` is an older asset from the trio exploration and is currently unreferenced. Delete it if you do another hero pass and still don't need it.)
-
-These are assembled here:
+The production-facing hero is rendered from `video/specs/wedge-demo.json` with
+`make demo-render`, which now copies the MP4 and poster into `web/public`.
+It is assembled here:
 
 - `web/src/components/landing/HeroSection.tsx`
 - `web/src/styles/landing.css`
 
-As of April 17, 2026, the shipping hero uses:
-
-- monitor as the dominant center/right anchor
-- MacBook overlapping lower-left
-- iPhone overlapping lower-right
-- CSS positioning, not a flattened composite image
+As of July 9, 2026, the shipping hero uses a four-beat launch → timeline →
+phone-steer → CTA loop. The timeline frame comes from the marketing screenshot
+pipeline; the phone frame comes from the iOS marketing capture.
 
 ## The Narrative
 
-The narrative is an unresolved product question, not a locked-in answer. Do not assert one in this skill. The current shipping hero is a trio (monitor + MacBook + iPhone) with copy that does the storytelling. Candidate directions explored April 2026:
+The current shipping narrative is explicit: start at the desk, see everything
+in one timeline, steer from the phone. Candidate static directions explored in
+April 2026 are retained below as historical references, not shipping truth:
 
 - **Timeline-primary** — big timeline, phone secondary. Highest product legibility, weakest differentiation.
 - **Terminal → Phone** — MacBook left, big phone right, arc between. Strongest differentiation, hides the timeline.
@@ -355,7 +328,7 @@ Tips:
 - The `❯` prompt, `zerg git:(main)` status bar, and bullet formatting are the real Claude Code look
 - Must use the full path `~/.local/bin/claude` in Terminal.app (PATH not loaded in `-sh`)
 
-## Solo-Device 0→1 Pipeline (recommended default)
+## Legacy Solo-Device 0→1 Pipeline (reference only)
 
 For a single shipping device asset (e.g. `device-iphone.webp`), the 0→1 path is:
 
@@ -662,6 +635,5 @@ Product showcase (tabbed screenshots): `web/src/components/landing/ProductShowca
 
 ## Future Work
 
-- **Automated pipeline:** Single command that captures all three screenshots, generates three device renders, crops them, and writes `device-monitor.png`, `device-macbook.png`, and `device-iphone.png`.
-- **Production hero as React component:** Keep the current CSS-composed approach, or later replace AI hardware shells with code-native device frames plus real screenshots if the assets drift too much.
-- **Phone back workaround:** Gemini renders the iPhone's titanium back ~40% of the time. Consider post-processing or generating multiple variants and selecting the best.
+- Add a single top-level target that runs marketing screenshots, optional iOS capture, video/poster render, and OG generation.
+- Consider a reduced-motion still that shows the timeline + phone together instead of the current final steer frame.

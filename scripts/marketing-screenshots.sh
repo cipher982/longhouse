@@ -33,6 +33,7 @@ unset DATABASE_URL
 export DATABASE_URL="sqlite:///$DEMO_DB_PATH"
 export AUTH_DISABLED=1
 export SINGLE_TENANT=1
+export LLM_DISABLED=1
 export VITE_PROXY_TARGET="http://localhost:$BACKEND_PORT"
 
 if [ -z "$FERNET_SECRET" ]; then

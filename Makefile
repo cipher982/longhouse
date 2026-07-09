@@ -661,7 +661,7 @@ release: ## Cut a stable release (usage: make release VERSION=v0.1.13)
 ui-capture: ## Capture local dev UI debug bundle
 	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,)
 
-marketing-screenshots: ## Regenerate landing-page marketing screenshots (retina, frozen clock, demo data). NAME=<entry> for one.
+marketing-screenshots: ## Regenerate landing-page marketing screenshots (retina, realistic demo data). NAME=<entry> for one.
 	@./scripts/marketing-screenshots.sh $(NAME)
 
 demo-render: ## Render the wedge demo (mp4 + hero poster) from real captured shots
@@ -674,7 +674,9 @@ demo-render: ## Render the wedge demo (mp4 + hero poster) from real captured sho
 		echo "  WARN: /tmp/lh-shots/session-dark.png missing — run 'make ios-marketing' first for the steer shot"; \
 	fi
 	@cd video && bun run render:wedge && bun run render:wedge-poster
-	@echo "Wedge demo: video/out/wedge-demo.mp4  +  video/out/wedge-poster.png"
+	@cp video/out/wedge-demo.mp4 web/public/videos/wedge-demo.mp4
+	@cp video/out/wedge-poster.png web/public/images/landing/wedge-poster.png
+	@echo "Wedge demo rendered and copied into web/public"
 
 qa-ui-workbench: ## Capture fixture-backed timeline/session workbench screenshots
 	@set -e; \

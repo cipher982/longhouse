@@ -25,20 +25,23 @@ screenshots:
   timeline-preview:
     description: Timeline page with sessions from multiple providers
     url: /timeline?marketing=true
+    clock: live
     viewport: { width: 1400, height: 900 }
     expect_selector: '[data-testid="timeline-inbox"]'
     output: public/images/landing/timeline-preview.png
 
   search-preview:
     description: Timeline with search results showing FTS5 matches
-    url: /timeline?query=file&marketing=true
+    url: /timeline?query=timeline&marketing=true
+    clock: live
     viewport: { width: 1400, height: 900 }
     expect_selector: '[data-testid="timeline-inbox"]'
     output: public/images/landing/search-preview.png
 
   session-detail-preview:
     description: Session detail view with events, tool calls expanded
-    # Resolves {featured_session_id} to the completed session with most tool calls
+    # Resolves {featured_session_id} to the transcript with the most tool calls
     url: /timeline/{featured_session_id}?marketing=true
+    clock: live
     viewport: { width: 1400, height: 900 }
     output: public/images/landing/session-detail-preview.png

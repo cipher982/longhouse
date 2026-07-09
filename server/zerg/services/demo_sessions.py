@@ -24,7 +24,7 @@ def _lh(wall: str, exit_code: int, token_count: int, output: str, chunk: str = "
 def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest]:
     """Return demo agent sessions for seeding a demo DB.
 
-    10 sessions across 5 days, 4 projects, 3 providers.
+    10 sessions across 5 days, 5 projects, 5 providers, and 4 machines.
     Mix of short (8-12), medium (15-18), and long (25-28) events.
     Includes parallel tool batches, MCP tools, and realistic outputs.
     """
@@ -1144,6 +1144,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             environment="production",
             project="longhouse",
             device_id="shipper-laptop",
+            device_name="MacBook Pro",
             cwd="/Users/demo/git/longhouse",
             git_repo="https://github.com/cipher982/longhouse",
             git_branch="feat/semantic-search",
@@ -1156,7 +1157,8 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             provider="codex",
             environment="production",
             project="longhouse",
-            device_id="shipper-laptop",
+            device_id="studio-mac",
+            device_name="Studio Mac",
             cwd="/Users/demo/git/longhouse",
             git_repo="https://github.com/cipher982/longhouse",
             git_branch="fix/ingest-race-condition",
@@ -1169,7 +1171,8 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             provider="antigravity",
             environment="production",
             project="acme-api",
-            device_id="shipper-laptop",
+            device_id="homelab-mini",
+            device_name="Homelab Mini",
             cwd="/Users/demo/git/acme-api",
             git_repo="https://github.com/demo/acme-api",
             git_branch="fix/digest-timezone",
@@ -1179,10 +1182,11 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             events=s3,
         ),
         SessionIngest(
-            provider="claude",
+            provider="opencode",
             environment="production",
             project="hdr",
-            device_id="shipper-laptop",
+            device_id="linux-workstation",
+            device_name="Linux Workstation",
             cwd="/Users/demo/git/hdr",
             git_repo="https://github.com/demo/hdr",
             git_branch="feat/watermark-detection",
@@ -1196,6 +1200,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             environment="production",
             project="longhouse",
             device_id="shipper-laptop",
+            device_name="MacBook Pro",
             cwd="/Users/demo/git/longhouse",
             git_repo="https://github.com/cipher982/longhouse",
             git_branch="feat/semantic-search",
@@ -1208,7 +1213,8 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             provider="claude",
             environment="production",
             project="longhouse",
-            device_id="shipper-laptop",
+            device_id="homelab-mini",
+            device_name="Homelab Mini",
             cwd="/Users/demo/git/longhouse",
             git_repo="https://github.com/cipher982/longhouse",
             git_branch="main",
@@ -1218,10 +1224,11 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             events=s6,
         ),
         SessionIngest(
-            provider="antigravity",
+            provider="cursor",
             environment="production",
             project="longhouse",
-            device_id="shipper-laptop",
+            device_id="studio-mac",
+            device_name="Studio Mac",
             cwd="/Users/demo/git/longhouse",
             git_repo="https://github.com/cipher982/longhouse",
             git_branch="feat/recall-panel",
@@ -1235,6 +1242,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             environment="production",
             project=None,
             device_id="shipper-laptop",
+            device_name="MacBook Pro",
             cwd="/Users/demo/git",
             git_repo=None,
             git_branch=None,
@@ -1247,7 +1255,8 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             provider="codex",
             environment="production",
             project="longhouse",
-            device_id="shipper-laptop",
+            device_id="linux-workstation",
+            device_name="Linux Workstation",
             cwd="/Users/demo/git/longhouse",
             git_repo="https://github.com/cipher982/longhouse",
             git_branch="main",
@@ -1261,6 +1270,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             environment="production",
             project="longhouse",
             device_id="shipper-laptop",
+            device_name="MacBook Pro",
             cwd="/Users/demo/git/longhouse",
             git_repo="https://github.com/cipher982/longhouse",
             git_branch="main",
