@@ -201,6 +201,57 @@ def test_ingest_launch_provenance_is_fill_only(tmp_path):
         assert session.launch_surface == "terminal"
 
 
+def test_ingest_only_backfills_surface_for_matching_actor(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    session_id = uuid4()
+
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="codex",
+                environment="development",
+                started_at=datetime(2026, 7, 9, tzinfo=timezone.utc),
+                launch_actor="human_shell",
+                events=[_event("first")],
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="codex",
+                environment="development",
+                started_at=datetime(2026, 7, 9, tzinfo=timezone.utc),
+                launch_actor="automation",
+                launch_surface="test",
+                events=[_event("conflicting")],
+            )
+        )
+        db.flush()
+        session = db.get(AgentSession, session_id)
+        assert session.launch_actor == "human_shell"
+        assert session.launch_surface is None
+
+        store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="codex",
+                environment="development",
+                started_at=datetime(2026, 7, 9, tzinfo=timezone.utc),
+                launch_actor="human_shell",
+                launch_surface="terminal",
+                events=[_event("matching")],
+            )
+        )
+        db.commit()
+
+    with SessionLocal() as db:
+        session = db.get(AgentSession, session_id)
+        assert session.launch_actor == "human_shell"
+        assert session.launch_surface == "terminal"
+
+
 def test_managed_local_materialization_persists_human_shell_launch(tmp_path):
     SessionLocal = _make_db(tmp_path)
     runner = SimpleNamespace(id=12, name="laptop", status="online", capabilities=["exec.full"])

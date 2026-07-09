@@ -1,6 +1,6 @@
 # Human Launch Provenance
 
-Status: Draft for implementation
+Status: Implemented
 Owner: Longhouse session core
 Created: 2026-07-09
 Related:

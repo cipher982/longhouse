@@ -157,7 +157,8 @@ def _fill_session_launch_provenance(
 ) -> None:
     if launch_actor and not session.launch_actor:
         session.launch_actor = launch_actor
-    if launch_surface and not session.launch_surface:
+        session.launch_surface = launch_surface
+    elif launch_actor == session.launch_actor and launch_surface and not session.launch_surface:
         session.launch_surface = launch_surface
 
 
