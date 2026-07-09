@@ -851,7 +851,10 @@ async def test_non_sqlite_stall_escalates_when_interrupt_cannot_unwind(tmp_path,
     started = threading.Event()
     release = threading.Event()
 
-    def _blocked_python(_db):
+    def _blocked_python(db):
+        # Establish the SQLite connection that the watchdog must interrupt,
+        # then block in Python so sqlite3_interrupt cannot unwind the writer.
+        db.execute(sa_text("SELECT 1"))
         started.set()
         release.wait()
 
