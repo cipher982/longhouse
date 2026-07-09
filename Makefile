@@ -197,6 +197,7 @@ test-e2e-onboarding: ## @internal Onboarding browser ring
 	@ONBOARDING_PLAYWRIGHT_PROJECT="$(PROJECT)" ./scripts/qa/qa-oss.sh --workdir $(CURDIR) --no-unit --no-e2e
 
 test-shipper-e2e: ## Shipper pipeline E2E (engine → API → DB)
+	@python3 scripts/build/generate_build_identity.py
 	cd engine && cargo build --profile $(or $(CARGO_PROFILE),release)
 	cd server && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
 
