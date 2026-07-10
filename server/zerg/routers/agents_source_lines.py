@@ -10,12 +10,15 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
 from pydantic import BaseModel
+from sqlalchemy import tuple_
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSourceLine
+from zerg.services.archive_transcript import load_session_source_line_bytes
+from zerg.services.raw_json_compression import decode_raw_json
 
 router = APIRouter(prefix="/agents/source-lines", tags=["agents"])
 
@@ -88,6 +91,7 @@ async def create_source_line_claims(
     present: list[SourceLineClaimResponseItem] = []
     missing: list[SourceLineClaimResponseItem] = []
     rejected: list[SourceLineRejectedItem] = []
+    valid: list[tuple[SourceLineClaimItem, SourceLineClaimResponseItem]] = []
 
     for item in request.items:
         normalized, error = _normalized_claim(item)
@@ -101,16 +105,44 @@ async def create_source_line_claims(
                 )
             )
             continue
+        valid.append((item, normalized))
 
-        exists = (
-            db.query(AgentSourceLine.id)
-            .filter(AgentSourceLine.session_id == item.session_id)
-            .filter(AgentSourceLine.source_path == normalized.source_path)
-            .filter(AgentSourceLine.source_offset == normalized.source_offset)
-            .filter(AgentSourceLine.line_hash == normalized.line_hash)
-            .first()
-            is not None
+    if not valid:
+        return SourceLineClaimsResponse(present=present, missing=missing, rejected=rejected)
+
+    identities = {(item.session_id, normalized.source_path, normalized.source_offset, normalized.line_hash) for item, normalized in valid}
+    rows = (
+        db.query(AgentSourceLine)
+        .filter(
+            tuple_(
+                AgentSourceLine.session_id,
+                AgentSourceLine.source_path,
+                AgentSourceLine.source_offset,
+                AgentSourceLine.line_hash,
+            ).in_(identities)
         )
-        (present if exists else missing).append(normalized)
+        .all()
+    )
+
+    durable: set[tuple[UUID, str, int, str]] = set()
+    slim_sessions: set[UUID] = set()
+    for row in rows:
+        identity = (row.session_id, row.source_path, int(row.source_offset), row.line_hash)
+        try:
+            raw_json = decode_raw_json(row)
+        except Exception:
+            raw_json = None
+        if raw_json:
+            durable.add(identity)
+        else:
+            slim_sessions.add(row.session_id)
+
+    for session_id in slim_sessions:
+        archived = load_session_source_line_bytes(db, session_id)
+        durable.update((session_id, source_path, source_offset, line_hash) for source_path, source_offset, line_hash in archived)
+
+    for item, normalized in valid:
+        identity = (item.session_id, normalized.source_path, normalized.source_offset, normalized.line_hash)
+        (present if identity in durable else missing).append(normalized)
 
     return SourceLineClaimsResponse(present=present, missing=missing, rejected=rejected)

@@ -134,6 +134,88 @@ def test_source_line_claims_split_present_missing_and_rejected(tmp_path):
         cleanup()
 
 
+def test_source_line_claims_require_recoverable_raw_bytes(tmp_path, monkeypatch):
+    factory, cleanup = _setup_app(tmp_path)
+    client = TestClient(api_app)
+    session_id = uuid4()
+    source_path = "/tmp/opencode.db#opencode:ses_test"
+    archived_raw = '{"part":"archived"}'
+    archived_hash = hashlib.sha256(archived_raw.encode()).hexdigest()
+    lost_hash = hashlib.sha256(b'{"part":"lost"}').hexdigest()
+
+    try:
+        with factory() as db:
+            db.add(
+                AgentSession(
+                    id=session_id,
+                    provider="opencode",
+                    environment="test",
+                    started_at=datetime.now(timezone.utc),
+                )
+            )
+            for source_offset, line_hash in ((10, archived_hash), (20, lost_hash)):
+                db.add(
+                    AgentSourceLine(
+                        session_id=session_id,
+                        source_path=source_path,
+                        source_offset=source_offset,
+                        branch_id=1,
+                        raw_json="",
+                        raw_json_z=None,
+                        raw_json_codec=0,
+                        line_hash=line_hash,
+                    )
+                )
+            db.commit()
+
+        monkeypatch.setattr(
+            "zerg.routers.agents_source_lines.load_session_source_line_bytes",
+            lambda db, requested_session_id: {
+                (source_path, 10, archived_hash): archived_raw,
+            },
+        )
+        response = client.post(
+            "/agents/source-lines/claims",
+            json={
+                "items": [
+                    {
+                        "session_id": str(session_id),
+                        "source_path": source_path,
+                        "source_offset": 10,
+                        "line_hash": archived_hash,
+                    },
+                    {
+                        "session_id": str(session_id),
+                        "source_path": source_path,
+                        "source_offset": 20,
+                        "line_hash": lost_hash,
+                    },
+                ]
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "present": [
+                {
+                    "source_path": source_path,
+                    "source_offset": 10,
+                    "line_hash": archived_hash,
+                }
+            ],
+            "missing": [
+                {
+                    "source_path": source_path,
+                    "source_offset": 20,
+                    "line_hash": lost_hash,
+                }
+            ],
+            "rejected": [],
+        }
+    finally:
+        cleanup()
+
+
 def test_source_line_claims_reject_too_many_items(tmp_path):
     _factory, cleanup = _setup_app(tmp_path)
     client = TestClient(api_app)
