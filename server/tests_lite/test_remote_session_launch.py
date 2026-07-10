@@ -42,6 +42,9 @@ from zerg.models.agents import SessionThreadAlias  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
 from zerg.models.live_store import LiveArchiveOutbox  # noqa: E402
 from zerg.models.live_store import LiveLaunchReadiness  # noqa: E402
+from zerg.models.live_store import LiveSessionCatalog  # noqa: E402
+from zerg.models.live_store import LiveSessionLaunchAttempt  # noqa: E402
+from zerg.models.live_store import LiveSessionThread  # noqa: E402
 from zerg.services.agents import AgentsStore  # noqa: E402
 from zerg.services.agents.kernel_capabilities import project_session_capabilities  # noqa: E402
 from zerg.services.agents.kernel_writes import ensure_primary_thread  # noqa: E402
@@ -50,6 +53,7 @@ from zerg.services.agents.kernel_writes import record_thread_alias  # noqa: E402
 from zerg.services.agents.kernel_writes import upsert_connection_for_run  # noqa: E402
 from zerg.services.live_archive_outbox import drain_live_archive_outbox  # noqa: E402
 from zerg.services.live_launch_readiness import upsert_live_launch_readiness  # noqa: E402
+from zerg.services.live_catalog_backfill import backfill_live_catalog  # noqa: E402
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlCommandResponse  # noqa: E402
@@ -1220,6 +1224,74 @@ def test_remote_launch_materializes_archive_shell_before_dispatch(tmp_path, monk
         with SessionLocal() as db:
             assert db.get(AgentSession, result.session_id) is not None
             assert _latest_attempt(db, result.session_id).state == "dispatched"
+    finally:
+        live_engine.dispose()
+
+
+def test_live_catalog_launch_dispatches_without_opening_archive_then_projects(tmp_path, monkeypatch):
+    ArchiveSession = _make_db(tmp_path)
+    _seed_user_and_device(ArchiveSession)
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-catalog-launch.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    with ArchiveSession() as archive_db, LiveSession() as live_db:
+        backfill_live_catalog(archive_db, live_db)
+
+    class CatalogDispatchRegistry(_StubRegistry):
+        async def send_command_nowait(self, **kwargs):  # type: ignore[override]
+            with ArchiveSession() as archive_db:
+                assert archive_db.get(AgentSession, kwargs["session_id"]) is None
+            with LiveSession() as live_db:
+                assert live_db.get(LiveSessionCatalog, kwargs["session_id"]) is not None
+            return await super().send_command_nowait(**kwargs)
+
+    registry = CatalogDispatchRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
+    live_serializer = _LiveReadinessSerializer(LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(remote_launch_module.database_module, "get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+
+    try:
+        with LiveSession() as catalog_db:
+            result = asyncio.run(
+                launch_remote_session(
+                    catalog_db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="codex",
+                        cwd="/Users/me/repo",
+                        client_request_id="catalog-request-1",
+                    ),
+                    registry=registry,
+                )
+            )
+
+        assert result.launch_state == "launching_unknown"
+        with ArchiveSession() as archive_db:
+            assert archive_db.get(AgentSession, result.session_id) is None
+        with LiveSession() as live_db, ArchiveSession() as archive_db:
+            catalog = live_db.get(LiveSessionCatalog, str(result.session_id))
+            assert catalog is not None
+            assert catalog.primary_thread_id is not None
+            assert live_db.get(LiveSessionThread, catalog.primary_thread_id) is not None
+            catalog_thread_id = catalog.primary_thread_id
+            attempt = (
+                live_db.query(LiveSessionLaunchAttempt)
+                .filter(LiveSessionLaunchAttempt.session_id == str(result.session_id))
+                .one()
+            )
+            assert attempt.state == "dispatched"
+            drain = drain_live_archive_outbox(live_db, archive_db, limit=10)
+            assert drain.failed == 0
+
+        with ArchiveSession() as archive_db:
+            archive_session = archive_db.get(AgentSession, result.session_id)
+            assert archive_session is not None
+            assert str(archive_session.primary_thread_id) == catalog_thread_id
+            assert _latest_attempt(archive_db, result.session_id).state == "dispatched"
     finally:
         live_engine.dispose()
 

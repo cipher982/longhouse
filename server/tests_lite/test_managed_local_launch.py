@@ -28,6 +28,9 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
+from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionLaunchAttempt
+from zerg.models.live_store import LiveSessionThread
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
@@ -479,6 +482,55 @@ def test_this_device_launch_returns_hot_readiness_when_archive_writer_is_stale(m
         outbox = live_db.query(LiveArchiveOutbox).one()
         assert outbox.kind == MANAGED_LOCAL_LAUNCH_KIND
         assert response.session_id in outbox.idempotency_key
+
+
+def test_this_device_launch_materializes_live_catalog_without_archive_db(monkeypatch, tmp_path):
+    import zerg.database as database_module
+    from zerg.routers import session_chat
+
+    live_url = f"sqlite:///{tmp_path / 'managed-launch-catalog.db'}"
+    live_engine = make_live_engine(live_url)
+    live_write_engine = make_live_write_engine(live_url)
+    initialize_live_database(live_engine)
+    LiveSession = make_sessionmaker(live_engine)
+    LiveWriteSession = make_sessionmaker(live_write_engine)
+
+    class LiveSerializer:
+        is_configured = True
+
+        async def execute(self, fn, **_kwargs):
+            with LiveWriteSession() as live_db:
+                result = fn(live_db)
+                live_db.commit()
+                return result
+
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(session_chat, "get_live_write_serializer", lambda: LiveSerializer())
+
+    _result, response = asyncio.run(
+        session_chat._launch_managed_local_session_serialized(
+            SimpleNamespace(),
+            ManagedLocalLaunchParams(
+                owner_id=42,
+                runner_target="cinder",
+                cwd="/tmp/demo",
+                provider="codex",
+                project="demo",
+                machine_name="cinder",
+            ),
+        )
+    )
+
+    with LiveSession() as live_db:
+        catalog = live_db.get(LiveSessionCatalog, response.session_id)
+        assert catalog is not None
+        assert catalog.project == "demo"
+        assert catalog.primary_thread_id is not None
+        assert live_db.get(LiveSessionThread, catalog.primary_thread_id) is not None
+        attempt = live_db.query(LiveSessionLaunchAttempt).one()
+        assert attempt.command_id == f"managed-local-{response.session_id}"
+        assert attempt.state == "pending"
 
 
 def test_this_device_launch_skips_runtime_pubsub_for_hot_readiness(monkeypatch, tmp_path):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Optional
 from uuid import NAMESPACE_URL
+from uuid import UUID
 from uuid import uuid5
 
 from sqlalchemy.exc import IntegrityError
@@ -42,6 +43,12 @@ class ProviderSessionAliasConflict(RuntimeError):
         self.requested_thread_id = requested_thread_id
 
 
+def primary_thread_id_for_session(session_id) -> UUID:
+    """Return the stable primary-thread identity for newly projected sessions."""
+
+    return uuid5(NAMESPACE_URL, f"longhouse:primary-thread:{session_id}")
+
+
 def ensure_primary_thread(db: Session, session: AgentSession) -> SessionThread:
     """Return the primary thread for ``session``, creating it if needed."""
 
@@ -55,6 +62,7 @@ def ensure_primary_thread(db: Session, session: AgentSession) -> SessionThread:
     )
     if thread is None:
         thread = SessionThread(
+            id=primary_thread_id_for_session(session.id),
             session_id=session.id,
             provider=session.provider,
             branch_kind="root",

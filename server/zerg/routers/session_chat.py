@@ -29,6 +29,7 @@ from sqlalchemy.orm import Session
 
 import zerg.database as database_module
 from zerg.config import get_settings
+from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -36,8 +37,10 @@ from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.services.agents.kernel_writes import primary_thread_id_for_session
 from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
+from zerg.services.live_catalog_launch import create_live_launch_catalog_shell
 from zerg.services.live_launch_readiness import upsert_live_launch_readiness
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.live_session_inputs import cancel_live_queued_receipt
@@ -117,6 +120,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["session-chat"])
 agents_router = APIRouter(prefix="/agents/sessions", tags=["agents"])
+_catalog_db_dependency = catalog_db_dependency()
 _STEER_ACTIVE_PRESENCE_STATES = frozenset({"thinking", "running"})
 _MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS = 300
 
@@ -176,7 +180,11 @@ async def _launch_managed_local_session_serialized(
     db: Session,
     params: ManagedLocalLaunchParams,
 ) -> tuple[Any, ManagedLocalSessionLaunchResponse]:
-    runner = resolve_managed_local_launch_runner(db, params)
+    runner = (
+        None
+        if database_module.live_catalog_enabled() and not params.require_runner_ready
+        else resolve_managed_local_launch_runner(db, params)
+    )
     plan = build_managed_local_launch_plan(params, runner=runner)
     launch_response = _managed_local_launch_response_from_plan(plan, owner_id=params.owner_id)
     await _write_hot_managed_local_launch_readiness(
@@ -210,6 +218,33 @@ async def _write_hot_managed_local_launch_readiness(
     expires_at = now + timedelta(seconds=_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS)
 
     def _write(live_db: Session):
+        command_id = f"managed-local-{plan.session_id}"
+        if database_module.live_catalog_enabled():
+            create_live_launch_catalog_shell(
+                live_db,
+                session_id=plan.session_id,
+                thread_id=primary_thread_id_for_session(plan.session_id),
+                run_id=None,
+                owner_id=owner_id,
+                provider=plan.provider,
+                device_id=plan.source_name,
+                device_name=plan.source_name,
+                cwd=plan.cwd,
+                project=plan.project,
+                git_repo=git_repo,
+                git_branch=git_branch,
+                display_name=plan.display_name,
+                initial_prompt=None,
+                execution_lifetime="live_control",
+                client_request_id=None,
+                command_id=command_id,
+                started_at=now,
+                expires_at=expires_at,
+                launch_actor=plan.launch_actor,
+                launch_surface=plan.launch_surface,
+                loop_mode=plan.loop_mode,
+                permission_mode=plan.permission_mode,
+            )
         readiness = upsert_live_launch_readiness(
             live_db,
             session_id=plan.session_id,
@@ -218,7 +253,7 @@ async def _write_hot_managed_local_launch_readiness(
             provider=plan.provider,
             execution_lifetime="live_control",
             state="pending",
-            command_id=f"managed-local-{plan.session_id}",
+            command_id=command_id,
             client_request_id=None,
             machine_id=plan.source_name,
             project=plan.project,
@@ -1296,7 +1331,7 @@ async def continue_remote_session_agents(
 @router.post("/managed-local/this-device", response_model=ManagedLocalSessionLaunchResponse)
 async def launch_managed_local_this_device(
     body: ManagedLocalThisDeviceLaunchRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ):
@@ -1360,7 +1395,7 @@ async def launch_managed_local_this_device(
 @router.post("/launch", response_model=RemoteSessionLaunchResponse)
 async def launch_remote_session_endpoint(
     body: RemoteSessionLaunchRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> RemoteSessionLaunchResponse:
     """Start a session on a user-owned machine via the Machine Agent control channel.

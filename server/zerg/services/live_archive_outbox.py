@@ -18,14 +18,17 @@ from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionRun
+from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveSessionInputReceipt
+from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.services.agents.kernel_writes import ensure_open_run_for_session
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import upsert_connection_for_run
+from zerg.services.live_catalog_launch import update_live_launch_catalog_outcome
 from zerg.services.live_launch_readiness import MANAGED_LOCAL_LAUNCH_OUTBOX_KIND
 from zerg.services.live_launch_readiness import REMOTE_LAUNCH_OUTBOX_KIND
 from zerg.services.live_launch_readiness import REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND
@@ -555,7 +558,24 @@ def _materialize_remote_launch(
         session.git_branch = str(launch.get("git_branch") or "").strip() or session.git_branch
         session.project = project or session.project
 
-    thread = ensure_primary_thread(db, session)
+    requested_thread_id_text = str(launch.get("primary_thread_id") or "").strip()
+    requested_thread_id = UUID(requested_thread_id_text) if requested_thread_id_text else None
+    thread = db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).one_or_none()
+    if thread is None and requested_thread_id is not None:
+        thread = SessionThread(
+            id=requested_thread_id,
+            session_id=session.id,
+            provider=provider,
+            branch_kind="root",
+            is_primary=1,
+            created_at=started_at,
+            updated_at=started_at,
+        )
+        db.add(thread)
+        db.flush()
+        session.primary_thread_id = thread.id
+    elif thread is None:
+        thread = ensure_primary_thread(db, session)
     resume_payload = launch.get("resume") if isinstance(launch.get("resume"), dict) else {}
     provider_thread_id = str(resume_payload.get("thread_id") or launch.get("provider_thread_id") or "").strip() or None
     if provider_thread_id and not is_synthetic_provider_session_id(session, provider_thread_id):
@@ -910,6 +930,15 @@ def _mark_live_side_effects_after_archive_commit(row: LiveArchiveOutbox, live_db
     current = live_db.get(LiveLaunchReadiness, str(plan.session_id))
     if current is not None and str(current.state or "").strip() in {"adopted", "failed", "abandoned"}:
         return
+    command_id = f"managed-local-{plan.session_id}"
+    catalog_attempt = live_db.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == command_id).one_or_none()
+    if catalog_attempt is not None:
+        update_live_launch_catalog_outcome(
+            live_db,
+            session_id=plan.session_id,
+            command_id=command_id,
+            state="adopted",
+        )
     update_live_launch_readiness_state(
         live_db,
         session_id=plan.session_id,
