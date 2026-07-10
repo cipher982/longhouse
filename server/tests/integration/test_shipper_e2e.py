@@ -74,7 +74,12 @@ CODEX_SESSION_ID = "019a4bea-3f39-7fe1-b132-6c14579e806c"
 OPENCODE_PROVIDER_SESSION_ID = "ses_longhouse_e2e"
 OPENCODE_SESSION_ID = str(uuid5(NAMESPACE_URL, f"opencode:{OPENCODE_PROVIDER_SESSION_ID}"))
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    # Filesystem observation can legitimately consume the 8-second condition
+    # budget before teardown gets its separate 5-second graceful-exit window.
+    pytest.mark.timeout(30),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -553,6 +558,7 @@ def _terminate_process(proc: subprocess.Popen[str]) -> str:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
+        proc.wait(timeout=5)
     output = ""
     for pipe in (proc.stdout, proc.stderr):
         if pipe is None:
