@@ -131,16 +131,4 @@ def read_archive_worker_status() -> dict[str, Any]:
         if active_age_seconds > operation_stale_after:
             payload["status"] = "degraded"
             payload["reason"] = "operation_stalled"
-    pending = int(payload.get("jobs_pending") or 0) + int(payload.get("outbox_pending") or 0)
-    last_progress_at = payload.get("last_progress_at_unix") or payload.get("started_at_unix")
-    if payload.get("status") == "running" and pending > 0 and isinstance(last_progress_at, int | float):
-        progress_age_seconds = max(0.0, time.time() - float(last_progress_at))
-        payload["progress_age_seconds"] = round(progress_age_seconds, 3)
-        progress_stale_after = max(
-            10.0,
-            float(os.getenv("LONGHOUSE_ARCHIVE_WORKER_PROGRESS_STALE_SECONDS", "60")),
-        )
-        if progress_age_seconds > progress_stale_after:
-            payload["status"] = "degraded"
-            payload["reason"] = "backlog_stalled"
     return payload
