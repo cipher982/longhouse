@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func
@@ -16,12 +13,10 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
-from zerg.services.session_observations import decode_observation_payload_json
 from zerg.utils.time import normalize_utc
 
 EVENT_ORIGIN_DURABLE = "durable"
 EVENT_ORIGIN_LIVE_PROVISIONAL = "live_provisional"
-MAX_ACTIVE_PREVIEW_OBSERVATIONS_PER_SESSION = 50
 BRIDGE_TRANSCRIPT_OBSERVATION_KEEP_PER_SESSION = 200
 BRIDGE_TRANSCRIPT_OBSERVATION_CLEANUP_BATCH_SIZE = 5000
 BRIDGE_TRANSCRIPT_OBSERVATION_CLEANUP_MAX_SESSIONS = 25
@@ -37,16 +32,6 @@ class TranscriptPreview:
     timestamp: datetime
     provisional_cursor: str | None
     provisional_complete: bool
-
-
-@dataclass(frozen=True)
-class _PreviewCandidate:
-    session_id: str
-    turn_key: str
-    seq: int | None
-    observation_id: str
-    row_id: int
-    preview: TranscriptPreview
 
 
 def visible_transcript_event_predicate():
@@ -73,75 +58,20 @@ def build_provisional_cursor(*, key: str, seq: int | None) -> str:
 
 
 def load_active_provisional_preview_map(db: Session, session_ids: list[UUID]) -> dict[str, TranscriptPreview]:
-    previews: dict[str, TranscriptPreview] = {}
-    missing_session_ids = session_ids
-    try:
-        from zerg import database as database_module
-        from zerg.services.session_live_previews import load_live_session_live_preview_map
-
-        if database_module.live_store_configured():
-            live_session_factory = database_module.get_live_session_factory()
-            if live_session_factory is not None:
-                with live_session_factory() as live_db:
-                    previews = load_live_session_live_preview_map(live_db, session_ids)
-                missing_session_ids = [session_id for session_id in session_ids if str(session_id) not in previews]
-    except Exception:
-        logger.warning("Failed to load live-store provisional previews; falling back to archive", exc_info=True)
-        previews = {}
-        missing_session_ids = session_ids
-    if not missing_session_ids:
-        return previews
-    if not _live_preview_projection_disabled():
-        from zerg.services.session_live_previews import load_session_live_preview_map
-
-        previews.update(load_session_live_preview_map(db, missing_session_ids))
-        return previews
-    previews.update(_load_active_provisional_preview_map_from_observations(db, missing_session_ids))
-    return previews
-
-
-def _load_active_provisional_preview_map_from_observations(
-    db: Session,
-    session_ids: list[UUID],
-) -> dict[str, TranscriptPreview]:
     if not session_ids:
         return {}
+    from zerg import database as database_module
+    from zerg.services.session_live_previews import load_live_session_live_preview_map
+    from zerg.services.session_live_previews import load_session_live_preview_map
 
-    rows: list[SessionObservation] = []
-    for session_id in session_ids:
-        rows.extend(
-            db.query(SessionObservation)
-            .filter(SessionObservation.session_id == session_id)
-            .filter(SessionObservation.source == "codex_bridge_live")
-            .filter(SessionObservation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
-            .order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc())
-            .limit(MAX_ACTIVE_PREVIEW_OBSERVATIONS_PER_SESSION)
-            .all()
-        )
-    candidates_by_turn: dict[tuple[str, str], _PreviewCandidate] = {}
-    for row in rows:
-        candidate = _preview_candidate_from_bridge_observation(row)
-        if candidate is None:
-            continue
-        key = (candidate.session_id, candidate.turn_key)
-        existing = candidates_by_turn.get(key)
-        if existing is None or _candidate_is_newer(candidate, existing):
-            candidates_by_turn[key] = candidate
-
-    previews: dict[str, TranscriptPreview] = {}
-    for candidate in candidates_by_turn.values():
-        existing = previews.get(candidate.session_id)
-        if existing is None or (candidate.preview.timestamp, candidate.row_id) > (
-            existing.timestamp,
-            existing.event_id,
-        ):
-            previews[candidate.session_id] = candidate.preview
-    return previews
-
-
-def _live_preview_projection_disabled() -> bool:
-    raw = str(os.getenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION") or "").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+    if not database_module.live_store_configured():
+        # Standalone unit-test databases have no split-store topology.
+        return load_session_live_preview_map(db, session_ids)
+    live_session_factory = database_module.get_live_session_factory()
+    if live_session_factory is None:
+        raise RuntimeError("Live preview store is unavailable")
+    with live_session_factory() as live_db:
+        return load_live_session_live_preview_map(live_db, session_ids)
 
 
 def cleanup_bridge_transcript_preview_observations(
@@ -270,92 +200,6 @@ def _delete_bridge_preview_observation_ids(db: Session, ids: list[int]) -> int:
     return db.query(SessionObservation).filter(SessionObservation.id.in_(ids)).delete(synchronize_session=False)
 
 
-def _preview_candidate_from_bridge_observation(row: SessionObservation) -> _PreviewCandidate | None:
-    if row.session_id is None:
-        return None
-    payload = _observation_payload(row)
-    bridge_payload = payload.get("payload")
-    if not isinstance(bridge_payload, dict):
-        return None
-    if bridge_payload.get("progress_kind") != "bridge_live_transcript_delta":
-        return None
-
-    text = str(bridge_payload.get("live_text") or "").strip()
-    if not text:
-        return None
-
-    turn_key = build_provisional_key(
-        source=row.source or "codex_bridge_live",
-        session_id=row.session_id,
-        thread_id=_optional_str(bridge_payload.get("thread_id")),
-        turn_id=_item_scoped_turn_id(
-            _optional_str(bridge_payload.get("turn_id")),
-            _optional_str(bridge_payload.get("item_id")),
-        ),
-    )
-    seq = _coerce_seq(bridge_payload.get("seq"))
-    cursor = build_provisional_cursor(key=turn_key, seq=seq)
-    timestamp = normalize_utc(row.observed_at) or row.received_at
-    return _PreviewCandidate(
-        session_id=str(row.session_id),
-        turn_key=turn_key,
-        seq=seq,
-        observation_id=row.observation_id,
-        row_id=int(row.id),
-        preview=TranscriptPreview(
-            event_id=int(row.id),
-            text=text,
-            event_origin=EVENT_ORIGIN_LIVE_PROVISIONAL,
-            timestamp=timestamp,
-            provisional_cursor=cursor,
-            provisional_complete=bool(bridge_payload.get("turn_completed")),
-        ),
-    )
-
-
-def _candidate_is_newer(candidate: _PreviewCandidate, existing: _PreviewCandidate) -> bool:
-    if candidate.seq is not None and existing.seq is not None:
-        return candidate.seq > existing.seq
-    if candidate.seq is not None and existing.seq is None:
-        return True
-    if candidate.seq is None and existing.seq is not None:
-        return False
-    return (candidate.preview.timestamp, candidate.row_id) > (existing.preview.timestamp, existing.row_id)
-
-
 def _clean_identity_part(value: str | None, *, fallback: str) -> str:
     value = (value or "").strip()
     return value or fallback
-
-
-def _optional_str(value: Any) -> str | None:
-    text = str(value or "").strip()
-    return text or None
-
-
-def _item_scoped_turn_id(turn_id: str | None, item_id: str | None) -> str | None:
-    if not item_id:
-        return turn_id
-    return f"{turn_id or 'unknown-turn'}#{item_id}"
-
-
-def _coerce_seq(value: Any) -> int | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    try:
-        return int(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _observation_payload(observation: SessionObservation) -> dict[str, Any]:
-    raw_json = decode_observation_payload_json(observation)
-    if not raw_json:
-        return {}
-    try:
-        encoded = json.loads(raw_json)
-    except json.JSONDecodeError:
-        return {}
-    return encoded if isinstance(encoded, dict) else {}

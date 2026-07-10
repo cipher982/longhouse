@@ -29,7 +29,6 @@ from zerg.services.session_observations import SOURCE_DOMAIN_RUNTIME
 from zerg.services.session_observations import record_session_observation
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
-from zerg.session_execution_home import SessionExecutionHome
 
 
 def _make_sessionmaker(tmp_path, name: str):
@@ -284,43 +283,6 @@ def test_live_bridge_ingest_uses_observation_write_fast_path(monkeypatch, tmp_pa
     assert preview.text == "fast preview"
 
 
-def test_active_preview_loader_caps_observations_per_session(monkeypatch, tmp_path):
-    monkeypatch.setenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", "1")
-    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_cap.db")
-    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
-    seen_row_ids: list[int] = []
-    original_candidate_loader = provisional_events_service._preview_candidate_from_bridge_observation
-
-    def _candidate_loader_spy(row):
-        seen_row_ids.append(int(row.id))
-        return original_candidate_loader(row)
-
-    monkeypatch.setattr(provisional_events_service, "MAX_ACTIVE_PREVIEW_OBSERVATIONS_PER_SESSION", 3)
-    monkeypatch.setattr(
-        provisional_events_service,
-        "_preview_candidate_from_bridge_observation",
-        _candidate_loader_spy,
-    )
-
-    with SessionLocal() as db:
-        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        for idx in range(1, 9):
-            _insert_legacy_bridge_preview_observation(
-                db,
-                session_id=session.id,
-                occurred_at=now + timedelta(milliseconds=idx),
-                seq=idx,
-                live_text=f"preview {idx}",
-            )
-        db.commit()
-
-        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
-
-    assert preview.text == "preview 8"
-    assert len(seen_row_ids) == 3
-    assert seen_row_ids == sorted(seen_row_ids, reverse=True)
-
-
 def test_active_preview_loader_uses_session_activity_without_scanning_events(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_no_event_scan.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
@@ -366,8 +328,7 @@ def test_active_preview_loader_uses_session_activity_without_scanning_events(tmp
     assert not any("FROM session_observations" in statement for statement in statements)
 
 
-def test_active_preview_loader_does_not_scan_observations_when_projection_missing(monkeypatch, tmp_path):
-    monkeypatch.delenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", raising=False)
+def test_active_preview_loader_does_not_scan_observations_when_projection_missing(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_no_projection_fallback.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
 
@@ -388,15 +349,11 @@ def test_active_preview_loader_does_not_scan_observations_when_projection_missin
         db.commit()
 
         projection_preview = load_active_provisional_preview_map(db, [session.id])
-        monkeypatch.setenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", "1")
-        observation_preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
 
     assert projection_preview == {}
-    assert observation_preview.text == "observation only preview"
 
 
-def test_live_preview_cleanup_keeps_bounded_latest_window(monkeypatch, tmp_path):
-    monkeypatch.setenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", "1")
+def test_live_preview_cleanup_keeps_bounded_latest_window(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_retention.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
 
@@ -424,46 +381,12 @@ def test_live_preview_cleanup_keeps_bounded_latest_window(monkeypatch, tmp_path)
             .order_by(SessionObservation.observed_at.asc(), SessionObservation.id.asc())
             .all()
         )
-        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
 
     assert removed == 5
     assert [json.loads(row.payload_json or "{}")["payload"]["seq"] for row in remaining] == [6, 7, 8]
-    assert preview.text == "preview 8"
 
 
-def test_observation_fallback_treats_new_item_as_new_preview_even_with_same_turn(monkeypatch, tmp_path):
-    monkeypatch.setenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", "1")
-    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_same_turn_items.db")
-    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
-
-    with SessionLocal() as db:
-        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        _insert_legacy_bridge_preview_observation(
-            db,
-            session_id=session.id,
-            occurred_at=now,
-            seq=1,
-            item_id="item-1",
-            live_text="first assistant message",
-        )
-        _insert_legacy_bridge_preview_observation(
-            db,
-            session_id=session.id,
-            occurred_at=now + timedelta(milliseconds=20),
-            seq=2,
-            item_id="item-2",
-            live_text="second assistant message",
-        )
-        db.commit()
-
-        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
-
-    assert preview.text == "second assistant message"
-    assert preview.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1#item-2:2"
-
-
-def test_live_preview_cleanup_removes_rows_covered_by_durable_activity(monkeypatch, tmp_path):
-    monkeypatch.setenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", "1")
+def test_live_preview_cleanup_removes_rows_covered_by_durable_activity(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_durable_retention.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
 
@@ -498,11 +421,9 @@ def test_live_preview_cleanup_removes_rows_covered_by_durable_activity(monkeypat
             .filter(SessionObservation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
             .all()
         )
-        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
 
     assert removed == 0
     assert len(remaining) == 1
-    assert preview.text == "current preview"
 
 
 def test_runtime_ingest_keeps_one_live_overlay_per_turn_on_write(tmp_path):
