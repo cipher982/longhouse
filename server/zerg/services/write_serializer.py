@@ -425,6 +425,7 @@ class WriteSerializer:
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._change_event = asyncio.Event()
         self._change_seq = 0
+        self._activity_observer: Callable[[dict[str, object]], None] | None = None
 
     def configure(self, session_factory: sessionmaker) -> None:
         """Set the write session factory. Call once at startup."""
@@ -445,6 +446,17 @@ class WriteSerializer:
         self._configured = True
         _last_write_timing.set(None)
         logger.info("WriteSerializer configured name=%s", self._name)
+
+    def set_activity_observer(self, observer: Callable[[dict[str, object]], None] | None) -> None:
+        self._activity_observer = observer
+
+    def _observe_activity(self, payload: dict[str, object]) -> None:
+        if self._activity_observer is None:
+            return
+        try:
+            self._activity_observer(payload)
+        except Exception:
+            logger.debug("WriteSerializer activity observer failed name=%s", self._name, exc_info=True)
 
     @property
     def is_configured(self) -> bool:
@@ -529,6 +541,14 @@ class WriteSerializer:
             self._active_interrupt_after_seconds = None
             self._active_wedged_writer_job_id = None
             self._active_started_at = time.monotonic()
+            self._observe_activity(
+                {
+                    "active": True,
+                    "label": queued.label,
+                    "job_id": queued.seq,
+                    "started_at_unix": time.time(),
+                }
+            )
             if not queued.ready.done():
                 queued.ready.set_result(None)
             return
@@ -642,7 +662,7 @@ class WriteSerializer:
                 return
 
             logger.warning(
-                "WriteSerializer interrupting active sqlite writer name=%s label=%s job_id=%s age_ms=%.1f deadline_s=%.1f",
+                "WriteSerializer interrupting active sqlite writer " "name=%s label=%s job_id=%s age_ms=%.1f deadline_s=%.1f",
                 self._name,
                 label or "unlabeled",
                 job_id,
@@ -915,6 +935,7 @@ class WriteSerializer:
                 self._active_wedged_writer_job_id = None
                 self._active_stage = None
                 self._active_started_at = None
+                self._observe_activity({"active": False, "label": None, "job_id": None})
                 self._promote_next_locked()
                 self._wait_cond.notify_all()
 

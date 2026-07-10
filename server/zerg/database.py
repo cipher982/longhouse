@@ -488,6 +488,10 @@ def configure_write_serializer() -> None:
     ws = get_write_serializer()
     if not ws.is_configured:
         ws.configure_resolver(_resolve_write_session_factory)
+    from zerg.services.archive_api_writer_status import write_archive_api_writer_status
+
+    ws.set_activity_observer(write_archive_api_writer_status)
+    write_archive_api_writer_status({"active": False, "label": None, "job_id": None})
 
 
 def configure_live_write_serializer() -> None:

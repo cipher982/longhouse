@@ -169,6 +169,10 @@ def process_next_archive_worker_job(
     *,
     on_start: Callable[[dict[str, Any]], None] | None = None,
 ) -> bool:
+    from zerg.services.archive_api_writer_status import archive_api_writer_busy
+
+    if archive_api_writer_busy():
+        return False
     pending, running, results = _job_dirs()
     request_paths = sorted(pending.glob("*.json"), key=lambda path: path.name)
     if not request_paths:

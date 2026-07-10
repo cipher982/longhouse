@@ -57,6 +57,13 @@ def _drain_interval_seconds() -> float:
     return max(0.05, float(os.getenv("LONGHOUSE_ARCHIVE_WORKER_INTERVAL_SECONDS", "1")))
 
 
+def _busy_yield_seconds() -> float:
+    # SQLite coordinates writers across processes, but an immediate worker
+    # re-claim can repeatedly beat the API writer after every short commit.
+    # Yield a bounded slice so ingest/catalog work gets an acquisition window.
+    return max(0.0, float(os.getenv("LONGHOUSE_ARCHIVE_WORKER_BUSY_YIELD_SECONDS", "0.05")))
+
+
 def _select_work_once(*, prefer_jobs: bool, process_job, drain_outbox):
     """Alternate durable jobs and outbox work while either lane is busy."""
 
@@ -174,6 +181,11 @@ def drain_once(
     limit: int | None = None,
     on_start=None,
 ) -> dict[str, int]:
+    from zerg.services.archive_api_writer_status import archive_api_writer_busy
+
+    if archive_api_writer_busy():
+        return {"processed": 0, "drained": 0, "failed": 0}
+
     from zerg.database import get_live_session_factory
     from zerg.database import get_write_session_factory
     from zerg.services.live_archive_outbox import apply_live_archive_outbox_to_archive
@@ -316,6 +328,7 @@ def run_worker(*, once: bool = False) -> int:
                 if once:
                     break
                 if result.get("processed") and not result.get("failed"):
+                    time.sleep(_busy_yield_seconds())
                     continue
                 time.sleep(_drain_interval_seconds())
         finally:

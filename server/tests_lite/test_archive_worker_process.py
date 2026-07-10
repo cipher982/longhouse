@@ -150,6 +150,32 @@ def test_archive_worker_native_style_exit_leaves_outbox_pending_and_parent_alive
         db.commit()
 
 
+def test_archive_worker_defers_while_api_writer_is_active(tmp_path, monkeypatch):
+    archive_url, live_url, archive_factory, live_factory, _received_at = _seed_worker_databases(tmp_path)
+    env = _worker_env(tmp_path, archive_url, live_url)
+    writer_status_path = tmp_path / "archive-api-writer-status.json"
+    env["LONGHOUSE_ARCHIVE_API_WRITER_STATUS_PATH"] = str(writer_status_path)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    from zerg.services.archive_api_writer_status import write_archive_api_writer_status
+
+    write_archive_api_writer_status({"active": True, "label": "ingest-live", "job_id": 1})
+    deferred = _run_worker(env)
+
+    assert deferred.returncode == 0, deferred.stderr
+    with archive_factory() as db:
+        assert db.query(AgentHeartbeat).count() == 0
+    with live_factory() as db:
+        assert db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.drained_at.is_(None)).count() == 1
+
+    write_archive_api_writer_status({"active": False, "label": None, "job_id": None})
+    drained = _run_worker(env)
+    assert drained.returncode == 0, drained.stderr
+    with archive_factory() as db:
+        assert db.query(AgentHeartbeat).count() == 1
+
+
 @pytest.mark.asyncio
 async def test_archive_worker_process_executes_durable_ingest_job(tmp_path, monkeypatch):
     archive_url, live_url, archive_factory, _live_factory, _received_at = _seed_worker_databases(tmp_path)
