@@ -203,6 +203,12 @@ def test_live_catalog_projection_is_idempotent_and_updates_rows(tmp_path):
 
         with LiveSession() as live_db:
             assert sync_live_catalog_session(archive_db, live_db, session_id=session_id) is True
+            live_session = live_db.get(LiveSessionCatalog, str(session_id))
+            live_session.user_state = "archived"
+            live_session.user_state_at = now + timedelta(minutes=1)
+            live_session.loop_mode = "autopilot"
+            live_session.notification_muted = True
+            live_db.commit()
 
         session = archive_db.get(AgentSession, session_id)
         card = archive_db.get(TimelineCard, session_id)
@@ -216,6 +222,10 @@ def test_live_catalog_projection_is_idempotent_and_updates_rows(tmp_path):
             assert sync_live_catalog_session(archive_db, live_db, session_id=session_id) is True
             assert live_db.query(LiveSessionCatalog).one().summary_title == "After"
             assert live_db.query(LiveTimelineCard).one().summary_title == "After"
+            assert live_db.query(LiveSessionCatalog).one().user_state == "archived"
+            assert live_db.query(LiveSessionCatalog).one().user_state_at.replace(tzinfo=timezone.utc) == now + timedelta(minutes=1)
+            assert live_db.query(LiveSessionCatalog).one().loop_mode == "autopilot"
+            assert live_db.query(LiveSessionCatalog).one().notification_muted is True
             assert live_db.query(LiveSessionCatalog).one().summary_title == "After"
             assert live_db.query(LiveTimelineCard).one().summary_title == "After"
             assert live_db.query(LiveSessionThread).count() == 1
