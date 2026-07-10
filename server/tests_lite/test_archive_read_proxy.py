@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
+from sqlalchemy.exc import OperationalError
 from starlette.requests import Request
 
 from zerg.database import Base
@@ -51,7 +52,7 @@ def test_archive_child_opens_sqlite_files_read_only(tmp_path):
     readonly = _readonly_sqlite_url(f"sqlite:///{database_path}")
     engine = create_engine(readonly)
     with engine.connect() as connection:
-        with pytest.raises(Exception, match="readonly database"):
+        with pytest.raises(OperationalError, match="readonly database"):
             connection.exec_driver_sql("CREATE TABLE forbidden (id INTEGER)")
 
 
