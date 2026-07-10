@@ -70,7 +70,8 @@ extension APISessionCapabilitiesResponse {
             composerPlaceholder: composerPlaceholder,
             composerDisabledReason: composerDisabledReason,
             sendDisabledReason: sendDisabledReason,
-            attachImages: attachImages
+            attachImages: attachImages,
+            stalenessReason: stalenessReason
         )
     }
 }

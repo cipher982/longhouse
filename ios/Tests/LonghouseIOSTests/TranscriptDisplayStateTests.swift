@@ -68,6 +68,19 @@ struct TranscriptDisplayStateTests {
     }
 
     @Test
+    func syncingWinsOverEmptyWhenArchiveIsCatchingUp() {
+        let state = TranscriptDisplayState.derive(
+            isInitialLoading: false,
+            hasContent: false,
+            errorMessage: nil,
+            refreshErrorMessage: nil,
+            isSyncing: true
+        )
+        #expect(state == .syncing)
+        #expect(state.showsTranscript == true)
+    }
+
+    @Test
     func hardErrorOnlyWhenNothingCached() {
         let state = TranscriptDisplayState.derive(
             isInitialLoading: false,

@@ -330,6 +330,7 @@ struct SessionCapabilities: Codable, Sendable {
     let composerDisabledReason: String?
     let sendDisabledReason: String?
     let attachImages: Bool?
+    let stalenessReason: String?
 }
 
 struct TimelineBadgePresentation: Codable, Hashable, Sendable {
@@ -729,6 +730,14 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     var canSendLive: Bool {
         if isClosed { return false }
         return capabilities.composerEnabled ?? (capabilities.liveControlAvailable || capabilities.replyToLiveSessionAvailable)
+    }
+
+    /// The archive is still converging with a live/catalog session. This is a
+    /// distinct transcript state: an empty projection here is not evidence that
+    /// the session has never produced messages.
+    var isTranscriptSyncing: Bool {
+        capabilities.stalenessReason == "archive_catching_up"
+            || runtimeDisplay.state == "syncing_transcript"
     }
 
     var canDraftBeforeSendReady: Bool {

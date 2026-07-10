@@ -257,7 +257,8 @@ struct SessionView: View {
             isInitialLoading: viewModel.isInitialLoading,
             hasContent: !viewModel.items.isEmpty || !viewModel.submittedInputs.isEmpty,
             errorMessage: viewModel.errorMessage,
-            refreshErrorMessage: viewModel.refreshErrorMessage
+            refreshErrorMessage: viewModel.refreshErrorMessage,
+            isSyncing: viewModel.detail?.isTranscriptSyncing == true
         )
     }
 

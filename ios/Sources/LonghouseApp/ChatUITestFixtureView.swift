@@ -629,7 +629,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 composerPlaceholder: composerPlaceholder,
                 composerDisabledReason: nil,
                 sendDisabledReason: nil,
-                attachImages: false
+                attachImages: false,
+                stalenessReason: nil
             ),
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "live",

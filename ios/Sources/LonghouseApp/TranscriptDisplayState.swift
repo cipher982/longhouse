@@ -15,6 +15,10 @@ enum TranscriptDisplayState: Equatable {
     case loading
     /// Loaded successfully but the session genuinely has no events.
     case empty
+    /// The session is live/catalog-visible but its durable transcript is still
+    /// converging. Keep the transcript mounted, but do not claim "No messages
+    /// yet" while the archive catches up.
+    case syncing
     /// Content is on screen but the latest refresh failed. Non-destructive
     /// banner over the transcript; never erases content.
     case contentWithRefreshError(String)
@@ -30,7 +34,8 @@ enum TranscriptDisplayState: Equatable {
         isInitialLoading: Bool,
         hasContent: Bool,
         errorMessage: String?,
-        refreshErrorMessage: String?
+        refreshErrorMessage: String?,
+        isSyncing: Bool = false
     ) -> TranscriptDisplayState {
         if isInitialLoading {
             return .loading
@@ -45,6 +50,9 @@ enum TranscriptDisplayState: Equatable {
         if let errorMessage {
             return .hardError(errorMessage)
         }
+        if isSyncing {
+            return .syncing
+        }
         return .empty
     }
 
@@ -56,7 +64,7 @@ enum TranscriptDisplayState: Equatable {
         switch self {
         case .loading, .hardError:
             return false
-        case .empty, .content, .contentWithRefreshError:
+        case .empty, .syncing, .content, .contentWithRefreshError:
             return true
         }
     }
@@ -78,6 +86,8 @@ struct TranscriptStateOverlay: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .hardError(let message):
             hardError(message)
+        case .syncing:
+            syncing
         case .contentWithRefreshError(let message):
             VStack {
                 refreshBanner(message)
@@ -86,6 +96,18 @@ struct TranscriptStateOverlay: View {
         case .content, .empty:
             EmptyView()
         }
+    }
+
+    private var syncing: some View {
+        VStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.regular)
+            Text("Syncing transcript…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("session-transcript-syncing")
     }
 
     /// Cold load failed, nothing cached. Full-screen, readable, actionable —
