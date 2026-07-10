@@ -406,6 +406,8 @@ def build_session_mobile_tail(
                 runtime_version_sum=0,
                 pause_request_count=0,
                 pause_request_fingerprint=None,
+                managed_control_count=0,
+                managed_control_fingerprint=None,
                 live_preview_updated_at=None,
                 thread_session_count=1,
                 fingerprint=f"live-launch:{session_id}:{revision_at}",
