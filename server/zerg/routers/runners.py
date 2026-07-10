@@ -28,6 +28,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
+from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.database import get_session_factory
 from zerg.database import live_catalog_enabled
@@ -63,6 +64,7 @@ from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
+_catalog_db_dependency = catalog_db_dependency()
 
 router = APIRouter(
     prefix="/runners",
@@ -611,7 +613,7 @@ async def register_runner(
 @router.get("/status", response_model=RunnerStatusResponse)
 def get_runner_status(
     response: Response,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerStatusResponse:
     """Get runner health summary for status indicators.
@@ -621,6 +623,8 @@ def get_runner_status(
     """
     timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "private, max-age=15"
+    if live_catalog_enabled():
+        return RunnerStatusResponse(total=0, online=0, offline=0, runners=[])
 
     with timing.span("load_runners"):
         runners = runner_crud.get_runners(db=db, owner_id=current_user.id)

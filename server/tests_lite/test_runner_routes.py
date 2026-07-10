@@ -6,11 +6,13 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from starlette.responses import Response
 
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import Runner
 from zerg.models.models import User
+from zerg.routers.runners import get_runner_status
 
 
 TEST_ENV = {
@@ -77,6 +79,19 @@ def test_delete_runner_removes_offline_runner(tmp_path: Path):
     finally:
         api_app.dependency_overrides.clear()
         db.close()
+
+
+def test_runner_status_is_empty_compatibility_view_in_catalog_mode():
+    response = Response()
+    with patch("zerg.routers.runners.live_catalog_enabled", return_value=True):
+        result = get_runner_status(
+            response=response,
+            db=SimpleNamespace(),
+            current_user=SimpleNamespace(id=1),
+        )
+
+    assert result.model_dump() == {"total": 0, "online": 0, "offline": 0, "runners": []}
+    assert response.headers["Cache-Control"] == "private, max-age=15"
 
 
 def test_delete_runner_rejects_connected_runner(tmp_path: Path):
