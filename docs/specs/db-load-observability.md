@@ -17,7 +17,7 @@ or stores any of it. Every number evaporates unless someone is watching.
 
 Consequence: months of SQLite firefighting (163 reliability commits since
 April) were flown on symptoms and one-off snapshots. We cannot rank fixes by
-measured impact, attribute disk IOPS/CPU to the david010 container versus its
+measured impact, attribute disk IOPS/CPU to the largest hosted tenant versus its
 neighbors, or prove the upcoming Phase E reclaim helped beyond "feels better."
 
 This epic ships the smallest capture layer that fixes that, then soaks it for a
@@ -51,13 +51,13 @@ ad-hoc analysis is enough until proven otherwise.
 Two small samplers on the zerg host, both writing ndjson with UTC timestamps
 to a local data dir (rotated, weeks of retention is plenty):
 
-1. **Runtime metrics snapshotter.** Every 1–5 min, curl the david010
+1. **Runtime metrics snapshotter.** Every 1–5 min, curl the target tenant
    `/metrics` endpoint and the trusted health payloads; append parsed ndjson.
    Retains: serializer label counts (which write lanes dominate), queue-wait /
    exec-time distributions, WAL bytes, checkpoint durations, archive pressure,
    projection lag.
 2. **Container resource sampler.** Same cadence: cgroup `io.stat` + `cpu.stat`
-   for `longhouse-david010` (and siblings: demo, canary, control-plane) plus
+   for `longhouse-<tenant>` (and siblings: demo, canary, control-plane) plus
    volume-level `iostat` for `/data`. Answers "is it the DB; reads or writes;
    which tenant" with zero app changes.
 
@@ -77,7 +77,7 @@ One analysis pass producing the numbers the completion epic consumes:
 
 - top serializer labels by count and by total exec time;
 - queue-wait percentiles per lane, WAL size envelope, checkpoint cost;
-- david010 IOPS/CPU share vs neighbors; read/write split;
+- target-tenant IOPS/CPU share vs neighbors; read/write split;
 - any surprise (a lane or query class nobody suspected).
 
 ## Acceptance
@@ -94,4 +94,4 @@ One analysis pass producing the numbers the completion epic consumes:
 - No dashboards, no alerting stack, no VictoriaMetrics/Prometheus server
   (revisit only if ndjson analysis becomes the bottleneck).
 - No new in-app instrumentation unless the baseline shows a blind spot.
-- No laptop/self-host capture — hosted david010 is the whale and the target.
+- No laptop/self-host capture — the largest hosted tenant is the whale and the target.

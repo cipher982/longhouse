@@ -38,7 +38,7 @@ leverage, each step's payoff proven by the measurement layer from
 
 Sequencing in one line: **measure → freeze → reclaim → tune → protect.**
 
-## Current State (verified 2026-07-09 on david010)
+## Current State (verified 2026-07-09 on the largest hosted tenant)
 
 - `longhouse.db` 126GiB, WAL ~300MB (healthy), page_size 4096.
 - ~61GB of monolith raw (`events.raw_json_z` + `source_lines.raw_json_z`) is
