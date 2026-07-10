@@ -125,7 +125,9 @@ is landed as a tested migration seam, not as a hidden mode switch.
 Large archive reads such as bulk export remain explicitly archive-degraded in
 catalog mode rather than buffering unbounded bodies through the child envelope.
 They are not part of the live launch/find/control loop and can move to streamed
-archive artifacts separately.
+archive artifacts separately. The optional legacy Runner websocket also closes
+with a retryable unavailable code in catalog mode until Runner registry state is
+projected into the live store; Machine Agent launch/control remains available.
 
 ## Worker Contract
 

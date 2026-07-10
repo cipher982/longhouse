@@ -391,8 +391,10 @@ def health_check(request: Request):
     """
     from zerg.build_info import BuildIdentityMissing
     from zerg.build_info import load as load_build_identity
+    from zerg.database import live_catalog_enabled
 
     _settings = get_settings()
+    catalog_mode = live_catalog_enabled()
     trusted = _request_is_trusted(request)
     health_status = {"status": "healthy", "message": "Longhouse API is running"}
 
@@ -478,7 +480,9 @@ def health_check(request: Request):
         from zerg.database import get_live_engine
         from zerg.database import live_store_configured
 
-        health_engine = (get_live_engine() if archive_worker.get("enabled") and live_store_configured() else None) or default_engine
+        health_engine = (
+            get_live_engine() if (catalog_mode or archive_worker.get("enabled")) and live_store_configured() else None
+        ) or default_engine
         with health_engine.connect() as conn:
             result = conn.execute(text("SELECT 1"))
             row = result.fetchone()
@@ -598,7 +602,7 @@ def health_check(request: Request):
     try:
         from zerg.database import default_engine
 
-        if archive_worker.get("enabled"):
+        if archive_worker.get("enabled") or catalog_mode:
             checks["fts5"] = {"status": "skip", "reason": "owned_by_archive_worker"}
         elif default_engine is not None and default_engine.dialect.name == "sqlite":
             with default_engine.connect() as conn:
@@ -672,7 +676,7 @@ def health_check(request: Request):
     # 8. Projection catch-up lag. Archive ingest may skip expensive derived
     # projections on the hot path; this should normally drain quickly in the
     # background and should be visible separately from raw ingest health.
-    if archive_worker.get("enabled"):
+    if archive_worker.get("enabled") or catalog_mode:
         checks["session_projection_lag"] = {"status": "skip", "reason": "owned_by_archive_worker"}
     else:
         try:
@@ -682,7 +686,7 @@ def health_check(request: Request):
 
     # 9. Enrichment lag. Embeddings/search enrichment run after durable ingest;
     # they should be visible, but must not be mistaken for raw shipping health.
-    if archive_worker.get("enabled"):
+    if archive_worker.get("enabled") or catalog_mode:
         checks["session_enrichment_lag"] = {"status": "skip", "reason": "owned_by_archive_worker"}
     else:
         try:

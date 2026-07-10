@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from zerg.crud import runner_crud
 from zerg.database import get_db
 from zerg.database import get_session_factory
+from zerg.database import live_catalog_enabled
 from zerg.database import reset_test_worker_id
 from zerg.database import set_test_worker_id
 from zerg.dependencies.auth import get_current_user
@@ -1156,6 +1157,9 @@ async def _runner_websocket_with_db(
 async def runner_websocket(
     websocket: WebSocket,
 ) -> None:
+    if live_catalog_enabled():
+        await websocket.close(code=1013, reason="Runner control is unavailable while archive storage is isolated")
+        return
     worker_id = websocket.query_params.get("worker")
     worker_token = set_test_worker_id(worker_id) if worker_id else None
     db = get_session_factory()()

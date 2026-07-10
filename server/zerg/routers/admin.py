@@ -24,6 +24,7 @@ from zerg.config import get_settings
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import get_session_factory
+from zerg.database import live_catalog_enabled
 
 # Auth dependency
 from zerg.dependencies.auth import get_current_user
@@ -231,6 +232,8 @@ async def reset_database(
 
 def _reset_database_sync(request: DatabaseResetRequest, current_user):
     settings = get_settings()
+    if live_catalog_enabled():
+        raise HTTPException(status_code=503, detail="Archive reset is unavailable while storage is isolated")
 
     # Log the reset attempt for audit purposes
     logger.warning(
@@ -426,6 +429,8 @@ async def fix_database_schema():
     """Directly fix the missing updated_at column issue."""
     # Check if we're in development mode
     settings = get_settings()
+    if live_catalog_enabled():
+        raise HTTPException(status_code=503, detail="Archive schema repair is unavailable while storage is isolated")
     if not settings.testing and (settings.environment or "") != "development":
         logger.warning("Attempted to fix database schema in non-development environment")
         raise HTTPException(status_code=403, detail="Database schema fix is only available in development environment")

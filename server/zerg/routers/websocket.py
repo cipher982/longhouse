@@ -21,8 +21,8 @@ from fastapi import WebSocketDisconnect
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
-from zerg.database import db_session
-from zerg.database import get_session_factory
+from zerg.database import catalog_db_session
+from zerg.database import get_catalog_session_factory
 from zerg.database import reset_test_worker_id
 from zerg.database import set_test_worker_id
 
@@ -48,7 +48,7 @@ def get_websocket_session(session_factory: Optional[sessionmaker] = None) -> Ses
     Returns:
         A SQLAlchemy Session object that must be closed by the caller
     """
-    factory = session_factory or get_session_factory()
+    factory = session_factory or get_catalog_session_factory()
     return factory()
 
 
@@ -87,7 +87,7 @@ async def websocket_endpoint(
         # Try to get token from session cookie (browser auth)
         auth_token = websocket.cookies.get("longhouse_session")
 
-    with db_session() as db_for_auth:
+    with catalog_db_session() as db_for_auth:
         user = validate_ws_jwt(auth_token, db_for_auth)
         # Extract user ID while still in session context to avoid DetachedInstanceError
         user_id = getattr(user, "id", None) if user is not None else None
@@ -111,7 +111,7 @@ async def websocket_endpoint(
 
         # Handle initial topic subscriptions if provided
         if initial_topics:
-            with db_session() as db:
+            with catalog_db_session() as db:
                 topics = [t.strip() for t in initial_topics.split(",")]
                 msg_id = f"auto-subscribe-{uuid.uuid4()}"
                 subscribe_envelope = Envelope.create(
@@ -129,7 +129,7 @@ async def websocket_endpoint(
                 raw_data = await websocket.receive_text()
                 data = json.loads(raw_data)
                 # Get a fresh DB session only for message processing
-                with db_session() as db:
+                with catalog_db_session() as db:
                     await dispatch_message(client_id, data, db)
 
             except json.JSONDecodeError as e:

@@ -3,8 +3,11 @@ import logging
 import pytest
 from fastapi import WebSocketDisconnect
 
-from zerg.database import Base, make_engine, make_sessionmaker
+from zerg.database import Base
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
 from zerg.routers.runners import _runner_websocket_with_db
+from zerg.routers.runners import runner_websocket
 
 
 def _make_db(tmp_path):
@@ -46,6 +49,16 @@ class _InvalidHelloWebSocket:
         raise RuntimeError("Unexpected ASGI message 'websocket.close', after sending 'websocket.close' or response already completed.")
 
 
+class _CatalogModeWebSocket:
+    query_params = {}
+
+    def __init__(self):
+        self.closed = None
+
+    async def close(self, code=1000, reason=None):
+        self.closed = (code, reason)
+
+
 @pytest.mark.asyncio
 async def test_runner_disconnect_before_hello_is_quiet(tmp_path, caplog):
     SessionLocal = _make_db(tmp_path)
@@ -75,3 +88,15 @@ async def test_runner_invalid_hello_close_race_is_swallowed(tmp_path, caplog):
     assert websocket.accepted is True
     assert "Failed to receive hello message: boom" in caplog.text
     assert "Error in runner websocket handler" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_runner_websocket_does_not_open_archive_in_catalog_mode(monkeypatch):
+    websocket = _CatalogModeWebSocket()
+    monkeypatch.setattr("zerg.routers.runners.live_catalog_enabled", lambda: True)
+    monkeypatch.setattr("zerg.routers.runners.get_session_factory", lambda: pytest.fail("cold DB opened"))
+
+    await runner_websocket(websocket)
+
+    assert websocket.closed is not None
+    assert websocket.closed[0] == 1013
