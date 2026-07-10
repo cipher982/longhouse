@@ -62,6 +62,12 @@ _MANAGED_LOCAL_ACTIVE_HOOK_PHASES = frozenset({"thinking", "running"})
 
 
 def _is_managed_local_session(db: Session, session: AgentSession) -> bool:
+    import zerg.database as database_module
+
+    if database_module.live_catalog_enabled():
+        from zerg.services.live_control_catalog import live_control_capability_available
+
+        return live_control_capability_available(db, session_id=session.id, capability="send")
     capabilities = project_session_capabilities(db, session_id=session.id)
     return bool(capabilities.live_control_available or capabilities.host_reattach_available)
 

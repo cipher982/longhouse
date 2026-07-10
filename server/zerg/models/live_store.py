@@ -83,6 +83,28 @@ class LiveDeviceToken(LiveBase):
     __table_args__ = (Index("ix_device_tokens_owner_device", "owner_id", "device_id"),)
 
 
+class LiveMachinePresence(LiveBase):
+    """Physical compatibility table for coarse Machine Agent presence."""
+
+    __tablename__ = "machine_presence"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_id = Column(Integer, nullable=False, index=True)
+    device_id = Column(String(255), nullable=False)
+    state = Column(String(32), nullable=False)
+    source = Column(String(64), nullable=False, server_default=text("'unknown'"))
+    idle_seconds = Column(Integer, nullable=True)
+    measured_at = Column(DateTime(timezone=True), nullable=False)
+    received_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "device_id", name="uq_live_machine_presence_owner_device"),
+        Index("ix_live_machine_presence_owner_received", "owner_id", "received_at"),
+    )
+
+
 class LiveAPNSDeviceRegistration(LiveBase):
     __tablename__ = "apns_device_registrations"
 

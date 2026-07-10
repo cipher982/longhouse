@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+import zerg.database as database_module
 import zerg.services.live_session_dispatch as live_session_dispatch
 from zerg.metrics import managed_turn_dispatch_seconds
 from zerg.metrics import managed_turn_phase_seconds
@@ -464,7 +465,12 @@ def _load_session_for_continuation(db: Session, session_id: str):
             detail=f"Invalid session id: {session_id}",
         ) from exc
 
-    source_session = AgentsStore(db).get_session(source_session_uuid)
+    if database_module.live_catalog_enabled():
+        from zerg.services.live_control_catalog import load_live_control_session
+
+        source_session = load_live_control_session(db, source_session_uuid)
+    else:
+        source_session = AgentsStore(db).get_session(source_session_uuid)
     if not source_session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -479,6 +485,21 @@ def _assert_live_session_send_available(
     *,
     owner_id: int | None = None,
 ) -> None:
+    if database_module.live_catalog_enabled():
+        from zerg.services.live_control_catalog import live_control_capability_available
+        from zerg.services.live_control_catalog import live_session_closed_for_input
+
+        if live_session_closed_for_input(db, source_session):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error_code": "session_closed", "message": "This session has ended."},
+            )
+        if live_control_capability_available(db, session_id=source_session.id, capability="send"):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This session does not have a live Longhouse control channel.",
+        )
     if _session_is_closed_for_input(db, source_session):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1040,6 +1061,134 @@ def _mark_managed_local_turn_failed_for_send(
     )
 
 
+async def _release_catalog_lock_after_terminal(
+    *,
+    session_id: UUID,
+    lock_scope_id: str,
+    request_id: str,
+    dispatched_at: datetime,
+) -> None:
+    """Release a hot control lock from live runtime truth, never cold rows."""
+
+    from zerg.models.live_store import LiveRuntimeState
+
+    factory = database_module.get_live_session_factory()
+    if factory is None:
+        await session_lock_manager.release(lock_scope_id, request_id)
+        return
+    deadline = asyncio.get_running_loop().time() + MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS
+    while asyncio.get_running_loop().time() < deadline:
+        with factory() as live_db:
+            state = (
+                live_db.query(LiveRuntimeState)
+                .filter(LiveRuntimeState.session_id == session_id)
+                .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+                .first()
+            )
+        if state is not None:
+            observed_at = normalize_utc(
+                getattr(state, "phase_started_at", None)
+                or getattr(state, "last_runtime_signal_at", None)
+                or getattr(state, "updated_at", None)
+            )
+            phase = str(getattr(state, "phase", "") or "").strip()
+            terminal = str(getattr(state, "terminal_state", "") or "").strip()
+            if observed_at is not None and observed_at >= dispatched_at and (phase in _MANAGED_LOCAL_TERMINAL_PHASES or terminal):
+                await session_lock_manager.release(lock_scope_id, request_id)
+                return
+        await asyncio.sleep(MANAGED_LOCAL_POLL_INTERVAL_SECS)
+
+
+def _schedule_catalog_lock_release(
+    *,
+    session_id: UUID,
+    lock_scope_id: str,
+    request_id: str,
+    dispatched_at: datetime,
+) -> None:
+    task = asyncio.create_task(
+        _release_catalog_lock_after_terminal(
+            session_id=session_id,
+            lock_scope_id=lock_scope_id,
+            request_id=request_id,
+            dispatched_at=dispatched_at,
+        )
+    )
+
+    def _log_failure(done: asyncio.Task[None]) -> None:
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            logger.exception("[%s] Catalog lock watcher failed for %s", request_id, session_id)
+
+    task.add_done_callback(_log_failure)
+
+
+async def _dispatch_catalog_managed_text(
+    *,
+    source_session,
+    owner_id: int,
+    message: str,
+    request_id: str,
+    lock_scope_id: str,
+    db: Session,
+    attachments: list[dict] | None,
+) -> JSONResponse:
+    """Dispatch from live identity and return without archive turn/event ACKs."""
+
+    from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
+    from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
+
+    payload: dict[str, object] = {"text": message}
+    if attachments:
+        if str(source_session.provider or "").strip().lower() != "codex":
+            await session_lock_manager.release(lock_scope_id, request_id)
+            raise HTTPException(status_code=400, detail="Attachments are only supported on codex managed sessions")
+        payload["attachments"] = list(attachments)
+    dispatched_at = datetime.now(timezone.utc)
+    result = await dispatch_managed_control_command(
+        db=db,
+        owner_id=owner_id,
+        session=source_session,
+        timeout_secs=15,
+        command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+        payload=payload,
+        request_id=request_id,
+        run_id=None,
+    )
+    data = dict(result.data or {})
+    exit_code = int(data.get("exit_code", 1)) if result.ok else 1
+    if not result.ok or exit_code != 0:
+        await session_lock_manager.release(lock_scope_id, request_id)
+        detail = str(result.error or data.get("stderr") or data.get("stdout") or "Managed control dispatch failed")
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "accepted": False,
+                "error": detail,
+                "error_code": SESSION_TURN_ERROR_SEND_FAILED,
+                "session_id": str(source_session.id),
+                "request_id": request_id,
+            },
+        )
+    _schedule_catalog_lock_release(
+        session_id=source_session.id,
+        lock_scope_id=lock_scope_id,
+        request_id=request_id,
+        dispatched_at=dispatched_at,
+    )
+    return JSONResponse(
+        content={
+            "accepted": True,
+            "session_id": str(source_session.id),
+            "request_id": request_id,
+            "verification": "live_control_ack",
+        }
+    )
+
+
 async def _dispatch_managed_local_text(
     *,
     source_session,
@@ -1052,6 +1201,16 @@ async def _dispatch_managed_local_text(
     attachments: list[dict] | None = None,
 ) -> JSONResponse:
     """Send text to a managed-local session and return acceptance status."""
+    if database_module.live_catalog_enabled():
+        return await _dispatch_catalog_managed_text(
+            source_session=source_session,
+            owner_id=owner_id,
+            message=message,
+            request_id=request_id,
+            lock_scope_id=lock_scope_id,
+            db=db,
+            attachments=attachments,
+        )
     tracer = get_tracer(__name__)
     provider_label = source_session.provider or "claude"
     with tracer.start_as_current_span("longhouse.turn") as span:
@@ -1305,6 +1464,8 @@ def _lock_scope_id_for_session(db: Session, session_id: str) -> str:
         session_uuid = UUID(session_id)
     except ValueError:
         return session_id
+    if database_module.live_catalog_enabled():
+        return session_lock_scope_id(session_uuid)
     session = AgentsStore(db).get_session(session_uuid)
     if session is None:
         return session_id

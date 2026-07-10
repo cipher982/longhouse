@@ -14,7 +14,8 @@ from pydantic import Field
 from pydantic import field_validator
 from sqlalchemy.orm import Session
 
-from zerg.database import get_db
+import zerg.database as database_module
+from zerg.database import catalog_db_dependency
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
 from zerg.models.machine_presence import MachinePresence
@@ -22,10 +23,12 @@ from zerg.models.user import User
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.write_backpressure import raise_hot_write_backpressure
 from zerg.services.write_serializer import WriteQueueTimeoutError
+from zerg.services.write_serializer import get_live_write_serializer
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+_catalog_db_dependency = catalog_db_dependency()
 
 _HOT_MACHINE_PRESENCE_QUEUE_TIMEOUT_SECONDS = 2.0
 
@@ -99,7 +102,7 @@ def _machine_presence_collection_enabled(db: Session, *, owner_id: int) -> bool:
 
 @router.get("/machine-presence/policy", response_model=MachinePresencePolicyResponse)
 async def get_machine_presence_policy(
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     token: DeviceToken | None = Depends(verify_agents_token),
 ) -> MachinePresencePolicyResponse:
     owner_id, _device_id = _machine_presence_identity(db, token)
@@ -109,7 +112,7 @@ async def get_machine_presence_policy(
 @router.post("/machine-presence", response_model=MachinePresenceResponse)
 async def update_machine_presence(
     payload: MachinePresenceIn,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     token: DeviceToken | None = Depends(verify_agents_token),
 ) -> MachinePresenceResponse:
     owner_id, device_id = _machine_presence_identity(db, token)
@@ -165,7 +168,7 @@ async def update_machine_presence(
             received_at=now,
         )
 
-    ws = get_write_serializer()
+    ws = get_live_write_serializer() if database_module.live_catalog_enabled() else get_write_serializer()
     try:
         return await ws.execute_after_closing_request_session(
             _write,

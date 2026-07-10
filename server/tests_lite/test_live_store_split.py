@@ -104,6 +104,7 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "live_heartbeat_stamps",
         "live_launch_readiness",
         "live_machine_control_operations",
+        "machine_presence",
         "live_runtime_state",
         "live_session_input_receipts",
         "live_session_live_previews",

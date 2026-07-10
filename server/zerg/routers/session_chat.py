@@ -47,6 +47,8 @@ from zerg.services.live_session_inputs import cancel_live_queued_receipt
 from zerg.services.live_session_inputs import count_live_queued_receipts
 from zerg.services.live_session_inputs import list_recent_live_input_receipts
 from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request_best_effort
+from zerg.services.live_session_inputs import mark_live_receipt_delivered_with_projection
+from zerg.services.live_session_inputs import mark_live_receipt_failed
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
 from zerg.services.managed_local_control import answer_pause_request_on_managed_local_session
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
@@ -297,7 +299,9 @@ class RemoteSessionContinueRequest(BaseModel):
     )
     execution_lifetime: RemoteExecutionLifetime | None = Field(
         None,
-        description="Continuation execution lifetime: one_shot|live_control. Message-bearing browser/iOS requests default to one_shot.",
+        description=(
+            "Continuation execution lifetime: one_shot|live_control. " "Message-bearing browser/iOS requests default to one_shot."
+        ),
     )
     client_request_id: str = Field(
         ...,
@@ -334,7 +338,9 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     )
     permission_mode: str = Field(
         "bypass",
-        description="Managed permission policy: 'bypass' (autonomous, default) or 'remote_approve' (answer permission prompts via Longhouse)",
+        description=(
+            "Managed permission policy: 'bypass' (autonomous, default) or " "'remote_approve' (answer permission prompts via Longhouse)"
+        ),
     )
     launch_actor: str | None = Field(None, description="Positive launch actor provenance when known")
     launch_surface: str | None = Field(None, description="Launch surface provenance when known")
@@ -951,7 +957,7 @@ def _assert_no_answerable_pause_request_pending(*, db: Session, source_session) 
 async def send_to_live_session(
     session_id: str,
     body: SessionMessageRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ):
     """Send text into the live managed-local session and return a fast JSON ack."""
@@ -1016,7 +1022,7 @@ async def send_to_live_session_agents(
     session_id: str,
     body: SessionMessageRequest,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ):
@@ -1101,7 +1107,7 @@ async def draft_reply_for_live_session_agents(
 @router.post("/{session_id}/interrupt-live", response_model=SessionInterruptResponse)
 async def interrupt_live_session(
     session_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> SessionInterruptResponse:
     """Browser-authenticated explicit interrupt for managed-local sessions."""
@@ -1120,7 +1126,7 @@ async def interrupt_live_session(
 async def interrupt_live_session_agents(
     session_id: str,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionInterruptResponse:
@@ -1152,7 +1158,7 @@ async def interrupt_live_session_agents(
 @router.post("/{session_id}/terminate-live", response_model=SessionTerminateResponse)
 async def terminate_live_session(
     session_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> SessionTerminateResponse:
     """Browser-authenticated explicit terminate for managed-local sessions."""
@@ -1171,7 +1177,7 @@ async def terminate_live_session(
 async def terminate_live_session_agents(
     session_id: str,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionTerminateResponse:
@@ -1292,7 +1298,7 @@ async def respond_to_pause_request_agents(
 async def continue_remote_session_agents(
     session_id: uuid.UUID,
     body: RemoteSessionContinueRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> RemoteSessionLaunchResponse:
@@ -1452,7 +1458,7 @@ async def launch_remote_session_endpoint(
 async def continue_remote_session_endpoint(
     session_id: uuid.UUID,
     body: RemoteSessionContinueRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> RemoteSessionLaunchResponse:
     """Continue an existing durable session on a user-owned machine."""
@@ -1490,7 +1496,7 @@ async def continue_remote_session_endpoint(
 @router.get("/{session_id}/lock")
 async def get_session_lock_status(
     session_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _current_user=Depends(get_current_browser_route_user),
 ) -> SessionLockInfo:
     """Check if a session is currently locked.
@@ -1568,6 +1574,8 @@ def _recent_input_summaries(source_session, db: Session) -> list[QueuedInputSumm
     live_rows = _list_recent_live_input_summaries(source_session)
     if live_rows is not None:
         return live_rows
+    if database_module.live_catalog_enabled():
+        return []
     return [_queued_summary(row) for row in list_recent_inputs(db, source_session.id)]
 
 
@@ -1678,6 +1686,185 @@ def _client_request_id_for_input(body: SessionInputRequest) -> str:
     if client_request_id:
         return client_request_id
     return uuid.uuid4().hex
+
+
+async def _finish_catalog_input_receipt(
+    *,
+    receipt_id: str,
+    delivery_request_id: str,
+    error: str | None = None,
+) -> None:
+    live_ws = get_live_write_serializer()
+    if not live_ws.is_configured:
+        raise HTTPException(status_code=503, detail="Live input writer is unavailable")
+    if error is None:
+        await live_ws.execute(
+            lambda live_db: mark_live_receipt_delivered_with_projection(
+                live_db,
+                receipt_id=receipt_id,
+                delivery_request_id=delivery_request_id,
+            ),
+            auto_commit=False,
+            label="live-input-delivered",
+        )
+        return
+    await live_ws.execute(
+        lambda live_db: mark_live_receipt_failed(live_db, receipt_id=receipt_id, error=error),
+        auto_commit=False,
+        label="live-input-failed",
+    )
+
+
+async def _create_catalog_session_input_response(
+    *,
+    source_session,
+    owner_id: int,
+    body: SessionInputRequest,
+    db: Session,
+) -> SessionInputResponse:
+    """Live-receipt authoritative input path used when the cold DB is absent."""
+
+    if body.intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER):
+        raise HTTPException(status_code=400, detail=f"unknown intent: {body.intent}")
+    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
+    client_request_id = _client_request_id_for_input(body)
+    existing = await load_live_input_receipt_by_client_request_best_effort(
+        owner_id=owner_id,
+        session_id=source_session.id,
+        client_request_id=client_request_id,
+    )
+    if existing is not None:
+        if existing.text != body.text:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error_code": "input_conflict",
+                    "existing_live_input_id": existing.id,
+                    "reason": "different_text",
+                },
+            )
+        if existing.status in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING):
+            return _live_receipt_response(source_session=source_session, db=db, receipt=existing)
+
+    current = _count_active_live_inputs(source_session)
+    if current is not None and current >= MAX_QUEUED_PER_SESSION:
+        raise HTTPException(status_code=409, detail=f"Too many queued inputs for this session ({current})")
+
+    delivery_request_id = uuid.uuid4().hex
+    if body.intent == INPUT_INTENT_QUEUE:
+        receipt_id = await _record_live_input_receipt_for_body(
+            source_session=source_session,
+            owner_id=owner_id,
+            body=body,
+            client_request_id=client_request_id,
+            intent=INPUT_INTENT_QUEUE,
+            status_value=INPUT_STATUS_QUEUED,
+        )
+        if receipt_id is None:
+            raise HTTPException(status_code=503, detail="Live input queue is unavailable")
+        return SessionInputResponse(
+            outcome="queued",
+            input_id=None,
+            live_input_id=receipt_id,
+            client_request_id=client_request_id,
+            intent=INPUT_INTENT_QUEUE,
+            queued=_recent_input_summaries(source_session, db),
+        )
+
+    if body.intent == INPUT_INTENT_AUTO:
+        lock_scope_id = session_lock_scope_id(source_session.id)
+        lock = await session_lock_manager.acquire(
+            session_id=lock_scope_id,
+            holder=delivery_request_id,
+            ttl_seconds=300,
+        )
+        if not lock:
+            receipt_id = await _record_live_input_receipt_for_body(
+                source_session=source_session,
+                owner_id=owner_id,
+                body=body,
+                client_request_id=client_request_id,
+                intent=INPUT_INTENT_AUTO,
+                status_value=INPUT_STATUS_QUEUED,
+            )
+            if receipt_id is None:
+                raise HTTPException(status_code=503, detail="Live input queue is unavailable")
+            return SessionInputResponse(
+                outcome="queued",
+                input_id=None,
+                live_input_id=receipt_id,
+                client_request_id=client_request_id,
+                intent=INPUT_INTENT_AUTO,
+                queued=_recent_input_summaries(source_session, db),
+            )
+    else:
+        lock_scope_id = session_lock_scope_id(source_session.id)
+
+    receipt_id = await _record_live_input_receipt_for_body(
+        source_session=source_session,
+        owner_id=owner_id,
+        body=body,
+        client_request_id=client_request_id,
+        intent=body.intent,
+        status_value=INPUT_STATUS_DELIVERING,
+        delivery_request_id=delivery_request_id,
+    )
+    if receipt_id is None:
+        if body.intent == INPUT_INTENT_AUTO:
+            await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        raise HTTPException(status_code=503, detail="Live input receipt writer is unavailable")
+
+    if body.intent == INPUT_INTENT_STEER:
+        from zerg.services.managed_local_control import steer_text_to_managed_local_session
+
+        result = await steer_text_to_managed_local_session(
+            db=db,
+            owner_id=owner_id,
+            session=source_session,
+            text=body.text,
+            request_id=delivery_request_id,
+        )
+        if not result.ok:
+            await _finish_catalog_input_receipt(
+                receipt_id=receipt_id,
+                delivery_request_id=delivery_request_id,
+                error=str(result.error or "steer failed"),
+            )
+            raise HTTPException(status_code=409, detail={"error_code": str(result.error or "steer_failed")})
+    else:
+        dispatch_response = await _build_managed_local_chat_response(
+            source_session=source_session,
+            owner_id=owner_id,
+            message=body.text,
+            request_id=delivery_request_id,
+            lock_scope_id=lock_scope_id,
+            db=db,
+        )
+        if int(dispatch_response.status_code) >= 400:
+            try:
+                payload = json.loads(dispatch_response.body or b"{}")
+            except Exception:
+                payload = {}
+            error = str(payload.get("error") or "send failed")
+            await _finish_catalog_input_receipt(
+                receipt_id=receipt_id,
+                delivery_request_id=delivery_request_id,
+                error=error,
+            )
+            raise HTTPException(status_code=dispatch_response.status_code, detail=payload)
+
+    await _finish_catalog_input_receipt(
+        receipt_id=receipt_id,
+        delivery_request_id=delivery_request_id,
+    )
+    return SessionInputResponse(
+        outcome="sent",
+        input_id=None,
+        live_input_id=receipt_id,
+        client_request_id=client_request_id,
+        intent=body.intent,
+        queued=_recent_input_summaries(source_session, db),
+    )
 
 
 def _input_conflict(existing: SessionInput, *, reason: InputConflictReason) -> HTTPException:
@@ -2024,6 +2211,13 @@ async def _create_session_input_response(
     body: SessionInputRequest,
     db: Session,
 ) -> SessionInputResponse:
+    if database_module.live_catalog_enabled():
+        return await _create_catalog_session_input_response(
+            source_session=source_session,
+            owner_id=owner_id,
+            body=body,
+            db=db,
+        )
     if body.intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -2417,7 +2611,7 @@ async def _create_session_input_response(
 async def create_session_input_endpoint(
     session_id: str,
     body: SessionInputRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> SessionInputResponse:
     source_session = _load_session_for_continuation(db, session_id)
@@ -2434,7 +2628,7 @@ async def list_session_inputs_endpoint(
     session_id: str,
     request: Request,
     response: Response,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _current_user: User = Depends(get_current_browser_route_user),
 ):
     """List queued + recently-failed inputs for the chip UI.
@@ -2466,7 +2660,7 @@ async def list_session_inputs_endpoint(
 async def cancel_live_session_input_endpoint(
     session_id: str,
     live_input_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _current_user: User = Depends(get_current_browser_route_user),
 ) -> dict:
     source_session = _load_session_for_continuation(db, session_id)
@@ -2524,7 +2718,7 @@ async def cancel_session_input_endpoint(
 @router.delete("/{session_id}/lock")
 async def force_release_lock(
     session_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _current_user=Depends(get_current_browser_route_user),
 ) -> dict:
     """Force release a session lock (admin operation).

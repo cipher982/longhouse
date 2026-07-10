@@ -15,6 +15,7 @@ from fastapi import Query
 from sqlalchemy.orm import Session
 
 import zerg.database as database_module
+from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -49,6 +50,7 @@ from zerg.services.workspace_suggestions import build_workspace_suggestions
 from zerg.services.write_serializer import get_live_write_serializer
 
 router = APIRouter(prefix="/agents/machines", tags=["agents"])
+_catalog_db_dependency = catalog_db_dependency()
 
 PROVIDER_LIVE_PROOF_COMMAND = "provider.live_proof"
 ARCHIVE_BACKLOG_CONTROL_COMMAND = "archive.backlog_control"
@@ -57,7 +59,7 @@ PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS = 15
 
 @router.get("", response_model=MachineDirectoryResponse)
 def list_machines(
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> MachineDirectoryResponse:
@@ -134,7 +136,7 @@ def get_machine_archive_backlog(
 async def control_machine_archive_backlog(
     device_id: str,
     request: ArchiveBacklogControlRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> ArchiveBacklogControlResponse:
@@ -175,7 +177,7 @@ async def control_machine_archive_backlog(
 @router.get("/operations/{operation_id}", response_model=MachineControlOperationResponse)
 def get_machine_control_operation(
     operation_id: str,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> MachineControlOperationResponse:
@@ -183,6 +185,8 @@ def get_machine_control_operation(
     operation = _get_live_machine_control_operation(owner_id=owner_id, operation_id=operation_id)
     if operation is not None:
         return MachineControlOperationResponse(**machine_control_operation_to_response(operation))
+    if database_module.live_catalog_enabled():
+        raise HTTPException(status_code=404, detail="Machine control operation not found")
     operation = get_machine_control_operation_for_owner(db, owner_id=owner_id, operation_id=operation_id)
     if operation is None:
         raise HTTPException(status_code=404, detail="Machine control operation not found")
@@ -193,7 +197,7 @@ def get_machine_control_operation(
 async def run_provider_live_proof(
     device_id: str,
     request: ProviderLiveProofRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> ProviderLiveProofAcceptedResponse:

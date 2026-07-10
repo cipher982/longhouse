@@ -135,7 +135,7 @@ def _timeline_filters_cache_key(db: Session, *, days_back: int) -> tuple[str, in
 
 @router.get("/machines", response_model=MachineDirectoryResponse)
 def list_browser_machines(
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_browser_user),
 ) -> MachineDirectoryResponse:
     """Browser machines directory. Same body shape as ``/api/agents/machines``."""

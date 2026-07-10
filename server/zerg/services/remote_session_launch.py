@@ -36,6 +36,10 @@ from zerg.models.agents import SessionThread
 from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
+from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
+from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.agents.kernel_writes import ensure_open_run_for_session
 from zerg.services.agents.kernel_writes import ensure_primary_thread
@@ -1568,6 +1572,158 @@ async def launch_remote_session(
     return _launch_result_for_attempt(launch_attempt)
 
 
+def _latest_live_thread_alias(db: Session, *, thread_id: str, provider: str, kind: str) -> str:
+    value = (
+        db.query(LiveSessionThreadAlias.alias_value)
+        .filter(
+            LiveSessionThreadAlias.thread_id == thread_id,
+            LiveSessionThreadAlias.provider == provider,
+            LiveSessionThreadAlias.alias_kind == kind,
+        )
+        .order_by(LiveSessionThreadAlias.last_seen_at.desc(), LiveSessionThreadAlias.id.desc())
+        .limit(1)
+        .scalar()
+    )
+    return str(value or "").strip()
+
+
+async def _continue_remote_session_live_catalog(
+    db: Session,
+    params: RemoteContinueParams,
+    *,
+    registry: MachineControlChannelRegistry | None,
+) -> RemoteLaunchResult:
+    """Continue from bounded live identity/aliases without opening the archive."""
+
+    from zerg.services.live_control_catalog import live_control_capability_available
+    from zerg.services.live_control_catalog import load_live_control_session
+
+    session = load_live_control_session(db, params.session_id)
+    if session is None:
+        raise RemoteLaunchError(
+            f"Session {params.session_id} was not found in the live catalog",
+            code="invalid_request",
+            status_code=404,
+        )
+    device_id = (params.device_id or session.device_id or "").strip()
+    cwd = (params.cwd or session.cwd or "").strip()
+    if not device_id:
+        raise RemoteLaunchError("device_id is required", code="invalid_request", status_code=400)
+    if not cwd:
+        raise RemoteLaunchError("cwd is required", code="invalid_request", status_code=400)
+    if not cwd.startswith("/"):
+        raise RemoteLaunchError("cwd must be absolute", code="cwd_not_allowed", status_code=400)
+    execution_lifetime = normalize_remote_execution_lifetime(params.execution_lifetime)
+    message = (params.message or "").strip()
+    if execution_lifetime == "one_shot" and not message:
+        raise RemoteLaunchError(
+            "message is required for one-shot session continuation",
+            code="invalid_request",
+            status_code=400,
+        )
+    provider = str(session.provider or "").strip().lower()
+    if provider not in continue_supported_providers():
+        raise RemoteLaunchError(
+            f"provider {provider!r} is not supported for session continuation",
+            code="provider_unsupported",
+            status_code=400,
+        )
+    _verify_device_owned_by(db, owner_id=params.owner_id, device_id=device_id)
+    if session.device_id:
+        _verify_device_owned_by(db, owner_id=params.owner_id, device_id=session.device_id)
+    client_request_id = (params.client_request_id or "").strip()
+    if not client_request_id:
+        raise RemoteLaunchError(
+            "client_request_id is required for session continuation",
+            code="invalid_request",
+            status_code=400,
+        )
+    if live_control_capability_available(db, session_id=session.id, capability="send"):
+        if execution_lifetime == "live_control":
+            return RemoteLaunchResult(
+                session_id=session.id,
+                launch_state="live",
+                execution_lifetime="live_control",
+            )
+        raise RemoteLaunchError(
+            "Session is already live; send input to the live session instead",
+            code="invalid_request",
+            status_code=409,
+        )
+
+    thread = (
+        db.query(LiveSessionThread)
+        .filter(LiveSessionThread.session_id == str(session.id), LiveSessionThread.is_primary == 1)
+        .order_by(LiveSessionThread.created_at.asc(), LiveSessionThread.id.asc())
+        .first()
+    )
+    if thread is None:
+        raise RemoteLaunchError(
+            "Continue needs live thread identity; the archive is currently unavailable",
+            code="transcript_not_found",
+            status_code=503,
+        )
+    provider_thread_id = _latest_live_thread_alias(
+        db,
+        thread_id=str(thread.id),
+        provider=provider,
+        kind="provider_session_id",
+    )
+    thread_path = (
+        _latest_live_thread_alias(
+            db,
+            thread_id=str(thread.id),
+            provider=provider,
+            kind="source_path",
+        )
+        or None
+    )
+    ever_managed = (
+        db.query(LiveSessionConnection.id)
+        .join(LiveSessionRun, LiveSessionRun.id == LiveSessionConnection.run_id)
+        .filter(LiveSessionRun.thread_id == str(thread.id))
+        .limit(1)
+        .first()
+        is not None
+    )
+    if (
+        not provider_thread_id
+        or (provider == "codex" and not thread_path)
+        or (provider == "claude" and not ever_managed and not thread_path)
+    ):
+        raise RemoteLaunchError(
+            "Continue needs provider resume identity from the archive; retry when archive repair completes",
+            code="transcript_not_found",
+            status_code=503,
+        )
+
+    reg = registry or get_machine_control_channel_registry()
+    info = reg.info(owner_id=params.owner_id, device_id=device_id)
+    if info is None:
+        raise RemoteLaunchError(f"Machine {device_id!r} is offline", code="machine_offline", status_code=409)
+    continue_cap = f"{provider}.resume_run_once" if execution_lifetime == "one_shot" else f"{provider}.continue"
+    if continue_cap not in info.supports:
+        raise RemoteLaunchError(
+            f"Machine {device_id!r} does not support {continue_cap}",
+            code="provider_unsupported",
+            status_code=409,
+        )
+    return await _continue_remote_session_hot(
+        session=session,
+        params=params,
+        registry=reg,
+        info=info,
+        device_id=device_id,
+        cwd=cwd,
+        provider=provider,
+        execution_lifetime=execution_lifetime,
+        message=message,
+        client_request_id=client_request_id,
+        provider_thread_id=provider_thread_id,
+        thread_path=thread_path,
+    )
+
+
 async def continue_remote_session(
     db: Session,
     params: RemoteContinueParams,
@@ -1575,6 +1731,9 @@ async def continue_remote_session(
     registry: MachineControlChannelRegistry | None = None,
 ) -> RemoteLaunchResult:
     """Start a new managed Codex process on an existing Longhouse session/thread."""
+
+    if database_module.live_catalog_enabled():
+        return await _continue_remote_session_live_catalog(db, params, registry=registry)
 
     session = db.query(AgentSession).filter(AgentSession.id == params.session_id).first()
     if session is None:
@@ -1953,6 +2112,8 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
     command_id = str(message.get("command_id") or "").strip()
     if not command_id or not (command_id.startswith("launch-") or command_id.startswith("continue-")):
         return False
+    if database_module.live_catalog_enabled():
+        return _reconcile_live_launch_from_command_result(message, command_id=command_id)
     attempt = db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.command_id == command_id).first()
     if attempt is None:
         return _reconcile_live_launch_from_command_result(message, command_id=command_id)

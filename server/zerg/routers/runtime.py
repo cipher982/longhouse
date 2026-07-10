@@ -16,6 +16,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.database import catalog_db_dependency
+from zerg.database import live_catalog_enabled
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -174,7 +175,11 @@ async def ingest_runtime_observation_batch(
             prepared_per_session: list[dict] = []
             widget_push = None
 
-            if push_contexts:
+            # Notification/session-message prep still depends on archive-only
+            # projections. Never smuggle a cold factory open into catalog-mode
+            # runtime ingest; the hot runtime write and control lock watcher are
+            # the availability contract while archive repair is underway.
+            if push_contexts and not live_catalog_enabled():
                 push_context_by_session = {item["session_id"]: item for item in push_contexts}
                 push_session_ids = list(push_context_by_session.keys())
 

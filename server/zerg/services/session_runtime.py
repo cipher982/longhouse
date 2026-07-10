@@ -570,6 +570,10 @@ def _load_live_runtime_state_map(session_ids: list[UUID]) -> dict[str, LiveRunti
 def load_runtime_state_map(db: Session, session_ids: list[UUID]) -> dict[str, SessionRuntimeState | LiveRuntimeState]:
     if not session_ids:
         return {}
+    from zerg.database import live_catalog_enabled
+
+    if live_catalog_enabled():
+        return _load_live_runtime_state_map(session_ids)
 
     rows = (
         db.query(SessionRuntimeState)

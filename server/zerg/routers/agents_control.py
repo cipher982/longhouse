@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 import zerg.database as database_module
 from zerg.config import get_settings
-from zerg.database import get_session_factory
+from zerg.database import get_catalog_session_factory
 from zerg.models.device_token import DeviceToken
 from zerg.routers.device_tokens import validate_device_token
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
@@ -67,6 +67,8 @@ async def _reconcile_machine_control_operation_result(
             )
             if matched:
                 return True
+    if database_module.live_catalog_enabled():
+        return False
     return await get_write_serializer().execute_or_direct(
         lambda write_db: reconcile_machine_control_operation_from_command_result(
             write_db,
@@ -81,6 +83,8 @@ async def _reconcile_machine_control_operation_result(
 
 
 async def _reconcile_late_launch_result(db: Session, message: dict[str, Any]) -> bool:
+    if database_module.live_catalog_enabled():
+        return reconcile_launch_from_command_result(db, message)
     return await get_write_serializer().execute_or_direct(
         lambda write_db: reconcile_launch_from_command_result(write_db, message),
         db,
@@ -99,7 +103,7 @@ async def _close_control_ws(websocket: WebSocket, *, code: int = 1008, reason: s
 @router.websocket("/ws")
 async def machine_control_websocket(websocket: WebSocket) -> None:
     settings = get_settings()
-    db = get_session_factory()()
+    db = get_catalog_session_factory()()
     registry = get_machine_control_channel_registry()
     owner_id: int | None = None
     device_id: str | None = None
