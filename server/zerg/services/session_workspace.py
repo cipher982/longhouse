@@ -82,8 +82,10 @@ def build_session_workspace(
     if not session:
         live_readiness = latest_live_launch_readiness([session_id]).get(session_id)
         if live_readiness is not None and (owner_id is None or live_readiness.owner_id == str(owner_id)):
+            preview = load_active_provisional_preview_map(db, [session_id]).get(str(session_id))
             session_response = build_live_launch_placeholder_response(
                 live_readiness,
+                transcript_preview=preview,
                 sharer=sharer,
             )
             return SessionWorkspaceResponse(
@@ -122,10 +124,36 @@ def build_session_workspace(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id} not found",
         )
+    with timing.span("load_thread"):
+        thread_sessions = store.list_thread_sessions(session)
+    if not thread_sessions:
+        thread_sessions = [session]
+
+    with timing.span("load_head"):
+        head = store.get_thread_head(session) or session
+
+    thread_session_ids = [item.id for item in thread_sessions]
+    with timing.span("load_activity"):
+        activity_map = store.get_last_activity_map(thread_session_ids)
+    with timing.span("load_first_user"):
+        first_user_map = store.get_first_message_map(thread_session_ids, role="user", max_len=80)
+    with timing.span("load_projection"):
+        projection = store.get_session_projection_page(
+            session,
+            branch_mode=branch_mode,
+            limit=limit,
+            load_from_end=True,
+        )
+
+    # Launch readiness is a hot-lane placeholder only until the archive has its
+    # first projected item. Once ingest catches up, keep the readiness metadata
+    # for runtime/capability display but never hide the durable transcript.
     live_readiness = latest_live_launch_readiness([session_id]).get(session_id)
-    if live_readiness is not None and (owner_id is None or live_readiness.owner_id == str(owner_id)):
+    if live_readiness is not None and (owner_id is None or live_readiness.owner_id == str(owner_id)) and projection.total == 0:
+        preview = load_active_provisional_preview_map(db, [session_id]).get(str(session_id))
         session_response = build_live_launch_placeholder_response(
             live_readiness,
+            transcript_preview=preview,
             sharer=sharer,
         )
         return SessionWorkspaceResponse(
@@ -159,27 +187,6 @@ def build_session_workspace(
                 thread_session_count=1,
                 fingerprint=f"live-launch:{session_id}:{live_readiness.updated_at or live_readiness.created_at}",
             ),
-        )
-
-    with timing.span("load_thread"):
-        thread_sessions = store.list_thread_sessions(session)
-    if not thread_sessions:
-        thread_sessions = [session]
-
-    with timing.span("load_head"):
-        head = store.get_thread_head(session) or session
-
-    thread_session_ids = [item.id for item in thread_sessions]
-    with timing.span("load_activity"):
-        activity_map = store.get_last_activity_map(thread_session_ids)
-    with timing.span("load_first_user"):
-        first_user_map = store.get_first_message_map(thread_session_ids, role="user", max_len=80)
-    with timing.span("load_projection"):
-        projection = store.get_session_projection_page(
-            session,
-            branch_mode=branch_mode,
-            limit=limit,
-            load_from_end=True,
         )
     with timing.span("workspace_revision"):
         workspace_revision = load_session_workspace_revision(db, session_id)
@@ -229,6 +236,7 @@ def build_session_workspace(
                 kernel_capabilities=kernel_capabilities_map.get(item.id),
                 has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),
                 pause_request=serialize_pause_request_projection(pause_request_map.get(item.id)),
+                launch_readiness=(live_readiness if item.id == session.id else None),
                 sharer=sharer,
             )
             for item in thread_sessions
@@ -254,6 +262,7 @@ def build_session_workspace(
             kernel_capabilities=kernel_capabilities_map.get(session.id),
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
             pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
+            launch_readiness=live_readiness,
             sharer=sharer,
         )
 
@@ -299,7 +308,11 @@ def build_session_mobile_tail(
     if not session:
         live_readiness = latest_live_launch_readiness([session_id]).get(session_id)
         if live_readiness is not None and (owner_id is None or live_readiness.owner_id == str(owner_id)):
-            session_response = build_live_launch_placeholder_response(live_readiness)
+            preview = load_active_provisional_preview_map(db, [session_id]).get(str(session_id))
+            session_response = build_live_launch_placeholder_response(
+                live_readiness,
+                transcript_preview=preview,
+            )
             revision_at = live_readiness.updated_at or live_readiness.created_at
             return SessionMobileTailResponse(
                 session=session_response,
@@ -333,39 +346,6 @@ def build_session_mobile_tail(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id} not found",
         )
-    live_readiness = latest_live_launch_readiness([session_id]).get(session_id)
-    if live_readiness is not None and (owner_id is None or live_readiness.owner_id == str(owner_id)):
-        session_response = build_live_launch_placeholder_response(live_readiness)
-        revision_at = live_readiness.updated_at or live_readiness.created_at
-        return SessionMobileTailResponse(
-            session=session_response,
-            projection=SessionProjectionResponse(
-                root_session_id=str(session_id),
-                focus_session_id=str(session_id),
-                head_session_id=str(session_id),
-                path_session_ids=[str(session_id)],
-                items=[],
-                total=0,
-                page_offset=offset,
-                branch_mode=branch_mode,
-                abandoned_events=0,
-            ),
-            snapshot_event_id=None,
-            workspace_revision=SessionWorkspaceRevisionResponse(
-                latest_event_id=0,
-                latest_session_updated_at=session.started_at,
-                latest_runtime_signal_at=revision_at,
-                runtime_version_sum=0,
-                pause_request_count=0,
-                pause_request_fingerprint=None,
-                managed_control_count=0,
-                managed_control_fingerprint=None,
-                live_preview_updated_at=None,
-                thread_session_count=1,
-                fingerprint=f"live-launch:{session_id}:{revision_at}",
-            ),
-        )
-
     if branch_mode not in {"head", "all"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -392,6 +372,44 @@ def build_session_mobile_tail(
             limit=limit,
             offset=offset,
             load_from_end=True,
+        )
+
+    # Keep the hot-lane launch placeholder only until the archive has its first
+    # projected item. A readiness row may remain live after ingest starts; it
+    # must not mask durable transcript content on mobile.
+    live_readiness = latest_live_launch_readiness([session_id]).get(session_id)
+    if live_readiness is not None and (owner_id is None or live_readiness.owner_id == str(owner_id)) and projection.total == 0:
+        preview = load_active_provisional_preview_map(db, [session_id]).get(str(session_id))
+        session_response = build_live_launch_placeholder_response(
+            live_readiness,
+            transcript_preview=preview,
+        )
+        revision_at = live_readiness.updated_at or live_readiness.created_at
+        return SessionMobileTailResponse(
+            session=session_response,
+            projection=SessionProjectionResponse(
+                root_session_id=str(session_id),
+                focus_session_id=str(session_id),
+                head_session_id=str(session_id),
+                path_session_ids=[str(session_id)],
+                items=[],
+                total=0,
+                page_offset=offset,
+                branch_mode=branch_mode,
+                abandoned_events=0,
+            ),
+            snapshot_event_id=None,
+            workspace_revision=SessionWorkspaceRevisionResponse(
+                latest_event_id=0,
+                latest_session_updated_at=session.started_at,
+                latest_runtime_signal_at=revision_at,
+                runtime_version_sum=0,
+                pause_request_count=0,
+                pause_request_fingerprint=None,
+                live_preview_updated_at=None,
+                thread_session_count=1,
+                fingerprint=f"live-launch:{session_id}:{revision_at}",
+            ),
         )
     with timing.span("workspace_revision"):
         workspace_revision = load_session_workspace_revision(db, session_id)
@@ -448,6 +466,7 @@ def build_session_mobile_tail(
             owner_id=owner_id,
             pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
+            launch_readiness=live_readiness,
         )
 
     with timing.span("build_projection"):

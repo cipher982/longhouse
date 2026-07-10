@@ -33,9 +33,11 @@ from zerg.dependencies.agents_auth import require_single_tenant  # noqa: E402
 from zerg.dependencies.agents_auth import verify_agents_token  # noqa: E402
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user  # noqa: E402
 from zerg.models import User  # noqa: E402
+from zerg.models.agents import AgentEvent  # noqa: E402
 from zerg.models.agents import AgentSession  # noqa: E402
 from zerg.models.agents import AgentSourceLine  # noqa: E402
 from zerg.models.agents import SessionConnection  # noqa: E402
+from zerg.models.agents import SessionLivePreview  # noqa: E402
 from zerg.models.agents import SessionLaunchAttempt  # noqa: E402
 from zerg.models.agents import SessionRun  # noqa: E402
 from zerg.models.agents import SessionThreadAlias  # noqa: E402
@@ -1580,6 +1582,61 @@ def test_live_launch_mobile_tail_uses_placeholder_while_shell_is_catching_up(tmp
         assert mobile_tail.projection.total == 0
         assert mobile_tail.snapshot_event_id is None
         assert mobile_tail.workspace_revision.fingerprint.startswith("live-launch:")
+
+        # The archive shell can still have a live provisional assistant preview
+        # while durable events are catching up. The placeholder must carry that
+        # preview through so clients can paint useful transcript content.
+        with SessionLocal() as db:
+            preview_at = datetime.now(timezone.utc)
+            db.add(
+                SessionLivePreview(
+                    session_id=result.session_id,
+                    thread_id="codex-thread",
+                    turn_key="codex_bridge_live:turn-1",
+                    seq=1,
+                    preview_text="Codex is thinking…",
+                    provisional_cursor="codex_bridge_live:turn-1:1",
+                    provisional_complete=0,
+                    event_origin="live_provisional",
+                    preview_observed_at=preview_at,
+                    preview_updated_at=preview_at,
+                    source="codex_bridge_live",
+                    last_observation_id="preview-1",
+                )
+            )
+            db.commit()
+            mobile_tail = build_session_mobile_tail(
+                db=db,
+                session_id=result.session_id,
+                owner_id=OWNER_ID,
+            )
+
+        assert mobile_tail.session.transcript_preview is not None
+        assert mobile_tail.session.transcript_preview.text == "Codex is thinking…"
+        assert mobile_tail.session.transcript_preview.is_stale is False
+
+        # Once the first durable event lands, the hot launch-readiness row must
+        # no longer mask the archived transcript with an empty placeholder.
+        with SessionLocal() as db:
+            db.add(
+                AgentEvent(
+                    session_id=result.session_id,
+                    role="assistant",
+                    content_text="Codex is ready.",
+                    timestamp=datetime.now(timezone.utc),
+                )
+            )
+            db.commit()
+            mobile_tail = build_session_mobile_tail(
+                db=db,
+                session_id=result.session_id,
+                owner_id=OWNER_ID,
+            )
+
+        assert mobile_tail.projection.total == 1
+        assert [item.event.content_text for item in mobile_tail.projection.items if item.event] == [
+            "Codex is ready."
+        ]
     finally:
         live_engine.dispose()
 

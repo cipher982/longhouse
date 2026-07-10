@@ -1855,6 +1855,7 @@ def build_live_launch_placeholder_response(
     launch_readiness: LiveLaunchReadinessView,
     *,
     now: datetime | None = None,
+    transcript_preview: TranscriptPreview | None = None,
     sharer: SessionSharerResponse | None = None,
 ) -> SessionResponse:
     """Build a read-only first-paint session response before archive convergence."""
@@ -1951,6 +1952,11 @@ def build_live_launch_placeholder_response(
         can_continue=False,
         continue_targets=[],
     )
+    transcript_preview_response = build_session_transcript_preview_response(
+        transcript_preview,
+        last_activity_at=started_at,
+        now=current_now,
+    )
     return SessionResponse(
         id=session_id,
         provider=provider,
@@ -2004,7 +2010,7 @@ def build_live_launch_placeholder_response(
         control=SessionControlResponse(),
         capabilities=capabilities,
         runtime_display=runtime_display,
-        transcript_preview=None,
+        transcript_preview=transcript_preview_response,
         timeline_card=build_session_timeline_card_response(
             runtime_view=None,
             runtime_display=runtime_display,
