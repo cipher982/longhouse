@@ -44,7 +44,12 @@ async def _supervise() -> None:
                 sys.executable,
                 "-m",
                 "zerg.services.archive_worker",
-                env={**os.environ, "LONGHOUSE_ARCHIVE_WORKER_CHILD": "1"},
+                env={
+                    **os.environ,
+                    "LONGHOUSE_ARCHIVE_WORKER_CHILD": "1",
+                    "LONGHOUSE_ARCHIVE_WORKER_RESTART_COUNT": str(restart_count),
+                    "LONGHOUSE_ARCHIVE_WORKER_RESTART_BACKOFF_SECONDS": str(backoff),
+                },
             )
             child_started_at = time.monotonic()
             logger.info("Archive worker started pid=%s restart_count=%s", _worker_process.pid, restart_count)

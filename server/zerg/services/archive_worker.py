@@ -266,7 +266,16 @@ async def _run_worker(*, once: bool = False) -> int:
         totals = {"processed": 0, "drained": 0, "failed": 0, "jobs_processed": 0}
         consecutive_failures = 0
         reporter = _StatusReporter(started_at=started_at)
-        reporter.start({"status": "running", "consecutive_failures": 0, "recovered_jobs": recovered_jobs, **totals})
+        reporter.start(
+            {
+                "status": "running",
+                "consecutive_failures": 0,
+                "recovered_jobs": recovered_jobs,
+                "restart_count": int(os.getenv("LONGHOUSE_ARCHIVE_WORKER_RESTART_COUNT", "0")),
+                "restart_backoff_seconds": float(os.getenv("LONGHOUSE_ARCHIVE_WORKER_RESTART_BACKOFF_SECONDS", "1")),
+                **totals,
+            }
+        )
         result: dict[str, int] = {"processed": 0, "drained": 0, "failed": 0}
         prefer_jobs = True
         foreground_since_maintenance = 0

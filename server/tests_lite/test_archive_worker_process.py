@@ -422,6 +422,8 @@ async def test_supervisor_restarts_killed_worker_and_drains_next_row(tmp_path, m
             and supervisor._worker_process.pid != first_pid
             and supervisor._worker_process.returncode is None
         )
+        await wait_until(lambda: int(read_archive_worker_status().get("restart_count") or 0) >= 1)
+        assert read_archive_worker_status()["restart_backoff_seconds"] >= 1.0
 
         await wait_until(lambda: drained_count() == 2)
         with archive_factory() as db:

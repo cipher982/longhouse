@@ -82,9 +82,37 @@ The useful seams already exist:
   row drained.
 - recall already uses a short-lived helper process for `retrieval.db` reads.
 
-The dangerous seam is `_drain_live_archive_outbox_once()` in `maintenance.py`:
+The first dangerous seam was `_drain_live_archive_outbox_once()` in `maintenance.py`:
 the Runtime Host opens both live and archive sessions, then runs the drain through
 the in-process archive `WriteSerializer`.
+
+### Implementation checkpoint
+
+The first containment release now implements:
+
+- a supervised, locked archive child process with crash backoff and durable
+  progress evidence;
+- exclusive worker ownership of every `LiveArchiveOutbox` operation kind;
+- commit-before-ack, idempotent retry behavior for launch, runtime, heartbeat,
+  and input projections;
+- a durable filesystem job protocol with native-exit recovery, live-ingest
+  priority, bounded result retention, and fair alternation with outbox work;
+- summary/title, projection, recall-index, preview-cleanup, and archive-WAL
+  maintenance in the child process;
+- live-store readiness and health that remain available while the archive child
+  is dead, stalled, or backing off.
+
+The synchronous ingest job cutover remains deliberately disabled by default.
+Enabling it while the Runtime Host still configures its monolith
+`WriteSerializer` would create an uncoordinated second writer. The job protocol
+is landed as a tested migration seam, not as a hidden mode switch.
+
+The remaining architectural work is the catalog boundary in Phases 4 and 5.
+Authentication, device tokens, session/thread cards, turns, runner state, and
+some request-time session projections still live in `longhouse.db`; therefore
+this checkpoint must be described as cold-work containment, not complete
+monolith failure isolation. The API still needs the catalog at boot and for
+timeline/detail reads.
 
 ## Worker Contract
 
