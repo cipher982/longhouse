@@ -879,6 +879,9 @@ impl PathScheduler {
         };
 
         if let Some(priority) = merge_priority(in_flight.rerun_priority, task_rerun) {
+            let prioritize_opencode_scan_continuation = priority == WorkPriority::Scan
+                && task_rerun == Some(WorkPriority::Scan)
+                && in_flight.provider == "opencode";
             let observation = in_flight.rerun_observation.unwrap_or(in_flight.observation);
             let estimated_bytes = in_flight
                 .rerun_estimated_bytes
@@ -890,6 +893,10 @@ impl PathScheduler {
                 observation,
                 estimated_bytes,
             );
+            if prioritize_opencode_scan_continuation {
+                self.ready_scan.retain(|candidate| candidate != path);
+                self.ready_scan.push_front(path.to_path_buf());
+            }
         }
     }
 
@@ -1472,6 +1479,23 @@ mod tests {
         assert!(scheduler.has_pending_priority(WorkPriority::Retry));
         assert!(scheduler.has_pending_priority(WorkPriority::Scan));
         assert!(!scheduler.has_pending_priority(WorkPriority::Live));
+    }
+
+    #[test]
+    fn test_opencode_scan_continuation_stays_ahead_of_bulk_discovery() {
+        let mut scheduler = PathScheduler::new(4);
+        let opencode = PathBuf::from("/tmp/opencode.db");
+        let other = PathBuf::from("/tmp/other.jsonl");
+        scheduler.enqueue(opencode.clone(), "opencode", WorkPriority::Scan);
+        let first = scheduler.pop_launchable().unwrap();
+        assert_eq!(first.path, opencode);
+
+        scheduler.enqueue(other, "codex", WorkPriority::Scan);
+        scheduler.complete(&opencode, Some(WorkPriority::Scan));
+
+        let continuation = scheduler.pop_launchable().unwrap();
+        assert_eq!(continuation.path, opencode);
+        assert_eq!(continuation.priority, WorkPriority::Scan);
     }
 
     #[test]
