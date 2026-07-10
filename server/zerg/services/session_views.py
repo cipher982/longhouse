@@ -1681,6 +1681,9 @@ def build_session_response(
         user_messages=session.user_messages,
         title_retry_at=getattr(session, "title_retry_at", None),
     )
+    from zerg.services.session_preferences import load_session_preferences
+
+    preferences = load_session_preferences(session.id, standalone_session=session)
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -1762,8 +1765,8 @@ def build_session_response(
             runtime_view=display_runtime_overlay,
             runtime_display=runtime_display,
         ),
-        loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
-        user_state=session.user_state or "active",
+        loop_mode=_coerce_session_loop_mode(preferences.loop_mode),
+        user_state=preferences.user_state,
         launch_state=launch_state,
         execution_lifetime=execution_lifetime,
         launch_error_code=launch_error_code,
@@ -2084,6 +2087,9 @@ def build_active_session_response(
     continue_target = _native_continue_target(store.db, session)
     continue_targets = [continue_target] if continue_target is not None else []
 
+    from zerg.services.session_preferences import load_session_preferences
+
+    preferences = load_session_preferences(session.id, standalone_session=session)
     return ActiveSessionResponse(
         id=str(session.id),
         project=session.project,
@@ -2114,7 +2120,7 @@ def build_active_session_response(
         display_phase=runtime_overlay.display_phase,
         active_tool=runtime_overlay.active_tool,
         confidence=runtime_overlay.confidence,
-        user_state=session.user_state or "active",
+        user_state=preferences.user_state,
         home_label=capability_flags.home_label,
         control=build_session_control_response(
             session,
@@ -2132,7 +2138,7 @@ def build_active_session_response(
             continue_targets=continue_targets,
         ),
         runtime_display=runtime_display,
-        loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
+        loop_mode=_coerce_session_loop_mode(preferences.loop_mode),
     )
 
 

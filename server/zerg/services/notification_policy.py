@@ -114,7 +114,9 @@ def next_quiet_hours_end(user: User | None, occurred_at: datetime) -> datetime |
 def session_notifications_muted(session: AgentSession | None) -> bool:
     if session is None:
         return False
-    return bool(getattr(session, "notification_muted", False))
+    from zerg.services.session_preferences import load_session_preferences
+
+    return load_session_preferences(session.id, standalone_session=session).notification_muted
 
 
 def recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at: datetime) -> bool:
