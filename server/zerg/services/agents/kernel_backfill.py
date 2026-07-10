@@ -20,10 +20,13 @@ from datetime import datetime
 from datetime import timezone
 from uuid import UUID
 
+from sqlalchemy import and_
 from sqlalchemy import func
+from sqlalchemy import or_
 from sqlalchemy import text
 from sqlalchemy import update as sql_update
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import aliased
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
@@ -407,6 +410,58 @@ def _move_subagent_session_under_parent(
         },
     )
     parent_branch = _ensure_head_branch(db, parent_thread.session_id)
+
+    # An orphan can overlap with rows already ingested on its eventual parent
+    # (for example when a ship retry delivers the same source file under both
+    # identities). Re-stamping those rows would violate the parent's durable
+    # dedupe indexes and repeatedly poison the live write queue. Keep the
+    # parent's copy and drop only rows that are already identical by an index
+    # key before moving the remainder.
+    parent_event = aliased(AgentEvent)
+    duplicate_event_ids = (
+        db.query(AgentEvent.id)
+        .filter(AgentEvent.session_id == child_session_id)
+        .filter(
+            db.query(parent_event.id)
+            .filter(parent_event.session_id == parent_thread.session_id)
+            .filter(parent_event.branch_id == parent_branch.id)
+            .filter(
+                or_(
+                    and_(
+                        AgentEvent.source_path.isnot(None),
+                        parent_event.source_path == AgentEvent.source_path,
+                        parent_event.source_offset == AgentEvent.source_offset,
+                        parent_event.event_hash == AgentEvent.event_hash,
+                    ),
+                    and_(
+                        AgentEvent.event_uuid.isnot(None),
+                        parent_event.event_uuid == AgentEvent.event_uuid,
+                    ),
+                )
+            )
+            .exists()
+        )
+    )
+    counts["events_duplicates_dropped"] = (
+        db.query(AgentEvent).filter(AgentEvent.id.in_(duplicate_event_ids)).delete(synchronize_session=False)
+    )
+
+    parent_source_line = aliased(AgentSourceLine)
+    duplicate_source_line_ids = (
+        db.query(AgentSourceLine.id)
+        .filter(AgentSourceLine.session_id == child_session_id)
+        .filter(
+            db.query(parent_source_line.id)
+            .filter(parent_source_line.session_id == parent_thread.session_id)
+            .filter(parent_source_line.branch_id == parent_branch.id)
+            .filter(parent_source_line.source_path == AgentSourceLine.source_path)
+            .filter(parent_source_line.source_offset == AgentSourceLine.source_offset)
+            .exists()
+        )
+    )
+    counts["source_lines_duplicates_dropped"] = (
+        db.query(AgentSourceLine).filter(AgentSourceLine.id.in_(duplicate_source_line_ids)).delete(synchronize_session=False)
+    )
 
     result = db.execute(
         sql_update(AgentEvent)

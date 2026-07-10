@@ -324,6 +324,26 @@ def test_relink_is_idempotent(tmp_path):
         assert db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").count() == 1
 
 
+def test_relink_discards_exact_duplicate_rows_before_reparenting(tmp_path):
+    """A retried sidechain may already exist on the parent under its source key.
+
+    Relinking must preserve that durable copy instead of repeatedly failing the
+    parent's event/source-line uniqueness constraints.
+    """
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        agent = _agent_payload()
+        store.ingest_session(agent)
+
+        parent = _parent_payload()
+        parent.events = [agent.events[0]]
+        store.ingest_session(parent)
+
+        assert db.query(AgentSession).filter(AgentSession.id == AGENT_ID).first() is None
+        assert db.query(AgentEvent).filter(AgentEvent.session_id == PARENT_ID).count() == 1
+
+
 def test_journal_before_parent_does_not_relink(tmp_path):
     """A journal ingested before the parent is dropped (not an orphan), and the
     parent's later arrival does not resurrect or relink anything."""
