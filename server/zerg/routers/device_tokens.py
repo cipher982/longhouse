@@ -24,6 +24,7 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
+from zerg.database import archive_database_is_read_only
 from zerg.database import catalog_db_dependency
 from zerg.dependencies.auth import get_current_user
 from zerg.models.apns_device_registration import APNSDeviceRegistration
@@ -532,7 +533,7 @@ def validate_device_token(token: str, db: Session) -> DeviceToken | None:
     last = device_token.last_used_at
     if last is not None and last.tzinfo is None:
         last = last.replace(tzinfo=timezone.utc)
-    if last is None or (now - last).total_seconds() > 3600:
+    if (last is None or (now - last).total_seconds() > 3600) and not archive_database_is_read_only():
         if get_write_serializer().is_configured:
             return device_token
         device_token.last_used_at = now

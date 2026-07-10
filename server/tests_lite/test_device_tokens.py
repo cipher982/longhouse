@@ -96,6 +96,30 @@ def test_validate_device_token_skips_last_used_write_when_serializer_configured(
         assert stored.last_used_at is None
 
 
+def test_validate_device_token_stays_read_only_in_archive_get_helper(tmp_path):
+    factory = _make_db(tmp_path)
+    plain_token = generate_device_token()
+
+    with factory() as db:
+        user = User(id=1, email="alice@example.com", role="ADMIN")
+        db.add(user)
+        db.commit()
+        db.add(DeviceToken(owner_id=user.id, device_id="archive-reader", token_hash=hash_token(plain_token)))
+        db.commit()
+
+    class _FakeSerializer:
+        is_configured = False
+
+    with (
+        factory() as db,
+        patch("zerg.routers.device_tokens.archive_database_is_read_only", return_value=True),
+        patch("zerg.routers.device_tokens.get_write_serializer", return_value=_FakeSerializer()),
+    ):
+        validated = validate_device_token(plain_token, db)
+        assert validated is not None
+        assert validated.last_used_at is None
+
+
 def test_agents_token_validation_returns_detached_device_token(tmp_path):
     """Agents auth should not keep its validation DB session checked out."""
     factory = _make_db(tmp_path)
