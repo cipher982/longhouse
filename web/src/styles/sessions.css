@@ -163,6 +163,51 @@
     opacity: 0.85;
   }
 
+  /* Relevance / recent is a compact segmented control, not two browser-default
+     buttons. It only appears while a text search is active. */
+  .sessions-search-mode {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    background: var(--surface-glass-1);
+    border: 1px solid var(--border-glass-1);
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+  }
+
+  .sessions-mode-btn {
+    appearance: none;
+    border: 0;
+    border-radius: calc(var(--radius-md) - 2px);
+    padding: 3px var(--space-2);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    font-family: var(--font-family-base);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    line-height: 1.25;
+    transition:
+      background var(--motion-duration-fast) var(--motion-easing-standard),
+      color var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .sessions-mode-btn:hover {
+    color: var(--color-text-secondary);
+  }
+
+  .sessions-mode-btn--active {
+    background: var(--surface-glass-3);
+    color: var(--color-text-primary);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28);
+  }
+
+  .sessions-mode-btn:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 1px;
+  }
+
   .session-card-similarity {
     margin-top: var(--space-1);
   }
