@@ -35,7 +35,7 @@ from zerg.services.managed_local_launcher import materialize_managed_local_launc
 from zerg.services.managed_provider_contracts import require_contract_for_provider
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
-from zerg.services.session_inputs import create_session_input
+from zerg.services.session_inputs import VALID_INTENTS
 from zerg.services.session_kernel_projection import is_synthetic_provider_session_id
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
@@ -391,15 +391,15 @@ def drain_live_archive_outbox(
         processed += 1
         row.attempts = int(row.attempts or 0) + 1
         try:
-            _drain_row(row, archive_db, live_db)
+            effects = apply_live_archive_outbox_to_archive(row, archive_db)
             archive_db.commit()
+            apply_live_archive_outbox_ack(row, live_db, effects)
         except Exception as exc:
             archive_db.rollback()
             row.last_error = f"{type(exc).__name__}: {exc}"
             failed += 1
             continue
 
-        _mark_live_side_effects_after_archive_commit(row, live_db)
         row.drained_at = drained_at
         row.last_error = None
         drained += 1
@@ -413,26 +413,36 @@ def drain_live_archive_outbox(
     return LiveArchiveDrainResult(processed=processed, drained=drained, failed=failed)
 
 
-def _drain_row(row: LiveArchiveOutbox, archive_db: Session, live_db: Session) -> None:
+def apply_live_archive_outbox_to_archive(row: LiveArchiveOutbox, archive_db: Session) -> dict[str, Any]:
+    """Apply one outbox row to cold state without opening or mutating live state."""
+
     if row.kind == HEARTBEAT_STAMP_KIND:
         _drain_heartbeat_stamp(row, archive_db)
-        return
+        return {}
     if row.kind == RUNTIME_EVENT_KIND:
         _drain_runtime_event(row, archive_db)
-        return
+        return {}
     if row.kind == MANAGED_LOCAL_LAUNCH_KIND:
         _drain_managed_local_launch(row, archive_db)
-        return
+        return {}
     if row.kind == REMOTE_LAUNCH_KIND:
         _drain_remote_launch(row, archive_db)
-        return
+        return {}
     if row.kind == REMOTE_LAUNCH_OUTCOME_KIND:
         _drain_remote_launch_outcome(row, archive_db)
-        return
+        return {}
     if row.kind == SESSION_INPUT_RECEIPT_KIND:
-        _drain_session_input_receipt(row, archive_db, live_db)
-        return
+        return _project_session_input_receipt(row, archive_db)
     raise ValueError(f"Unsupported live archive outbox kind: {row.kind}")
+
+
+def apply_live_archive_outbox_ack(row: LiveArchiveOutbox, live_db: Session, effects: dict[str, Any]) -> None:
+    """Apply the short live-side acknowledgement after cold state commits."""
+
+    if row.kind == SESSION_INPUT_RECEIPT_KIND:
+        _ack_session_input_receipt(row, live_db, effects)
+        return
+    _mark_live_side_effects_after_archive_commit(row, live_db)
 
 
 def _drain_heartbeat_stamp(row: LiveArchiveOutbox, archive_db: Session) -> None:
@@ -878,8 +888,12 @@ def _mark_live_side_effects_after_archive_commit(row: LiveArchiveOutbox, live_db
         if state in {"adopted", "failed", "dispatched"}:
             session_id = UUID(str(launch.get("session_id") or ""))
             current = live_db.get(LiveLaunchReadiness, str(session_id))
-            if current is not None and _remote_launch_state_rank(str(current.state or "")) > _remote_launch_state_rank(state):
-                return
+            if current is not None:
+                current_state = str(current.state or "").strip()
+                current_rank = _remote_launch_state_rank(current_state)
+                next_rank = _remote_launch_state_rank(state)
+                if current_rank > next_rank or (current_rank == next_rank and current_state != state):
+                    return
             update_live_launch_readiness_state(
                 live_db,
                 session_id=session_id,
@@ -893,6 +907,9 @@ def _mark_live_side_effects_after_archive_commit(row: LiveArchiveOutbox, live_db
     payload = json.loads(row.payload_json or "{}")
     launch = _restore_jsonable(payload.get("launch") or {})
     plan = _restore_managed_local_launch_plan(launch.get("plan") or {})
+    current = live_db.get(LiveLaunchReadiness, str(plan.session_id))
+    if current is not None and str(current.state or "").strip() in {"adopted", "failed", "abandoned"}:
+        return
     update_live_launch_readiness_state(
         live_db,
         session_id=plan.session_id,
@@ -933,7 +950,7 @@ def _restore_managed_local_launch_plan(plan_payload: dict[str, Any]) -> ManagedL
     )
 
 
-def _drain_session_input_receipt(row: LiveArchiveOutbox, archive_db: Session, live_db: Session) -> None:
+def _project_session_input_receipt(row: LiveArchiveOutbox, archive_db: Session) -> dict[str, Any]:
     payload = json.loads(row.payload_json or "{}")
     receipt = _restore_jsonable(payload.get("receipt") or {})
     receipt_id = str(receipt.get("id") or "").strip()
@@ -955,15 +972,28 @@ def _drain_session_input_receipt(row: LiveArchiveOutbox, archive_db: Session, li
         client_request_id=client_request_id,
         delivery_request_id=delivery_request_id,
     )
-    live_db.query(LiveSessionInputReceipt).filter(LiveSessionInputReceipt.id == receipt_id).update(
-        {
-            "archive_session_input_id": archive_input_id,
-            "status": INPUT_STATUS_DELIVERED,
-            "delivery_request_id": delivery_request_id,
-            "updated_at": datetime.now(timezone.utc),
-        },
-        synchronize_session=False,
-    )
+    return {
+        "receipt_id": receipt_id,
+        "archive_session_input_id": archive_input_id,
+        "delivery_request_id": delivery_request_id,
+    }
+
+
+def _ack_session_input_receipt(row: LiveArchiveOutbox, live_db: Session, effects: dict[str, Any]) -> None:
+    del row
+    receipt_id = str(effects.get("receipt_id") or "").strip()
+    archive_input_id = int(effects.get("archive_session_input_id") or 0)
+    delivery_request_id = str(effects.get("delivery_request_id") or "").strip()
+    if not receipt_id or not archive_input_id or not delivery_request_id:
+        raise ValueError("session input receipt acknowledgement is missing projection effects")
+    receipt = live_db.get(LiveSessionInputReceipt, receipt_id)
+    if receipt is None:
+        return
+    receipt.archive_session_input_id = archive_input_id
+    receipt.delivery_request_id = receipt.delivery_request_id or delivery_request_id
+    if receipt.status == INPUT_STATUS_DELIVERING:
+        receipt.status = INPUT_STATUS_DELIVERED
+    receipt.updated_at = datetime.now(timezone.utc)
 
 
 def project_session_input_receipt_to_archive(
@@ -989,22 +1019,33 @@ def project_session_input_receipt_to_archive(
     existing = existing_query.order_by(SessionInput.id.asc()).first()
     if existing is not None:
         input_id = int(existing.id)
+        if existing.status == INPUT_STATUS_DELIVERING:
+            now = datetime.now(timezone.utc)
+            existing.status = INPUT_STATUS_DELIVERED
+            existing.delivered_at = now
+            existing.updated_at = now
+            existing.last_error = None
         _link_session_turn(db, source_session_id=source_session_id, delivery_request_id=delivery_request_id, input_id=input_id)
         return input_id
 
-    from zerg.services.session_inputs import mark_delivered as _mark_input_delivered
+    if intent not in VALID_INTENTS:
+        raise ValueError(f"invalid intent: {intent}")
+    from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
 
-    row = create_session_input(
-        db,
+    now = datetime.now(timezone.utc)
+    row = SessionInput(
         session_id=source_session_id,
-        text=text,
+        thread_id=ensure_thread_id_for_session(db, source_session_id),
+        body=text,
         owner_id=owner_id,
         intent=intent,
-        status=INPUT_STATUS_DELIVERING,
+        status=INPUT_STATUS_DELIVERED,
         client_request_id=client_request_id,
         delivery_request_id=delivery_request_id,
+        delivered_at=now,
     )
-    _mark_input_delivered(db, int(row.id))
+    db.add(row)
+    db.flush()
     input_id = int(row.id)
     _link_session_turn(db, source_session_id=source_session_id, delivery_request_id=delivery_request_id, input_id=input_id)
     return input_id
@@ -1021,7 +1062,6 @@ def _link_session_turn(
         SessionTurn.session_id == source_session_id,
         SessionTurn.request_id == delivery_request_id,
     ).update({"session_input_id": input_id}, synchronize_session=False)
-    db.commit()
 
 
 def _jsonable(value: Any) -> Any:

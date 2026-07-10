@@ -369,6 +369,7 @@ def db_drain_live_archive_outbox(
 
     from zerg.database import make_live_engine
     from zerg.database import make_sessionmaker
+    from zerg.services.archive_worker_status import archive_worker_enabled
     from zerg.services.live_archive_outbox import drain_live_archive_outbox
 
     archive_engine, resolved_database_url = _resolve_db_engine(database_url)
@@ -394,8 +395,18 @@ def db_drain_live_archive_outbox(
     live_engine = make_live_engine(live_database_url)
     ArchiveSession = make_sessionmaker(archive_engine)
     LiveSession = make_sessionmaker(live_engine)
+    excluded_kinds = None
+    if archive_worker_enabled():
+        from zerg.services.archive_worker import worker_owned_outbox_kinds
+
+        excluded_kinds = worker_owned_outbox_kinds()
     with LiveSession() as live_db, ArchiveSession() as archive_db:
-        result = drain_live_archive_outbox(live_db, archive_db, limit=limit)
+        result = drain_live_archive_outbox(
+            live_db,
+            archive_db,
+            limit=limit,
+            exclude_kinds=excluded_kinds,
+        )
 
     payload = {
         "status": "ok" if result.failed == 0 else "partial",
