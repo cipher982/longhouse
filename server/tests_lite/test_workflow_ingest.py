@@ -34,6 +34,8 @@ from zerg.database import _ensure_agents_fts
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSessionBranch
+from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionThread
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
@@ -341,6 +343,86 @@ def test_relink_discards_exact_duplicate_rows_before_reparenting(tmp_path):
         store.ingest_session(parent)
 
         assert db.query(AgentSession).filter(AgentSession.id == AGENT_ID).first() is None
+        assert db.query(AgentEvent).filter(AgentEvent.session_id == PARENT_ID).count() == 1
+
+
+def test_relink_collapses_duplicate_child_branches_before_reparenting(tmp_path):
+    """Rewind copies are legal on separate child branches but collide when
+    relink normalizes both branches onto the parent's head branch.
+    """
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_agent_payload())
+
+        original_branch = db.query(AgentSessionBranch).filter(AgentSessionBranch.session_id == AGENT_ID).one()
+        original_branch.is_head = 0
+        copied_branch = AgentSessionBranch(
+            session_id=AGENT_ID,
+            parent_branch_id=original_branch.id,
+            branch_reason="source_rewind",
+            is_head=1,
+        )
+        db.add(copied_branch)
+        db.flush()
+
+        original_event = db.query(AgentEvent).filter(AgentEvent.session_id == AGENT_ID).one()
+        event_values = {
+            column.name: getattr(original_event, column.name)
+            for column in AgentEvent.__table__.columns
+            if column.name != "id"
+        }
+        event_values["branch_id"] = copied_branch.id
+        db.add(AgentEvent(**event_values))
+
+        original_line = db.query(AgentSourceLine).filter(AgentSourceLine.session_id == AGENT_ID).one()
+        line_values = {
+            column.name: getattr(original_line, column.name)
+            for column in AgentSourceLine.__table__.columns
+            if column.name != "id"
+        }
+        line_values["branch_id"] = copied_branch.id
+        line_values["is_branch_copy"] = 1
+        db.add(AgentSourceLine(**line_values))
+        db.commit()
+
+        store.ingest_session(_parent_payload())
+
+        assert db.query(AgentSession).filter(AgentSession.id == AGENT_ID).first() is None
+        assert db.query(AgentEvent).filter(AgentEvent.session_id == PARENT_ID).count() == 2
+        assert db.query(AgentEvent).filter(AgentEvent.content_text == "decompose the research question").count() == 1
+        assert db.query(AgentSourceLine).filter(AgentSourceLine.session_id == PARENT_ID).count() == 2
+
+
+def test_relink_parent_wins_provisional_key_collision(tmp_path, monkeypatch):
+    """The session-scoped provisional key can collide even when transcript
+    source keys differ, so relink must preserve the parent's copy.
+    """
+    from zerg.services.agents import kernel_backfill
+
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_agent_payload())
+
+        real_relink = kernel_backfill.relink_orphan_subagents_for_parent
+        monkeypatch.setattr(kernel_backfill, "relink_orphan_subagents_for_parent", lambda *args, **kwargs: {})
+        store.ingest_session(_parent_payload())
+        monkeypatch.setattr(kernel_backfill, "relink_orphan_subagents_for_parent", real_relink)
+
+        provisional_key = "relink-provisional-collision"
+        db.query(AgentEvent).filter(AgentEvent.session_id.in_([AGENT_ID, PARENT_ID])).update(
+            {AgentEvent.provisional_key: provisional_key},
+            synchronize_session=False,
+        )
+        db.commit()
+
+        summary = real_relink(db, provider="claude", parent_provider_session_id=str(PARENT_ID))
+        db.commit()
+
+        assert summary["candidates_resolved"] == 1
+        assert db.query(AgentSession).filter(AgentSession.id == AGENT_ID).first() is None
+        assert db.query(AgentEvent).filter(AgentEvent.provisional_key == provisional_key).count() == 1
         assert db.query(AgentEvent).filter(AgentEvent.session_id == PARENT_ID).count() == 1
 
 

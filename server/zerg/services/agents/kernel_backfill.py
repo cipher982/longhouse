@@ -411,12 +411,11 @@ def _move_subagent_session_under_parent(
     )
     parent_branch = _ensure_head_branch(db, parent_thread.session_id)
 
-    # An orphan can overlap with rows already ingested on its eventual parent
-    # (for example when a ship retry delivers the same source file under both
-    # identities). Re-stamping those rows would violate the parent's durable
-    # dedupe indexes and repeatedly poison the live write queue. Keep the
-    # parent's copy and drop only rows that are already identical by an index
-    # key before moving the remainder.
+    # An orphan can overlap with rows already ingested on its eventual parent,
+    # or carry the same rewind copy on several child branches. Relink collapses
+    # every child branch onto the parent's head branch, so both shapes can
+    # violate a durable unique index. Keep the parent's copy first, then keep
+    # the oldest child copy for each key that would collide after normalization.
     parent_event = aliased(AgentEvent)
     duplicate_event_ids = (
         db.query(AgentEvent.id)
@@ -424,18 +423,23 @@ def _move_subagent_session_under_parent(
         .filter(
             db.query(parent_event.id)
             .filter(parent_event.session_id == parent_thread.session_id)
-            .filter(parent_event.branch_id == parent_branch.id)
             .filter(
                 or_(
                     and_(
+                        parent_event.branch_id == parent_branch.id,
                         AgentEvent.source_path.isnot(None),
                         parent_event.source_path == AgentEvent.source_path,
                         parent_event.source_offset == AgentEvent.source_offset,
                         parent_event.event_hash == AgentEvent.event_hash,
                     ),
                     and_(
+                        parent_event.branch_id == parent_branch.id,
                         AgentEvent.event_uuid.isnot(None),
                         parent_event.event_uuid == AgentEvent.event_uuid,
+                    ),
+                    and_(
+                        AgentEvent.provisional_key.isnot(None),
+                        parent_event.provisional_key == AgentEvent.provisional_key,
                     ),
                 )
             )
@@ -444,6 +448,35 @@ def _move_subagent_session_under_parent(
     )
     counts["events_duplicates_dropped"] = (
         db.query(AgentEvent).filter(AgentEvent.id.in_(duplicate_event_ids)).delete(synchronize_session=False)
+    )
+
+    sibling_event = aliased(AgentEvent)
+    duplicate_child_event_ids = (
+        db.query(AgentEvent.id)
+        .filter(AgentEvent.session_id == child_session_id)
+        .filter(
+            db.query(sibling_event.id)
+            .filter(sibling_event.session_id == child_session_id)
+            .filter(sibling_event.id < AgentEvent.id)
+            .filter(
+                or_(
+                    and_(
+                        AgentEvent.source_path.isnot(None),
+                        sibling_event.source_path == AgentEvent.source_path,
+                        sibling_event.source_offset == AgentEvent.source_offset,
+                        sibling_event.event_hash == AgentEvent.event_hash,
+                    ),
+                    and_(
+                        AgentEvent.event_uuid.isnot(None),
+                        sibling_event.event_uuid == AgentEvent.event_uuid,
+                    ),
+                )
+            )
+            .exists()
+        )
+    )
+    counts["events_branch_duplicates_dropped"] = (
+        db.query(AgentEvent).filter(AgentEvent.id.in_(duplicate_child_event_ids)).delete(synchronize_session=False)
     )
 
     parent_source_line = aliased(AgentSourceLine)
@@ -456,11 +489,40 @@ def _move_subagent_session_under_parent(
             .filter(parent_source_line.branch_id == parent_branch.id)
             .filter(parent_source_line.source_path == AgentSourceLine.source_path)
             .filter(parent_source_line.source_offset == AgentSourceLine.source_offset)
+            .filter(
+                or_(
+                    parent_source_line.revision == AgentSourceLine.revision,
+                    parent_source_line.line_hash == AgentSourceLine.line_hash,
+                )
+            )
             .exists()
         )
     )
     counts["source_lines_duplicates_dropped"] = (
         db.query(AgentSourceLine).filter(AgentSourceLine.id.in_(duplicate_source_line_ids)).delete(synchronize_session=False)
+    )
+
+    sibling_source_line = aliased(AgentSourceLine)
+    duplicate_child_source_line_ids = (
+        db.query(AgentSourceLine.id)
+        .filter(AgentSourceLine.session_id == child_session_id)
+        .filter(
+            db.query(sibling_source_line.id)
+            .filter(sibling_source_line.session_id == child_session_id)
+            .filter(sibling_source_line.id < AgentSourceLine.id)
+            .filter(sibling_source_line.source_path == AgentSourceLine.source_path)
+            .filter(sibling_source_line.source_offset == AgentSourceLine.source_offset)
+            .filter(
+                or_(
+                    sibling_source_line.revision == AgentSourceLine.revision,
+                    sibling_source_line.line_hash == AgentSourceLine.line_hash,
+                )
+            )
+            .exists()
+        )
+    )
+    counts["source_lines_branch_duplicates_dropped"] = (
+        db.query(AgentSourceLine).filter(AgentSourceLine.id.in_(duplicate_child_source_line_ids)).delete(synchronize_session=False)
     )
 
     result = db.execute(
