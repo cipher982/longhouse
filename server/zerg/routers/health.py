@@ -266,6 +266,8 @@ def readyz_check():
     _settings = get_settings()
 
     from zerg.database import default_engine
+    from zerg.database import get_live_engine
+    from zerg.database import live_store_configured
 
     single_tenant_violation = getattr(_health_app_ref, "single_tenant_violation", None)
     if single_tenant_violation:
@@ -274,13 +276,14 @@ def readyz_check():
             content={"status": "unhealthy", "reason": single_tenant_violation},
         )
 
-    if default_engine is None:
+    readiness_engine = (get_live_engine() if live_store_configured() else None) or default_engine
+    if readiness_engine is None:
         return JSONResponse(
             status_code=503,
             content={"status": "unhealthy", "reason": "database engine not initialized"},
         )
 
-    db_url = str(default_engine.url)
+    db_url = str(readiness_engine.url)
     if db_url.startswith("sqlite"):
         db_path = db_url.replace("sqlite:///", "").replace("sqlite://", "")
         if not db_path or db_path == ":memory:":
@@ -289,12 +292,13 @@ def readyz_check():
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
             try:
                 conn.execute("SELECT 1")
-                row = conn.execute(EVENTS_FTS_EXISTS_SQL).fetchone()
-                if not row:
-                    return JSONResponse(
-                        status_code=503,
-                        content={"status": "unhealthy", "reason": "events_fts table missing (FTS5 required)"},
-                    )
+                if readiness_engine is default_engine:
+                    row = conn.execute(EVENTS_FTS_EXISTS_SQL).fetchone()
+                    if not row:
+                        return JSONResponse(
+                            status_code=503,
+                            content={"status": "unhealthy", "reason": "events_fts table missing (FTS5 required)"},
+                        )
             finally:
                 conn.close()
         except Exception:
@@ -304,7 +308,7 @@ def readyz_check():
             )
     else:
         try:
-            with default_engine.connect() as conn:
+            with readiness_engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
         except Exception:
             return JSONResponse(
@@ -461,8 +465,11 @@ def health_check(request: Request):
     # 2. Database connectivity
     try:
         from zerg.database import default_engine
+        from zerg.database import get_live_engine
+        from zerg.database import live_store_configured
 
-        with default_engine.connect() as conn:
+        health_engine = (get_live_engine() if archive_worker.get("enabled") and live_store_configured() else None) or default_engine
+        with health_engine.connect() as conn:
             result = conn.execute(text("SELECT 1"))
             row = result.fetchone()
             db_check = {
@@ -472,9 +479,9 @@ def health_check(request: Request):
             # The DB URL exposes the on-disk path / host; operator-only.
             if trusted:
                 db_check["url"] = (
-                    str(default_engine.url).replace(default_engine.url.password or "", "***")
-                    if default_engine.url.password
-                    else str(default_engine.url)
+                    str(health_engine.url).replace(health_engine.url.password or "", "***")
+                    if health_engine.url.password
+                    else str(health_engine.url)
                 )
             checks["database"] = db_check
     except Exception as e:
@@ -579,7 +586,9 @@ def health_check(request: Request):
     try:
         from zerg.database import default_engine
 
-        if default_engine is not None and default_engine.dialect.name == "sqlite":
+        if archive_worker.get("enabled"):
+            checks["fts5"] = {"status": "skip", "reason": "owned_by_archive_worker"}
+        elif default_engine is not None and default_engine.dialect.name == "sqlite":
             with default_engine.connect() as conn:
                 fts_row = conn.execute(text(EVENTS_FTS_EXISTS_SQL)).fetchone()
                 if not fts_row:
@@ -651,17 +660,23 @@ def health_check(request: Request):
     # 8. Projection catch-up lag. Archive ingest may skip expensive derived
     # projections on the hot path; this should normally drain quickly in the
     # background and should be visible separately from raw ingest health.
-    try:
-        checks["session_projection_lag"] = _session_projection_lag_check()
-    except Exception as e:
-        checks["session_projection_lag"] = {"status": "warn", "error": str(e)}
+    if archive_worker.get("enabled"):
+        checks["session_projection_lag"] = {"status": "skip", "reason": "owned_by_archive_worker"}
+    else:
+        try:
+            checks["session_projection_lag"] = _session_projection_lag_check()
+        except Exception as e:
+            checks["session_projection_lag"] = {"status": "warn", "error": str(e)}
 
     # 9. Enrichment lag. Embeddings/search enrichment run after durable ingest;
     # they should be visible, but must not be mistaken for raw shipping health.
-    try:
-        checks["session_enrichment_lag"] = _session_enrichment_lag_check()
-    except Exception as e:
-        checks["session_enrichment_lag"] = {"status": "warn", "error": str(e)}
+    if archive_worker.get("enabled"):
+        checks["session_enrichment_lag"] = {"status": "skip", "reason": "owned_by_archive_worker"}
+    else:
+        try:
+            checks["session_enrichment_lag"] = _session_enrichment_lag_check()
+        except Exception as e:
+            checks["session_enrichment_lag"] = {"status": "warn", "error": str(e)}
 
     # 10. SQLite WAL pressure: phase 1 instrumentation. WAL bytes is the cheapest
     # leading indicator of write-side backpressure; the engine's adaptive

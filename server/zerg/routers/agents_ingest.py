@@ -1129,9 +1129,11 @@ async def ingest_session(
                         transcript_preview=transcript_preview,
                     )
 
+            from zerg.services.archive_ingest_job import archive_ingest_worker_enabled
             from zerg.services.write_serializer import get_write_serializer
 
             ws = get_write_serializer()
+            use_archive_ingest_worker = archive_ingest_worker_enabled()
             ingest_chunk = _ingest_chunk_for_label(write_label)
 
             def _do_ingest(
@@ -1161,7 +1163,7 @@ async def ingest_session(
                                 archive_primary_state = "fallback"
                                 legacy_raw_effective = True
                                 logger.warning(
-                                    "Archive-primary manifest insert failed for live session %s; falling back to legacy raw",
+                                    "Archive-primary manifest insert failed for live session %s; " "falling back to legacy raw",
                                     data.id,
                                     exc_info=True,
                                 )
@@ -1184,7 +1186,7 @@ async def ingest_session(
                             archive_primary_state = "fallback"
                             legacy_raw_effective = True
                             logger.warning(
-                                "Archive-primary manifest insert failed for session %s; falling back to legacy raw writes",
+                                "Archive-primary manifest insert failed for session %s; " "falling back to legacy raw writes",
                                 data.id,
                                 exc_info=True,
                             )
@@ -1239,6 +1241,9 @@ async def ingest_session(
                 write_results: list[IngestResult] = []
                 archive_primary_states: list[str] = []
                 legacy_raw_states: list[bool] = []
+                worker_job_wait_ms = 0.0
+                worker_exec_ms = 0.0
+                request_session_closed = False
                 for batch_index, ingest_batch in enumerate(ingest_batches):
                     batch_write_timeout_seconds = write_timeout_seconds
                     batch_queue_timeout_seconds = queue_timeout_seconds
@@ -1261,84 +1266,145 @@ async def ingest_session(
                         await asyncio.sleep(0)
                         await _check_ingest_writer_pressure(write_label, response)
 
-                    archive_primary_prepared = None
-                    archive_primary_state = "disabled"
-                    archive_primary_records_written = 0
-                    legacy_raw_effective = settings.legacy_raw_write_enabled
-                    if settings.archive_primary_write_enabled:
-                        prepare_coro = _prepare_archive_primary_before_ingest(
-                            data=ingest_batch,
-                            fallback_db=db,
-                            settings=settings,
-                        )
-                        try:
-                            if request_budget_seconds is not None:
-                                prepare_timeout_seconds = max(
-                                    0.1,
-                                    request_budget_seconds - (time.monotonic() - request_budget_started),
-                                )
-                                archive_primary_prepared = await asyncio.wait_for(
-                                    prepare_coro,
-                                    timeout=prepare_timeout_seconds,
-                                )
-                            else:
-                                archive_primary_prepared = await prepare_coro
-                        except asyncio.TimeoutError:
-                            from zerg.services.archive_shadow import PreparedArchiveShadow
+                    if use_archive_ingest_worker:
+                        from zerg.services.archive_worker_jobs import ArchiveWorkerJobError
+                        from zerg.services.archive_worker_jobs import ArchiveWorkerJobTimeout
+                        from zerg.services.archive_worker_jobs import submit_archive_worker_job
 
-                            archive_primary_prepared = PreparedArchiveShadow(enabled=True, error="prepare_timeout")
-                        if archive_primary_prepared.error:
-                            if not settings.legacy_raw_write_enabled:
-                                if write_label == "ingest-live":
+                        if not request_session_closed:
+                            db.close()
+                            request_session_closed = True
+                        worker_timeout_seconds = sum(
+                            timeout for timeout in (batch_queue_timeout_seconds, batch_write_timeout_seconds) if timeout is not None
+                        ) or _env_float("LONGHOUSE_ARCHIVE_INGEST_WORKER_TIMEOUT_SECONDS", 30.0)
+                        if request_budget_seconds is not None:
+                            worker_timeout_seconds = min(
+                                worker_timeout_seconds,
+                                max(0.1, request_budget_seconds - (time.monotonic() - request_budget_started)),
+                            )
+                        try:
+                            worker_result = await submit_archive_worker_job(
+                                "session_ingest.v1",
+                                {
+                                    "data": ingest_batch.model_dump(mode="json"),
+                                    "write_label": write_label,
+                                    "batch_index": batch_index,
+                                    "ship_trace": ship_trace,
+                                    "timing": {
+                                        "handler_entered_at_ms": handler_entered_at_ms,
+                                        "decode_finished_at_ms": decode_finished_at_ms,
+                                        "validate_finished_at_ms": validate_finished_at_ms,
+                                    },
+                                },
+                                timeout_seconds=worker_timeout_seconds,
+                            )
+                        except (ArchiveWorkerJobTimeout, ArchiveWorkerJobError):
+                            logger.warning(
+                                "Archive worker ingest failed for session %s batch=%s",
+                                data.id,
+                                batch_index + 1,
+                                exc_info=True,
+                            )
+                            response.headers["X-Ingest-Archive-Worker"] = "unavailable"
+                            request_status_label = "live_backpressure" if write_label == "ingest-live" else "archive_backpressure"
+                            if write_label == "ingest-live":
+                                _raise_live_ingest_backpressure(
+                                    response,
+                                    admission_state="archive_worker_unavailable",
+                                )
+                            _raise_archive_ingest_backpressure(
+                                response,
+                                admission_state="archive_worker_unavailable",
+                            )
+                        batch_result = IngestResult.model_validate(worker_result["result"])
+                        batch_archive_primary_state = str(worker_result.get("archive_primary_state") or "disabled")
+                        batch_legacy_raw_effective = bool(worker_result.get("legacy_raw_effective"))
+                        worker_job_wait_ms += float(worker_result.get("job_wait_ms") or 0.0)
+                        worker_exec_ms += float(worker_result.get("worker_exec_ms") or 0.0)
+                    else:
+                        archive_primary_prepared = None
+                        archive_primary_state = "disabled"
+                        archive_primary_records_written = 0
+                        legacy_raw_effective = settings.legacy_raw_write_enabled
+                        if settings.archive_primary_write_enabled:
+                            prepare_coro = _prepare_archive_primary_before_ingest(
+                                data=ingest_batch,
+                                fallback_db=db,
+                                settings=settings,
+                            )
+                            try:
+                                if request_budget_seconds is not None:
+                                    prepare_timeout_seconds = max(
+                                        0.1,
+                                        request_budget_seconds - (time.monotonic() - request_budget_started),
+                                    )
+                                    archive_primary_prepared = await asyncio.wait_for(
+                                        prepare_coro,
+                                        timeout=prepare_timeout_seconds,
+                                    )
+                                else:
+                                    archive_primary_prepared = await prepare_coro
+                            except asyncio.TimeoutError:
+                                from zerg.services.archive_shadow import PreparedArchiveShadow
+
+                                archive_primary_prepared = PreparedArchiveShadow(enabled=True, error="prepare_timeout")
+                            if archive_primary_prepared.error:
+                                if not settings.legacy_raw_write_enabled:
+                                    if write_label == "ingest-live":
+                                        archive_primary_state = "fallback"
+                                        legacy_raw_effective = True
+                                        logger.warning(
+                                            "Archive-primary prepare failed for live session %s batch=%s; "
+                                            "falling back to legacy raw: %s",
+                                            data.id,
+                                            batch_index + 1,
+                                            archive_primary_prepared.error,
+                                        )
+                                    else:
+                                        request_status_label = "archive_primary_failed"
+                                        raise HTTPException(
+                                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                            detail="Archive-primary write failed and legacy raw fallback is disabled",
+                                            headers={"X-Ingest-Archive-Primary": "failed"},
+                                        )
+                                else:
                                     archive_primary_state = "fallback"
                                     legacy_raw_effective = True
                                     logger.warning(
-                                        "Archive-primary prepare failed for live session %s batch=%s; falling back to legacy raw: %s",
+                                        "Archive-primary prepare failed for session %s batch=%s; " "falling back to legacy raw writes: %s",
                                         data.id,
                                         batch_index + 1,
                                         archive_primary_prepared.error,
                                     )
-                                else:
-                                    request_status_label = "archive_primary_failed"
-                                    raise HTTPException(
-                                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                        detail="Archive-primary write failed and legacy raw fallback is disabled",
-                                        headers={"X-Ingest-Archive-Primary": "failed"},
-                                    )
                             else:
-                                archive_primary_state = "fallback"
-                                legacy_raw_effective = True
-                                logger.warning(
-                                    "Archive-primary prepare failed for session %s batch=%s; falling back to legacy raw writes: %s",
-                                    data.id,
-                                    batch_index + 1,
-                                    archive_primary_prepared.error,
-                                )
-                        else:
-                            archive_primary_state = "prepared"
-                            archive_primary_records_written = archive_primary_prepared.records_written
+                                archive_primary_state = "prepared"
+                                archive_primary_records_written = archive_primary_prepared.records_written
 
-                    batch_result, batch_archive_primary_state, batch_legacy_raw_effective = await ws.execute_after_closing_request_session(
-                        lambda write_db,
-                        ingest_batch=ingest_batch,
-                        batch_index=batch_index,
-                        archive_primary_prepared=archive_primary_prepared,
-                        archive_primary_state=archive_primary_state,
-                        archive_primary_records_written=archive_primary_records_written,
-                        legacy_raw_effective=legacy_raw_effective: _do_ingest(
-                            write_db,
-                            ingest_batch,
-                            batch_index,
-                            archive_primary_prepared,
-                            archive_primary_state,
-                            archive_primary_records_written,
-                            legacy_raw_effective,
-                        ),
-                        db,
-                        label=write_label,
-                        timeout_seconds=batch_write_timeout_seconds,
-                        queue_timeout_seconds=batch_queue_timeout_seconds,
-                    )
+                        (
+                            batch_result,
+                            batch_archive_primary_state,
+                            batch_legacy_raw_effective,
+                        ) = await ws.execute_after_closing_request_session(
+                            lambda write_db,
+                            ingest_batch=ingest_batch,
+                            batch_index=batch_index,
+                            archive_primary_prepared=archive_primary_prepared,
+                            archive_primary_state=archive_primary_state,
+                            archive_primary_records_written=archive_primary_records_written,
+                            legacy_raw_effective=legacy_raw_effective: _do_ingest(
+                                write_db,
+                                ingest_batch,
+                                batch_index,
+                                archive_primary_prepared,
+                                archive_primary_state,
+                                archive_primary_records_written,
+                                legacy_raw_effective,
+                            ),
+                            db,
+                            label=write_label,
+                            timeout_seconds=batch_write_timeout_seconds,
+                            queue_timeout_seconds=batch_queue_timeout_seconds,
+                        )
                     write_results.append(batch_result)
                     archive_primary_states.append(batch_archive_primary_state)
                     legacy_raw_states.append(batch_legacy_raw_effective)
@@ -1353,7 +1419,12 @@ async def ingest_session(
                 from zerg.services.write_serializer import last_write_timing
 
                 timing = last_write_timing()
-                if timing is not None:
+                if use_archive_ingest_worker:
+                    response.headers["X-Ingest-Queue-Wait-Ms"] = f"{max(0.0, worker_job_wait_ms - worker_exec_ms):.1f}"
+                    response.headers["X-Ingest-Exec-Ms"] = f"{worker_exec_ms:.1f}"
+                    response.headers["X-Ingest-Label"] = write_label
+                    response.headers["X-Ingest-Archive-Worker"] = "completed"
+                elif timing is not None:
                     response.headers["X-Ingest-Queue-Wait-Ms"] = f"{timing.queue_wait_ms:.1f}"
                     response.headers["X-Ingest-Exec-Ms"] = f"{timing.exec_ms:.1f}"
                     if timing.label:
@@ -1385,7 +1456,7 @@ async def ingest_session(
                 agents_ingest_events_total.labels(provider=provider_label, kind="inserted").inc(result.events_inserted)
                 agents_ingest_events_total.labels(provider=provider_label, kind="skipped").inc(result.events_skipped)
 
-            if not settings.archive_primary_write_enabled:
+            if not use_archive_ingest_worker and not settings.archive_primary_write_enabled:
                 await _write_shadow_archive_after_ingest(data=data, result=result, fallback_db=db)
 
             # Publish to per-session pubsub so SSE subscribers wake directly.

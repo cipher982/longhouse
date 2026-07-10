@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import time
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -119,4 +120,15 @@ def read_archive_worker_status() -> dict[str, Any]:
         except ValueError:
             payload["status"] = "unknown"
             payload["reason"] = "status_timestamp_invalid"
+    active_started_at = payload.get("active_started_at_unix")
+    if payload.get("status") == "running" and isinstance(active_started_at, int | float):
+        active_age_seconds = max(0.0, time.time() - float(active_started_at))
+        payload["active_age_seconds"] = round(active_age_seconds, 3)
+        operation_stale_after = max(
+            10.0,
+            float(os.getenv("LONGHOUSE_ARCHIVE_WORKER_OPERATION_STALE_SECONDS", "60")),
+        )
+        if active_age_seconds > operation_stale_after:
+            payload["status"] = "degraded"
+            payload["reason"] = "operation_stalled"
     return payload
