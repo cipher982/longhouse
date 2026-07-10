@@ -931,7 +931,8 @@ async def set_session_action(
         )
 
     session_model = LiveSessionCatalog if database_module.live_catalog_enabled() else AgentSession
-    session = db.query(session_model).filter(session_model.id == session_id).first()
+    session_key = session_model.session_id if database_module.live_catalog_enabled() else session_model.id
+    session = db.query(session_model).filter(session_key == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
@@ -953,7 +954,8 @@ async def set_session_loop_mode(
 ) -> SessionLoopModeResponse:
     """Set the explicit loop mode for a coding session."""
     session_model = LiveSessionCatalog if database_module.live_catalog_enabled() else AgentSession
-    session = db.query(session_model).filter(session_model.id == session_id).first()
+    session_key = session_model.session_id if database_module.live_catalog_enabled() else session_model.id
+    session = db.query(session_model).filter(session_key == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
@@ -973,7 +975,8 @@ async def set_session_notification_watch(
 ) -> SessionNotificationWatchResponse:
     """Mute or unmute session attention notifications."""
     session_model = LiveSessionCatalog if database_module.live_catalog_enabled() else AgentSession
-    session = db.query(session_model).filter(session_model.id == session_id).first()
+    session_key = session_model.session_id if database_module.live_catalog_enabled() else session_model.id
+    session = db.query(session_model).filter(session_key == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
