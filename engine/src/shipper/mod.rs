@@ -73,6 +73,15 @@ pub(crate) enum OpenCodeShipMode {
     ReconcileDurability,
 }
 
+const OPENCODE_RECONCILIATION_SESSION_LIMIT: usize = 4;
+
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct OpenCodeShipOutcome {
+    pub sessions_shipped: usize,
+    pub events_shipped: usize,
+    pub reconciliation_pending: bool,
+}
+
 /// Pick a batch target for the given band. Live transcript ships stay small
 /// (latency); archive / replay ships go bigger (amortize round trip).
 /// `max_batch_bytes` (configurable hard ceiling) clamps both bands.
@@ -225,7 +234,7 @@ pub(crate) async fn ship_opencode_database(
     tracker: Option<&ConsecutiveErrorTracker>,
     parse_tracker: Option<&RecentIssueTracker>,
 ) -> Result<(usize, usize)> {
-    ship_opencode_database_with_trace(
+    let outcome = ship_opencode_database_with_trace(
         path,
         conn,
         client,
@@ -236,7 +245,8 @@ pub(crate) async fn ship_opencode_database(
         OpenCodeShipMode::ChangedOnly,
         None,
     )
-    .await
+    .await?;
+    Ok((outcome.sessions_shipped, outcome.events_shipped))
 }
 
 pub(crate) async fn ship_opencode_database_with_trace(
@@ -249,13 +259,15 @@ pub(crate) async fn ship_opencode_database_with_trace(
     parse_tracker: Option<&RecentIssueTracker>,
     mode: OpenCodeShipMode,
     ship_trace: Option<&ShipTraceContext>,
-) -> Result<(usize, usize)> {
+) -> Result<OpenCodeShipOutcome> {
     let file_state = FileState::new(conn);
     ensure_opencode_sqlite_state_table(conn)?;
     ensure_opencode_source_line_durability_table(conn)?;
     let sessions = opencode_db::list_opencode_sessions(path)?;
     let mut sessions_shipped = 0usize;
     let mut events_shipped = 0usize;
+    let mut reconciliation_sessions = 0usize;
+    let mut reconciliation_pending = false;
 
     for candidate in sessions {
         let current_offset = file_state.get_offset(&candidate.source_key)?;
@@ -269,6 +281,13 @@ pub(crate) async fn ship_opencode_database_with_trace(
             == Some(candidate.fingerprint.as_str());
         if unchanged && (mode == OpenCodeShipMode::ChangedOnly || durability_proven) {
             continue;
+        }
+        if unchanged && mode == OpenCodeShipMode::ReconcileDurability {
+            if reconciliation_sessions >= OPENCODE_RECONCILIATION_SESSION_LIMIT {
+                reconciliation_pending = true;
+                break;
+            }
+            reconciliation_sessions += 1;
         }
 
         let parse_result =
@@ -494,7 +513,11 @@ pub(crate) async fn ship_opencode_database_with_trace(
         }
     }
 
-    Ok((sessions_shipped, events_shipped))
+    Ok(OpenCodeShipOutcome {
+        sessions_shipped,
+        events_shipped,
+        reconciliation_pending,
+    })
 }
 
 fn ensure_opencode_sqlite_state_table(conn: &Connection) -> Result<()> {
@@ -3542,15 +3565,15 @@ pub(crate) async fn full_scan_with_batch_bytes_and_parse_tracker(
             )
             .await
             {
-                Ok((sessions, events)) => {
-                    if sessions > 0 {
-                        files_shipped += sessions;
-                        events_shipped += events;
+                Ok(outcome) => {
+                    if outcome.sessions_shipped > 0 {
+                        files_shipped += outcome.sessions_shipped;
+                        events_shipped += outcome.events_shipped;
                         log_slow_file_processing(
                             "opencode_sqlite_scan",
                             path,
                             provider_name,
-                            events,
+                            outcome.events_shipped,
                             0,
                             0,
                             file_start.elapsed(),
@@ -4179,7 +4202,9 @@ mod tests {
         .unwrap();
 
         handle.join().unwrap();
-        assert_eq!(result, (0, 0));
+        assert_eq!(result.sessions_shipped, 0);
+        assert_eq!(result.events_shipped, 0);
+        assert!(!result.reconciliation_pending);
         assert_eq!(captured.lock().unwrap().len(), 1);
         assert!(get_opencode_source_line_durability(&conn, &source_key)
             .unwrap()
@@ -4198,7 +4223,9 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(skipped, (0, 0));
+        assert_eq!(skipped.sessions_shipped, 0);
+        assert_eq!(skipped.events_shipped, 0);
+        assert!(!skipped.reconciliation_pending);
     }
 
     #[tokio::test]
@@ -4258,7 +4285,9 @@ mod tests {
         .unwrap();
 
         handle.join().unwrap();
-        assert_eq!(result, (1, 2));
+        assert_eq!(result.sessions_shipped, 1);
+        assert_eq!(result.events_shipped, 2);
+        assert!(!result.reconciliation_pending);
         let bodies = captured.lock().unwrap();
         assert_eq!(bodies.len(), 2);
         let claim: Value = serde_json::from_slice(&bodies[0]).unwrap();
@@ -4313,12 +4342,85 @@ mod tests {
         .unwrap();
 
         handle.join().unwrap();
-        assert_eq!(result, (0, 0));
+        assert_eq!(result.sessions_shipped, 0);
+        assert_eq!(result.events_shipped, 0);
+        assert!(!result.reconciliation_pending);
         assert_eq!(captured.lock().unwrap().len(), 1);
         assert_eq!(
             get_opencode_source_line_durability(&conn, &source_key).unwrap(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn test_opencode_reconciliation_yields_after_bounded_session_count() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_opencode_fixture_db(&db_path);
+        let opencode_conn = Connection::open(&db_path).unwrap();
+        for index in 1..=OPENCODE_RECONCILIATION_SESSION_LIMIT {
+            opencode_conn
+                .execute(
+                    "INSERT INTO session (id, parent_id, directory, path, title, version, time_created, time_updated)
+                     VALUES (?1, NULL, '/tmp', 'tmp', 'empty', '1', ?2, ?2)",
+                    rusqlite::params![
+                        format!("ses_empty_{index}"),
+                        1_779_100_001_000_i64 + index as i64,
+                    ],
+                )
+                .unwrap();
+        }
+
+        let (_state_file, conn) = make_db();
+        ensure_opencode_sqlite_state_table(&conn).unwrap();
+        let file_state = FileState::new(&conn);
+        for candidate in opencode_db::list_opencode_sessions(&db_path).unwrap() {
+            let longhouse_session_id =
+                opencode_db::longhouse_session_id_for_opencode(&candidate.provider_session_id);
+            file_state
+                .set_offset(
+                    &candidate.source_key,
+                    candidate.version,
+                    &longhouse_session_id,
+                    &candidate.provider_session_id,
+                    "opencode",
+                )
+                .unwrap();
+            set_opencode_sqlite_fingerprint(
+                &conn,
+                &candidate.source_key,
+                &candidate.fingerprint,
+                candidate.version,
+                &longhouse_session_id,
+            )
+            .unwrap();
+        }
+
+        let outcome = ship_opencode_database_with_trace(
+            &db_path,
+            &conn,
+            &make_test_client("http://127.0.0.1:9"),
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+            OpenCodeShipMode::ReconcileDurability,
+            Some(&make_ship_trace("reconciliation_scan")),
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.reconciliation_pending);
+        assert_eq!(outcome.sessions_shipped, 0);
+        assert_eq!(outcome.events_shipped, 0);
+        let proven: usize = conn
+            .query_row(
+                "SELECT COUNT(*) FROM opencode_source_line_durability",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(proven, OPENCODE_RECONCILIATION_SESSION_LIMIT);
     }
 
     #[tokio::test]
@@ -4331,7 +4433,7 @@ mod tests {
         let client = make_test_client(&url);
         let trace = make_ship_trace("live_transcript");
 
-        let (sessions, events) = ship_opencode_database_with_trace(
+        let outcome = ship_opencode_database_with_trace(
             &db_path,
             &conn,
             &client,
@@ -4345,7 +4447,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!((sessions, events), (1, 2));
+        assert_eq!((outcome.sessions_shipped, outcome.events_shipped), (1, 2));
         handle.join().unwrap();
         let captured = captured.lock().unwrap();
         assert_eq!(captured.len(), 1);

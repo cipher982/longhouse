@@ -1748,7 +1748,18 @@ fn maybe_start_reconciliation_scan(
         return;
     }
 
-    if scheduler.has_pending_work() || !deferred_retries.is_empty() {
+    if scheduler.has_pending_priority(WorkPriority::Scan) {
+        tracing::debug!(
+            reason,
+            "Skipping reconciliation scan because one is already pending"
+        );
+        return;
+    }
+
+    let live_retry_pending = deferred_retries
+        .values()
+        .any(|retry| retry.priority == WorkPriority::Live);
+    if scheduler.has_pending_priority(WorkPriority::Live) || live_retry_pending {
         tracing::debug!(
             reason,
             "Skipping reconciliation scan while live local work is pending"
@@ -2939,7 +2950,9 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         )
         .await
         {
-            Ok((sessions_shipped, events_shipped)) => {
+            Ok(outcome) => {
+                let sessions_shipped = outcome.sessions_shipped;
+                let events_shipped = outcome.events_shipped;
                 if sessions_shipped > 0 {
                     tracing::info!(
                         context = work_context(result.job.priority),
@@ -2961,6 +2974,9 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     file_start.elapsed(),
                 );
                 result.events_shipped = events_shipped;
+                if outcome.reconciliation_pending {
+                    result.rerun_priority = Some(WorkPriority::Scan);
+                }
             }
             Err(e) => {
                 if task_context.tracker.record_error() {
@@ -4592,6 +4608,34 @@ mod tests {
                 assert!(discovery_tasks.is_empty());
             },
         );
+    }
+
+    #[tokio::test]
+    async fn test_archive_retry_backlog_does_not_starve_reconciliation_scan() {
+        let mut discovery_tasks = JoinSet::new();
+        let providers = vec![ProviderConfig {
+            name: "codex",
+            root: PathBuf::from("/tmp/reconciliation-alongside-retry"),
+            extension: "jsonl",
+        }];
+        let mut scheduler = PathScheduler::new(4);
+        scheduler.enqueue(
+            PathBuf::from("/tmp/archive-retry.jsonl"),
+            "codex",
+            WorkPriority::Retry,
+        );
+        let deferred_retries = HashMap::new();
+
+        maybe_start_reconciliation_scan(
+            &mut discovery_tasks,
+            &providers,
+            &scheduler,
+            &deferred_retries,
+            ArchiveRepairMode::Trickle,
+            "test retry backlog",
+        );
+
+        assert_eq!(discovery_tasks.len(), 1);
     }
 
     #[test]

@@ -900,6 +900,14 @@ impl PathScheduler {
         !self.ready_jobs.is_empty() || !self.in_flight.is_empty()
     }
 
+    pub fn has_pending_priority(&self, priority: WorkPriority) -> bool {
+        self.ready_jobs.values().any(|job| job.priority == priority)
+            || self
+                .in_flight
+                .values()
+                .any(|job| job.priority == priority || job.rerun_priority == Some(priority))
+    }
+
     pub fn snapshot(&self) -> SchedulerSnapshot {
         let ready_live = self.ready_count(WorkPriority::Live);
         let ready_retry = self.ready_count(WorkPriority::Retry);
@@ -1447,6 +1455,19 @@ mod tests {
 
         scheduler.complete(&path, None);
         assert!(!scheduler.has_pending_work());
+    }
+
+    #[test]
+    fn test_pending_priority_includes_inflight_reruns() {
+        let mut scheduler = PathScheduler::new(2);
+        let path = PathBuf::from("/tmp/retry-then-scan.jsonl");
+        scheduler.enqueue(path.clone(), "codex", WorkPriority::Retry);
+        let _job = scheduler.pop_launchable().unwrap();
+        scheduler.enqueue(path, "codex", WorkPriority::Scan);
+
+        assert!(scheduler.has_pending_priority(WorkPriority::Retry));
+        assert!(scheduler.has_pending_priority(WorkPriority::Scan));
+        assert!(!scheduler.has_pending_priority(WorkPriority::Live));
     }
 
     #[test]
