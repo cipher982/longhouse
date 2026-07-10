@@ -17,6 +17,7 @@ from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
 from zerg.services.archive_read_proxy import proxy_archive_read
 from zerg.services.archive_read_proxy import should_proxy_archive_read
+from zerg.services.archive_read_subprocess import _readonly_sqlite_url
 
 
 def _request(path: str, query: str = "") -> Request:
@@ -42,6 +43,16 @@ def test_archive_read_proxy_routes_only_cold_get_surfaces():
     assert should_proxy_archive_read(_request("/timeline/recall", "query=sqlite"))
     assert not should_proxy_archive_read(_request("/timeline/sessions"))
     assert not should_proxy_archive_read(_request("/agents/machines"))
+
+
+def test_archive_child_opens_sqlite_files_read_only(tmp_path):
+    database_path = tmp_path / "archive with spaces.db"
+    database_path.touch()
+    readonly = _readonly_sqlite_url(f"sqlite:///{database_path}")
+    engine = create_engine(readonly)
+    with engine.connect() as connection:
+        with pytest.raises(Exception, match="readonly database"):
+            connection.exec_driver_sql("CREATE TABLE forbidden (id INTEGER)")
 
 
 @pytest.mark.asyncio
@@ -93,7 +104,9 @@ def test_archive_read_child_serves_real_archive_route(tmp_path):
     env.update(
         {
             "AUTH_DISABLED": "1",
-            "DATABASE_URL": f"sqlite:///{database_path}",
+                "DATABASE_URL": f"sqlite:///{database_path}",
+                "LONGHOUSE_LIVE_DATABASE_URL": f"sqlite:///{tmp_path / 'archive-live.db'}",
+                "LONGHOUSE_LIVE_DB_PATH": "",
             "LONGHOUSE_LIVE_CATALOG_ENABLED": "0",
             "LONGHOUSE_ARCHIVE_WORKER_ENABLED": "0",
         }

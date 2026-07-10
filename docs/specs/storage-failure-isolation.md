@@ -106,9 +106,9 @@ The completed catalog cutover additionally implements:
   suggestions, timeline cards, launch/control state, and input receipts;
 - a cold-writer-only archive worker for ingest, projection, repair, enrichment,
   and maintenance;
-- authenticated archive detail/search/recall GETs in bounded disposable child
-  processes, with a four-process concurrency cap and typed pressure/timeout/native
-  failure responses;
+- authenticated archive detail/search/recall GETs in bounded, SQLite-read-only
+  disposable child processes, with a four-process concurrency cap and typed
+  pressure/timeout/native failure responses;
 - a live-only workspace invalidation stream so active detail views keep updating
   without opening cold SQLite in the Runtime Host.
 

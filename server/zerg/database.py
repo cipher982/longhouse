@@ -230,6 +230,11 @@ def _configure_sqlite_engine(engine: Engine, *, busy_timeout_ms: int | None = No
     def set_sqlite_pragmas(dbapi_conn, _connection_record):
         cursor = dbapi_conn.cursor()
         try:
+            if os.getenv("LONGHOUSE_ARCHIVE_READER_CHILD") == "1":
+                cursor.execute("PRAGMA query_only=ON")
+                cursor.execute(f"PRAGMA foreign_keys={foreign_keys}")
+                cursor.execute(f"PRAGMA busy_timeout={_busy_timeout_ms}")
+                return
             cursor.execute(f"PRAGMA journal_mode={journal_mode}")
             cursor.execute(f"PRAGMA synchronous={synchronous}")
             cursor.execute(f"PRAGMA foreign_keys={foreign_keys}")
