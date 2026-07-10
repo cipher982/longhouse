@@ -2466,6 +2466,16 @@ def _run_wal_checkpoint(engine: Engine | None, *, label: str, truncate_bytes: in
         return _record_wal_checkpoint_result(payload)
 
 
+def run_archive_wal_checkpoint_once() -> dict[str, Any]:
+    """Run the archive worker's bounded checkpoint maintenance unit."""
+
+    return _run_wal_checkpoint(
+        default_engine,
+        label="archive",
+        truncate_bytes=WAL_TRUNCATE_BYTES,
+    )
+
+
 async def start_wal_checkpoint_loop(*, include_archive: bool = True) -> None:
     """Start periodic PASSIVE WAL checkpoints.
 
