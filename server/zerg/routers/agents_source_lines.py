@@ -18,6 +18,8 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
+from zerg.services.agents.store import AgentsStore
+from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.raw_json_compression import decode_raw_json
 
@@ -151,6 +153,16 @@ async def create_source_line_claims(
     for session_id in slim_sessions:
         archived = load_session_source_line_bytes(db, session_id)
         durable.update((session_id, source_path, source_offset, line_hash) for source_path, source_offset, line_hash in archived)
+
+    # Life Hub consumes the complete selected head transcript. A matching row
+    # is not durable proof when another selected row still has no bytes.
+    for session_id in {identity[0] for identity in durable}:
+        try:
+            export = AgentsStore(db).export_session_jsonl(session_id, branch_mode="head")
+        except ArchiveTranscriptUnavailable:
+            export = None
+        if export is None:
+            durable = {identity for identity in durable if identity[0] != session_id}
 
     for item, normalized in valid:
         identity = (item.session_id, normalized.source_path, normalized.source_offset, normalized.line_hash)

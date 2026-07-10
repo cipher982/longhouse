@@ -74,7 +74,7 @@ pub(crate) enum OpenCodeShipMode {
 }
 
 const OPENCODE_RECONCILIATION_SESSION_LIMIT: usize = 4;
-const OPENCODE_DURABILITY_PROOF_VERSION: &str = "exportable-v2";
+const OPENCODE_DURABILITY_PROOF_VERSION: &str = "head-export-v1";
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OpenCodeShipOutcome {

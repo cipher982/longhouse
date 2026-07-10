@@ -175,6 +175,10 @@ def test_source_line_claims_require_recoverable_raw_bytes(tmp_path, monkeypatch)
                 (source_path, 10, archived_hash): archived_raw,
             },
         )
+        monkeypatch.setattr(
+            "zerg.routers.agents_source_lines.AgentsStore.export_session_jsonl",
+            lambda self, requested_session_id, *, branch_mode: (archived_raw.encode(), object()),
+        )
         response = client.post(
             "/agents/source-lines/claims",
             json={
@@ -213,6 +217,72 @@ def test_source_line_claims_require_recoverable_raw_bytes(tmp_path, monkeypatch)
             ],
             "rejected": [],
         }
+    finally:
+        cleanup()
+
+
+def test_source_line_claims_require_complete_head_export(tmp_path, monkeypatch):
+    from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
+
+    factory, cleanup = _setup_app(tmp_path)
+    client = TestClient(api_app)
+    session_id = uuid4()
+    source_path = "/tmp/opencode.db#opencode:ses_export"
+    raw_line = '{"part":"present-row"}'
+    line_hash = hashlib.sha256(raw_line.encode()).hexdigest()
+
+    try:
+        with factory() as db:
+            db.add(
+                AgentSession(
+                    id=session_id,
+                    provider="opencode",
+                    environment="test",
+                    started_at=datetime.now(timezone.utc),
+                )
+            )
+            db.add(
+                AgentSourceLine(
+                    session_id=session_id,
+                    source_path=source_path,
+                    source_offset=10,
+                    branch_id=1,
+                    raw_json=raw_line,
+                    line_hash=line_hash,
+                )
+            )
+            db.commit()
+
+        def fail_export(self, requested_session_id, *, branch_mode):  # noqa: ARG001
+            raise ArchiveTranscriptUnavailable("another selected row has no bytes")
+
+        monkeypatch.setattr(
+            "zerg.routers.agents_source_lines.AgentsStore.export_session_jsonl",
+            fail_export,
+        )
+        response = client.post(
+            "/agents/source-lines/claims",
+            json={
+                "items": [
+                    {
+                        "session_id": str(session_id),
+                        "source_path": source_path,
+                        "source_offset": 10,
+                        "line_hash": line_hash,
+                    }
+                ]
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["present"] == []
+        assert response.json()["missing"] == [
+            {
+                "source_path": source_path,
+                "source_offset": 10,
+                "line_hash": line_hash,
+            }
+        ]
     finally:
         cleanup()
 
