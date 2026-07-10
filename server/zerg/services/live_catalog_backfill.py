@@ -480,6 +480,7 @@ def live_catalog_table_names() -> tuple[str, ...]:
         "users",
         "refresh_sessions",
         "device_tokens",
+        "notification_client_presence",
         "apns_device_registrations",
         "apns_live_activity_registrations",
         "apns_widget_push_states",

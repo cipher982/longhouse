@@ -24,13 +24,13 @@ from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.machine_presence import MachinePresence
-from zerg.models.notification_client_presence import NotificationClientPresence
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.notification_policy import AttentionDeliveryAction
 from zerg.services.notification_policy import evaluate_tier1_delivery
 from zerg.services.notification_policy import evaluate_tier2_delivery
+from zerg.services.notification_policy import recent_visible_web_client_exists
 from zerg.services.notification_policy import user_time_sensitive_blocked
 from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
@@ -53,7 +53,6 @@ LONG_RUN_WAITING_LOCKED_THRESHOLD = timedelta(minutes=10)
 LONG_RUN_WAITING_MIN_MEANINGFUL_RUN = timedelta(minutes=5)
 MACHINE_PRESENCE_FRESHNESS_WINDOW = timedelta(seconds=90)
 MACHINE_ACTIVE_SUPPRESSION_GRACE_WINDOW = timedelta(minutes=3)
-WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW = timedelta(seconds=90)
 WIDGET_PUSH_DEBOUNCE = timedelta(seconds=30)
 WIDGET_PUSH_PLATFORM = "ios_widget"
 LIVE_ACTIVITY_PUSH_DEBOUNCE = timedelta(seconds=15)
@@ -829,23 +828,7 @@ def prepare_session_blocked_reminder_push(
 
 
 def _recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at: datetime) -> bool:
-    threshold = occurred_at - WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW
-    try:
-        return (
-            db.query(NotificationClientPresence.id)
-            .filter(
-                NotificationClientPresence.owner_id == owner_id,
-                NotificationClientPresence.client_type == "web",
-                NotificationClientPresence.visible.is_(True),
-                NotificationClientPresence.last_seen_at >= threshold,
-            )
-            .first()
-            is not None
-        )
-    except OperationalError as exc:
-        if _is_missing_optional_table(exc):
-            return False
-        raise
+    return recent_visible_web_client_exists(db, owner_id=owner_id, occurred_at=occurred_at)
 
 
 def _machine_presence_rows_since(
@@ -856,12 +839,25 @@ def _machine_presence_rows_since(
     window: timedelta,
 ) -> list[MachinePresence]:
     threshold = occurred_at - window
+    presence_db = db
+    owned_presence_db = None
+    from zerg.database import get_live_session_factory
+    from zerg.database import live_catalog_enabled
+
+    if live_catalog_enabled():
+        live_factory = get_live_session_factory()
+        if live_factory is not None:
+            owned_presence_db = live_factory()
+            presence_db = owned_presence_db
     try:
-        rows = db.query(MachinePresence).filter(MachinePresence.owner_id == owner_id).all()
+        rows = presence_db.query(MachinePresence).filter(MachinePresence.owner_id == owner_id).all()
     except OperationalError as exc:
         if _is_missing_optional_table(exc):
             return []
         raise
+    finally:
+        if owned_presence_db is not None:
+            owned_presence_db.close()
     recent_rows: list[MachinePresence] = []
     for row in rows:
         received_at = _as_aware_utc(row.received_at)

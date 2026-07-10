@@ -43,6 +43,7 @@ def test_archive_read_proxy_routes_only_cold_get_surfaces():
     assert should_proxy_archive_read(_request("/agents/sessions", "query=sqlite"))
     assert should_proxy_archive_read(_request("/timeline/recall", "query=sqlite"))
     assert not should_proxy_archive_read(_request("/timeline/sessions"))
+    assert not should_proxy_archive_read(_request("/timeline/sessions/stream"))
     assert not should_proxy_archive_read(_request("/agents/machines"))
 
 
@@ -54,6 +55,7 @@ def test_archive_child_opens_sqlite_files_read_only(tmp_path):
     with engine.connect() as connection:
         with pytest.raises(OperationalError, match="readonly database"):
             connection.exec_driver_sql("CREATE TABLE forbidden (id INTEGER)")
+    assert _readonly_sqlite_url(readonly) == readonly
 
 
 @pytest.mark.asyncio
@@ -99,15 +101,16 @@ async def test_archive_read_native_exit_degrades_one_request(monkeypatch):
 
 def test_archive_read_child_serves_real_archive_route(tmp_path):
     database_path = tmp_path / "archive.db"
+    live_path = tmp_path / "archive-live.db"
     Base.metadata.create_all(create_engine(f"sqlite:///{database_path}"))
-    initialize_live_database(make_live_engine(f"sqlite:///{tmp_path / 'archive-live.db'}"))
+    initialize_live_database(make_live_engine(f"sqlite:///{live_path}"))
     env = dict(os.environ)
     env.update(
         {
             "AUTH_DISABLED": "1",
                 "DATABASE_URL": f"sqlite:///{database_path}",
-                "LONGHOUSE_LIVE_DATABASE_URL": f"sqlite:///{tmp_path / 'archive-live.db'}",
-                "LONGHOUSE_LIVE_DB_PATH": "",
+                "LONGHOUSE_LIVE_DATABASE_URL": f"sqlite:///{live_path}",
+                "LONGHOUSE_LIVE_DB_PATH": str(live_path),
             "LONGHOUSE_LIVE_CATALOG_ENABLED": "0",
             "LONGHOUSE_ARCHIVE_WORKER_ENABLED": "0",
         }

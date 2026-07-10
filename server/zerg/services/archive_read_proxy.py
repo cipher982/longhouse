@@ -59,6 +59,8 @@ def should_proxy_archive_read(request: Request) -> bool:
     if request.method.upper() not in {"GET", "HEAD"}:
         return False
     path = normalized_api_path(request)
+    if path == "/timeline/sessions/stream":
+        return False
     if path in _EXACT_ARCHIVE_READS:
         return True
     if path == "/timeline/sessions":

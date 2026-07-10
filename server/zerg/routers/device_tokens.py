@@ -177,6 +177,7 @@ async def create_device_token(
             owner_id=current_user.id,
             device_id=request.device_id,
             token_hash=token_hash,
+            created_at=datetime.now(timezone.utc),
         )
         wdb.add(device_token)
         wdb.flush()

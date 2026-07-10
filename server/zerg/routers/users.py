@@ -21,6 +21,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.crud import update_user
+from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 
 # Auth guard ---------------------------------------------------------------
@@ -40,10 +41,11 @@ from zerg.services.notification_policy import load_user_notification_prefs
 
 # Usage service
 from zerg.services.usage_service import get_user_usage
-from zerg.services.write_serializer import get_write_serializer
+from zerg.services.write_serializer import get_catalog_write_serializer
 from zerg.utils.time import UTCBaseModel
 
 router = APIRouter(tags=["users"], dependencies=[Depends(get_current_user)])
+_catalog_db_dependency = catalog_db_dependency()
 
 
 class UserNotificationSettingsResponse(BaseModel):
@@ -189,7 +191,7 @@ async def update_current_user_notification_settings(
 @router.post("/users/me/client-presence", response_model=UserClientPresenceResponse)
 async def update_current_user_client_presence(
     heartbeat: UserClientPresenceHeartbeat,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ) -> UserClientPresenceResponse:
     """Record whether a browser client is actively watching Longhouse."""
@@ -233,7 +235,7 @@ async def update_current_user_client_presence(
             last_seen_at=row.last_seen_at,
         )
 
-    return await get_write_serializer().execute_or_direct(
+    return await get_catalog_write_serializer().execute_or_direct(
         _upsert_client_presence,
         db,
         label="client-presence",

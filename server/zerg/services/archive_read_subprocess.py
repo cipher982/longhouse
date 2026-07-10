@@ -21,6 +21,8 @@ def _readonly_sqlite_url(raw: str) -> str:
     parsed = make_url(raw)
     if not parsed.database or parsed.database == ":memory:":
         return raw
+    if parsed.database.startswith("file:") and parsed.query.get("mode") == "ro" and parsed.query.get("uri") == "true":
+        return raw
     path = Path(parsed.database).expanduser()
     if not path.is_absolute():
         path = path.resolve()

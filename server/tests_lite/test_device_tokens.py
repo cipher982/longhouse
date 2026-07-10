@@ -153,6 +153,7 @@ def test_create_device_token_routes_write_through_serializer(tmp_path):
     with factory() as db:
         token = db.query(DeviceToken).filter(DeviceToken.device_id == "macbook").first()
         assert token is not None
+        assert token.created_at is not None
         assert token.revoked_at is None
 
     cleanup()

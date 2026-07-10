@@ -76,11 +76,34 @@ class LiveDeviceToken(LiveBase):
     owner_id = Column(Integer, nullable=False, index=True)
     device_id = Column(String(255), nullable=False)
     token_hash = Column(String(64), nullable=False, unique=True, index=True)
-    created_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (Index("ix_device_tokens_owner_device", "owner_id", "device_id"),)
+
+
+class LiveNotificationClientPresence(LiveBase):
+    """Ephemeral browser visibility used by notification suppression."""
+
+    __tablename__ = "notification_client_presence"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    owner_id = Column(Integer, nullable=False, index=True)
+    client_id = Column(String, nullable=False)
+    client_type = Column(String, nullable=False, server_default=text("'web'"))
+    visible = Column(Boolean, nullable=False, server_default=text("0"))
+    route = Column(String, nullable=True)
+    session_id = Column(String, nullable=True, index=True)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "client_id", name="uq_notification_client_presence_owner_client"),
+        Index("ix_notification_client_presence_owner_seen", "owner_id", "last_seen_at"),
+        Index("ix_notification_client_presence_owner_visible_seen", "owner_id", "visible", "last_seen_at"),
+    )
 
 
 class LiveMachinePresence(LiveBase):
