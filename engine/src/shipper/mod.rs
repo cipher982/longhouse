@@ -75,6 +75,7 @@ pub(crate) enum OpenCodeShipMode {
 
 const OPENCODE_RECONCILIATION_SESSION_LIMIT: usize = 4;
 const OPENCODE_DURABILITY_PROOF_VERSION: &str = "head-archive-bundle-ro-v1";
+const OPENCODE_RECONCILIATION_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OpenCodeShipOutcome {
@@ -264,6 +265,7 @@ pub(crate) async fn ship_opencode_database_with_trace(
     let file_state = FileState::new(conn);
     ensure_opencode_sqlite_state_table(conn)?;
     ensure_opencode_source_line_durability_table(conn)?;
+    ensure_opencode_reconciliation_attempt_table(conn)?;
     let sessions = opencode_db::list_opencode_sessions(path)?;
     let mut sessions_shipped = 0usize;
     let mut events_shipped = 0usize;
@@ -285,11 +287,15 @@ pub(crate) async fn ship_opencode_database_with_trace(
             continue;
         }
         if unchanged && mode == OpenCodeShipMode::ReconcileDurability {
+            if opencode_reconciliation_attempt_is_recent(conn, &candidate.source_key)? {
+                continue;
+            }
             if reconciliation_sessions >= OPENCODE_RECONCILIATION_SESSION_LIMIT {
                 reconciliation_pending = true;
                 break;
             }
             reconciliation_sessions += 1;
+            record_opencode_reconciliation_attempt(conn, &candidate.source_key)?;
         }
 
         let parse_result =
@@ -556,6 +562,47 @@ fn ensure_opencode_source_line_durability_table(conn: &Connection) -> Result<()>
             fingerprint TEXT NOT NULL,
             proven_at TEXT NOT NULL
         );",
+    )?;
+    Ok(())
+}
+
+fn ensure_opencode_reconciliation_attempt_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS opencode_source_line_reconciliation_attempts (
+            source_key TEXT PRIMARY KEY,
+            attempted_at TEXT NOT NULL
+        );",
+    )?;
+    Ok(())
+}
+
+fn opencode_reconciliation_attempt_is_recent(conn: &Connection, source_key: &str) -> Result<bool> {
+    let result = conn.query_row(
+        "SELECT attempted_at FROM opencode_source_line_reconciliation_attempts WHERE source_key = ?1",
+        [source_key],
+        |row| row.get::<_, String>(0),
+    );
+    let attempted_at = match result {
+        Ok(value) => value,
+        Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let Ok(attempted_at) = chrono::DateTime::parse_from_rfc3339(&attempted_at) else {
+        return Ok(false);
+    };
+    let age = Utc::now().signed_duration_since(attempted_at.with_timezone(&Utc));
+    Ok(age >= chrono::Duration::zero()
+        && age
+            < chrono::Duration::from_std(OPENCODE_RECONCILIATION_RETRY_DELAY)
+                .expect("OpenCode retry delay fits chrono duration"))
+}
+
+fn record_opencode_reconciliation_attempt(conn: &Connection, source_key: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO opencode_source_line_reconciliation_attempts (source_key, attempted_at)
+         VALUES (?1, ?2)
+         ON CONFLICT(source_key) DO UPDATE SET attempted_at = excluded.attempted_at",
+        rusqlite::params![source_key, Utc::now().to_rfc3339()],
     )?;
     Ok(())
 }
@@ -4357,6 +4404,24 @@ mod tests {
             get_opencode_source_line_durability(&conn, &source_key).unwrap(),
             None
         );
+        assert!(opencode_reconciliation_attempt_is_recent(&conn, &source_key).unwrap());
+
+        let skipped = ship_opencode_database_with_trace(
+            &db_path,
+            &conn,
+            &make_test_client("http://127.0.0.1:9"),
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+            OpenCodeShipMode::ReconcileDurability,
+            Some(&make_ship_trace("reconciliation_scan")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(skipped.sessions_shipped, 0);
+        assert_eq!(skipped.events_shipped, 0);
+        assert!(!skipped.reconciliation_pending);
     }
 
     #[tokio::test]
