@@ -16,6 +16,8 @@ Longhouse fixes that:
 - **Steer live work remotely** — launch a session through Longhouse and send to it later from the web or your phone.
 - **Own your history** — runs on machines you control, SQLite at the core, nothing uploaded to a vendor cloud.
 
+To be clear, this is NOT like all the other agent wrappers that run their *own* internal management and force you into their UX/UI platform. You can literally just run 'claude' like normal and get the full observability stack. To go further just 'longhouse claude' (or anything else like Cursor, OpenCode, Codex, antigravity) and then *with no change to your terminal experience* you gain full remote control (like that claude remote feature they introcued) but this is fully open source and implemented across all the coding agents into one unified system.
+
 ## Install
 
 **macOS (recommended):** download [Longhouse for macOS](https://longhouse.ai/download/macos). Open the app to finish setup.
