@@ -97,8 +97,6 @@ The first containment release now implements:
   and input projections;
 - a durable filesystem job protocol with native-exit recovery, live-ingest
   priority, bounded result retention, and fair alternation with outbox work;
-- summary/title, projection, recall-index, preview-cleanup, and archive-WAL
-  maintenance in the child process;
 - live-store readiness and health that remain available while the archive child
   is dead, stalled, or backing off.
 
@@ -107,12 +105,16 @@ Enabling it while the Runtime Host still configures its monolith
 `WriteSerializer` would create an uncoordinated second writer. The job protocol
 is landed as a tested migration seam, not as a hidden mode switch.
 
-The remaining architectural work is the catalog boundary in Phases 4 and 5.
+The remaining architectural work includes the Phase 4 cold-writer cutover and
+the Phase 5 catalog boundary. Summary/title, projection, recall indexing,
+preview cleanup, archive WAL, and synchronous ingest remain in the Runtime Host
+until the worker can become the sole monolith writer; moving those loops early
+caused real cross-process lock contention in the full shipper harness.
 Authentication, device tokens, session/thread cards, turns, runner state, and
-some request-time session projections still live in `longhouse.db`; therefore
-this checkpoint must be described as cold-work containment, not complete
-monolith failure isolation. The API still needs the catalog at boot and for
-timeline/detail reads.
+some request-time session projections also still live in `longhouse.db`.
+Therefore this checkpoint must be described as outbox crash containment, not
+complete monolith failure isolation. The API still needs the catalog at boot
+and for timeline/detail reads.
 
 ## Worker Contract
 
