@@ -67,6 +67,12 @@ pub(crate) enum BatchBand {
     Archive,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum OpenCodeShipMode {
+    ChangedOnly,
+    ReconcileDurability,
+}
+
 /// Pick a batch target for the given band. Live transcript ships stay small
 /// (latency); archive / replay ships go bigger (amortize round trip).
 /// `max_batch_bytes` (configurable hard ceiling) clamps both bands.
@@ -227,6 +233,7 @@ pub(crate) async fn ship_opencode_database(
         max_batch_bytes,
         tracker,
         parse_tracker,
+        OpenCodeShipMode::ChangedOnly,
         None,
     )
     .await
@@ -240,10 +247,12 @@ pub(crate) async fn ship_opencode_database_with_trace(
     max_batch_bytes: u64,
     tracker: Option<&ConsecutiveErrorTracker>,
     parse_tracker: Option<&RecentIssueTracker>,
+    mode: OpenCodeShipMode,
     ship_trace: Option<&ShipTraceContext>,
 ) -> Result<(usize, usize)> {
     let file_state = FileState::new(conn);
     ensure_opencode_sqlite_state_table(conn)?;
+    ensure_opencode_source_line_durability_table(conn)?;
     let sessions = opencode_db::list_opencode_sessions(path)?;
     let mut sessions_shipped = 0usize;
     let mut events_shipped = 0usize;
@@ -253,9 +262,12 @@ pub(crate) async fn ship_opencode_database_with_trace(
         let current_fingerprint = get_opencode_sqlite_fingerprint(conn, &candidate.source_key)?;
         let persisted_longhouse_session_id =
             get_opencode_sqlite_longhouse_session_id(conn, &candidate.source_key)?;
-        if candidate.version <= current_offset
-            && current_fingerprint.as_deref() == Some(candidate.fingerprint.as_str())
-        {
+        let unchanged = candidate.version <= current_offset
+            && current_fingerprint.as_deref() == Some(candidate.fingerprint.as_str());
+        let durability_proven = get_opencode_source_line_durability(conn, &candidate.source_key)?
+            .as_deref()
+            == Some(candidate.fingerprint.as_str());
+        if unchanged && (mode == OpenCodeShipMode::ChangedOnly || durability_proven) {
             continue;
         }
 
@@ -285,6 +297,68 @@ pub(crate) async fn ship_opencode_database_with_trace(
             opencode_db::managed_longhouse_session_id_for_opencode(&provider_session_id)
                 .or(persisted_longhouse_session_id)
                 .unwrap_or_else(|| parse_result.metadata.session_id.clone());
+        if unchanged && mode == OpenCodeShipMode::ReconcileDurability {
+            let source_line_refs = source_line_refs_for_lines(&parse_result.source_lines);
+            let claims = source_line_claims::claim_all_source_lines_present(
+                client,
+                &longhouse_session_id,
+                &candidate.source_key,
+                &source_line_refs,
+                request_timeout_for_trace(ship_trace),
+            )
+            .await;
+            match claims {
+                Ok(summary) if summary.missing == 0 => {
+                    if let Err(error) = media_upload::ensure_media_uploaded(
+                        client,
+                        &longhouse_session_id,
+                        "opencode",
+                        &candidate.source_key,
+                        &parse_result.media_objects,
+                        request_timeout_for_trace(ship_trace),
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            path = %candidate.source_key,
+                            provider_session_id = %candidate.provider_session_id,
+                            error = %error,
+                            "OpenCode durability reconciliation media upload failed"
+                        );
+                        continue;
+                    }
+                    set_opencode_source_line_durability(
+                        conn,
+                        &candidate.source_key,
+                        &candidate.fingerprint,
+                    )?;
+                    if let Some(tracker) = tracker {
+                        tracker.record_success();
+                    }
+                    continue;
+                }
+                Ok(summary) => {
+                    tracing::info!(
+                        path = %candidate.source_key,
+                        provider_session_id = %candidate.provider_session_id,
+                        source_lines_present = summary.present,
+                        source_lines_missing = summary.missing,
+                        "OpenCode source bytes are incomplete; reshipping canonical session"
+                    );
+                }
+                Err(error) => {
+                    if tracker.map_or(true, |tracker| tracker.record_error()) {
+                        tracing::warn!(
+                            path = %candidate.source_key,
+                            provider_session_id = %candidate.provider_session_id,
+                            error = %error,
+                            "OpenCode durability reconciliation failed; leaving proof pending"
+                        );
+                    }
+                    continue;
+                }
+            }
+        }
         if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
             file_state.set_offset(
                 &candidate.source_key,
@@ -299,6 +373,11 @@ pub(crate) async fn ship_opencode_database_with_trace(
                 &candidate.fingerprint,
                 candidate.version,
                 &longhouse_session_id,
+            )?;
+            set_opencode_source_line_durability(
+                conn,
+                &candidate.source_key,
+                &candidate.fingerprint,
             )?;
             continue;
         }
@@ -408,6 +487,7 @@ pub(crate) async fn ship_opencode_database_with_trace(
             candidate.version,
             &longhouse_session_id,
         )?;
+        set_opencode_source_line_durability(conn, &candidate.source_key, &candidate.fingerprint)?;
         if session_events_shipped > 0 {
             sessions_shipped += 1;
             events_shipped += session_events_shipped;
@@ -441,6 +521,49 @@ fn ensure_opencode_sqlite_state_table(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    Ok(())
+}
+
+fn ensure_opencode_source_line_durability_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS opencode_source_line_durability (
+            source_key TEXT PRIMARY KEY,
+            fingerprint TEXT NOT NULL,
+            proven_at TEXT NOT NULL
+        );",
+    )?;
+    Ok(())
+}
+
+fn get_opencode_source_line_durability(
+    conn: &Connection,
+    source_key: &str,
+) -> Result<Option<String>> {
+    let result = conn.query_row(
+        "SELECT fingerprint FROM opencode_source_line_durability WHERE source_key = ?1",
+        [source_key],
+        |row| row.get::<_, String>(0),
+    );
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn set_opencode_source_line_durability(
+    conn: &Connection,
+    source_key: &str,
+    fingerprint: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO opencode_source_line_durability (source_key, fingerprint, proven_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(source_key) DO UPDATE SET
+             fingerprint = excluded.fingerprint,
+             proven_at = excluded.proven_at",
+        rusqlite::params![source_key, fingerprint, Utc::now().to_rfc3339()],
+    )?;
     Ok(())
 }
 
@@ -3406,7 +3529,7 @@ pub(crate) async fn full_scan_with_batch_bytes_and_parse_tracker(
     for (path, provider_name) in &all_files {
         let file_start = std::time::Instant::now();
         if *provider_name == "opencode" && opencode_db::is_opencode_database_path(path) {
-            match ship_opencode_database(
+            match ship_opencode_database_with_trace(
                 path,
                 conn,
                 client,
@@ -3414,6 +3537,8 @@ pub(crate) async fn full_scan_with_batch_bytes_and_parse_tracker(
                 max_batch_bytes,
                 tracker,
                 parse_tracker,
+                OpenCodeShipMode::ReconcileDurability,
+                None,
             )
             .await
             {
@@ -3998,6 +4123,205 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_opencode_reconciliation_proves_unchanged_source_bytes_without_reship() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_opencode_fixture_db(&db_path);
+        let (_state_file, conn) = make_db();
+        let source_key = opencode_db::opencode_source_key(&db_path, "ses_test");
+
+        let (url, _captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        ship_opencode_database(
+            &db_path,
+            &conn,
+            &make_test_client(&url),
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        handle.join().unwrap();
+        conn.execute(
+            "DELETE FROM opencode_source_line_durability WHERE source_key = ?1",
+            [&source_key],
+        )
+        .unwrap();
+
+        let parse_result = opencode_db::parse_opencode_session(&db_path, "ses_test").unwrap();
+        let refs = source_line_refs_for_lines(&parse_result.source_lines);
+        let present = refs
+            .iter()
+            .map(|source_line| {
+                json!({
+                    "source_path": source_key,
+                    "source_offset": source_line.source_offset,
+                    "line_hash": source_line.line_hash,
+                })
+            })
+            .collect::<Vec<_>>();
+        let claim_body = json!({"present": present, "missing": [], "rejected": []}).to_string();
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", claim_body.as_str())]);
+        let result = ship_opencode_database_with_trace(
+            &db_path,
+            &conn,
+            &make_test_client(&url),
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+            OpenCodeShipMode::ReconcileDurability,
+            Some(&make_ship_trace("reconciliation_scan")),
+        )
+        .await
+        .unwrap();
+
+        handle.join().unwrap();
+        assert_eq!(result, (0, 0));
+        assert_eq!(captured.lock().unwrap().len(), 1);
+        assert!(get_opencode_source_line_durability(&conn, &source_key)
+            .unwrap()
+            .is_some());
+
+        let skipped = ship_opencode_database_with_trace(
+            &db_path,
+            &conn,
+            &make_test_client("http://127.0.0.1:9"),
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+            OpenCodeShipMode::ReconcileDurability,
+            Some(&make_ship_trace("reconciliation_scan")),
+        )
+        .await
+        .unwrap();
+        assert_eq!(skipped, (0, 0));
+    }
+
+    #[tokio::test]
+    async fn test_opencode_reconciliation_reships_when_source_bytes_are_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_opencode_fixture_db(&db_path);
+        let (_state_file, conn) = make_db();
+        let source_key = opencode_db::opencode_source_key(&db_path, "ses_test");
+
+        let (url, _captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        ship_opencode_database(
+            &db_path,
+            &conn,
+            &make_test_client(&url),
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        handle.join().unwrap();
+        conn.execute(
+            "DELETE FROM opencode_source_line_durability WHERE source_key = ?1",
+            [&source_key],
+        )
+        .unwrap();
+
+        let parse_result = opencode_db::parse_opencode_session(&db_path, "ses_test").unwrap();
+        let refs = source_line_refs_for_lines(&parse_result.source_lines);
+        let missing = refs
+            .iter()
+            .map(|source_line| {
+                json!({
+                    "source_path": source_key,
+                    "source_offset": source_line.source_offset,
+                    "line_hash": source_line.line_hash,
+                })
+            })
+            .collect::<Vec<_>>();
+        let claim_body = json!({"present": [], "missing": missing, "rejected": []}).to_string();
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", claim_body.as_str()), ("200 OK", "{}")]);
+        let result = ship_opencode_database_with_trace(
+            &db_path,
+            &conn,
+            &make_test_client(&url),
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+            OpenCodeShipMode::ReconcileDurability,
+            Some(&make_ship_trace("reconciliation_scan")),
+        )
+        .await
+        .unwrap();
+
+        handle.join().unwrap();
+        assert_eq!(result, (1, 2));
+        let bodies = captured.lock().unwrap();
+        assert_eq!(bodies.len(), 2);
+        let claim: Value = serde_json::from_slice(&bodies[0]).unwrap();
+        assert_eq!(claim["items"].as_array().unwrap().len(), refs.len());
+        assert_eq!(decode_payload(&bodies[1])["provider"], "opencode");
+        assert!(get_opencode_source_line_durability(&conn, &source_key)
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn test_opencode_reconciliation_does_not_ingest_when_claims_fail() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_opencode_fixture_db(&db_path);
+        let (_state_file, conn) = make_db();
+        let source_key = opencode_db::opencode_source_key(&db_path, "ses_test");
+
+        let (url, _captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        ship_opencode_database(
+            &db_path,
+            &conn,
+            &make_test_client(&url),
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        handle.join().unwrap();
+        conn.execute(
+            "DELETE FROM opencode_source_line_durability WHERE source_key = ?1",
+            [&source_key],
+        )
+        .unwrap();
+
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("503 Service Unavailable", "busy")]);
+        let result = ship_opencode_database_with_trace(
+            &db_path,
+            &conn,
+            &make_test_client(&url),
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+            OpenCodeShipMode::ReconcileDurability,
+            Some(&make_ship_trace("reconciliation_scan")),
+        )
+        .await
+        .unwrap();
+
+        handle.join().unwrap();
+        assert_eq!(result, (0, 0));
+        assert_eq!(captured.lock().unwrap().len(), 1);
+        assert_eq!(
+            get_opencode_source_line_durability(&conn, &source_key).unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn test_ship_opencode_database_with_trace_sends_live_header() {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("opencode.db");
@@ -4015,6 +4339,7 @@ mod tests {
             10_000_000,
             None,
             None,
+            OpenCodeShipMode::ChangedOnly,
             Some(&trace),
         )
         .await

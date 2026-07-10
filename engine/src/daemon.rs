@@ -2930,6 +2930,11 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             task_context.shipper_config.max_batch_bytes,
             Some(&task_context.tracker),
             Some(&task_context.parse_tracker),
+            if result.job.priority == WorkPriority::Scan {
+                shipper::OpenCodeShipMode::ReconcileDurability
+            } else {
+                shipper::OpenCodeShipMode::ChangedOnly
+            },
             Some(&opencode_trace),
         )
         .await

@@ -9,6 +9,8 @@ use uuid::Uuid;
 use crate::shipper::SourceLineRef;
 use crate::shipping::client::ShipperClient;
 
+const MAX_CLAIMS_PER_REQUEST: usize = 512;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SourceLineClaimsSummary {
     pub claimed: usize,
@@ -130,6 +132,28 @@ pub async fn claim_source_lines_present(
         present,
         missing,
     })
+}
+
+pub async fn claim_all_source_lines_present(
+    client: &ShipperClient,
+    session_id: &str,
+    source_path: &str,
+    source_lines: &[SourceLineRef],
+    request_timeout: Option<Duration>,
+) -> Result<SourceLineClaimsSummary> {
+    let mut total = SourceLineClaimsSummary::default();
+    for chunk in source_lines.chunks(MAX_CLAIMS_PER_REQUEST) {
+        let summary =
+            claim_source_lines_present(client, session_id, source_path, chunk, request_timeout)
+                .await?;
+        total.claimed += summary.claimed;
+        total.present += summary.present;
+        total.missing += summary.missing;
+        if summary.missing > 0 {
+            break;
+        }
+    }
+    Ok(total)
 }
 
 fn validate_session_uuid(session_id: &str) -> Result<()> {
