@@ -40,6 +40,7 @@ from zerg.models.user import User
 from zerg.services.agents.kernel_writes import primary_thread_id_for_session
 from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
+from zerg.services.live_catalog_launch import attach_live_catalog_control
 from zerg.services.live_catalog_launch import create_live_launch_catalog_shell
 from zerg.services.live_launch_readiness import upsert_live_launch_readiness
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
@@ -54,6 +55,8 @@ from zerg.services.managed_local_control import answer_pause_request_on_managed_
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import build_managed_local_launch_plan
+from zerg.services.managed_local_launcher import managed_local_run_id_for_session
+from zerg.services.managed_local_launcher import managed_provider_has_lease_observer
 from zerg.services.managed_local_launcher import resolve_managed_local_launch_runner
 from zerg.services.remote_session_launch import RemoteContinueParams
 from zerg.services.remote_session_launch import RemoteLaunchError
@@ -246,6 +249,17 @@ async def _write_hot_managed_local_launch_readiness(
                 launch_surface=plan.launch_surface,
                 loop_mode=plan.loop_mode,
                 permission_mode=plan.permission_mode,
+            )
+            attach_live_catalog_control(
+                live_db,
+                session_id=plan.session_id,
+                provider=plan.provider,
+                device_id=plan.source_name,
+                state="detached" if managed_provider_has_lease_observer(plan.provider) else "attached",
+                external_name=plan.managed_session_name,
+                run_id=managed_local_run_id_for_session(plan.session_id),
+                provider_session_id=plan.provider_session_id,
+                observed_at=now,
             )
         readiness = upsert_live_launch_readiness(
             live_db,

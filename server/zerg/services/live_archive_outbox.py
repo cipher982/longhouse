@@ -755,12 +755,28 @@ def _attach_live_remote_launch(
             db.add(run)
             db.flush()
     else:
-        run = ensure_open_run_for_session(
-            db,
-            session,
-            launch_origin=launch_origin,
-            host_id=session.device_id,
-        )
+        run_id_text = str(launch.get("run_id") or "").strip()
+        run_id = UUID(run_id_text) if run_id_text else None
+        run = db.get(SessionRun, run_id) if run_id is not None else None
+        if run is None and run_id is not None:
+            run = SessionRun(
+                id=run_id,
+                thread_id=thread.id,
+                provider=session.provider,
+                host_id=session.device_id,
+                cwd=cwd or session.cwd,
+                launch_origin=launch_origin,
+                started_at=normalize_utc(launch.get("started_at")) or datetime.now(timezone.utc),
+            )
+            db.add(run)
+            db.flush()
+        if run is None:
+            run = ensure_open_run_for_session(
+                db,
+                session,
+                launch_origin=launch_origin,
+                host_id=session.device_id,
+            )
         run.cwd = cwd or run.cwd
     contract = require_contract_for_provider(session.provider)
     caps = contract.connection_capabilities

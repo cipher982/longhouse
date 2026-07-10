@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -15,6 +18,9 @@ from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+
+logger = logging.getLogger(__name__)
+_QUEUE_DRAINABLE_PHASES = frozenset({"idle", "needs_user", "blocked"})
 
 
 @dataclass(frozen=True)
@@ -131,7 +137,17 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
         return False
     with factory() as read_db:
         session = load_live_control_session(read_db, session_id)
+        runtime_state = (
+            read_db.query(LiveRuntimeState)
+            .filter(LiveRuntimeState.session_id == session.id)
+            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+            .first()
+            if session is not None
+            else None
+        )
     if session is None:
+        return False
+    if runtime_state is None or str(runtime_state.phase or "").strip() not in _QUEUE_DRAINABLE_PHASES:
         return False
 
     request_id = uuid4().hex
@@ -195,3 +211,27 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
         dispatched_at=dispatched_at,
     )
     return True
+
+
+async def run_live_catalog_input_recovery_loop() -> None:
+    """Recover queued hot receipts without ever opening the cold database."""
+
+    from zerg.services.live_session_inputs import list_session_ids_with_queued_live_receipts
+
+    interval = max(1.0, float(os.getenv("LONGHOUSE_LIVE_INPUT_RECOVERY_INTERVAL_SECONDS", "5")))
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            import zerg.database as database_module
+
+            factory = database_module.get_live_session_factory()
+            if factory is None:
+                continue
+            with factory() as live_db:
+                session_ids = list_session_ids_with_queued_live_receipts(live_db, limit=100)
+            for session_id in session_ids:
+                await wake_next_live_catalog_input(session_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Live catalog input recovery tick failed")

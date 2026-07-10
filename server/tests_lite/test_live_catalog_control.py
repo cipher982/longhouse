@@ -16,6 +16,7 @@ import zerg.database as database_module
 from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
+from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionInputReceipt
@@ -163,6 +164,20 @@ async def test_catalog_terminal_wake_dispatches_next_live_receipt(tmp_path, monk
     factory = make_sessionmaker(engine)
     with factory() as db:
         session_id = _seed_live_control(db)
+        now = datetime.now(timezone.utc)
+        db.add(
+            LiveRuntimeState(
+                runtime_key=f"codex:{session_id}",
+                session_id=session_id,
+                provider="codex",
+                device_id="cinder",
+                phase="idle",
+                phase_source="test",
+                timeline_anchor_at=now,
+                runtime_version=1,
+                updated_at=now,
+            )
+        )
         upsert_live_input_receipt(
             db,
             owner_id=7,
@@ -199,3 +214,40 @@ async def test_catalog_terminal_wake_dispatches_next_live_receipt(tmp_path, monk
         receipt = db.query(LiveSessionInputReceipt).one()
         assert receipt.status == "delivered"
         assert receipt.delivery_request_id
+
+
+@pytest.mark.asyncio
+async def test_catalog_lock_timeout_releases_and_attempts_queue_recovery(tmp_path, monkeypatch):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
+    initialize_live_database(engine)
+    factory = make_sessionmaker(engine)
+    with factory() as db:
+        session_id = _seed_live_control(db)
+
+    import zerg.services.live_control_catalog as live_control
+    import zerg.services.session_chat_impl as chat_impl
+    from zerg.services.session_kernel_projection import session_lock_scope_id
+    from zerg.services.session_locks import session_lock_manager
+
+    request_id = "timeout-holder"
+    scope = session_lock_scope_id(session_id)
+    assert await session_lock_manager.acquire(session_id=scope, holder=request_id, ttl_seconds=300)
+    wakes: list[str] = []
+
+    async def fake_wake(value):
+        wakes.append(str(value))
+        return False
+
+    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: factory)
+    monkeypatch.setattr(chat_impl, "MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS", 0)
+    monkeypatch.setattr(live_control, "wake_next_live_catalog_input", fake_wake)
+
+    await chat_impl._release_catalog_lock_after_terminal(
+        session_id=session_id,
+        lock_scope_id=scope,
+        request_id=request_id,
+        dispatched_at=datetime.now(timezone.utc),
+    )
+
+    assert await session_lock_manager.get_lock_info(scope) is None
+    assert wakes == [str(session_id)]

@@ -29,8 +29,11 @@ from zerg.models.enums import UserRole
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionLaunchAttempt
+from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
@@ -531,6 +534,13 @@ def test_this_device_launch_materializes_live_catalog_without_archive_db(monkeyp
         attempt = live_db.query(LiveSessionLaunchAttempt).one()
         assert attempt.command_id == f"managed-local-{response.session_id}"
         assert attempt.state == "pending"
+        run = live_db.query(LiveSessionRun).one()
+        connection = live_db.query(LiveSessionConnection).one()
+        assert connection.run_id == run.id
+        assert connection.state == "detached"
+        assert connection.device_id == "cinder"
+        assert live_db.query(LiveSessionThreadAlias).count() == 0
+        assert response.provider_session_id is None
 
 
 def test_this_device_launch_skips_runtime_pubsub_for_hot_readiness(monkeypatch, tmp_path):

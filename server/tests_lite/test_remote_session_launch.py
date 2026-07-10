@@ -43,8 +43,10 @@ from zerg.models.device_token import DeviceToken  # noqa: E402
 from zerg.models.live_store import LiveArchiveOutbox  # noqa: E402
 from zerg.models.live_store import LiveLaunchReadiness  # noqa: E402
 from zerg.models.live_store import LiveSessionCatalog  # noqa: E402
+from zerg.models.live_store import LiveSessionConnection  # noqa: E402
 from zerg.models.live_store import LiveSessionLaunchAttempt  # noqa: E402
 from zerg.models.live_store import LiveSessionThread  # noqa: E402
+from zerg.models.live_store import LiveSessionThreadAlias  # noqa: E402
 from zerg.services.agents import AgentsStore  # noqa: E402
 from zerg.services.agents.kernel_capabilities import project_session_capabilities  # noqa: E402
 from zerg.services.agents.kernel_writes import ensure_primary_thread  # noqa: E402
@@ -52,8 +54,8 @@ from zerg.services.agents.kernel_writes import record_run  # noqa: E402
 from zerg.services.agents.kernel_writes import record_thread_alias  # noqa: E402
 from zerg.services.agents.kernel_writes import upsert_connection_for_run  # noqa: E402
 from zerg.services.live_archive_outbox import drain_live_archive_outbox  # noqa: E402
-from zerg.services.live_launch_readiness import upsert_live_launch_readiness  # noqa: E402
 from zerg.services.live_catalog_backfill import backfill_live_catalog  # noqa: E402
+from zerg.services.live_launch_readiness import upsert_live_launch_readiness  # noqa: E402
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlCommandResponse  # noqa: E402
@@ -170,10 +172,10 @@ def _seed_continuable_codex_session(
         started_at=now,
         ended_at=now if ended else None,
         last_activity_at=now,
-                                        user_messages=1,
+        user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-                    )
+    )
     db.add(session)
     db.flush()
     thread = ensure_primary_thread(db, session)
@@ -241,10 +243,10 @@ def _seed_continuable_claude_session(
         started_at=now,
         ended_at=now if ended else None,
         last_activity_at=now,
-                                        user_messages=1,
+        user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-                    )
+    )
     db.add(session)
     db.flush()
     thread = ensure_primary_thread(db, session)
@@ -313,10 +315,10 @@ def _seed_imported_claude_session(
         started_at=now,
         ended_at=now if ended else None,
         last_activity_at=now,
-                                        user_messages=1,
+        user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-                    )
+    )
     db.add(session)
     db.flush()
     thread = ensure_primary_thread(db, session)
@@ -522,7 +524,7 @@ def test_launch_remote_session_writes_live_launch_readiness(tmp_path, monkeypatc
                     ),
                     registry=registry,
                 )
-        )
+            )
 
         assert result.launch_state == "launching_unknown"
         assert live_serializer.labels == ["launch-readiness", "launch-readiness"]
@@ -1251,6 +1253,7 @@ def test_live_catalog_launch_dispatches_without_opening_archive_then_projects(tm
     monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(remote_launch_module.database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(remote_launch_module.database_module, "get_live_session_factory", lambda: LiveSession)
+    monkeypatch.setattr(remote_launch_module.database_module, "get_live_write_session_factory", lambda: LiveSession)
     monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
 
     try:
@@ -1270,6 +1273,20 @@ def test_live_catalog_launch_dispatches_without_opening_archive_then_projects(tm
             )
 
         assert result.launch_state == "launching_unknown"
+        with LiveSession() as live_db:
+            assert reconcile_launch_from_command_result(
+                live_db,
+                {
+                    "command_id": f"launch-{result.session_id}",
+                    "session_id": str(result.session_id),
+                    "ok": True,
+                    "result": {
+                        "exit_code": 0,
+                        "provider_session_id": "provider-live-1",
+                        "thread_path": "/tmp/provider-live-1.jsonl",
+                    },
+                },
+            )
         with ArchiveSession() as archive_db:
             assert archive_db.get(AgentSession, result.session_id) is None
         with LiveSession() as live_db, ArchiveSession() as archive_db:
@@ -1283,7 +1300,19 @@ def test_live_catalog_launch_dispatches_without_opening_archive_then_projects(tm
                 .filter(LiveSessionLaunchAttempt.session_id == str(result.session_id))
                 .one()
             )
-            assert attempt.state == "dispatched"
+            assert attempt.state == "adopted"
+            connection = live_db.query(LiveSessionConnection).one()
+            assert connection.state == "attached"
+            aliases = {
+                row.alias_kind: row.alias_value
+                for row in live_db.query(LiveSessionThreadAlias).filter(
+                    LiveSessionThreadAlias.thread_id == catalog_thread_id
+                )
+            }
+            assert aliases == {
+                "provider_session_id": "provider-live-1",
+                "source_path": "/tmp/provider-live-1.jsonl",
+            }
             drain = drain_live_archive_outbox(live_db, archive_db, limit=10)
             assert drain.failed == 0
 
@@ -1291,7 +1320,7 @@ def test_live_catalog_launch_dispatches_without_opening_archive_then_projects(tm
             archive_session = archive_db.get(AgentSession, result.session_id)
             assert archive_session is not None
             assert str(archive_session.primary_thread_id) == catalog_thread_id
-            assert _latest_attempt(archive_db, result.session_id).state == "dispatched"
+            assert _latest_attempt(archive_db, result.session_id).state == "adopted"
     finally:
         live_engine.dispose()
 
@@ -1859,11 +1888,11 @@ def test_provider_without_remote_launch_contract_rejected(tmp_path):
                 launch_remote_session(
                     db,
                     RemoteLaunchParams(
-                    owner_id=OWNER_ID,
-                    device_id="cinder",
-                    provider="antigravity",
-                    cwd="/Users/me/repo",
-                ),
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="antigravity",
+                        cwd="/Users/me/repo",
+                    ),
                     registry=registry,
                 )
             )
@@ -2292,11 +2321,7 @@ def test_http_continue_endpoint_message_defaults_to_one_shot(tmp_path):
         run = db.get(SessionRun, attempt.run_id)
         assert run is not None
         assert run.launch_origin == "longhouse_continued"
-        conn = (
-            db.query(SessionConnection)
-            .filter(SessionConnection.run_id == run.id)
-            .one()
-        )
+        conn = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
         assert conn.control_plane == "codex_exec"
         assert conn.can_send_input == 0
         assert conn.can_resume == 0
@@ -2786,11 +2811,7 @@ def test_one_shot_continue_hot_outbox_releases_existing_runs(tmp_path, monkeypat
             assert released_run.ended_at is not None
             released_connection = db.get(SessionConnection, existing_connection_id)
             assert released_connection.state == "released"
-            one_shot_connection = (
-                db.query(SessionConnection)
-                .filter(SessionConnection.run_id == new_run.id)
-                .one()
-            )
+            one_shot_connection = db.query(SessionConnection).filter(SessionConnection.run_id == new_run.id).one()
             assert one_shot_connection.control_plane == "codex_exec"
             assert one_shot_connection.can_send_input == 0
             assert one_shot_connection.can_resume == 0
@@ -3100,10 +3121,10 @@ def test_adopted_control_claude_session_is_continuable(tmp_path):
             started_at=now,
             ended_at=now,
             last_activity_at=now,
-                                                user_messages=1,
+            user_messages=1,
             assistant_messages=1,
             tool_calls=0,
-                                )
+        )
         db.add(session)
         db.flush()
         thread = ensure_primary_thread(db, session)
@@ -3213,11 +3234,7 @@ def test_late_continue_claude_reconciliation_attaches_new_run(tmp_path):
         # Original managed run/connection (now released) + the new continued run.
         assert db.query(SessionRun).count() == 2
         assert db.query(SessionConnection).count() == 2
-        new_connection = (
-            db.query(SessionConnection)
-            .filter(SessionConnection.run_id == attempt.run_id)
-            .one()
-        )
+        new_connection = db.query(SessionConnection).filter(SessionConnection.run_id == attempt.run_id).one()
         assert new_connection.state == "attached"
 
 
@@ -3428,10 +3445,10 @@ def test_continue_rejects_missing_resume_identity(tmp_path):
                 cwd="/Users/me/repo",
                 started_at=now,
                 ended_at=now,
-                                                                                user_messages=0,
+                user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
-                                            )
+            )
         )
         db.commit()
         with pytest.raises(RemoteLaunchError) as excinfo:
@@ -3635,10 +3652,10 @@ def test_reap_orphaned_launches_expires_stale_rows(tmp_path):
             device_id="cinder",
             cwd="/Users/me/repo",
             started_at=past,
-                                                            user_messages=0,
+            user_messages=0,
             assistant_messages=0,
             tool_calls=0,
-                                )
+        )
         db.add(session)
         db.flush()
         db.add(
@@ -3704,10 +3721,10 @@ def test_admin_launch_debug_lists_non_live_rows(tmp_path):
                 device_id="cinder",
                 cwd="/Users/me/repo",
                 started_at=now,
-                                                                                user_messages=0,
+                user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
-                                            )
+            )
             db.add(session)
             db.flush()
             thread = ensure_primary_thread(db, session)
@@ -3737,10 +3754,10 @@ def test_admin_launch_debug_lists_non_live_rows(tmp_path):
                 device_id="cinder",
                 cwd="/Users/me/repo",
                 started_at=now,
-                                                                                user_messages=0,
+                user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
-                                            )
+            )
         )
         db.flush()
         db.add(

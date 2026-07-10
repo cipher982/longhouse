@@ -8,6 +8,7 @@ views.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -29,6 +30,8 @@ from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import provider_for_control_plane
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.utils.time import normalize_utc
+
+logger = logging.getLogger(__name__)
 
 CONTROL_SOURCE_HEARTBEAT = "machine_heartbeat"
 CONTROL_SOURCE_ENGINE_CHANNEL = "machine_control_ws"
@@ -353,6 +356,22 @@ def upsert_live_control_leases(
             _payload_for_live_lease(lease, control_state=control_state, reason=reason, ttl_ms=ttl_ms),
             sort_keys=True,
         )
+        from zerg.services.live_catalog_launch import attach_live_catalog_control
+
+        try:
+            attach_live_catalog_control(
+                db,
+                session_id=session_id,
+                provider=provider,
+                device_id=normalized_device_id,
+                state={"online": "attached", "degraded": "degraded"}.get(control_state, "detached"),
+                external_name=row.machine_id,
+                observed_at=seen_at,
+            )
+        except RuntimeError:
+            # Heartbeats may precede catalog ingest for a newly discovered
+            # Shadow session. The next catalog sync/heartbeat converges it.
+            logger.debug("Live control lease arrived before catalog session %s", session_id)
         touched.add(session_id)
     return touched
 
@@ -392,6 +411,20 @@ def mark_missing_live_control_leases(
         payload["control_state"] = "offline"
         payload["reason"] = "missing_from_snapshot"
         row.payload_json = json.dumps(payload, sort_keys=True)
+        from zerg.services.live_catalog_launch import attach_live_catalog_control
+
+        try:
+            attach_live_catalog_control(
+                db,
+                session_id=row.session_id,
+                provider=str(row.provider),
+                device_id=normalized_device_id,
+                state="detached",
+                external_name=row.machine_id,
+                observed_at=seen_at,
+            )
+        except RuntimeError:
+            logger.debug("Missing live control lease has no catalog session %s", row.session_id)
         try:
             touched.add(UUID(str(row.session_id)))
         except (TypeError, ValueError):

@@ -1101,6 +1101,11 @@ async def _release_catalog_lock_after_terminal(
                     await wake_next_live_catalog_input(session_id)
                 return
         await asyncio.sleep(MANAGED_LOCAL_POLL_INTERVAL_SECS)
+    released = await session_lock_manager.release(lock_scope_id, request_id)
+    if released:
+        from zerg.services.live_control_catalog import wake_next_live_catalog_input
+
+        await wake_next_live_catalog_input(session_id)
 
 
 def _schedule_catalog_lock_release(

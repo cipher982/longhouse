@@ -6,17 +6,164 @@ from datetime import datetime
 from datetime import timezone
 from typing import Any
 from uuid import UUID
+from uuid import uuid4
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
+from zerg.services.managed_provider_contracts import require_contract_for_provider
 
 LIVE_CATALOG_CARD_REVISION = "live-catalog-v1"
+
+
+def _upsert_live_thread_alias(
+    db: Session,
+    *,
+    thread_id: str,
+    provider: str,
+    kind: str,
+    value: str | None,
+    observed_at: datetime,
+) -> None:
+    clean = str(value or "").strip()
+    if not clean:
+        return
+    row = (
+        db.query(LiveSessionThreadAlias)
+        .filter(
+            LiveSessionThreadAlias.thread_id == thread_id,
+            LiveSessionThreadAlias.provider == provider,
+            LiveSessionThreadAlias.alias_kind == kind,
+            LiveSessionThreadAlias.alias_value == clean,
+        )
+        .first()
+    )
+    if row is None:
+        db.add(
+            LiveSessionThreadAlias(
+                thread_id=thread_id,
+                provider=provider,
+                alias_kind=kind,
+                alias_value=clean,
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+            )
+        )
+    else:
+        row.last_seen_at = observed_at
+
+
+def attach_live_catalog_control(
+    db: Session,
+    *,
+    session_id: UUID | str,
+    provider: str,
+    device_id: str | None,
+    state: str,
+    external_name: str | None = None,
+    run_id: UUID | str | None = None,
+    provider_session_id: str | None = None,
+    source_path: str | None = None,
+    launch_origin: str = "longhouse_spawned",
+    force_new_run: bool = False,
+    observed_at: datetime | None = None,
+) -> LiveSessionConnection:
+    """Materialize live kernel control from launch/lease evidence."""
+
+    now = observed_at or datetime.now(timezone.utc)
+    session = db.get(LiveSessionCatalog, str(session_id))
+    if session is None or not session.primary_thread_id:
+        raise RuntimeError(f"live catalog session/thread missing for control attach: {session_id}")
+    thread_id = str(session.primary_thread_id)
+    run = None
+    if run_id is not None:
+        run = db.get(LiveSessionRun, str(run_id))
+    if run is None and not force_new_run:
+        run = (
+            db.query(LiveSessionRun)
+            .filter(LiveSessionRun.thread_id == thread_id, LiveSessionRun.ended_at.is_(None))
+            .order_by(LiveSessionRun.started_at.desc(), LiveSessionRun.id.desc())
+            .first()
+        )
+    if run is None:
+        if force_new_run:
+            open_runs = db.query(LiveSessionRun).filter(LiveSessionRun.thread_id == thread_id, LiveSessionRun.ended_at.is_(None)).all()
+            for open_run in open_runs:
+                open_run.ended_at = now
+                for old_connection in (
+                    db.query(LiveSessionConnection)
+                    .filter(LiveSessionConnection.run_id == open_run.id, LiveSessionConnection.released_at.is_(None))
+                    .all()
+                ):
+                    old_connection.state = "released"
+                    old_connection.released_at = now
+        run = LiveSessionRun(
+            id=str(run_id or uuid4()),
+            thread_id=thread_id,
+            provider=provider,
+            host_id=device_id,
+            cwd=session.cwd,
+            launch_origin=launch_origin,
+            started_at=now,
+        )
+        db.add(run)
+        db.flush()
+
+    contract = require_contract_for_provider(provider)
+    connection = (
+        db.query(LiveSessionConnection)
+        .filter(
+            LiveSessionConnection.run_id == str(run.id),
+            LiveSessionConnection.control_plane == contract.control_plane,
+        )
+        .first()
+    )
+    if connection is None:
+        connection = LiveSessionConnection(
+            run_id=str(run.id),
+            control_plane=contract.control_plane,
+            acquisition_kind="spawned_control",
+            acquired_at=now,
+        )
+        db.add(connection)
+    caps = contract.connection_capabilities
+    connection.state = state
+    connection.external_name = external_name
+    connection.device_id = device_id
+    connection.can_send_input = caps["can_send_input"]
+    connection.can_interrupt = caps["can_interrupt"]
+    connection.can_terminate = caps["can_terminate"]
+    connection.can_tail_output = caps["can_tail_output"]
+    connection.can_resume = caps["can_resume"]
+    connection.last_health_at = now
+    connection.released_at = now if state in {"released", "ended"} else None
+    session.ended_at = None
+    session.updated_at = now
+    _upsert_live_thread_alias(
+        db,
+        thread_id=thread_id,
+        provider=provider,
+        kind="provider_session_id",
+        value=provider_session_id,
+        observed_at=now,
+    )
+    _upsert_live_thread_alias(
+        db,
+        thread_id=thread_id,
+        provider=provider,
+        kind="source_path",
+        value=source_path,
+        observed_at=now,
+    )
+    db.flush()
+    return connection
 
 
 def create_live_launch_catalog_shell(

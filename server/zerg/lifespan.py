@@ -284,6 +284,13 @@ async def lifespan(app: FastAPI):
                 logger.info("Live catalog mode: archive worker supervisor started; cold API loops remain disabled")
             except Exception:
                 logger.exception("Failed to start archive worker supervisor")
+            try:
+                from zerg.services.live_control_catalog import run_live_catalog_input_recovery_loop
+
+                asyncio.create_task(run_live_catalog_input_recovery_loop())
+                logger.info("Live catalog input recovery loop started")
+            except Exception:
+                logger.exception("Failed to start live catalog input recovery loop")
 
         # Core background services
         if not catalog_mode and not _settings.testing:
@@ -312,7 +319,9 @@ async def lifespan(app: FastAPI):
                     failed.append(f"session_input_queue_recovery ({e})")
                     logger.exception("Failed to start session_input_queue_recovery")
             else:
-                logger.info("Session input queue periodic recovery disabled; set LONGHOUSE_ENABLE_SESSION_INPUT_QUEUE_RECOVERY=1 to enable")
+                logger.info(
+                    "Session input queue periodic recovery disabled; " "set LONGHOUSE_ENABLE_SESSION_INPUT_QUEUE_RECOVERY=1 to enable"
+                )
 
             # Remote launch reaper: orphan expired launch rows.
             try:

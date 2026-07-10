@@ -37,6 +37,7 @@ from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
@@ -54,6 +55,7 @@ from zerg.services.live_archive_outbox import REMOTE_LAUNCH_OUTCOME_KIND
 from zerg.services.live_archive_outbox import enqueue_remote_launch_outbox
 from zerg.services.live_archive_outbox import enqueue_remote_launch_outcome_outbox
 from zerg.services.live_archive_outbox import remote_launch_idempotency_key
+from zerg.services.live_catalog_launch import attach_live_catalog_control
 from zerg.services.live_catalog_launch import create_live_launch_catalog_shell
 from zerg.services.live_catalog_launch import live_launch_result
 from zerg.services.live_catalog_launch import update_live_launch_catalog_outcome
@@ -888,7 +890,7 @@ async def _launch_remote_session_live_catalog(
 
     session_uuid = uuid4()
     thread_uuid = uuid4()
-    run_uuid = uuid4() if execution_lifetime == "one_shot" else None
+    run_uuid = uuid4()
     command_id = f"launch-{session_uuid}"
     project = _project_for(cwd, params.project)
     display_name = (params.display_name or project).strip() or project
@@ -1186,26 +1188,40 @@ async def _continue_remote_session_hot(
             "thread_path": _result_resume_thread_path(response_message) or thread_path,
             "external_name": info.machine_name or device_id,
         }
-        await _write_live_launch_readiness(
-            lambda live_db: (
-                update_live_launch_readiness_state(
+
+        def _record_continue_adopted(live_db: Session):
+            update_live_launch_readiness_state(
+                live_db,
+                session_id=session_uuid,
+                state="adopted",
+                clear_expires=True,
+            )
+            if database_module.live_catalog_enabled() and execution_lifetime == "live_control":
+                attach_live_catalog_control(
                     live_db,
                     session_id=session_uuid,
+                    provider=provider,
+                    device_id=device_id,
+                    state="attached",
+                    external_name=info.machine_name or device_id,
+                    run_id=run_uuid,
+                    provider_session_id=outcome.get("provider_thread_id"),
+                    source_path=outcome.get("thread_path"),
+                    launch_origin="longhouse_continued",
+                    force_new_run=True,
+                )
+            enqueue_remote_launch_outcome_outbox(
+                live_db,
+                launch=launch_payload,
+                outcome=outcome,
+                idempotency_key=_remote_continue_outcome_outbox_key(
+                    session_id=session_uuid,
+                    client_request_id=client_request_id,
                     state="adopted",
-                    clear_expires=True,
-                ),
-                enqueue_remote_launch_outcome_outbox(
-                    live_db,
-                    launch=launch_payload,
-                    outcome=outcome,
-                    idempotency_key=_remote_continue_outcome_outbox_key(
-                        session_id=session_uuid,
-                        client_request_id=client_request_id,
-                        state="adopted",
-                    ),
                 ),
             )
-        )
+
+        await _write_live_launch_readiness(_record_continue_adopted)
         elapsed_ms = int((datetime.now(timezone.utc) - now).total_seconds() * 1000)
         logger.info(
             "remote_continue session=%s device=%s provider=%s state=live duration_ms=%s",
@@ -2069,6 +2085,30 @@ def _reconcile_live_launch_from_command_result(message: dict, *, command_id: str
                 state="adopted",
                 clear_expires=True,
             )
+            if database_module.live_catalog_enabled() and str(launch.get("execution_lifetime") or "live_control") == "live_control":
+                attach_live_catalog_control(
+                    live_db,
+                    session_id=session_uuid,
+                    provider=str(launch.get("provider") or ""),
+                    device_id=str(launch.get("device_id") or "").strip() or None,
+                    state="attached",
+                    external_name=str(outcome.get("external_name") or "").strip() or None,
+                    run_id=str(launch.get("run_id") or "").strip() or None,
+                    provider_session_id=str(outcome.get("provider_thread_id") or "").strip() or None,
+                    source_path=str(outcome.get("thread_path") or "").strip() or None,
+                    launch_origin=str(launch.get("launch_origin") or "longhouse_spawned"),
+                    force_new_run=str(launch.get("mode") or "") == "continue",
+                )
+            catalog_attempt = (
+                live_db.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == command_id).one_or_none()
+            )
+            if catalog_attempt is not None:
+                update_live_launch_catalog_outcome(
+                    live_db,
+                    session_id=session_uuid,
+                    command_id=command_id,
+                    state="adopted",
+                )
         else:
             error = message.get("error") or {}
             code = normalize_remote_launch_error_code(error.get("code"))

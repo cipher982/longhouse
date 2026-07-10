@@ -42,6 +42,7 @@ from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
 from zerg.models.refresh_session import RefreshSession
 from zerg.models.user import User
+from zerg.utils.time import normalize_utc
 
 
 @dataclass
@@ -497,7 +498,7 @@ def _upsert_catalog_values(live_db: Session, target_model, values: dict[str, Any
 
 
 def sync_live_catalog_session(archive_db: Session, live_db: Session, *, session_id: Any) -> bool:
-    """Refresh one bounded session/card projection after a cold worker commit."""
+    """Refresh bounded card and control-kernel rows after a cold commit."""
 
     source_session = archive_db.get(AgentSession, session_id)
     if source_session is None:
@@ -514,6 +515,77 @@ def sync_live_catalog_session(archive_db: Session, live_db: Session, *, session_
             LiveTimelineCard,
             _catalog_values(source_card, LiveTimelineCard),
         )
+    threads = archive_db.query(SessionThread).filter(SessionThread.session_id == source_session.id).all()
+    thread_ids = [thread.id for thread in threads]
+    for thread in threads:
+        _upsert_catalog_values(live_db, LiveSessionThread, _catalog_values(thread, LiveSessionThread))
+    if thread_ids:
+        aliases = archive_db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(thread_ids)).all()
+        for alias in aliases:
+            existing_alias = (
+                live_db.query(LiveSessionThreadAlias)
+                .filter(
+                    LiveSessionThreadAlias.thread_id == str(alias.thread_id),
+                    LiveSessionThreadAlias.provider == alias.provider,
+                    LiveSessionThreadAlias.alias_kind == alias.alias_kind,
+                    LiveSessionThreadAlias.alias_value == alias.alias_value,
+                )
+                .first()
+            )
+            if existing_alias is not None:
+                existing_alias.first_seen_at = min(existing_alias.first_seen_at, alias.first_seen_at)
+                existing_alias.last_seen_at = max(existing_alias.last_seen_at, alias.last_seen_at)
+            else:
+                _upsert_catalog_values(live_db, LiveSessionThreadAlias, _catalog_values(alias, LiveSessionThreadAlias))
+        runs = archive_db.query(SessionRun).filter(SessionRun.thread_id.in_(thread_ids)).all()
+        run_ids = [run.id for run in runs]
+        for run in runs:
+            values = _catalog_values(run, LiveSessionRun)
+            values["argv_redacted_json"] = _json_text(run.argv_redacted_json)
+            _upsert_catalog_values(live_db, LiveSessionRun, values)
+        if run_ids:
+            connections = archive_db.query(SessionConnection).filter(SessionConnection.run_id.in_(run_ids)).all()
+            for connection in connections:
+                values = _catalog_values(connection, LiveSessionConnection)
+                values["capabilities_extra_json"] = _json_text(connection.capabilities_extra_json)
+                existing_connection = (
+                    live_db.query(LiveSessionConnection)
+                    .filter(
+                        LiveSessionConnection.run_id == str(connection.run_id),
+                        LiveSessionConnection.control_plane == connection.control_plane,
+                    )
+                    .first()
+                )
+                if existing_connection is not None:
+                    values.pop("id", None)
+                    live_health = normalize_utc(existing_connection.last_health_at)
+                    archive_health = normalize_utc(connection.last_health_at)
+                    if live_health is not None and (archive_health is None or live_health > archive_health):
+                        for key in (
+                            "state",
+                            "released_at",
+                            "last_health_at",
+                            "can_send_input",
+                            "can_interrupt",
+                            "can_terminate",
+                            "can_tail_output",
+                            "can_resume",
+                        ):
+                            values.pop(key, None)
+                    for key, value in values.items():
+                        setattr(existing_connection, key, value)
+                else:
+                    _upsert_catalog_values(live_db, LiveSessionConnection, values)
+    attempts = archive_db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.session_id == source_session.id).all()
+    for attempt in attempts:
+        values = _catalog_values(attempt, LiveSessionLaunchAttempt)
+        existing_attempt = live_db.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == attempt.command_id).first()
+        if existing_attempt is not None:
+            values.pop("id", None)
+            for key, value in values.items():
+                setattr(existing_attempt, key, value)
+        else:
+            _upsert_catalog_values(live_db, LiveSessionLaunchAttempt, values)
     live_db.commit()
     return True
 

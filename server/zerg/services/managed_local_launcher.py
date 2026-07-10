@@ -9,8 +9,10 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import NAMESPACE_URL
 from uuid import UUID
 from uuid import uuid4
+from uuid import uuid5
 
 from sqlalchemy.orm import Session
 
@@ -48,6 +50,14 @@ _MANAGED_LOCAL_NAME_MAX = 64
 # them live, and the read-time freshness clamp still degrades them after the
 # lease TTL if no further evidence arrives.
 _HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex", "opencode", "cursor"})
+
+
+def managed_provider_has_lease_observer(provider: str | None) -> bool:
+    return str(provider or "").strip().lower() in _HEARTBEAT_LEASE_OBSERVED_PROVIDERS
+
+
+def managed_local_run_id_for_session(session_id: UUID | str) -> UUID:
+    return uuid5(NAMESPACE_URL, f"longhouse:managed-local-run:{session_id}")
 
 
 class ManagedLocalLaunchError(RuntimeError):
@@ -319,6 +329,7 @@ def materialize_managed_local_launch_plan_sync(
         host_id=plan.source_name,
         cwd=plan.cwd,
         launch_origin="longhouse_spawned",
+        run_id=managed_local_run_id_for_session(plan.session_id),
     )
     connection_capabilities = contract.connection_capabilities
     # Liveness honesty: ``live_control_available`` must mean an observer

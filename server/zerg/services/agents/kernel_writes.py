@@ -153,10 +153,12 @@ def record_run(
     cwd: str | None = None,
     launch_origin: str = "longhouse_spawned",
     started_at: datetime | None = None,
+    run_id=None,
 ) -> SessionRun:
     """Insert a new SessionRun row. Caller manages commit."""
 
     run = SessionRun(
+        id=run_id,
         thread_id=thread.id,
         provider=provider,
         host_id=host_id,
