@@ -176,8 +176,8 @@ def test_source_line_claims_require_recoverable_raw_bytes(tmp_path, monkeypatch)
             },
         )
         monkeypatch.setattr(
-            "zerg.routers.agents_source_lines.AgentsStore.export_session_jsonl",
-            lambda self, requested_session_id, *, branch_mode: (archived_raw.encode(), object()),
+            "zerg.routers.agents_source_lines.build_session_archive_bundle",
+            lambda db, requested_session_id, *, branch_mode: object(),
         )
         response = client.post(
             "/agents/source-lines/claims",
@@ -201,6 +201,7 @@ def test_source_line_claims_require_recoverable_raw_bytes(tmp_path, monkeypatch)
 
         assert response.status_code == 200, response.text
         assert response.json() == {
+            "proof_version": "head-archive-bundle-v1",
             "present": [
                 {
                     "source_path": source_path,
@@ -253,11 +254,11 @@ def test_source_line_claims_require_complete_head_export(tmp_path, monkeypatch):
             )
             db.commit()
 
-        def fail_export(self, requested_session_id, *, branch_mode):  # noqa: ARG001
+        def fail_export(db, requested_session_id, *, branch_mode):  # noqa: ARG001
             raise ArchiveTranscriptUnavailable("another selected row has no bytes")
 
         monkeypatch.setattr(
-            "zerg.routers.agents_source_lines.AgentsStore.export_session_jsonl",
+            "zerg.routers.agents_source_lines.build_session_archive_bundle",
             fail_export,
         )
         response = client.post(

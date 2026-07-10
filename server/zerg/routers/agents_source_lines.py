@@ -18,14 +18,15 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
-from zerg.services.agents.store import AgentsStore
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.session_archive import build_session_archive_bundle
 
 router = APIRouter(prefix="/agents/source-lines", tags=["agents"])
 
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+_PROOF_VERSION = "head-archive-bundle-v1"
 
 
 class SourceLineClaimItem(BaseModel):
@@ -53,6 +54,7 @@ class SourceLineRejectedItem(BaseModel):
 
 
 class SourceLineClaimsResponse(BaseModel):
+    proof_version: str = _PROOF_VERSION
     present: list[SourceLineClaimResponseItem]
     missing: list[SourceLineClaimResponseItem]
     rejected: list[SourceLineRejectedItem]
@@ -154,14 +156,14 @@ async def create_source_line_claims(
         archived = load_session_source_line_bytes(db, session_id)
         durable.update((session_id, source_path, source_offset, line_hash) for source_path, source_offset, line_hash in archived)
 
-    # Life Hub consumes the complete selected head transcript. A matching row
-    # is not durable proof when another selected row still has no bytes.
+    # Use the exact Life Hub bundle builder as the final authority. A matching
+    # row is not durable proof when the selected bundle still cannot be built.
     for session_id in {identity[0] for identity in durable}:
         try:
-            export = AgentsStore(db).export_session_jsonl(session_id, branch_mode="head")
+            bundle = build_session_archive_bundle(db, session_id, branch_mode="head")
         except ArchiveTranscriptUnavailable:
-            export = None
-        if export is None:
+            bundle = None
+        if bundle is None:
             durable = {identity for identity in durable if identity[0] != session_id}
 
     for item, normalized in valid:
