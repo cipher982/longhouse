@@ -1094,7 +1094,11 @@ async def _release_catalog_lock_after_terminal(
             phase = str(getattr(state, "phase", "") or "").strip()
             terminal = str(getattr(state, "terminal_state", "") or "").strip()
             if observed_at is not None and observed_at >= dispatched_at and (phase in _MANAGED_LOCAL_TERMINAL_PHASES or terminal):
-                await session_lock_manager.release(lock_scope_id, request_id)
+                released = await session_lock_manager.release(lock_scope_id, request_id)
+                if released:
+                    from zerg.services.live_control_catalog import wake_next_live_catalog_input
+
+                    await wake_next_live_catalog_input(session_id)
                 return
         await asyncio.sleep(MANAGED_LOCAL_POLL_INTERVAL_SECS)
 
