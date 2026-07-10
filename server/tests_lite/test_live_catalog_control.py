@@ -104,6 +104,10 @@ def test_live_control_projection_never_needs_archive_models(tmp_path):
         assert session.device_id == "cinder"
         assert live_control_capability_available(db, session_id=session_id, capability="send") is True
         assert live_control_capability_available(db, session_id=session_id, capability="interrupt") is True
+        connection = db.query(LiveSessionConnection).one()
+        connection.state = "degraded"
+        db.commit()
+        assert live_control_capability_available(db, session_id=session_id, capability="send") is True
 
 
 @pytest.mark.asyncio

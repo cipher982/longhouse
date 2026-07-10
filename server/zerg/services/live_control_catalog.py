@@ -93,7 +93,7 @@ def live_control_capability_available(
         .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
         .filter(
             LiveSessionThread.session_id == str(session_id),
-            LiveSessionConnection.state == "attached",
+            LiveSessionConnection.state.in_(("attached", "degraded")),
             LiveSessionConnection.released_at.is_(None),
             column == 1,
         )
