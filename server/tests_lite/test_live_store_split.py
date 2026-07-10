@@ -91,6 +91,8 @@ def test_live_write_serializer_is_distinct_from_archive_serializer():
 
 
 def test_initialize_live_database_creates_only_live_tables(tmp_path):
+    from zerg.services.live_catalog_backfill import live_catalog_table_names
+
     engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
 
     initialize_live_database(engine)
@@ -106,7 +108,7 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "live_session_input_receipts",
         "live_session_live_previews",
         "live_sessions",
-    }
+    } | set(live_catalog_table_names())
     assert "sessions" not in tables
     assert "agent_heartbeats" not in tables
     assert "events" not in tables

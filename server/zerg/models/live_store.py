@@ -6,6 +6,7 @@ archive schema inside the hot DB, which would turn the split into ceremony.
 """
 
 from sqlalchemy import BigInteger
+from sqlalchemy import Boolean
 from sqlalchemy import Column
 from sqlalchemy import DateTime
 from sqlalchemy import Index
@@ -21,6 +22,255 @@ from sqlalchemy.sql import text as sql_text
 from zerg.models.types import GUID
 
 LiveBase = declarative_base()
+
+
+class LiveUser(LiveBase):
+    """Bounded account identity required while the cold store is unavailable."""
+
+    __tablename__ = "live_users"
+
+    id = Column(Integer, primary_key=True)
+    provider = Column(String(64), nullable=True)
+    provider_user_id = Column(String(255), nullable=True, index=True)
+    email = Column(String(320), nullable=False, unique=True, index=True)
+    cp_user_id = Column(Integer, nullable=True, index=True)
+    email_verified = Column(Boolean, nullable=False, server_default=text("1"))
+    is_active = Column(Boolean, nullable=False, server_default=text("1"))
+    role = Column(String(32), nullable=False, server_default=text("'user'"))
+    display_name = Column(String(255), nullable=True)
+    avatar_url = Column(Text, nullable=True)
+    prefs_json = Column(Text, nullable=True)
+    context_json = Column(Text, nullable=True)
+    last_login = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class LiveRefreshSession(LiveBase):
+    """Browser refresh-token lineage owned by the live authentication lane."""
+
+    __tablename__ = "live_refresh_sessions"
+
+    id = Column(Integer, primary_key=True)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    user_id = Column(Integer, nullable=False, index=True)
+    family_id = Column(String(36), nullable=False, index=True)
+    parent_id = Column(Integer, nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    absolute_expires_at = Column(DateTime(timezone=True), nullable=False)
+    idle_expires_at = Column(DateTime(timezone=True), nullable=False)
+    used_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class LiveDeviceToken(LiveBase):
+    """Machine credential required for ingest, launch, and control."""
+
+    __tablename__ = "live_device_tokens"
+
+    id = Column(String(36), primary_key=True)
+    owner_id = Column(Integer, nullable=False, index=True)
+    device_id = Column(String(255), nullable=False)
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_live_device_tokens_owner_device", "owner_id", "device_id"),)
+
+
+class LiveSessionCatalog(LiveBase):
+    """Bounded session identity/card fields; never contains transcript bodies."""
+
+    __tablename__ = "live_session_catalog"
+
+    session_id = Column(String(36), primary_key=True)
+    provider = Column(String(50), nullable=False, index=True)
+    environment = Column(String(20), nullable=False, index=True)
+    project = Column(String(255), nullable=True, index=True)
+    device_id = Column(String(255), nullable=True, index=True)
+    device_name = Column(String(255), nullable=True)
+    cwd = Column(Text, nullable=True)
+    git_repo = Column(String(500), nullable=True)
+    git_branch = Column(String(255), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    last_activity_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    user_messages = Column(Integer, nullable=False, server_default=text("0"))
+    assistant_messages = Column(Integer, nullable=False, server_default=text("0"))
+    tool_calls = Column(Integer, nullable=False, server_default=text("0"))
+    summary = Column(Text, nullable=True)
+    summary_title = Column(String(255), nullable=True)
+    anchor_title = Column(String(255), nullable=True)
+    first_user_message_preview = Column(Text, nullable=True)
+    last_visible_text_preview = Column(Text, nullable=True)
+    last_user_message_preview = Column(Text, nullable=True)
+    last_assistant_message_preview = Column(Text, nullable=True)
+    transcript_revision = Column(Integer, nullable=False, server_default=text("0"))
+    summary_revision = Column(Integer, nullable=False, server_default=text("0"))
+    user_state = Column(String(20), nullable=False, server_default=text("'active'"), index=True)
+    user_state_at = Column(DateTime(timezone=True), nullable=True)
+    primary_thread_id = Column(String(36), nullable=True, index=True)
+    loop_mode = Column(String(32), nullable=False, server_default=text("'assist'"))
+    notification_muted = Column(Boolean, nullable=False, server_default=text("0"))
+    origin_kind = Column(String(64), nullable=True, index=True)
+    hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    launch_actor = Column(String(32), nullable=True, index=True)
+    launch_surface = Column(String(32), nullable=True, index=True)
+    permission_mode = Column(String(32), nullable=False, server_default=text("'bypass'"))
+    created_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        Index("ix_live_session_catalog_project_started", "project", "started_at"),
+        Index("ix_live_session_catalog_provider_started", "provider", "started_at"),
+    )
+
+
+class LiveTimelineCard(LiveBase):
+    """Materialized list projection for timeline reads without the cold store."""
+
+    __tablename__ = "live_timeline_cards"
+
+    session_id = Column(String(36), primary_key=True)
+    provider = Column(String(50), nullable=False, index=True)
+    environment = Column(String(20), nullable=False, index=True)
+    project = Column(String(255), nullable=True, index=True)
+    device_id = Column(String(255), nullable=True, index=True)
+    cwd = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    last_activity_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    summary_title = Column(String(255), nullable=True)
+    first_user_message_preview = Column(Text, nullable=True)
+    last_visible_text_preview = Column(Text, nullable=True)
+    last_user_message_preview = Column(Text, nullable=True)
+    last_assistant_message_preview = Column(Text, nullable=True)
+    user_messages = Column(Integer, nullable=False, server_default=text("0"))
+    assistant_messages = Column(Integer, nullable=False, server_default=text("0"))
+    tool_calls = Column(Integer, nullable=False, server_default=text("0"))
+    transcript_revision = Column(Integer, nullable=False, server_default=text("0"))
+    archive_state = Column(String(32), nullable=False, server_default=text("'current'"))
+    archive_lag_records = Column(Integer, nullable=False, server_default=text("0"))
+    archive_last_source_offset = Column(BigInteger, nullable=True)
+    origin_kind = Column(String(64), nullable=True, index=True)
+    hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    launch_actor = Column(String(32), nullable=True, index=True)
+    launch_surface = Column(String(32), nullable=True, index=True)
+    derived_state = Column(String(32), nullable=False, server_default=text("'unknown'"))
+    derived_revision = Column(String(128), nullable=True)
+    parser_revision = Column(String(128), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        Index("ix_live_timeline_cards_activity", "last_activity_at", "started_at"),
+        Index("ix_live_timeline_cards_project_provider", "project", "provider"),
+    )
+
+
+class LiveSessionThread(LiveBase):
+    __tablename__ = "live_session_threads"
+
+    id = Column(String(36), primary_key=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    provider = Column(String(64), nullable=False, index=True)
+    parent_thread_id = Column(String(36), nullable=True, index=True)
+    parent_event_id = Column(Integer, nullable=True)
+    branch_kind = Column(String(20), nullable=False, server_default=text("'root'"))
+    origin_kind = Column(String(64), nullable=True, index=True)
+    hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    is_primary = Column(Integer, nullable=False, server_default=text("0"))
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+
+
+class LiveSessionThreadAlias(LiveBase):
+    __tablename__ = "live_session_thread_aliases"
+
+    id = Column(Integer, primary_key=True)
+    thread_id = Column(String(36), nullable=False, index=True)
+    provider = Column(String(64), nullable=False)
+    alias_kind = Column(String(48), nullable=False, index=True)
+    alias_value = Column(String(1024), nullable=False)
+    first_seen_at = Column(DateTime(timezone=True), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index("ix_live_thread_aliases_lookup", "provider", "alias_kind", "alias_value"),
+        Index("ix_live_thread_aliases_thread_kind", "thread_id", "alias_kind"),
+        UniqueConstraint("thread_id", "provider", "alias_kind", "alias_value", name="uq_live_thread_alias"),
+    )
+
+
+class LiveSessionRun(LiveBase):
+    __tablename__ = "live_session_runs"
+
+    id = Column(String(36), primary_key=True)
+    thread_id = Column(String(36), nullable=False, index=True)
+    provider = Column(String(64), nullable=False)
+    host_id = Column(String(255), nullable=True, index=True)
+    boot_id = Column(String(64), nullable=True)
+    pid = Column(Integer, nullable=True)
+    process_start_time = Column(DateTime(timezone=True), nullable=True)
+    cwd = Column(Text, nullable=True)
+    argv_redacted_json = Column(Text, nullable=True)
+    launch_origin = Column(String(32), nullable=False, server_default=text("'longhouse_spawned'"))
+    started_at = Column(DateTime(timezone=True), nullable=False)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    exit_status = Column(String(64), nullable=True)
+
+
+class LiveSessionConnection(LiveBase):
+    __tablename__ = "live_session_connections"
+
+    id = Column(Integer, primary_key=True)
+    run_id = Column(String(36), nullable=False, index=True)
+    control_plane = Column(String(32), nullable=False)
+    acquisition_kind = Column(String(32), nullable=False)
+    state = Column(String(32), nullable=False, server_default=text("'attached'"), index=True)
+    external_name = Column(String(255), nullable=True)
+    device_id = Column(String(255), nullable=True, index=True)
+    can_send_input = Column(Integer, nullable=False, server_default=text("0"))
+    can_interrupt = Column(Integer, nullable=False, server_default=text("0"))
+    can_terminate = Column(Integer, nullable=False, server_default=text("0"))
+    can_tail_output = Column(Integer, nullable=False, server_default=text("0"))
+    can_resume = Column(Integer, nullable=False, server_default=text("0"))
+    capabilities_extra_json = Column(Text, nullable=True)
+    acquired_at = Column(DateTime(timezone=True), nullable=False)
+    released_at = Column(DateTime(timezone=True), nullable=True)
+    last_health_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (UniqueConstraint("run_id", "control_plane", name="uq_live_connection_run_plane"),)
+
+
+class LiveSessionLaunchAttempt(LiveBase):
+    __tablename__ = "live_session_launch_attempts"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    thread_id = Column(String(36), nullable=True)
+    run_id = Column(String(36), nullable=True)
+    provider = Column(String(64), nullable=False)
+    host_id = Column(String(255), nullable=True, index=True)
+    owner_id = Column(Integer, nullable=True, index=True)
+    execution_lifetime = Column(String(32), nullable=False, server_default=text("'live_control'"))
+    client_request_id = Column(String(64), nullable=True, index=True)
+    command_id = Column(String(64), nullable=True, index=True)
+    state = Column(String(32), nullable=False, server_default=text("'pending'"), index=True)
+    error_code = Column(String(64), nullable=True)
+    error_message = Column(Text, nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_live_launch_attempts_session_client_request",
+            "session_id",
+            "client_request_id",
+            unique=True,
+            sqlite_where=sql_text("client_request_id IS NOT NULL"),
+        ),
+    )
 
 
 class LiveSession(LiveBase):

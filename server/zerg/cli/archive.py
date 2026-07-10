@@ -25,6 +25,65 @@ from zerg.services.archive_store import FilesystemArchiveStore
 app = typer.Typer(help="Inspect and control local archive backlog repair")
 
 
+@app.command("backfill-live-catalog")
+def backfill_live_catalog_command(
+    database_url: str | None = typer.Option(
+        None,
+        "--database-url",
+        help="Cold monolith SQLite URL (defaults to DATABASE_URL).",
+    ),
+    live_database_url: str | None = typer.Option(
+        None,
+        "--live-database-url",
+        help="Live Store SQLite URL (defaults to LONGHOUSE_LIVE_DATABASE_URL).",
+    ),
+    batch_size: int = typer.Option(500, "--batch-size", min=1, max=5000),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Idempotently seed bounded auth/session/timeline state into the live DB."""
+
+    settings = get_settings()
+    archive_url = database_url or settings.database_url
+    live_url = live_database_url or settings.live_database_url
+    if not archive_url:
+        raise typer.BadParameter("DATABASE_URL or --database-url is required")
+    if not live_url:
+        raise typer.BadParameter("LONGHOUSE_LIVE_DATABASE_URL or --live-database-url is required")
+
+    from zerg.database import initialize_live_database
+    from zerg.database import make_engine
+    from zerg.database import make_live_engine
+    from zerg.database import make_sessionmaker
+    from zerg.services.live_catalog_backfill import backfill_live_catalog
+
+    archive_engine = make_engine(archive_url)
+    live_engine = make_live_engine(live_url)
+    initialize_live_database(live_engine)
+    ArchiveSession = make_sessionmaker(archive_engine)
+    LiveSession = make_sessionmaker(live_engine)
+    try:
+        with ArchiveSession() as archive_db, LiveSession() as live_db:
+            result = backfill_live_catalog(
+                archive_db,
+                live_db,
+                batch_size=batch_size,
+            )
+    finally:
+        archive_engine.dispose()
+        live_engine.dispose()
+
+    payload = {"status": "ok", **result.as_dict()}
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+    else:
+        typer.echo(
+            "Live catalog backfill complete "
+            f"rows={payload['total']} sessions={payload['sessions']} "
+            f"cards={payload['timeline_cards']} users={payload['users']} "
+            f"device_tokens={payload['device_tokens']}"
+        )
+
+
 def _format_bytes(value: Any) -> str:
     size = int(value or 0)
     units = ("B", "KB", "MB", "GB", "TB")

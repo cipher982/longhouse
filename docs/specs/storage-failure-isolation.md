@@ -105,8 +105,10 @@ Enabling it while the Runtime Host still configures its monolith
 `WriteSerializer` would create an uncoordinated second writer. The job protocol
 is landed as a tested migration seam, not as a hidden mode switch.
 
-The remaining architectural work includes the Phase 4 cold-writer cutover and
-the Phase 5 catalog boundary. Summary/title, projection, recall indexing,
+The remaining architectural work includes the cold-writer cutover and catalog
+boundary. The implementation order is intentionally interleaved: bounded
+auth/session/card writes must move to the live catalog before the API can stop
+configuring the monolith writer. Summary/title, projection, recall indexing,
 preview cleanup, archive WAL, and synchronous ingest remain in the Runtime Host
 until the worker can become the sole monolith writer; moving those loops early
 caused real cross-process lock contention in the full shipper harness.
@@ -232,7 +234,26 @@ into prepare/apply/ack operations so retries cannot regress newer live state.
 Gate: all outbox kinds drain only in the worker; managed launch, input, runtime,
 and heartbeat remain usable throughout a worker crash/restart test.
 
-### Phase 4: Complete cold-writer ownership
+### Phase 4A: Establish the live catalog write boundary
+
+Add bounded live-store projections for users, refresh sessions, device tokens,
+session identity, threads, timeline cards, control capabilities, and launch
+attempts. Backfill is an explicit idempotent worker/operator action; it is not a
+Runtime Host startup dependency.
+
+Cut auth/device-token writes, launch shells, timeline card writes, and other
+synchronous launch-loop mutations to the live writer before moving any more
+cold maintenance. Authentication and launch must never become synchronous
+archive-worker jobs.
+
+Gate:
+
+- live catalog backfill is idempotent and parity is measurable;
+- login/refresh/device-token operations work with the monolith unavailable;
+- launch creates a live catalog shell before archive projection;
+- timeline list reads only live catalog/card/runtime tables.
+
+### Phase 4B: Complete cold-writer ownership
 
 Move every remaining archive `WriteSerializer` label out of the API process,
 including durable ingest, scan/replay, repair, projection, enrichment, and cold
@@ -248,7 +269,7 @@ Gate:
 - cold native exit leaves auth, timeline catalog, launch, input, runtime, and
   heartbeat available.
 
-### Phase 5: Catalog and read isolation
+### Phase 5: Complete catalog read isolation
 
 The API still reads bounded catalog tables from `longhouse.db` during the writer
 cutover. If a missing, corrupt, or native-failing monolith read can still take the
