@@ -134,8 +134,6 @@ _INGEST_STAGE_HEADER_LIMIT = 8
 _UNTRACED_INGEST_MAX_EVENTS = 200
 _UNTRACED_INGEST_MAX_SOURCE_LINES = 200
 _UNTRACED_INGEST_MAX_DECODED_BYTES = 2 * 1024 * 1024
-_ARCHIVE_SHADOW_SESSION_LOCKS: dict[str, asyncio.Lock] = {}
-_ARCHIVE_SHADOW_SESSION_LOCKS_GUARD = asyncio.Lock()
 
 
 def _ingest_chunk_for_label(label: str) -> int:
@@ -255,8 +253,6 @@ def _merge_archive_primary_states(states: list[str]) -> str:
 
     if not states:
         return "disabled"
-    if any(state == "fallback" for state in states):
-        return "fallback"
     if any(state == "failed" for state in states):
         return "failed"
     if any(state == "written" for state in states):
@@ -706,86 +702,22 @@ def _background_server_fanout_observation(
     )
 
 
-async def _archive_shadow_session_lock(session_id: UUID | str) -> asyncio.Lock:
-    async with _ARCHIVE_SHADOW_SESSION_LOCKS_GUARD:
-        return _ARCHIVE_SHADOW_SESSION_LOCKS.setdefault(str(session_id), asyncio.Lock())
-
-
-async def _write_shadow_archive_after_ingest(
+def _prepare_archive_primary_with_fresh_manifest_db(
     *,
     data: SessionIngest,
     result,
-    fallback_db: Session,
-) -> None:
-    """Best-effort archive shadow write without holding the ingest writer slot."""
-    from zerg.services.archive_shadow import insert_archive_chunk_manifests
-    from zerg.services.archive_shadow import prepare_ingest_shadow_archive
-    from zerg.services.write_serializer import get_write_serializer
-
-    lock = await _archive_shadow_session_lock(result.session_id)
-    try:
-        async with lock:
-            await _write_shadow_archive_after_ingest_locked(
-                data=data,
-                result=result,
-                fallback_db=fallback_db,
-                prepare_ingest_shadow_archive=prepare_ingest_shadow_archive,
-                insert_archive_chunk_manifests=insert_archive_chunk_manifests,
-                get_write_serializer=get_write_serializer,
-            )
-    except Exception:
-        logger.warning("Shadow archive write failed after ingest for session %s", result.session_id, exc_info=True)
-
-
-async def _write_shadow_archive_after_ingest_locked(
-    *,
-    data: SessionIngest,
-    result,
-    fallback_db: Session,
-    prepare_ingest_shadow_archive,
-    insert_archive_chunk_manifests,
-    get_write_serializer,
-) -> None:
-    if _is_testing_env():
-        prepared = prepare_ingest_shadow_archive(data=data, result=result, manifest_db=fallback_db)
-    else:
-        prepared = await asyncio.to_thread(
-            _prepare_shadow_archive_with_fresh_manifest_db,
-            data=data,
-            result=result,
-            prepare_ingest_shadow_archive=prepare_ingest_shadow_archive,
-        )
-    if not prepared.enabled or prepared.error or not prepared.chunks:
-        return
-
-    def _insert_manifests(write_db: Session) -> None:
-        insert_archive_chunk_manifests(write_db, prepared.chunks)
-
-    ws = get_write_serializer()
-    if ws.is_configured and not _is_testing_env():
-        await ws.execute(_insert_manifests, label="archive-shadow-manifest")
-    else:
-        await ws.execute_or_direct(_insert_manifests, fallback_db, label="archive-shadow-manifest")
-
-
-def _prepare_shadow_archive_with_fresh_manifest_db(
-    *,
-    data: SessionIngest,
-    result,
-    prepare_ingest_shadow_archive,
+    prepare_ingest_archive,
     settings=None,
-    force_enabled: bool = False,
 ):
     from zerg.database import get_session_factory
 
     SessionLocal = get_session_factory()
     with SessionLocal() as read_db:
-        return prepare_ingest_shadow_archive(
+        return prepare_ingest_archive(
             data=data,
             result=result,
             settings=settings,
             manifest_db=read_db,
-            force_enabled=force_enabled,
         )
 
 
@@ -795,9 +727,9 @@ async def _prepare_archive_primary_before_ingest(
     fallback_db: Session,
     settings,
 ):
-    """Prepare archive-primary chunks before legacy raw writes run."""
+    """Prepare immutable archive chunks before projection writes run."""
 
-    from zerg.services.archive_shadow import prepare_ingest_shadow_archive
+    from zerg.services.archive_primary import prepare_ingest_archive
 
     if data.id is None:
         raise ValueError("archive-primary ingest requires a resolved session id")
@@ -809,20 +741,18 @@ async def _prepare_archive_primary_before_ingest(
         source_lines_inserted=0,
     )
     if _is_testing_env():
-        return prepare_ingest_shadow_archive(
+        return prepare_ingest_archive(
             data=data,
             result=result,
             settings=settings,
             manifest_db=fallback_db,
-            force_enabled=True,
         )
     return await asyncio.to_thread(
-        _prepare_shadow_archive_with_fresh_manifest_db,
+        _prepare_archive_primary_with_fresh_manifest_db,
         data=data,
         result=result,
-        prepare_ingest_shadow_archive=prepare_ingest_shadow_archive,
+        prepare_ingest_archive=prepare_ingest_archive,
         settings=settings,
-        force_enabled=True,
     )
 
 
@@ -1058,14 +988,8 @@ async def ingest_session(
                     _raise_untraced_ingest_backpressure(response)
 
                 settings = get_settings()
-                if settings.archive_primary_write_enabled and data.id is None:
+                if data.id is None:
                     data.id = uuid4()
-                if not settings.archive_primary_write_enabled and not settings.legacy_raw_write_enabled:
-                    request_status_label = "invalid_archive_config"
-                    raise HTTPException(
-                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                        detail="Legacy raw writes cannot be disabled unless archive-primary writes are enabled",
-                    )
 
                 provider_label = data.provider or "unknown"
                 validate_finished_at_ms = _unix_ms()
@@ -1144,53 +1068,26 @@ async def ingest_session(
                 archive_primary_prepared=None,
                 archive_primary_state: str = "disabled",
                 archive_primary_records_written: int = 0,
-                legacy_raw_effective: bool = settings.legacy_raw_write_enabled,
-            ) -> tuple[IngestResult, str, bool]:
+            ) -> tuple[IngestResult, str]:
                 if write_label in _ARCHIVE_INGEST_LABELS:
                     set_active_stage = getattr(ws, "set_active_stage", None)
                     if callable(set_active_stage):
                         set_active_stage(f"{write_label}:batch-{batch_index + 1}:store-ingest")
                 write_started_at_ms = _unix_ms()
                 if archive_primary_prepared is not None and archive_primary_state == "prepared" and archive_primary_prepared.chunks:
-                    from zerg.services.archive_shadow import insert_archive_chunk_manifests
+                    from zerg.services.archive_primary import insert_archive_chunk_manifests
 
                     try:
                         insert_archive_chunk_manifests(write_db, archive_primary_prepared.chunks)
                         archive_primary_state = "written"
                     except Exception:
                         write_db.rollback()
-                        if not settings.legacy_raw_write_enabled:
-                            if write_label == "ingest-live":
-                                archive_primary_state = "fallback"
-                                legacy_raw_effective = True
-                                logger.warning(
-                                    "Archive-primary manifest insert failed for live session %s; " "falling back to legacy raw",
-                                    data.id,
-                                    exc_info=True,
-                                )
-                            else:
-                                # Archive is the only raw store and the manifest
-                                # write failed: fail closed for archive/replay lanes
-                                # so the engine retries instead of silently losing
-                                # source fidelity.
-                                logger.warning(
-                                    "Archive-primary manifest insert failed for session %s " "and legacy raw fallback is disabled",
-                                    data.id,
-                                    exc_info=True,
-                                )
-                                raise HTTPException(
-                                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                    detail="Archive-primary write failed and legacy raw fallback is disabled",
-                                    headers={"X-Ingest-Archive-Primary": "failed"},
-                                )
-                        else:
-                            archive_primary_state = "fallback"
-                            legacy_raw_effective = True
-                            logger.warning(
-                                "Archive-primary manifest insert failed for session %s; " "falling back to legacy raw writes",
-                                data.id,
-                                exc_info=True,
-                            )
+                        logger.warning("Archive-primary manifest insert failed for session %s", data.id, exc_info=True)
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Archive-primary write failed",
+                            headers={"X-Ingest-Archive-Primary": "failed"},
+                        )
                 elif archive_primary_state == "prepared":
                     archive_primary_state = "written"
 
@@ -1201,7 +1098,7 @@ async def ingest_session(
                     synchronous_projections=_sync_derived_projections_for_label(write_label),
                     synchronous_session_counts=_sync_session_counts_for_label(write_label),
                     incremental_session_counts=_incremental_session_counts_for_label(write_label),
-                    write_legacy_raw=legacy_raw_effective,
+                    write_legacy_raw=False,
                     raw_source_archived=archive_primary_state == "written" and archive_primary_records_written > 0,
                 )
                 store_returned_at_ms = _unix_ms()
@@ -1227,7 +1124,7 @@ async def ingest_session(
                         },
                     },
                 )
-                return result, archive_primary_state, legacy_raw_effective
+                return result, archive_primary_state
 
             with tracer.start_as_current_span("longhouse.ingest.write") as write_span:
                 write_started = time.monotonic()
@@ -1241,7 +1138,6 @@ async def ingest_session(
                 )
                 write_results: list[IngestResult] = []
                 archive_primary_states: list[str] = []
-                legacy_raw_states: list[bool] = []
                 worker_job_wait_ms = 0.0
                 worker_exec_ms = 0.0
                 request_session_closed = False
@@ -1275,9 +1171,10 @@ async def ingest_session(
                         if not request_session_closed:
                             db.close()
                             request_session_closed = True
-                        worker_timeout_seconds = sum(
-                            timeout for timeout in (batch_queue_timeout_seconds, batch_write_timeout_seconds) if timeout is not None
-                        ) or _env_float("LONGHOUSE_ARCHIVE_INGEST_WORKER_TIMEOUT_SECONDS", 30.0)
+                        worker_timeout_seconds = (
+                            sum(timeout for timeout in (batch_queue_timeout_seconds, batch_write_timeout_seconds) if timeout is not None)
+                            or 30.0
+                        )
                         if request_budget_seconds is not None:
                             worker_timeout_seconds = min(
                                 worker_timeout_seconds,
@@ -1319,87 +1216,58 @@ async def ingest_session(
                             )
                         batch_result = IngestResult.model_validate(worker_result["result"])
                         batch_archive_primary_state = str(worker_result.get("archive_primary_state") or "disabled")
-                        batch_legacy_raw_effective = bool(worker_result.get("legacy_raw_effective"))
                         worker_job_wait_ms += float(worker_result.get("job_wait_ms") or 0.0)
                         worker_exec_ms += float(worker_result.get("worker_exec_ms") or 0.0)
                     else:
                         archive_primary_prepared = None
-                        archive_primary_state = "disabled"
+                        archive_primary_state = "prepared"
                         archive_primary_records_written = 0
-                        legacy_raw_effective = settings.legacy_raw_write_enabled
-                        if settings.archive_primary_write_enabled:
-                            prepare_coro = _prepare_archive_primary_before_ingest(
-                                data=ingest_batch,
-                                fallback_db=db,
-                                settings=settings,
-                            )
-                            try:
-                                if request_budget_seconds is not None:
-                                    prepare_timeout_seconds = max(
-                                        0.1,
-                                        request_budget_seconds - (time.monotonic() - request_budget_started),
-                                    )
-                                    archive_primary_prepared = await asyncio.wait_for(
-                                        prepare_coro,
-                                        timeout=prepare_timeout_seconds,
-                                    )
-                                else:
-                                    archive_primary_prepared = await prepare_coro
-                            except asyncio.TimeoutError:
-                                from zerg.services.archive_shadow import PreparedArchiveShadow
-
-                                archive_primary_prepared = PreparedArchiveShadow(enabled=True, error="prepare_timeout")
-                            if archive_primary_prepared.error:
-                                if not settings.legacy_raw_write_enabled:
-                                    if write_label == "ingest-live":
-                                        archive_primary_state = "fallback"
-                                        legacy_raw_effective = True
-                                        logger.warning(
-                                            "Archive-primary prepare failed for live session %s batch=%s; "
-                                            "falling back to legacy raw: %s",
-                                            data.id,
-                                            batch_index + 1,
-                                            archive_primary_prepared.error,
-                                        )
-                                    else:
-                                        request_status_label = "archive_primary_failed"
-                                        raise HTTPException(
-                                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                                            detail="Archive-primary write failed and legacy raw fallback is disabled",
-                                            headers={"X-Ingest-Archive-Primary": "failed"},
-                                        )
-                                else:
-                                    archive_primary_state = "fallback"
-                                    legacy_raw_effective = True
-                                    logger.warning(
-                                        "Archive-primary prepare failed for session %s batch=%s; " "falling back to legacy raw writes: %s",
-                                        data.id,
-                                        batch_index + 1,
-                                        archive_primary_prepared.error,
-                                    )
+                        prepare_coro = _prepare_archive_primary_before_ingest(
+                            data=ingest_batch,
+                            fallback_db=db,
+                            settings=settings,
+                        )
+                        try:
+                            if request_budget_seconds is not None:
+                                prepare_timeout_seconds = max(
+                                    0.1,
+                                    request_budget_seconds - (time.monotonic() - request_budget_started),
+                                )
+                                archive_primary_prepared = await asyncio.wait_for(
+                                    prepare_coro,
+                                    timeout=prepare_timeout_seconds,
+                                )
                             else:
-                                archive_primary_state = "prepared"
-                                archive_primary_records_written = archive_primary_prepared.records_written
+                                archive_primary_prepared = await prepare_coro
+                        except asyncio.TimeoutError:
+                            from zerg.services.archive_primary import PreparedArchivePrimary
+
+                            archive_primary_prepared = PreparedArchivePrimary(error="prepare_timeout")
+                        if archive_primary_prepared.error:
+                            request_status_label = "archive_primary_failed"
+                            raise HTTPException(
+                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail="Archive-primary write failed",
+                                headers={"X-Ingest-Archive-Primary": "failed"},
+                            )
+                        archive_primary_records_written = archive_primary_prepared.records_written
 
                         (
                             batch_result,
                             batch_archive_primary_state,
-                            batch_legacy_raw_effective,
                         ) = await ws.execute_after_closing_request_session(
                             lambda write_db,
                             ingest_batch=ingest_batch,
                             batch_index=batch_index,
                             archive_primary_prepared=archive_primary_prepared,
                             archive_primary_state=archive_primary_state,
-                            archive_primary_records_written=archive_primary_records_written,
-                            legacy_raw_effective=legacy_raw_effective: _do_ingest(
+                            archive_primary_records_written=archive_primary_records_written: _do_ingest(
                                 write_db,
                                 ingest_batch,
                                 batch_index,
                                 archive_primary_prepared,
                                 archive_primary_state,
                                 archive_primary_records_written,
-                                legacy_raw_effective,
                             ),
                             db,
                             label=write_label,
@@ -1408,10 +1276,8 @@ async def ingest_session(
                         )
                     write_results.append(batch_result)
                     archive_primary_states.append(batch_archive_primary_state)
-                    legacy_raw_states.append(batch_legacy_raw_effective)
                 result = _merge_ingest_results(write_results)
                 archive_primary_state = _merge_archive_primary_states(archive_primary_states)
-                legacy_raw_effective = any(legacy_raw_states) if legacy_raw_states else settings.legacy_raw_write_enabled
                 write_ms = round((time.monotonic() - write_started) * 1000, 1)
                 agents_ingest_write_seconds.labels(provider=provider_label).observe(write_ms / 1000.0)
 
@@ -1438,7 +1304,6 @@ async def ingest_session(
                 response.headers["X-Ingest-Chunk-Size"] = str(ingest_chunk)
                 response.headers["X-Ingest-Sub-Batches"] = str(len(ingest_batches))
                 response.headers["X-Ingest-Archive-Primary"] = archive_primary_state
-                response.headers["X-Ingest-Legacy-Raw"] = "enabled" if legacy_raw_effective else "disabled"
                 response.headers["X-Ingest-Store-Stage-Ms"] = _stage_timing_header_value(result.store_stage_ms)
                 set_span_attributes(
                     write_span,
@@ -1456,9 +1321,6 @@ async def ingest_session(
                 )
                 agents_ingest_events_total.labels(provider=provider_label, kind="inserted").inc(result.events_inserted)
                 agents_ingest_events_total.labels(provider=provider_label, kind="skipped").inc(result.events_skipped)
-
-            if not use_archive_ingest_worker and not settings.archive_primary_write_enabled:
-                await _write_shadow_archive_after_ingest(data=data, result=result, fallback_db=db)
 
             # Publish to per-session pubsub so SSE subscribers wake directly.
             # Lives outside the DB transaction: publish only reflects persisted state.
@@ -1514,9 +1376,7 @@ async def ingest_session(
                     "longhouse.ingest.archive_primary_state": archive_primary_state,
                 },
             )
-            request_status_label = (
-                "ok_archive_primary_failed" if write_label == "ingest-live" and archive_primary_state == "failed" else "ok"
-            )
+            request_status_label = "ok"
             return IngestResponse(
                 session_id=str(result.session_id),
                 events_inserted=result.events_inserted,

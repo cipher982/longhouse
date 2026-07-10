@@ -21,7 +21,7 @@ from zerg.services.agents.models import IngestResult
 from zerg.services.agents.models import SessionIngest
 from zerg.services.agents.models import SourceLineIngest
 from zerg.services.agents.store import AgentsStore
-from zerg.services.archive_shadow import write_ingest_shadow_archive
+from zerg.services.archive_primary import write_ingest_archive
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.raw_json_compression import CODEC_PLAIN
 
@@ -63,17 +63,15 @@ def _ingest_with_source_lines(store: AgentsStore, session_id):
 def test_export_reconstructs_from_archive_when_raw_dropped(tmp_path, monkeypatch):
     archive_root = tmp_path / "archive"
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_ROOT", str(archive_root))
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID", "default")
 
     factory = _factory(tmp_path)
     session_id = uuid4()
 
-    # 1. Ingest, then seed the archive with the same source lines (shadow path).
+    # 1. Ingest, then seed the archive with the same source lines (archive_result path).
     with factory() as db:
         store = AgentsStore(db)
-        result = _ingest_with_source_lines(store, session_id)
-        write_ingest_shadow_archive(
+        _ingest_with_source_lines(store, session_id)
+        write_ingest_archive(
             db,
             data=SessionIngest(
                 id=session_id,
@@ -81,9 +79,21 @@ def test_export_reconstructs_from_archive_when_raw_dropped(tmp_path, monkeypatch
                 environment="production",
                 started_at="2026-01-01T00:00:00Z",
                 source_lines=[
-                    SourceLineIngest(source_path="/tmp/s.jsonl", source_offset=0, raw_json='{"type":"user","timestamp":"2026-01-01T00:00:01Z"}'),
-                    SourceLineIngest(source_path="/tmp/s.jsonl", source_offset=50, raw_json='{"type":"assistant","timestamp":"2026-01-01T00:00:02Z"}'),
-                    SourceLineIngest(source_path="/tmp/s.jsonl", source_offset=100, raw_json='{"type":"system","subtype":"compact_boundary"}'),
+                    SourceLineIngest(
+                        source_path="/tmp/s.jsonl",
+                        source_offset=0,
+                        raw_json='{"type":"user","timestamp":"2026-01-01T00:00:01Z"}',
+                    ),
+                    SourceLineIngest(
+                        source_path="/tmp/s.jsonl",
+                        source_offset=50,
+                        raw_json='{"type":"assistant","timestamp":"2026-01-01T00:00:02Z"}',
+                    ),
+                    SourceLineIngest(
+                        source_path="/tmp/s.jsonl",
+                        source_offset=100,
+                        raw_json='{"type":"system","subtype":"compact_boundary"}',
+                    ),
                 ],
             ),
             result=IngestResult(
@@ -131,7 +141,6 @@ def test_export_fails_closed_when_archive_bytes_missing(tmp_path, monkeypatch):
 
     archive_root = tmp_path / "archive"
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_ROOT", str(archive_root))
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID", "default")
 
     factory = _factory(tmp_path)
     session_id = uuid4()

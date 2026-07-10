@@ -8,14 +8,18 @@ import sys
 from uuid import uuid4
 
 import pytest
+from fastapi import Depends
+from fastapi import FastAPI
 from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 from starlette.requests import Request
 
 from zerg.database import Base
+from zerg.database import get_db
 from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
+from zerg.main import api_app
 from zerg.services.archive_read_proxy import proxy_archive_read
 from zerg.services.archive_read_proxy import should_proxy_archive_read
 from zerg.services.archive_read_subprocess import _readonly_sqlite_url
@@ -39,12 +43,40 @@ def _request(path: str, query: str = "") -> Request:
 
 
 def test_archive_read_proxy_routes_only_cold_get_surfaces():
+    app = FastAPI()
+
+    @app.get("/agents/worklog/day")
+    def archive_backed_agent_read(_db=Depends(get_db)):
+        return {}
+
+    @app.get("/agents/sessions/{session_id}/archive-bundle")
+    def unbounded_agent_read(_db=Depends(get_db)):
+        return {}
+
     assert should_proxy_archive_read(_request("/timeline/sessions/00000000-0000-0000-0000-000000000001/workspace"))
     assert should_proxy_archive_read(_request("/agents/sessions", "query=sqlite"))
     assert should_proxy_archive_read(_request("/timeline/recall", "query=sqlite"))
+    assert should_proxy_archive_read(_request("/agents/worklog/day"), routes=app.routes)
+    assert not should_proxy_archive_read(
+        _request("/agents/sessions/00000000-0000-0000-0000-000000000001/archive-bundle"),
+        routes=app.routes,
+    )
     assert not should_proxy_archive_read(_request("/timeline/sessions"))
     assert not should_proxy_archive_read(_request("/timeline/sessions/stream"))
     assert not should_proxy_archive_read(_request("/agents/machines"))
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "/agents/worklog/day",
+        "/agents/ingest-health",
+        "/agents/usage-stats",
+        "/agents/machines/health",
+    ),
+)
+def test_archive_backed_machine_gets_are_discovered_from_route_dependencies(path):
+    assert should_proxy_archive_read(_request(path), routes=api_app.routes)
 
 
 def test_archive_child_opens_sqlite_files_read_only(tmp_path):
@@ -108,11 +140,9 @@ def test_archive_read_child_serves_real_archive_route(tmp_path):
     env.update(
         {
             "AUTH_DISABLED": "1",
-                "DATABASE_URL": f"sqlite:///{database_path}",
-                "LONGHOUSE_LIVE_DATABASE_URL": f"sqlite:///{live_path}",
-                "LONGHOUSE_LIVE_DB_PATH": str(live_path),
-            "LONGHOUSE_LIVE_CATALOG_ENABLED": "0",
-            "LONGHOUSE_ARCHIVE_WORKER_ENABLED": "0",
+            "DATABASE_URL": f"sqlite:///{database_path}",
+            "LONGHOUSE_LIVE_DATABASE_URL": f"sqlite:///{live_path}",
+            "LONGHOUSE_LIVE_DB_PATH": str(live_path),
         }
     )
     completed = subprocess.run(

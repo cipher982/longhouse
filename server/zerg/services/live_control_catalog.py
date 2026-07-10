@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -218,7 +217,7 @@ async def run_live_catalog_input_recovery_loop() -> None:
 
     from zerg.services.live_session_inputs import list_session_ids_with_queued_live_receipts
 
-    interval = max(1.0, float(os.getenv("LONGHOUSE_LIVE_INPUT_RECOVERY_INTERVAL_SECONDS", "5")))
+    interval = 5.0
     while True:
         try:
             await asyncio.sleep(interval)

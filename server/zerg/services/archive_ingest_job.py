@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from typing import Any
 from uuid import uuid4
@@ -12,28 +11,15 @@ from zerg.database import get_write_session_factory
 from zerg.services.agents.models import IngestResult
 from zerg.services.agents.models import SessionIngest
 from zerg.services.agents.store import AgentsStore
-from zerg.services.archive_shadow import insert_archive_chunk_manifests
-from zerg.services.archive_shadow import prepare_ingest_shadow_archive
+from zerg.services.archive_primary import insert_archive_chunk_manifests
+from zerg.services.archive_primary import prepare_ingest_archive
 
 
 def archive_ingest_worker_enabled() -> bool:
-    from zerg.services.archive_worker_status import archive_worker_enabled
+    from zerg.database import live_catalog_enabled
     from zerg.services.archive_worker_status import archive_worker_status_path
 
-    if not archive_worker_enabled():
-        return False
-    if archive_worker_status_path() is None:
-        return False
-    # Dark until every remaining monolith writer has moved behind the process
-    # boundary. Enabling this while the API WriteSerializer is active would
-    # create two writer processes for longhouse.db.
-    explicit = os.getenv("LONGHOUSE_ARCHIVE_INGEST_WORKER_ENABLED")
-    if explicit is None:
-        from zerg.database import live_catalog_enabled
-
-        return live_catalog_enabled()
-    value = explicit.strip().lower()
-    return value not in {"0", "false", "no", "off"}
+    return live_catalog_enabled() and archive_worker_status_path() is not None
 
 
 def execute_archive_ingest_job(payload: dict[str, Any]) -> dict[str, Any]:
@@ -46,8 +32,6 @@ def execute_archive_ingest_job(payload: dict[str, Any]) -> dict[str, Any]:
         data.id = uuid4()
 
     settings = get_settings()
-    if not settings.archive_primary_write_enabled and not settings.legacy_raw_write_enabled:
-        raise RuntimeError("legacy raw writes cannot be disabled unless archive-primary writes are enabled")
     session_factory = get_write_session_factory()
     if session_factory is None:
         raise RuntimeError("archive write session factory is unavailable")
@@ -59,46 +43,29 @@ def execute_archive_ingest_job(payload: dict[str, Any]) -> dict[str, Any]:
     from zerg.routers.agents_ingest import _sync_session_counts_for_label
     from zerg.routers.agents_ingest import _unix_ms
 
-    archive_primary_state = "disabled"
-    legacy_raw_effective = settings.legacy_raw_write_enabled
+    archive_primary_state = "prepared"
     archive_primary_records_written = 0
     started = time.monotonic()
     with session_factory() as db:
-        if settings.archive_primary_write_enabled:
-            placeholder = IngestResult(
-                session_id=data.id,
-                events_inserted=0,
-                events_skipped=0,
-                session_created=False,
-                source_lines_inserted=0,
-            )
-            prepared = prepare_ingest_shadow_archive(
-                data=data,
-                result=placeholder,
-                settings=settings,
-                manifest_db=db,
-                force_enabled=True,
-            )
-            if prepared.error:
-                if not settings.legacy_raw_write_enabled and write_label != "ingest-live":
-                    raise RuntimeError(f"archive-primary prepare failed: {prepared.error}")
-                archive_primary_state = "fallback"
-                legacy_raw_effective = True
-            else:
-                archive_primary_state = "prepared"
-                archive_primary_records_written = prepared.records_written
-                if prepared.chunks:
-                    try:
-                        insert_archive_chunk_manifests(db, prepared.chunks)
-                        archive_primary_state = "written"
-                    except Exception:
-                        db.rollback()
-                        if not settings.legacy_raw_write_enabled and write_label != "ingest-live":
-                            raise
-                        archive_primary_state = "fallback"
-                        legacy_raw_effective = True
-                else:
-                    archive_primary_state = "written"
+        placeholder = IngestResult(
+            session_id=data.id,
+            events_inserted=0,
+            events_skipped=0,
+            session_created=False,
+            source_lines_inserted=0,
+        )
+        prepared = prepare_ingest_archive(
+            data=data,
+            result=placeholder,
+            settings=settings,
+            manifest_db=db,
+        )
+        if prepared.error:
+            raise RuntimeError(f"archive-primary prepare failed: {prepared.error}")
+        archive_primary_records_written = prepared.records_written
+        if prepared.chunks:
+            insert_archive_chunk_manifests(db, prepared.chunks)
+        archive_primary_state = "written"
 
         write_started_at_ms = _unix_ms()
         result = AgentsStore(db).ingest_session(
@@ -107,7 +74,7 @@ def execute_archive_ingest_job(payload: dict[str, Any]) -> dict[str, Any]:
             synchronous_projections=_sync_derived_projections_for_label(write_label),
             synchronous_session_counts=_sync_session_counts_for_label(write_label),
             incremental_session_counts=_incremental_session_counts_for_label(write_label),
-            write_legacy_raw=legacy_raw_effective,
+            write_legacy_raw=False,
             raw_source_archived=archive_primary_state == "written" and archive_primary_records_written > 0,
         )
         store_returned_at_ms = _unix_ms()
@@ -131,19 +98,10 @@ def execute_archive_ingest_job(payload: dict[str, Any]) -> dict[str, Any]:
                 },
             },
         )
-        if not settings.archive_primary_write_enabled and settings.archive_shadow_write_enabled:
-            prepared_shadow = prepare_ingest_shadow_archive(
-                data=data,
-                result=result,
-                settings=settings,
-                manifest_db=db,
-            )
-            if not prepared_shadow.error and prepared_shadow.chunks:
-                insert_archive_chunk_manifests(db, prepared_shadow.chunks)
         db.commit()
 
     from zerg.database import get_live_session_factory
-    from zerg.services.live_catalog_backfill import sync_live_catalog_session
+    from zerg.services.live_catalog_projection import sync_live_catalog_session
 
     live_session_factory = get_live_session_factory()
     if live_session_factory is None:
@@ -154,7 +112,6 @@ def execute_archive_ingest_job(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "result": result.model_dump(mode="json"),
         "archive_primary_state": archive_primary_state,
-        "legacy_raw_effective": legacy_raw_effective,
         "worker_exec_ms": round((time.monotonic() - started) * 1000, 1),
         "batch_index": batch_index,
     }

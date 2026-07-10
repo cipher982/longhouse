@@ -15,8 +15,8 @@ from zerg.database import catalog_db_dependency
 from zerg.database import catalog_db_session
 
 _catalog_db_dependency = catalog_db_dependency()
-# Compatibility seam for tests/extensions; catalog_db_session itself chooses
-# archive while dark and live after explicit cutover.
+# Compatibility seam for tests/extensions; catalog_db_session chooses the live
+# catalog in Runtime Hosts and the read-only archive in helper processes.
 db_session = catalog_db_session
 
 

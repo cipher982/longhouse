@@ -31,11 +31,10 @@ def _readonly_sqlite_url(raw: str) -> str:
 
 async def _main() -> None:
     payload = json.loads(sys.stdin.buffer.read())
-    # These must be authoritative before importing settings or route modules.
+    # The read-only archive URL is authoritative before importing settings or
+    # route modules. It identifies this process as an archive reader without a
+    # deployment feature flag.
     os.environ["AUTH_DISABLED"] = "1"
-    os.environ["LONGHOUSE_ARCHIVE_READER_CHILD"] = "1"
-    os.environ["LONGHOUSE_LIVE_CATALOG_ENABLED"] = "0"
-    os.environ["LONGHOUSE_ARCHIVE_WORKER_ENABLED"] = "0"
     original_database_url = os.environ.get("DATABASE_URL", "")
     if not os.environ.get("LONGHOUSE_LIVE_DATABASE_URL") and not os.environ.get("LONGHOUSE_LIVE_DB_PATH"):
         from sqlalchemy.engine import make_url

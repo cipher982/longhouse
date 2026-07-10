@@ -13,9 +13,6 @@ from zerg.services.archive_worker_status import archive_worker_status_path
 
 
 def archive_api_writer_status_path() -> Path | None:
-    explicit = os.getenv("LONGHOUSE_ARCHIVE_API_WRITER_STATUS_PATH", "").strip()
-    if explicit:
-        return Path(explicit).expanduser()
     worker_path = archive_worker_status_path()
     if worker_path is None:
         return None

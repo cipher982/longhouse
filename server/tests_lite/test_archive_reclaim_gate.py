@@ -25,7 +25,7 @@ from zerg.services.agents.models import SessionIngest
 from zerg.services.agents.models import SourceLineIngest
 from zerg.services.agents.store import AgentsStore
 from zerg.services.archive_reclaim_verifier import verify_session_archive_coverage
-from zerg.services.archive_shadow import write_ingest_shadow_archive
+from zerg.services.archive_primary import write_ingest_archive
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.archive_transcript import load_session_source_line_bytes
 
@@ -71,8 +71,6 @@ def test_slim_row_written_when_raw_disabled(tmp_path):
 def test_archive_lookup_disambiguates_revisions_by_line_hash(tmp_path, monkeypatch):
     archive_root = tmp_path / "archive"
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_ROOT", str(archive_root))
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID", "default")
 
     factory = _factory(tmp_path)
     session_id = uuid4()
@@ -85,7 +83,7 @@ def test_archive_lookup_disambiguates_revisions_by_line_hash(tmp_path, monkeypat
         _ingest(store, session_id, [("/tmp/s.jsonl", 10, v1)])
         _ingest(store, session_id, [("/tmp/s.jsonl", 10, v2)])
         for raw in (v1, v2):
-            write_ingest_shadow_archive(
+            write_ingest_archive(
                 db,
                 data=SessionIngest(
                     id=session_id,
@@ -119,8 +117,6 @@ def test_archive_lookup_disambiguates_revisions_by_line_hash(tmp_path, monkeypat
 def test_verifier_flags_uncovered_rows(tmp_path, monkeypatch):
     archive_root = tmp_path / "archive"
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_ROOT", str(archive_root))
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID", "default")
 
     factory = _factory(tmp_path)
     session_id = uuid4()
@@ -130,14 +126,16 @@ def test_verifier_flags_uncovered_rows(tmp_path, monkeypatch):
     with factory() as db:
         store = AgentsStore(db)
         _ingest(store, session_id, lines)
-        write_ingest_shadow_archive(
+        write_ingest_archive(
             db,
             data=SessionIngest(
                 id=session_id,
                 provider="claude",
                 environment="production",
                 started_at="2026-01-01T00:00:00Z",
-                source_lines=[SourceLineIngest(source_path="/tmp/s.jsonl", source_offset=0, raw_json='{"type":"user"}')],
+                source_lines=[
+                    SourceLineIngest(source_path="/tmp/s.jsonl", source_offset=0, raw_json='{"type":"user"}')
+                ],
             ),
             result=IngestResult(
                 session_id=session_id,

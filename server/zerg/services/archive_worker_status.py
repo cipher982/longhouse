@@ -19,18 +19,10 @@ def _utc_now_iso() -> str:
 
 
 def archive_worker_enabled() -> bool:
-    explicit = os.getenv("LONGHOUSE_ARCHIVE_WORKER_ENABLED")
-    if explicit is None and os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}:
-        return False
-    value = (explicit if explicit is not None else "1").strip().lower()
-    return value not in {"0", "false", "no", "off"}
+    return os.getenv("TESTING", "").strip().lower() not in {"1", "true", "yes", "on"}
 
 
 def archive_worker_status_path() -> Path | None:
-    explicit = os.getenv("LONGHOUSE_ARCHIVE_WORKER_STATUS_PATH", "").strip()
-    if explicit:
-        return Path(explicit).expanduser()
-
     live_url = os.getenv("LONGHOUSE_LIVE_DATABASE_URL", "").strip()
     live_path = os.getenv("LONGHOUSE_LIVE_DB_PATH", "").strip()
     if live_path:
@@ -110,10 +102,7 @@ def read_archive_worker_status() -> dict[str, Any]:
             observed = datetime.fromisoformat(observed_at.replace("Z", "+00:00"))
             age_seconds = max(0.0, (datetime.now(timezone.utc) - observed).total_seconds())
             payload["age_seconds"] = round(age_seconds, 3)
-            stale_after = max(
-                2.0,
-                float(os.getenv("LONGHOUSE_ARCHIVE_WORKER_STATUS_STALE_SECONDS", "10")),
-            )
+            stale_after = 10.0
             if age_seconds > stale_after:
                 payload["status"] = "degraded"
                 payload["reason"] = "status_stale"
@@ -124,10 +113,7 @@ def read_archive_worker_status() -> dict[str, Any]:
     if payload.get("status") == "running" and isinstance(active_started_at, int | float):
         active_age_seconds = max(0.0, time.time() - float(active_started_at))
         payload["active_age_seconds"] = round(active_age_seconds, 3)
-        operation_stale_after = max(
-            10.0,
-            float(os.getenv("LONGHOUSE_ARCHIVE_WORKER_OPERATION_STALE_SECONDS", "60")),
-        )
+        operation_stale_after = 60.0
         if active_age_seconds > operation_stale_after:
             payload["status"] = "degraded"
             payload["reason"] = "operation_stalled"

@@ -1,6 +1,6 @@
 # Storage Failure Isolation
 
-**Status:** Approved implementation plan
+**Status:** Implemented; live catalog and archive worker are the only Runtime Host topology
 **Owner:** Longhouse core
 **Created:** 2026-07-10
 **Related:** `reliability-data-plane.md`,
@@ -112,22 +112,20 @@ The completed catalog cutover additionally implements:
 - a live-only workspace invalidation stream so active detail views keep updating
   without opening cold SQLite in the Runtime Host.
 
-The migration flag remains dark until an explicit idempotent catalog backfill and
-hosted parity check complete. Once enabled, the API process does not open the cold
-monolith; normal archive reads cross a crash boundary and a cold native failure
-degrades only the affected request.
+The live catalog is authoritative on every file-backed Runtime Host. There is
+no rollout flag, dark mode, or in-process archive writer configuration. The API
+process does not open the cold monolith; normal archive reads cross a crash
+boundary and a cold native failure degrades only the affected request.
 
-The synchronous ingest job cutover remains deliberately disabled by default.
-Enabling it while the Runtime Host still configures its monolith
-`WriteSerializer` would create an uncoordinated second writer. The job protocol
-is landed as a tested migration seam, not as a hidden mode switch.
+Synchronous ingest is always submitted to the archive worker. Archive-primary
+bytes are the only raw-storage contract; a failed archive write returns a
+retryable error and never falls back to raw payloads in the monolith.
 
-Large archive reads such as bulk export remain explicitly archive-degraded in
-catalog mode rather than buffering unbounded bodies through the child envelope.
+Large archive reads such as bulk export remain explicitly unsupported rather
+than buffering unbounded bodies through the child envelope.
 They are not part of the live launch/find/control loop and can move to streamed
-archive artifacts separately. The optional legacy Runner websocket also closes
-with a retryable unavailable code in catalog mode until Runner registry state is
-projected into the live store; Machine Agent launch/control remains available.
+archive artifacts separately. The optional legacy Runner websocket remains
+support-tier; Machine Agent launch/control is the canonical path.
 
 ## Worker Contract
 
@@ -247,10 +245,10 @@ and heartbeat remain usable throughout a worker crash/restart test.
 
 ### Phase 4A: Establish the live catalog write boundary
 
-Add bounded live-store projections for users, refresh sessions, device tokens,
+Add bounded live-store ownership for users, refresh sessions, device tokens,
 session identity, threads, timeline cards, control capabilities, and launch
-attempts. Backfill is an explicit idempotent worker/operator action; it is not a
-Runtime Host startup dependency.
+attempts. New state is born in the live store; durable archive writes project
+session/card state back after commit.
 
 Cut auth/device-token writes, launch shells, timeline card writes, and other
 synchronous launch-loop mutations to the live writer before moving any more
@@ -259,7 +257,7 @@ archive-worker jobs.
 
 Gate:
 
-- live catalog backfill is idempotent and parity is measurable;
+- live catalog projection is idempotent and parity is measurable;
 - login/refresh/device-token operations work with the monolith unavailable;
 - launch creates a live catalog shell before archive projection;
 - timeline list reads only live catalog/card/runtime tables.

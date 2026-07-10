@@ -22,8 +22,9 @@ def test_catalog_factory_uses_live_database_without_opening_archive(tmp_path, mo
         live_db.add(User(id=23, email="live-only@example.com", role="USER"))
         live_db.commit()
 
-    monkeypatch.setattr(database_module._settings, "live_catalog_enabled", True)
     monkeypatch.setattr(database_module._settings, "live_database_url", str(live_engine.url))
+    monkeypatch.setattr(database_module._settings, "testing", False)
+    monkeypatch.setenv("TESTING", "0")
     monkeypatch.setattr(database_module, "get_live_session_factory", lambda: LiveSession)
 
     def fail_archive_factory():
@@ -36,14 +37,15 @@ def test_catalog_factory_uses_live_database_without_opening_archive(tmp_path, mo
         assert catalog_db.query(User).one().email == "live-only@example.com"
 
 
-def test_catalog_factory_stays_archive_backed_until_explicit_cutover(monkeypatch):
+def test_archive_reader_process_uses_read_only_archive(monkeypatch):
     sentinel = object()
-    monkeypatch.setattr(database_module._settings, "live_catalog_enabled", False)
+    monkeypatch.setattr(database_module._settings, "database_url", "sqlite:///file:/tmp/archive.db?mode=ro&uri=true")
+    monkeypatch.setattr(database_module._settings, "live_database_url", "sqlite:////tmp/live.db")
     monkeypatch.setattr(database_module, "get_session_factory", lambda: sentinel)
     monkeypatch.setattr(
         database_module,
         "get_live_session_factory",
-        lambda: pytest.fail("dark live catalog must not be selected"),
+        lambda: pytest.fail("archive reader must not select the live catalog"),
     )
     assert get_catalog_session_factory() is sentinel
 
@@ -53,9 +55,11 @@ def test_catalog_serializer_follows_catalog_owner(monkeypatch):
     assert get_catalog_write_serializer() is get_live_write_serializer()
 
 
-def test_archive_dependency_returns_typed_degradation_after_cutover(monkeypatch):
-    monkeypatch.setattr(database_module._settings, "live_catalog_enabled", True)
+def test_runtime_archive_dependency_returns_typed_degradation(monkeypatch):
     monkeypatch.setattr(database_module._settings, "live_database_url", "sqlite:///live.db")
+    monkeypatch.setattr(database_module._settings, "database_url", "sqlite:///archive.db")
+    monkeypatch.setattr(database_module._settings, "testing", False)
+    monkeypatch.setenv("TESTING", "0")
     dependency = get_db()
     with pytest.raises(HTTPException) as error:
         next(dependency)

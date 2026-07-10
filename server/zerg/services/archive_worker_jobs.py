@@ -32,9 +32,6 @@ _JOB_PRIORITY = {
 
 
 def archive_worker_jobs_root() -> Path:
-    explicit = os.getenv("LONGHOUSE_ARCHIVE_WORKER_JOBS_PATH", "").strip()
-    if explicit:
-        return Path(explicit).expanduser()
     status_path = archive_worker_status_path()
     if status_path is None:
         raise RuntimeError("archive worker jobs require a file-backed worker status path")
@@ -105,7 +102,7 @@ async def submit_archive_worker_job(
     timeout_seconds: float,
 ) -> dict[str, Any]:
     pending, _running, results = _job_dirs()
-    max_pending = max(1, int(os.getenv("LONGHOUSE_ARCHIVE_WORKER_MAX_PENDING_JOBS", "1000")))
+    max_pending = 1000
     if sum(1 for _ in pending.glob("*.json")) >= max_pending:
         raise ArchiveWorkerJobError(f"archive worker pending-job limit reached ({max_pending})")
     job_id = str(uuid4())

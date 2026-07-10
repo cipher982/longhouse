@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import sys
 import time
 from asyncio.subprocess import Process
@@ -19,7 +18,7 @@ _worker_process: Process | None = None
 
 
 def _max_backoff_seconds() -> float:
-    return max(1.0, float(os.getenv("LONGHOUSE_ARCHIVE_WORKER_MAX_BACKOFF_SECONDS", "30")))
+    return 30.0
 
 
 async def _terminate_worker(process: Process) -> None:
@@ -44,12 +43,10 @@ async def _supervise() -> None:
                 sys.executable,
                 "-m",
                 "zerg.services.archive_worker",
-                env={
-                    **os.environ,
-                    "LONGHOUSE_ARCHIVE_WORKER_CHILD": "1",
-                    "LONGHOUSE_ARCHIVE_WORKER_RESTART_COUNT": str(restart_count),
-                    "LONGHOUSE_ARCHIVE_WORKER_RESTART_BACKOFF_SECONDS": str(backoff),
-                },
+                "--restart-count",
+                str(restart_count),
+                "--restart-backoff-seconds",
+                str(backoff),
             )
             child_started_at = time.monotonic()
             logger.info("Archive worker started pid=%s restart_count=%s", _worker_process.pid, restart_count)

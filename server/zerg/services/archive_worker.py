@@ -55,14 +55,14 @@ class _StatusReporter:
 
 
 def _drain_interval_seconds() -> float:
-    return max(0.05, float(os.getenv("LONGHOUSE_ARCHIVE_WORKER_INTERVAL_SECONDS", "1")))
+    return 1.0
 
 
 def _busy_yield_seconds() -> float:
     # SQLite coordinates writers across processes, but an immediate worker
     # re-claim can repeatedly beat the API writer after every short commit.
     # Yield a bounded slice so ingest/catalog work gets an acquisition window.
-    return max(0.0, float(os.getenv("LONGHOUSE_ARCHIVE_WORKER_BUSY_YIELD_SECONDS", "0.05")))
+    return 0.05
 
 
 def _select_work_once(*, prefer_jobs: bool, process_job, drain_outbox):
@@ -241,16 +241,27 @@ def drain_once(
     return {"processed": 1, "drained": int(drained), "failed": int(not drained)}
 
 
-def run_worker(*, once: bool = False) -> int:
+def run_worker(*, once: bool = False, restart_count: int = 0, restart_backoff_seconds: float = 1.0) -> int:
     # Cold schema checks/migrations belong inside this crash boundary. A native
     # SQLite failure here must restart the child, not terminate the Runtime Host.
     from zerg.database import initialize_database
 
     initialize_database()
-    return asyncio.run(_run_worker(once=once))
+    return asyncio.run(
+        _run_worker(
+            once=once,
+            restart_count=restart_count,
+            restart_backoff_seconds=restart_backoff_seconds,
+        )
+    )
 
 
-async def _run_worker(*, once: bool = False) -> int:
+async def _run_worker(
+    *,
+    once: bool = False,
+    restart_count: int = 0,
+    restart_backoff_seconds: float = 1.0,
+) -> int:
     from zerg.database import configure_write_serializer
     from zerg.database import get_live_session_factory
     from zerg.services.archive_worker_jobs import archive_worker_job_counts
@@ -290,8 +301,8 @@ async def _run_worker(*, once: bool = False) -> int:
                 "status": "running",
                 "consecutive_failures": 0,
                 "recovered_jobs": recovered_jobs,
-                "restart_count": int(os.getenv("LONGHOUSE_ARCHIVE_WORKER_RESTART_COUNT", "0")),
-                "restart_backoff_seconds": float(os.getenv("LONGHOUSE_ARCHIVE_WORKER_RESTART_BACKOFF_SECONDS", "1")),
+                "restart_count": restart_count,
+                "restart_backoff_seconds": restart_backoff_seconds,
                 **totals,
             }
         )
@@ -393,9 +404,15 @@ async def _run_worker(*, once: bool = False) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--restart-count", type=int, default=0)
+    parser.add_argument("--restart-backoff-seconds", type=float, default=1.0)
     args = parser.parse_args()
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
-    return run_worker(once=args.once)
+    return run_worker(
+        once=args.once,
+        restart_count=args.restart_count,
+        restart_backoff_seconds=args.restart_backoff_seconds,
+    )
 
 
 if __name__ == "__main__":

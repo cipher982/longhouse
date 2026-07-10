@@ -76,7 +76,7 @@ def test_relinked_subagent_coverage_resolves_across_child_id(tmp_path, monkeypat
     # 2. Seed the archive chunk for the agent's source line UNDER ITS OWN ID
     #    (this is where archive-primary wrote it at ingest time).
     store = FilesystemArchiveStore(tmp_path / "archive")
-    from zerg.services.archive_shadow import insert_archive_chunk_manifests
+    from zerg.services.archive_primary import insert_archive_chunk_manifests
     chunks = store.write_record_chunks([
         ArchiveRecord(tenant_id="default", session_id=str(AGENT_ID), stream="source_lines",
                       source_seq=1, raw_bytes=AGENT_RAW.encode(), source_path=AGENT_PATH, source_offset=0)

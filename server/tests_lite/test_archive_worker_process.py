@@ -32,8 +32,6 @@ def _worker_env(tmp_path, archive_url: str, live_url: str) -> dict[str, str]:
         **os.environ,
         "DATABASE_URL": archive_url,
         "LONGHOUSE_LIVE_DATABASE_URL": live_url,
-        "LONGHOUSE_ARCHIVE_WORKER_ENABLED": "1",
-        "LONGHOUSE_ARCHIVE_WORKER_STATUS_PATH": str(tmp_path / "archive-worker-status.json"),
         "AUTH_DISABLED": "1",
         "FERNET_SECRET": Fernet.generate_key().decode(),
         "TESTING": "0",
@@ -118,8 +116,8 @@ def test_archive_worker_drains_real_heartbeat_outbox_in_child_process(tmp_path, 
         assert outbox.drained_at is not None
         assert outbox.attempts == 1
 
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_STATUS_PATH", env["LONGHOUSE_ARCHIVE_WORKER_STATUS_PATH"])
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("LONGHOUSE_LIVE_DATABASE_URL", live_url)
     status = read_archive_worker_status()
     assert status["status"] == "stopped"
     assert status["drained"] == 1
@@ -156,8 +154,6 @@ def test_archive_worker_native_style_exit_leaves_outbox_pending_and_parent_alive
 def test_archive_worker_defers_while_api_writer_is_active(tmp_path, monkeypatch):
     archive_url, live_url, archive_factory, live_factory, _received_at = _seed_worker_databases(tmp_path)
     env = _worker_env(tmp_path, archive_url, live_url)
-    writer_status_path = tmp_path / "archive-api-writer-status.json"
-    env["LONGHOUSE_ARCHIVE_API_WRITER_STATUS_PATH"] = str(writer_status_path)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -183,7 +179,6 @@ def test_archive_worker_defers_while_api_writer_is_active(tmp_path, monkeypatch)
 async def test_archive_worker_process_executes_durable_ingest_job(tmp_path, monkeypatch):
     archive_url, live_url, archive_factory, _live_factory, _received_at = _seed_worker_databases(tmp_path)
     env = _worker_env(tmp_path, archive_url, live_url)
-    env["LONGHOUSE_ARCHIVE_WORKER_JOBS_PATH"] = str(tmp_path / "jobs")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -207,7 +202,6 @@ async def test_archive_worker_process_executes_durable_ingest_job(tmp_path, monk
 async def test_archive_worker_recovers_ingest_job_after_native_exit(tmp_path, monkeypatch):
     archive_url, live_url, archive_factory, _live_factory, _received_at = _seed_worker_databases(tmp_path)
     env = _worker_env(tmp_path, archive_url, live_url)
-    env["LONGHOUSE_ARCHIVE_WORKER_JOBS_PATH"] = str(tmp_path / "jobs")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -229,12 +223,11 @@ async def test_archive_worker_recovers_ingest_job_after_native_exit(tmp_path, mo
         assert db.query(AgentEvent).count() == 1
 
 
-def test_archive_worker_defaults_off_in_tests_and_can_be_enabled(monkeypatch):
-    monkeypatch.delenv("LONGHOUSE_ARCHIVE_WORKER_ENABLED", raising=False)
+def test_archive_worker_is_canonical_outside_tests(monkeypatch):
     monkeypatch.setenv("TESTING", "1")
     assert archive_worker_enabled() is False
 
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_ENABLED", "1")
+    monkeypatch.setenv("TESTING", "0")
     assert archive_worker_enabled() is True
 
 
@@ -242,24 +235,18 @@ def test_archive_ingest_worker_defaults_to_catalog_single_writer_mode(tmp_path, 
     import zerg.database as database_module
     from zerg.services.archive_ingest_job import archive_ingest_worker_enabled
 
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_STATUS_PATH", str(tmp_path / "status.json"))
-    monkeypatch.delenv("LONGHOUSE_ARCHIVE_INGEST_WORKER_ENABLED", raising=False)
+    monkeypatch.setenv("LONGHOUSE_LIVE_DB_PATH", str(tmp_path / "live.db"))
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: False)
     assert archive_ingest_worker_enabled() is False
 
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     assert archive_ingest_worker_enabled() is True
 
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_WORKER_ENABLED", "0")
-    assert archive_ingest_worker_enabled() is False
-
 
 def test_archive_worker_stale_running_status_is_degraded(tmp_path, monkeypatch):
     path = tmp_path / "archive-worker-status.json"
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_STATUS_PATH", str(path))
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_STATUS_STALE_SECONDS", "2")
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("LONGHOUSE_LIVE_DB_PATH", str(tmp_path / "live.db"))
     write_archive_worker_status({"status": "running", "pid": 123})
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["observed_at"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
@@ -273,10 +260,8 @@ def test_archive_worker_stale_running_status_is_degraded(tmp_path, monkeypatch):
 
 
 def test_archive_worker_long_active_operation_is_degraded(tmp_path, monkeypatch):
-    path = tmp_path / "archive-worker-status.json"
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_STATUS_PATH", str(path))
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_OPERATION_STALE_SECONDS", "10")
+    monkeypatch.setenv("TESTING", "0")
+    monkeypatch.setenv("LONGHOUSE_LIVE_DB_PATH", str(tmp_path / "live.db"))
     write_archive_worker_status(
         {
             "status": "running",
@@ -315,9 +300,6 @@ async def test_supervisor_restarts_killed_worker_and_drains_next_row(tmp_path, m
     env = _worker_env(tmp_path, archive_url, live_url)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_INTERVAL_SECONDS", "0.05")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_MAX_BACKOFF_SECONDS", "1")
-
     import zerg.services.archive_worker_supervisor as supervisor
 
     async def wait_until(predicate, timeout: float = 5.0):

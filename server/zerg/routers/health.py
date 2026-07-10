@@ -19,7 +19,7 @@ router = APIRouter(tags=["health"])
 
 EVENTS_FTS_EXISTS_SQL = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1"
 _ARCHIVE_DEGRADABLE_WRITER_LABELS = {
-    "archive-shadow-manifest",
+    "archive-primary-manifest",
     "heartbeat-bookkeeping",
     "ingest",
     "ingest-replay",

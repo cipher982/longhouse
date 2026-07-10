@@ -1,7 +1,6 @@
 """Agents API — session CRUD, listing, and export endpoints."""
 
 import logging
-import os
 from datetime import date as date_type
 from datetime import datetime
 from datetime import timedelta
@@ -653,7 +652,7 @@ async def get_session_turns(
         )
 
     if (
-        os.getenv("LONGHOUSE_ARCHIVE_READER_CHILD") != "1"
+        not database_module.archive_database_is_read_only()
         and project_session_capabilities(db, session_id=session.id).managed_transport is not None
     ):
         await execute_session_turn_write(

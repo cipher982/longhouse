@@ -14,6 +14,8 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Iterable
+from typing import Any
 
 from fastapi import HTTPException
 from fastapi import Request
@@ -25,19 +27,13 @@ logger = logging.getLogger(__name__)
 _TIMELINE_SESSION_READ = re.compile(
     r"^/timeline/sessions/[^/]+(?:$|/(?:thread|turns(?:/\d+)?|events|projection|workspace|mobile-tail|preview|graph|workflows)$)"
 )
-_AGENTS_SESSION_READ = re.compile(
-    r"^/agents/sessions/[^/]+(?:$|/(?:thread|tail|turns(?:/\d+)?|events|projection|workspace|preview|graph|workflows)$)"
-)
 _EXACT_ARCHIVE_READS = {
     "/timeline/recall",
     "/timeline/sessions/semantic",
     "/timeline/filters",
     "/timeline/sessions/summary",
-    "/agents/recall",
-    "/agents/sessions/semantic",
-    "/agents/sessions/summary",
-    "/agents/sessions/wall",
 }
+_UNBOUNDED_AGENT_READ = re.compile(r"^/agents/sessions/[^/]+/(?:export|archive-bundle)$")
 _PASSTHROUGH_HEADERS = {
     "cache-control",
     "content-disposition",
@@ -47,7 +43,7 @@ _PASSTHROUGH_HEADERS = {
     "last-modified",
     "x-limit-cap",
 }
-_ARCHIVE_READ_SLOTS = asyncio.Semaphore(max(1, int(os.getenv("LONGHOUSE_ARCHIVE_READ_MAX_PROCESSES", "4"))))
+_ARCHIVE_READ_SLOTS = asyncio.Semaphore(4)
 
 
 def normalized_api_path(request: Request) -> str:
@@ -55,7 +51,29 @@ def normalized_api_path(request: Request) -> str:
     return path[4:] if path.startswith("/api/") else path
 
 
-def should_proxy_archive_read(request: Request) -> bool:
+def _depends_on_archive_db(dependant: Any) -> bool:
+    from zerg.database import get_db
+
+    for dependency in getattr(dependant, "dependencies", ()):
+        if dependency.call is get_db or _depends_on_archive_db(dependency):
+            return True
+    return False
+
+
+def _agent_route_reads_archive(path: str, method: str, routes: Iterable[Any]) -> bool:
+    if _UNBOUNDED_AGENT_READ.fullmatch(path):
+        return False
+    for route in routes:
+        methods = getattr(route, "methods", ()) or ()
+        path_regex = getattr(route, "path_regex", None)
+        if method not in methods or path_regex is None or path_regex.fullmatch(path) is None:
+            continue
+        dependant = getattr(route, "dependant", None)
+        return dependant is not None and _depends_on_archive_db(dependant)
+    return False
+
+
+def should_proxy_archive_read(request: Request, *, routes: Iterable[Any] = ()) -> bool:
     if request.method.upper() not in {"GET", "HEAD"}:
         return False
     path = normalized_api_path(request)
@@ -67,7 +85,9 @@ def should_proxy_archive_read(request: Request) -> bool:
         return "query" in request.query_params or request.query_params.get("mode", "lexical") != "lexical"
     if path == "/agents/sessions":
         return "query" in request.query_params or request.query_params.get("mode", "lexical") != "lexical"
-    return bool(_TIMELINE_SESSION_READ.fullmatch(path) or _AGENTS_SESSION_READ.fullmatch(path))
+    if path.startswith("/agents/") and _agent_route_reads_archive(path, request.method.upper(), routes):
+        return True
+    return bool(_TIMELINE_SESSION_READ.fullmatch(path))
 
 
 async def proxy_archive_read(request: Request) -> Response:
@@ -77,14 +97,7 @@ async def proxy_archive_read(request: Request) -> Response:
         "query": request.url.query,
     }
     env = dict(os.environ)
-    env.update(
-        {
-            "AUTH_DISABLED": "1",
-            "LONGHOUSE_LIVE_CATALOG_ENABLED": "0",
-            "LONGHOUSE_ARCHIVE_WORKER_ENABLED": "0",
-            "LONGHOUSE_ARCHIVE_READER_CHILD": "1",
-        }
-    )
+    env["AUTH_DISABLED"] = "1"
     try:
         await asyncio.wait_for(_ARCHIVE_READ_SLOTS.acquire(), timeout=1.0)
     except TimeoutError:
@@ -92,7 +105,7 @@ async def proxy_archive_read(request: Request) -> Response:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={"code": "archive_read_pressure", "message": "Archive readers are busy; retry shortly."},
         ) from None
-    timeout = max(1.0, float(os.getenv("LONGHOUSE_ARCHIVE_READ_TIMEOUT_SECONDS", "15")))
+    timeout = 30.0
     try:
         proc = await asyncio.create_subprocess_exec(
             sys.executable,

@@ -91,7 +91,7 @@ def test_live_write_serializer_is_distinct_from_archive_serializer():
 
 
 def test_initialize_live_database_creates_only_live_tables(tmp_path):
-    from zerg.services.live_catalog_backfill import live_catalog_table_names
+    from zerg.services.live_catalog_projection import live_catalog_table_names
 
     engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
 
@@ -290,7 +290,7 @@ def test_live_archive_outbox_drains_heartbeat_to_archive_idempotently(tmp_path):
         "ship_latency_p95_ms_1h": 200,
         "disk_free_bytes": 123_456,
         "is_offline": 0,
-        "raw_json": "{\"ok\":true}",
+        "raw_json": '{"ok":true}',
         "sessions_digest": "digest-live-drain",
         "sessions_sequence": 9,
     }
@@ -314,7 +314,7 @@ def test_live_archive_outbox_drains_heartbeat_to_archive_idempotently(tmp_path):
             assert rows[0].version == "0.5.0"
             assert rows[0].spool_pending == 2
             assert rows[0].disk_free_bytes == 123_456
-            assert rows[0].raw_json == "{\"ok\":true}"
+            assert rows[0].raw_json == '{"ok":true}'
             assert rows[0].sessions_digest == "digest-live-drain"
 
         with LiveSession() as live_db:
@@ -501,6 +501,7 @@ def test_managed_local_launch_outbox_retries_after_live_mark_drained_commit_fail
             live_db.commit()
 
         with LiveSession() as live_db, ArchiveSession() as archive_db:
+
             def fail_live_commit_once():
                 raise RuntimeError("live commit failed")
 
@@ -1045,9 +1046,7 @@ def test_live_archive_outbox_drains_runtime_event_to_archive(tmp_path):
 
         with ArchiveSession() as archive_db:
             state = (
-                archive_db.query(SessionRuntimeState)
-                .filter(SessionRuntimeState.runtime_key == event.runtime_key)
-                .one()
+                archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == event.runtime_key).one()
             )
             assert state.phase == "running"
             assert state.active_tool == "Shell"
@@ -1055,9 +1054,7 @@ def test_live_archive_outbox_drains_runtime_event_to_archive(tmp_path):
             assert session.user_state == "active"
             assert session.user_state_at is not None
             assert (
-                archive_db.query(SessionObservation)
-                .filter(SessionObservation.runtime_key == event.runtime_key)
-                .count()
+                archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count()
                 == 1
             )
 
@@ -1073,9 +1070,7 @@ def test_live_archive_outbox_drains_runtime_event_to_archive(tmp_path):
         assert drain_result.processed == 0
         with ArchiveSession() as archive_db:
             assert (
-                archive_db.query(SessionObservation)
-                .filter(SessionObservation.runtime_key == event.runtime_key)
-                .count()
+                archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count()
                 == 1
             )
     finally:
@@ -1147,9 +1142,7 @@ def test_live_archive_outbox_runtime_event_retry_is_idempotent(tmp_path, monkeyp
                 == 0
             )
             assert (
-                archive_db.query(SessionObservation)
-                .filter(SessionObservation.runtime_key == event.runtime_key)
-                .count()
+                archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count()
                 == 0
             )
         with LiveSession() as live_db:
@@ -1183,9 +1176,7 @@ def test_live_archive_outbox_runtime_event_retry_is_idempotent(tmp_path, monkeyp
                 == 1
             )
             assert (
-                archive_db.query(SessionObservation)
-                .filter(SessionObservation.runtime_key == event.runtime_key)
-                .count()
+                archive_db.query(SessionObservation).filter(SessionObservation.runtime_key == event.runtime_key).count()
                 == 1
             )
     finally:
@@ -1445,7 +1436,9 @@ def test_remote_launch_outbox_out_of_order_drain_keeps_dispatched_state(tmp_path
                 outcome={"state": "dispatched", "error_message": "timed out"},
             )
             intent = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == "remote_launch.v1").one()
-            outcome = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == "remote_launch_outcome.v1").one()
+            outcome = (
+                live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == "remote_launch_outcome.v1").one()
+            )
             outcome.created_at = now - timedelta(seconds=2)
             intent.created_at = now - timedelta(seconds=1)
             live_db.commit()

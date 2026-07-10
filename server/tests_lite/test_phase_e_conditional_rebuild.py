@@ -29,7 +29,7 @@ from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import AgentSession
 from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
-from zerg.services.archive_shadow import insert_archive_chunk_manifests
+from zerg.services.archive_primary import insert_archive_chunk_manifests
 from zerg.services.raw_json_compression import compress_raw_json, CODEC_ZSTD
 from datetime import datetime, timezone
 

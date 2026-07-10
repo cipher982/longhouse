@@ -908,8 +908,6 @@ def test_interrupted_ingest_write_returns_retryable_backpressure(
 
 
 def test_archive_primary_prepare_is_bounded_to_archive_sub_batches(tmp_path, monkeypatch):
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
     prepared_sizes: list[int] = []
 
     async def fake_prepare(*, data, fallback_db, settings):  # noqa: ARG001
@@ -1089,83 +1087,7 @@ def test_july8_archive_wal_degradation_sheds_replay_but_live_transcript_still_wr
         api_app.dependency_overrides.clear()
 
 
-def test_archive_primary_later_batch_prepare_failure_falls_back_when_legacy_raw_enabled(tmp_path, monkeypatch):
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
-    prepared_sizes: list[int] = []
-
-    async def fake_prepare(*, data, fallback_db, settings):  # noqa: ARG001
-        prepared_sizes.append(max(len(data.events), len(data.source_lines or [])))
-        if len(prepared_sizes) == 2:
-            return SimpleNamespace(error="synthetic_prepare_failure", chunks=(), records_written=0)
-        return SimpleNamespace(error=None, chunks=(), records_written=0)
-
-    monkeypatch.setattr(
-        "zerg.routers.agents_ingest._prepare_archive_primary_before_ingest",
-        fake_prepare,
-    )
-    client, SessionLocal = _make_client(tmp_path)
-    try:
-        session_id = "51111111-2222-3333-4444-555555555555"
-        response = client.post(
-            "/agents/ingest",
-            json=_batched_archive_primary_payload(session_id, 65),
-            headers=_spool_replay_trace_header(session_id),
-        )
-
-        assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
-        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
-        assert response.headers["X-Ingest-Sub-Batches"] == "5"
-        assert prepared_sizes == [16, 16, 16, 16, 1]
-        with SessionLocal() as db:
-            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 65
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_archive_primary_prepare_timeout_falls_back_when_legacy_raw_enabled(tmp_path, monkeypatch):
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS", "2.0")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_WAL_SHED_BYTES", "0")
-
-    async def admit_without_shared_pressure(_write_label, _response):
-        return False
-
-    async def slow_prepare(*, data, fallback_db, settings):  # noqa: ARG001
-        raise asyncio.TimeoutError
-
-    monkeypatch.setattr(
-        "zerg.routers.agents_ingest._acquire_archive_ingest_slot",
-        admit_without_shared_pressure,
-    )
-    monkeypatch.setattr(
-        "zerg.routers.agents_ingest._prepare_archive_primary_before_ingest",
-        slow_prepare,
-    )
-    client, SessionLocal = _make_client(tmp_path)
-    try:
-        session_id = "59111111-2222-3333-4444-555555555555"
-        response = client.post(
-            "/agents/ingest",
-            json=_batched_archive_primary_payload(session_id, 1),
-            headers=_spool_replay_trace_header(session_id),
-        )
-
-        assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
-        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
-        with SessionLocal() as db:
-            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 1
-    finally:
-        api_app.dependency_overrides.clear()
-
-
 def test_archive_primary_later_batch_prepare_failure_fails_closed_without_legacy_raw(tmp_path, monkeypatch):
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "0")
-    monkeypatch.delenv("LONGHOUSE_DISABLE_LEGACY_RAW_WRITES", raising=False)
     prepared_sizes: list[int] = []
 
     async def fake_prepare(*, data, fallback_db, settings):  # noqa: ARG001
@@ -1196,10 +1118,7 @@ def test_archive_primary_later_batch_prepare_failure_fails_closed_without_legacy
         api_app.dependency_overrides.clear()
 
 
-def test_live_archive_primary_prepare_failure_forces_legacy_raw_fallback(tmp_path, monkeypatch):
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "0")
-    monkeypatch.delenv("LONGHOUSE_DISABLE_LEGACY_RAW_WRITES", raising=False)
+def test_live_archive_primary_prepare_failure_fails_closed(tmp_path, monkeypatch):
     prepared_sizes: list[int] = []
 
     async def fake_prepare(*, data, fallback_db, settings):  # noqa: ARG001
@@ -1221,22 +1140,18 @@ def test_live_archive_primary_prepare_failure_forces_legacy_raw_fallback(tmp_pat
             headers=_live_transcript_trace_header(session_id),
         )
 
-        assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
-        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
-        assert prepared_sizes == [16, 16, 16, 16, 1]
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE, response.text
+        assert response.headers["X-Ingest-Archive-Primary"] == "failed"
+        assert prepared_sizes == [16, 16]
         with SessionLocal() as db:
-            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 65
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 16
             source_lines = db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).all()
-            assert any(line.raw_json_z is not None for line in source_lines)
+            assert all(line.raw_json_z is None for line in source_lines)
     finally:
         api_app.dependency_overrides.clear()
 
 
-def test_live_archive_primary_manifest_failure_rolls_back_before_forced_legacy_raw_fallback(tmp_path, monkeypatch):
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "0")
-    monkeypatch.delenv("LONGHOUSE_DISABLE_LEGACY_RAW_WRITES", raising=False)
+def test_live_archive_primary_manifest_failure_rolls_back_and_fails(tmp_path, monkeypatch):
     rollbacks = 0
 
     async def fake_prepare(*, data, fallback_db, settings):  # noqa: ARG001
@@ -1272,7 +1187,7 @@ def test_live_archive_primary_manifest_failure_rolls_back_before_forced_legacy_r
         fake_prepare,
     )
     monkeypatch.setattr(
-        "zerg.services.archive_shadow.insert_archive_chunk_manifests",
+        "zerg.services.archive_primary.insert_archive_chunk_manifests",
         fake_insert_archive_chunk_manifests,
     )
     monkeypatch.setattr(Session, "rollback", observed_rollback)
@@ -1285,75 +1200,12 @@ def test_live_archive_primary_manifest_failure_rolls_back_before_forced_legacy_r
             headers=_live_transcript_trace_header(session_id),
         )
 
-        assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
-        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE, response.text
+        assert response.headers["X-Ingest-Archive-Primary"] == "failed"
         assert rollbacks >= 1
         with SessionLocal() as db:
-            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 1
-            assert db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).one().raw_json_z is not None
-            assert db.execute(text("SELECT count(*) FROM poisoned_archive_write")).scalar_one() == 0
-    finally:
-        api_app.dependency_overrides.clear()
-
-
-def test_live_archive_primary_manifest_failure_rolls_back_before_legacy_raw_fallback(tmp_path, monkeypatch):
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
-    rollbacks = 0
-
-    async def fake_prepare(*, data, fallback_db, settings):  # noqa: ARG001
-        chunk = SimpleNamespace(
-            tenant_id="tenant-test",
-            session_id=str(data.id),
-            stream="source_lines",
-            relative_path="tenants/tenant-test/sessions/test/chunks/source_lines-fallback.jsonl.zst",
-            first_source_seq=1,
-            last_source_seq=1,
-            record_count=1,
-            uncompressed_bytes=1,
-            compressed_bytes=1,
-            payload_sha256="2" * 64,
-            file_sha256="3" * 64,
-        )
-        return SimpleNamespace(error=None, chunks=(chunk,), records_written=1)
-
-    def fake_insert_archive_chunk_manifests(db, chunks):  # noqa: ARG001
-        db.execute(text("CREATE TABLE IF NOT EXISTS poisoned_archive_write (id integer primary key)"))
-        db.execute(text("INSERT INTO poisoned_archive_write (id) VALUES (1)"))
-        raise RuntimeError("synthetic_manifest_failure")
-
-    original_rollback = Session.rollback
-
-    def observed_rollback(self):
-        nonlocal rollbacks
-        rollbacks += 1
-        return original_rollback(self)
-
-    monkeypatch.setattr(
-        "zerg.routers.agents_ingest._prepare_archive_primary_before_ingest",
-        fake_prepare,
-    )
-    monkeypatch.setattr(
-        "zerg.services.archive_shadow.insert_archive_chunk_manifests",
-        fake_insert_archive_chunk_manifests,
-    )
-    monkeypatch.setattr(Session, "rollback", observed_rollback)
-    client, SessionLocal = _make_client(tmp_path)
-    try:
-        session_id = "64111111-2222-3333-4444-555555555555"
-        response = client.post(
-            "/agents/ingest",
-            json=_batched_archive_primary_payload(session_id, 1),
-            headers=_live_transcript_trace_header(session_id),
-        )
-
-        assert response.status_code == status.HTTP_200_OK, response.text
-        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
-        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
-        assert rollbacks >= 1
-        with SessionLocal() as db:
-            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 1
+            assert db.query(AgentEvent).filter(AgentEvent.session_id == session_id).count() == 0
+            assert db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).count() == 0
             assert db.execute(text("SELECT count(*) FROM poisoned_archive_write")).scalar_one() == 0
     finally:
         api_app.dependency_overrides.clear()
@@ -1405,6 +1257,14 @@ def test_agents_ingest_releases_request_db_before_serialized_write(tmp_path, mon
     monkeypatch.setattr(
         "zerg.services.write_serializer.get_write_serializer",
         lambda: ReleaseCheckingSerializer(),
+    )
+
+    async def prepare_empty_archive(**_kwargs):
+        return SimpleNamespace(error=None, chunks=(), records_written=0)
+
+    monkeypatch.setattr(
+        "zerg.routers.agents_ingest._prepare_archive_primary_before_ingest",
+        prepare_empty_archive,
     )
     api_app.dependency_overrides[get_db] = override_db
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token

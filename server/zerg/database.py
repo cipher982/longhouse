@@ -230,7 +230,7 @@ def _configure_sqlite_engine(engine: Engine, *, busy_timeout_ms: int | None = No
     def set_sqlite_pragmas(dbapi_conn, _connection_record):
         cursor = dbapi_conn.cursor()
         try:
-            if os.getenv("LONGHOUSE_ARCHIVE_READER_CHILD") == "1":
+            if archive_database_is_read_only(str(engine.url)):
                 cursor.execute("PRAGMA query_only=ON")
                 cursor.execute(f"PRAGMA foreign_keys={foreign_keys}")
                 cursor.execute(f"PRAGMA busy_timeout={_busy_timeout_ms}")
@@ -579,18 +579,33 @@ def live_store_configured() -> bool:
     return bool(_settings.live_database_url)
 
 
-def live_catalog_enabled() -> bool:
-    """Return whether bounded auth/session catalog state is authoritative live."""
+def archive_database_is_read_only(database_url: str | None = None) -> bool:
+    target_url = database_url or _settings.database_url
+    try:
+        parsed = make_url(target_url)
+    except Exception:
+        return False
+    return parsed.drivername.startswith("sqlite") and parsed.query.get("mode") == "ro"
 
-    return bool(_settings.live_catalog_enabled and live_store_configured())
+
+def live_catalog_enabled() -> bool:
+    """Return whether this process owns the canonical live catalog.
+
+    Normal Runtime Hosts always use the live catalog. Disposable archive-read
+    children are identified by their read-only archive URL and intentionally
+    execute the cold route against the monolith.
+    """
+
+    if _settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return False
+    return bool(live_store_configured() and not archive_database_is_read_only())
 
 
 def get_catalog_session_factory() -> sessionmaker:
     """Return the active bounded-catalog session factory.
 
-    The feature flag keeps the additive backfill deploy dark until parity has
-    been proven. After cutover, auth and other catalog consumers never need to
-    open the cold monolith.
+    Runtime Hosts use the live catalog. Archive-read children use the cold
+    database directly and never silently fall back between stores.
     """
 
     if live_catalog_enabled():
@@ -732,13 +747,7 @@ def get_catalog_db() -> Iterator[Session]:
 
 
 def catalog_db_dependency():
-    """Select the FastAPI dependency identity once at process import/startup.
-
-    Returning the canonical ``get_db`` object while the migration flag is dark
-    preserves existing dependency overrides. An explicitly enabled process
-    receives the live-only provider and never opens the archive as a hidden
-    fallback.
-    """
+    """Select the canonical catalog dependency for this process role."""
 
     return get_catalog_db if live_catalog_enabled() else get_db
 

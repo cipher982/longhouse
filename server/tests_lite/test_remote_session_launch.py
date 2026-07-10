@@ -54,7 +54,6 @@ from zerg.services.agents.kernel_writes import record_run  # noqa: E402
 from zerg.services.agents.kernel_writes import record_thread_alias  # noqa: E402
 from zerg.services.agents.kernel_writes import upsert_connection_for_run  # noqa: E402
 from zerg.services.live_archive_outbox import drain_live_archive_outbox  # noqa: E402
-from zerg.services.live_catalog_backfill import backfill_live_catalog  # noqa: E402
 from zerg.services.live_launch_readiness import upsert_live_launch_readiness  # noqa: E402
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
@@ -1236,8 +1235,10 @@ def test_live_catalog_launch_dispatches_without_opening_archive_then_projects(tm
     live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-catalog-launch.db")
     initialize_live_database(live_engine)
     LiveSession = sessionmaker(bind=live_engine)
-    with ArchiveSession() as archive_db, LiveSession() as live_db:
-        backfill_live_catalog(archive_db, live_db)
+    with LiveSession() as live_db:
+        live_db.add(User(id=OWNER_ID, email=f"u{OWNER_ID}@ex.com", role="ADMIN"))
+        live_db.add(DeviceToken(owner_id=OWNER_ID, device_id="cinder", token_hash=f"hash-cinder-{OWNER_ID}"))
+        live_db.commit()
 
     class CatalogDispatchRegistry(_StubRegistry):
         async def send_command_nowait(self, **kwargs):  # type: ignore[override]

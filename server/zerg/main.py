@@ -172,7 +172,7 @@ async def isolate_archive_reads(request, call_next):
     from zerg.services.archive_read_proxy import proxy_archive_read
     from zerg.services.archive_read_proxy import should_proxy_archive_read
 
-    if live_catalog_enabled() and should_proxy_archive_read(request):
+    if live_catalog_enabled() and should_proxy_archive_read(request, routes=api_app.routes):
         try:
             path = normalized_api_path(request)
             if path.startswith("/agents/"):

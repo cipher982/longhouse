@@ -271,8 +271,8 @@ These are the simplifications with the best launch leverage:
   bounded and live/archive fate is split.
 - Freeze generic archive job-ledger work until after launch. Build only the
   single-purpose FTS repair state if needed.
-- Keep archive-primary fallback frozen, not deleted, until legacy raw fallback is
-  no longer load-bearing.
+- Delete the legacy raw fallback now that archive-primary is the sole proven
+  raw-storage contract.
 
 ## Implementation Order
 

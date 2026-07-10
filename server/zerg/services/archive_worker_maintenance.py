@@ -69,7 +69,7 @@ class ArchiveMaintenanceScheduler:
         if name == "catalog_sync":
 
             async def run_catalog_sync() -> None:
-                from zerg.services.live_catalog_backfill import sync_recent_live_catalog
+                from zerg.services.live_catalog_projection import sync_recent_live_catalog
 
                 await asyncio.to_thread(sync_recent_live_catalog, limit=25)
 

@@ -18,7 +18,7 @@ from zerg.services.agents.models import IngestResult
 from zerg.services.agents.models import SessionIngest
 from zerg.services.agents.store import AgentsStore
 from zerg.services.archive_events_verifier import verify_session_event_archive_coverage
-from zerg.services.archive_shadow import write_ingest_shadow_archive
+from zerg.services.archive_primary import write_ingest_archive
 from zerg.services.archive_store import FilesystemArchiveStore
 
 
@@ -30,7 +30,9 @@ def _factory(tmp_path):
 
 def _session(session_id, events):
     return SessionIngest(
-        id=session_id, provider="claude", environment="production",
+        id=session_id,
+        provider="claude",
+        environment="production",
         started_at="2026-01-01T00:00:00Z",
         events=[
             EventIngest(role=r, content_text=c, timestamp=t, source_path="/tmp/s.jsonl", source_offset=o, raw_json=raw)
@@ -42,8 +44,6 @@ def _session(session_id, events):
 def test_verifier_flags_uncovered_event_rows(tmp_path, monkeypatch):
     archive_root = tmp_path / "archive"
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_ROOT", str(archive_root))
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID", "default")
 
     factory = _factory(tmp_path)
     session_id = uuid4()
@@ -55,10 +55,16 @@ def test_verifier_flags_uncovered_event_rows(tmp_path, monkeypatch):
         store = AgentsStore(db)
         store.ingest_session(_session(session_id, events))
         # Archive ONLY the first event's bytes.
-        write_ingest_shadow_archive(
+        write_ingest_archive(
             db,
             data=_session(session_id, events[:1]),
-            result=IngestResult(session_id=session_id, events_inserted=0, events_skipped=0, session_created=False, source_lines_inserted=0),
+            result=IngestResult(
+                session_id=session_id,
+                events_inserted=0,
+                events_skipped=0,
+                session_created=False,
+                source_lines_inserted=0,
+            ),
             archive_store=FilesystemArchiveStore(archive_root),
         )
         db.commit()
@@ -74,8 +80,6 @@ def test_verifier_flags_uncovered_event_rows(tmp_path, monkeypatch):
 def test_verifier_full_coverage(tmp_path, monkeypatch):
     archive_root = tmp_path / "archive"
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_ROOT", str(archive_root))
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED", "1")
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID", "default")
 
     factory = _factory(tmp_path)
     session_id = uuid4()
@@ -86,10 +90,16 @@ def test_verifier_full_coverage(tmp_path, monkeypatch):
     with factory() as db:
         store = AgentsStore(db)
         store.ingest_session(_session(session_id, events))
-        write_ingest_shadow_archive(
+        write_ingest_archive(
             db,
             data=_session(session_id, events),
-            result=IngestResult(session_id=session_id, events_inserted=0, events_skipped=0, session_created=False, source_lines_inserted=0),
+            result=IngestResult(
+                session_id=session_id,
+                events_inserted=0,
+                events_skipped=0,
+                session_created=False,
+                source_lines_inserted=0,
+            ),
             archive_store=FilesystemArchiveStore(archive_root),
         )
         db.commit()

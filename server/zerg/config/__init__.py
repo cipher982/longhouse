@@ -103,12 +103,12 @@ def _sqlite_url_for_path(path_value: str) -> str:
 
 
 def _resolve_live_database_url() -> str:
-    """Resolve the optional Live Store database URL.
+    """Resolve the canonical Live Store database URL.
 
     Explicit env vars (LONGHOUSE_LIVE_DATABASE_URL / LONGHOUSE_LIVE_DB_PATH) win.
     When neither is set and DATABASE_URL points to a file-backed SQLite path,
     derive a default sibling file: <archive-stem>-live.db in the same directory.
-    Non-SQLite or in-memory archive URLs keep the live store disabled.
+    Non-file test databases do not receive a second store.
     """
     explicit_url = _strip_env_quotes(os.getenv("LONGHOUSE_LIVE_DATABASE_URL") or "")
     if explicit_url:
@@ -183,11 +183,8 @@ class Settings:  # noqa: D401 – simple data container
     # Database ---------------------------------------------------------
     database_url: str
     archive_root: str
-    archive_shadow_write_enabled: bool
-    archive_primary_write_enabled: bool
-    legacy_raw_write_enabled: bool
-    archive_shadow_tenant_id: str
-    archive_shadow_chunk_target_bytes: int
+    archive_primary_tenant_id: str
+    archive_primary_chunk_target_bytes: int
 
     # Cryptography -----------------------------------------------------
     fernet_secret: str | None
@@ -271,7 +268,6 @@ class Settings:  # noqa: D401 – simple data container
     umami_domains: str | None = None
     umami_tag: str | None = None
     live_database_url: str = ""
-    live_catalog_enabled: bool = False
 
     # Telegram channel integration ------------------------------------
     telegram_bot_token: str | None = None  # TELEGRAM_BOT_TOKEN from @BotFather
@@ -534,12 +530,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
     database_url = os.getenv("DATABASE_URL", "")
     live_database_url = _resolve_live_database_url()
     archive_root = _resolve_archive_root(database_url)
-    archive_shadow_tenant_id = (
-        os.getenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID")
-        or os.getenv("LONGHOUSE_ARCHIVE_TENANT_ID")
-        or os.getenv("LONGHOUSE_TENANT_ID")
-        or "default"
-    )
+    archive_primary_tenant_id = os.getenv("INSTANCE_ID") or os.getenv("LONGHOUSE_TENANT_ID") or "default"
 
     return Settings(
         app_mode=app_mode,
@@ -558,14 +549,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         github_client_secret=os.getenv("GITHUB_CLIENT_SECRET"),
         database_url=database_url,
         live_database_url=live_database_url,
-        live_catalog_enabled=_truthy(os.getenv("LONGHOUSE_LIVE_CATALOG_ENABLED")),
         archive_root=archive_root,
-        archive_shadow_write_enabled=_truthy(os.getenv("LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED")),
-        archive_primary_write_enabled=_truthy(os.getenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED")),
-        legacy_raw_write_enabled=not _truthy(os.getenv("LONGHOUSE_DISABLE_LEGACY_RAW_WRITES"))
-        and _truthy(os.getenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")),
-        archive_shadow_tenant_id=archive_shadow_tenant_id,
-        archive_shadow_chunk_target_bytes=int(os.getenv("LONGHOUSE_ARCHIVE_SHADOW_CHUNK_TARGET_BYTES", str(32 * 1024 * 1024))),
+        archive_primary_tenant_id=archive_primary_tenant_id,
+        archive_primary_chunk_target_bytes=32 * 1024 * 1024,
         fernet_secret=os.getenv("FERNET_SECRET"),
         _llm_token_stream_default=_truthy(os.getenv("LLM_TOKEN_STREAM")),
         dev_admin=_truthy(os.getenv("DEV_ADMIN")),

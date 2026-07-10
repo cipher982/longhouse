@@ -19,7 +19,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
-from zerg.services.archive_shadow import insert_archive_chunk_manifests
+from zerg.services.archive_primary import insert_archive_chunk_manifests
 from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.raw_json_compression import CODEC_PLAIN

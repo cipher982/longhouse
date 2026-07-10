@@ -1,6 +1,6 @@
 # Reliability Data Plane
 
-**Status:** Phase 8 restore/decommission plan implemented; deletion and compaction remain unapproved
+**Status:** Archive-primary complete; legacy raw fallback removed pre-launch
 **Owner:** Longhouse core
 **Created:** 2026-06-05
 **Branch:** `epic/reliability-data-plane`
@@ -363,9 +363,10 @@ Partial shadow chunks for old sessions are checkpointed, but they do not regress
 existing hot counts or previews. When later legacy export inserts older chunks,
 the same parser revision can rebuild from the full sealed session archive.
 
-## Migration Strategy
+## Historical Migration Strategy (Complete)
 
-The migration is additive and reversible until explicit decommission approval.
+These steps record how the archive was proven. They are not runtime modes or
+operator choices. Archive-primary is now the only raw-storage contract.
 
 ### Step 1: Schemas and Stores, No Behavior Change
 
@@ -386,8 +387,7 @@ For new source data:
 - project cards/events in shadow;
 - compare old/new visible projections.
 
-Initial shadow archive writes are gated by
-`LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED`. Source-line archive chunks are
+The original rollout used shadow writes. That gate no longer exists. Source-line archive chunks are
 retry-idempotent: dynamic ingest timing is not included in the chunk payload,
 so replaying the same source lines writes the same chunk path and manifest row.
 The first hot-card projector supports generic normalized event JSON plus the
@@ -433,8 +433,8 @@ Cut over in order:
 
 New raw data writes archive-primary. Source-line raw bytes go to the
 `source_lines` archive stream; provider event raw bytes go to the `events`
-archive stream unless redundancy is explicitly proven later. Legacy raw writes
-stay behind a fallback flag until confidence is high.
+archive stream unless redundancy is explicitly proven later. Archive failure is
+retryable and never falls back to monolith raw writes.
 
 ### Step 8: Decommission Legacy Raw Storage
 
@@ -446,7 +446,7 @@ documents the production reclaim gate; it does not run destructive work.
 
 ### Production Rollout Gates
 
-1. Shadow archive/projector deployment with legacy serving paths retained.
+1. Historical: shadow archive/projector deployment with legacy serving paths retained.
 2. Comparison reports for timeline cards, detail projections, search, and
    control labels on sampled heavy sessions.
 3. Hot read cutover after comparison evidence and rollback procedure are
@@ -648,8 +648,8 @@ Review gate: architecture review.
 
 ### Phase 4: Shadow Ingest and Projectors
 
-Goal: write new raw data to archive in parallel and project from archive without
-cutting over reads.
+Historical rollout goal: write new raw data to archive in parallel and project
+from archive without cutting over reads.
 
 Scope:
 
@@ -663,7 +663,7 @@ Scope:
 Acceptance:
 
 - existing product behavior unchanged by default;
-- feature flag enables shadow archive writes;
+- archive writer can be exercised independently during the historical rollout;
 - source machine can observe archive high-water mark;
 - projector lag is visible but not product-fatal;
 - restart resumes projector from checkpoint.
@@ -750,22 +750,21 @@ Goal: make archive the primary raw source for new data, while preserving rollbac
 
 Scope:
 
-- archive-primary flag;
-- legacy raw-write disable flag;
+- archive-primary writes;
 - source-line and event raw archive streams;
-- rollback/fallback runbook;
+- fail-closed retry behavior;
 - continued comparison samples.
 
 Acceptance:
 
 - new raw data can be replayed from archive only;
 - disabling legacy raw writes does not affect hot product paths;
-- rollback to legacy raw write path is documented and tested.
+- archive failure returns retryable pressure without writing raw data elsewhere.
 
 Tests:
 
 - archive-only replay;
-- fallback rollback;
+- archive failure retry;
 - mixed old/new session replay;
 - search/detail rebuild from archive.
 

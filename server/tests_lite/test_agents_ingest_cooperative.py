@@ -123,9 +123,8 @@ def test_merge_ingest_results_sums_counts_and_keeps_latest_event_id():
     assert merged.store_stage_ms == {"events": 3.0, "source_lines": 3.0}
 
 
-def test_merge_archive_primary_states_prioritizes_fallback_then_written():
+def test_merge_archive_primary_states_prioritizes_written():
     assert _merge_archive_primary_states([]) == "disabled"
     assert _merge_archive_primary_states(["disabled"]) == "disabled"
     assert _merge_archive_primary_states(["written", "disabled"]) == "written"
-    assert _merge_archive_primary_states(["written", "fallback"]) == "fallback"
     assert _merge_archive_primary_states(["prepared"]) == "prepared"
