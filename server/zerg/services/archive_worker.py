@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import fcntl
 import logging
 import os
@@ -36,7 +37,7 @@ class _StatusReporter:
 
     def update(self, payload: dict[str, object]) -> None:
         with self._lock:
-            self._payload = dict(payload)
+            self._payload.update(payload)
         self._write()
 
     def stop(self) -> None:
@@ -133,6 +134,18 @@ def _next_pending_outbox_row(live_session_factory) -> dict[str, object] | None:
         }
 
 
+def _pending_outbox_count(live_session_factory) -> int:
+    from zerg.models.live_store import LiveArchiveOutbox
+
+    with live_session_factory() as live_db:
+        return int(
+            live_db.query(LiveArchiveOutbox.id)
+            .filter(LiveArchiveOutbox.drained_at.is_(None))
+            .filter(LiveArchiveOutbox.kind.in_(sorted(worker_owned_outbox_kinds())))
+            .count()
+        )
+
+
 def _record_outbox_failure(live_session_factory, *, row_id: int, error: str) -> None:
     from zerg.models.live_store import LiveArchiveOutbox
 
@@ -217,10 +230,17 @@ def drain_once(
 
 
 def run_worker(*, once: bool = False) -> int:
+    return asyncio.run(_run_worker(once=once))
+
+
+async def _run_worker(*, once: bool = False) -> int:
+    from zerg.database import configure_write_serializer
+    from zerg.database import get_live_session_factory
     from zerg.services.archive_worker_jobs import archive_worker_job_counts
     from zerg.services.archive_worker_jobs import process_next_archive_worker_job
     from zerg.services.archive_worker_jobs import prune_archive_worker_jobs
     from zerg.services.archive_worker_jobs import recover_interrupted_archive_jobs
+    from zerg.services.archive_worker_maintenance import ArchiveMaintenanceScheduler
 
     lock_path = archive_worker_lock_path()
     if lock_path is None:
@@ -234,6 +254,10 @@ def run_worker(*, once: bool = False) -> int:
 
     signal.signal(signal.SIGTERM, _request_stop)
     signal.signal(signal.SIGINT, _request_stop)
+    configure_write_serializer()
+    live_session_factory = get_live_session_factory()
+    if live_session_factory is None:
+        raise RuntimeError("archive worker requires a live session factory")
 
     with _exclusive_worker_lock(lock_path):
         started_at = time.time()
@@ -245,6 +269,8 @@ def run_worker(*, once: bool = False) -> int:
         reporter.start({"status": "running", "consecutive_failures": 0, "recovered_jobs": recovered_jobs, **totals})
         result: dict[str, int] = {"processed": 0, "drained": 0, "failed": 0}
         prefer_jobs = True
+        foreground_since_maintenance = 0
+        maintenance = ArchiveMaintenanceScheduler()
 
         def report_active(operation: str, identity: object) -> None:
             reporter.update(
@@ -254,6 +280,7 @@ def run_worker(*, once: bool = False) -> int:
                     "active_operation": operation,
                     "active_identity": str(identity),
                     "active_started_at_unix": time.time(),
+                    "outbox_pending": _pending_outbox_count(live_session_factory),
                     **archive_worker_job_counts(),
                     **totals,
                 }
@@ -278,20 +305,33 @@ def run_worker(*, once: bool = False) -> int:
                         result = outbox_result
                     for key in ("processed", "drained", "failed"):
                         totals[key] += int(result.get(key, 0))
+                    if result.get("processed"):
+                        foreground_since_maintenance += 1
+
+                    maintenance_name = None
+                    if not once and (not result.get("processed") or foreground_since_maintenance >= 100):
+                        maintenance_name = await maintenance.run_one_due(
+                            on_start=lambda name: report_active("maintenance", name),
+                            allow_expensive=not result.get("processed"),
+                        )
+                        if maintenance_name is not None:
+                            foreground_since_maintenance = 0
                     consecutive_failures = 0 if not result.get("failed") else consecutive_failures + 1
-                    reporter.update(
-                        {
-                            "status": "running",
-                            "consecutive_failures": consecutive_failures,
-                            "last_result": result,
-                            "last_progress_at_unix": time.time() if result.get("processed") else None,
-                            "active_operation": None,
-                            "active_identity": None,
-                            "active_started_at_unix": None,
-                            **archive_worker_job_counts(),
-                            **totals,
-                        }
-                    )
+                    status_payload: dict[str, object] = {
+                        "status": "running",
+                        "consecutive_failures": consecutive_failures,
+                        "last_result": result,
+                        "last_maintenance": maintenance_name,
+                        "active_operation": None,
+                        "active_identity": None,
+                        "active_started_at_unix": None,
+                        "outbox_pending": _pending_outbox_count(live_session_factory),
+                        **archive_worker_job_counts(),
+                        **totals,
+                    }
+                    if result.get("processed") or maintenance_name is not None:
+                        status_payload["last_progress_at_unix"] = time.time()
+                    reporter.update(status_payload)
                 except Exception as exc:
                     consecutive_failures += 1
                     logger.exception("Archive worker iteration failed")
@@ -308,7 +348,7 @@ def run_worker(*, once: bool = False) -> int:
                     break
                 if result.get("processed") and not result.get("failed"):
                     continue
-                time.sleep(_drain_interval_seconds())
+                await asyncio.sleep(_drain_interval_seconds())
         finally:
             reporter.update(
                 {

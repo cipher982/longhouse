@@ -1073,9 +1073,11 @@ def _migrate_agents_columns(engine: Engine) -> None:
             # Multi-column indexes the model layer doesn't declare on these columns.
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_execution_home ON sessions(execution_home)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_source_runner_id ON sessions(source_runner_id)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_thread_head ON sessions(thread_root_session_id, is_writable_head)"))
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started ON sessions(continued_from_session_id, started_at)")
+                text("CREATE INDEX IF NOT EXISTS ix_sessions_thread_head " "ON sessions(thread_root_session_id, is_writable_head)")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started " "ON sessions(continued_from_session_id, started_at)")
             )
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_last_activity_at ON sessions(last_activity_at)"))
     except Exception:
@@ -1267,10 +1269,10 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("UPDATE agent_heartbeats SET ship_server_errors_1h = 0 WHERE ship_server_errors_1h IS NULL"))
             if columns and "ship_payload_rejections_1h" not in columns:
                 conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_payload_rejections_1h INTEGER DEFAULT 0"))
-                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_rejections_1h = 0 WHERE ship_payload_rejections_1h IS NULL"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_rejections_1h = 0 " "WHERE ship_payload_rejections_1h IS NULL"))
             if columns and "ship_payload_too_large_1h" not in columns:
                 conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_payload_too_large_1h INTEGER DEFAULT 0"))
-                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_too_large_1h = 0 WHERE ship_payload_too_large_1h IS NULL"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_too_large_1h = 0 " "WHERE ship_payload_too_large_1h IS NULL"))
             if columns and "ship_retryable_client_errors_1h" not in columns:
                 conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_retryable_client_errors_1h INTEGER DEFAULT 0"))
                 conn.execute(
@@ -1409,7 +1411,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.commit()
     except Exception:
         logger.error(
-            "session_inputs queue migration FAILED — client_request_id dedupe or queue-attempt recovery may be incomplete",
+            "session_inputs queue migration FAILED — client_request_id dedupe or " "queue-attempt recovery may be incomplete",
             exc_info=True,
         )
         try:
@@ -1471,7 +1473,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 if "source_event_id" not in columns:
                     conn.execute(text("ALTER TABLE session_messages ADD COLUMN source_event_id INTEGER"))
                 if "delivery_status" not in columns:
-                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivery_status VARCHAR(32) NOT NULL DEFAULT 'queued'"))
+                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivery_status " "VARCHAR(32) NOT NULL DEFAULT 'queued'"))
                 if "delivery_attempts" not in columns:
                     conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0"))
                 if "last_error" not in columns:
@@ -1879,7 +1881,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
                         UPDATE runners
                         SET availability_policy = CASE
                             WHEN COALESCE(TRIM(availability_policy), '') != '' THEN availability_policy
-                            WHEN json_extract(runner_metadata, '$.availability_policy') IN ('always_on', 'on_demand', 'ephemeral')
+                            WHEN json_extract(runner_metadata, '$.availability_policy')
+                                IN ('always_on', 'on_demand', 'ephemeral')
                                 THEN json_extract(runner_metadata, '$.availability_policy')
                             WHEN name LIKE 'lh-vm-canary-%' THEN 'ephemeral'
                             WHEN json_extract(runner_metadata, '$.install_mode') = 'desktop' THEN 'on_demand'
@@ -2189,8 +2192,12 @@ def _ensure_agents_fts(engine: Engine) -> None:
                 conn.exec_driver_sql(
                     """
                     CREATE TRIGGER IF NOT EXISTS events_ad AFTER DELETE ON events BEGIN
-                      INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
-                      VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
+                      INSERT INTO events_fts(
+                        events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id
+                      ) VALUES(
+                        'delete', old.id, old.content_text, old.tool_output_text,
+                        old.tool_name, old.role, old.session_id
+                      );
                     END
                     """
                 )
@@ -2198,8 +2205,12 @@ def _ensure_agents_fts(engine: Engine) -> None:
                 conn.exec_driver_sql(
                     """
                     CREATE TRIGGER IF NOT EXISTS events_au AFTER UPDATE ON events BEGIN
-                      INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
-                      VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
+                      INSERT INTO events_fts(
+                        events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id
+                      ) VALUES(
+                        'delete', old.id, old.content_text, old.tool_output_text,
+                        old.tool_name, old.role, old.session_id
+                      );
                       INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
                       VALUES (new.id, new.content_text, new.tool_output_text, new.tool_name, new.role, new.session_id);
                     END
@@ -2409,7 +2420,8 @@ async def start_wal_checkpoint_loop() -> None:
 
     def _do_checkpoint():
         """Run checkpoint in a thread — never block the event loop."""
-        _run_wal_checkpoint(default_engine, label="archive", truncate_bytes=WAL_TRUNCATE_BYTES)
+        if not archive_worker_owns_wal_checkpoint():
+            run_archive_wal_checkpoint_once()
         _run_wal_checkpoint(live_engine, label="live", truncate_bytes=LIVE_WAL_TRUNCATE_BYTES)
 
     async def _loop():
@@ -2423,6 +2435,21 @@ async def start_wal_checkpoint_loop() -> None:
                 logger.warning("WAL checkpoint failed (non-fatal)", exc_info=True)
 
     _wal_checkpoint_task = asyncio.create_task(_loop())
+
+
+def run_archive_wal_checkpoint_once() -> dict[str, Any]:
+    """Checkpoint the cold monolith from its owning process."""
+
+    return _run_wal_checkpoint(default_engine, label="archive", truncate_bytes=WAL_TRUNCATE_BYTES)
+
+
+def archive_worker_owns_wal_checkpoint() -> bool:
+    """The API retains PASSIVE fallback while the archive worker is unhealthy."""
+
+    from zerg.services.archive_worker_status import archive_worker_enabled
+    from zerg.services.archive_worker_status import read_archive_worker_status
+
+    return archive_worker_enabled() and read_archive_worker_status().get("status") == "running"
 
 
 async def stop_wal_checkpoint_loop() -> None:

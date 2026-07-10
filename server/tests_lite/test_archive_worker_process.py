@@ -259,6 +259,41 @@ def test_archive_worker_long_active_operation_is_degraded(tmp_path, monkeypatch)
     assert status["active_age_seconds"] >= 59
 
 
+def test_archive_worker_stalled_backlog_is_degraded(tmp_path, monkeypatch):
+    path = tmp_path / "archive-worker-status.json"
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_STATUS_PATH", str(path))
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_PROGRESS_STALE_SECONDS", "10")
+    write_archive_worker_status(
+        {
+            "status": "running",
+            "pid": 123,
+            "jobs_pending": 2,
+            "outbox_pending": 3,
+            "last_progress_at_unix": (datetime.now(timezone.utc) - timedelta(minutes=1)).timestamp(),
+        }
+    )
+
+    status = read_archive_worker_status()
+
+    assert status["status"] == "degraded"
+    assert status["reason"] == "backlog_stalled"
+    assert status["progress_age_seconds"] >= 59
+
+
+def test_archive_wal_falls_back_to_api_when_worker_is_degraded(tmp_path, monkeypatch):
+    from zerg.database import archive_worker_owns_wal_checkpoint
+
+    path = tmp_path / "archive-worker-status.json"
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_STATUS_PATH", str(path))
+    write_archive_worker_status({"status": "running", "pid": 123})
+    assert archive_worker_owns_wal_checkpoint() is True
+
+    write_archive_worker_status({"status": "degraded", "pid": 123})
+    assert archive_worker_owns_wal_checkpoint() is False
+
+
 def test_archive_worker_scheduler_alternates_jobs_and_outbox():
     from zerg.services.archive_worker import _select_work_once
 
@@ -273,6 +308,52 @@ def test_archive_worker_scheduler_alternates_jobs_and_outbox():
         assert job_processed or outbox_result["processed"]
 
     assert selected == ["job", "outbox", "job", "outbox", "job", "outbox"]
+
+
+@pytest.mark.asyncio
+async def test_archive_maintenance_scheduler_runs_one_due_unit(monkeypatch):
+    from zerg.services.archive_worker_maintenance import ArchiveMaintenanceScheduler
+
+    scheduler = ArchiveMaintenanceScheduler()
+    scheduler._next_due = {name: 0.0 for name in scheduler._next_due}
+    ran: list[str] = []
+
+    def fake_operation(name: str):
+        async def run() -> None:
+            ran.append(name)
+
+        return 30.0, run
+
+    monkeypatch.setattr(scheduler, "_operation", fake_operation)
+
+    first = await scheduler.run_one_due()
+    second = await scheduler.run_one_due()
+
+    assert first == "projection"
+    assert second == "summary"
+    assert ran == ["projection", "summary"]
+
+
+@pytest.mark.asyncio
+async def test_forced_archive_maintenance_skips_expensive_units(monkeypatch):
+    from zerg.services.archive_worker_maintenance import ArchiveMaintenanceScheduler
+
+    scheduler = ArchiveMaintenanceScheduler()
+    scheduler._next_due = {name: 0.0 for name in scheduler._next_due}
+    ran: list[str] = []
+
+    def fake_operation(name: str):
+        async def run() -> None:
+            ran.append(name)
+
+        return 30.0, run
+
+    monkeypatch.setattr(scheduler, "_operation", fake_operation)
+
+    selected = await scheduler.run_one_due(allow_expensive=False)
+
+    assert selected == "recall"
+    assert ran == ["recall"]
 
 
 @pytest.mark.asyncio

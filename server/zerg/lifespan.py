@@ -273,6 +273,9 @@ async def lifespan(app: FastAPI):
         if not _settings.testing:
             started: list[str] = []
             failed: list[str] = []
+            from zerg.services.archive_worker_status import archive_worker_enabled
+
+            archive_worker_owns_cold_background = archive_worker_enabled()
 
             try:
                 with _timed_startup_step("ops_events_bridge_start"):
@@ -296,7 +299,9 @@ async def lifespan(app: FastAPI):
                     failed.append(f"session_input_queue_recovery ({e})")
                     logger.exception("Failed to start session_input_queue_recovery")
             else:
-                logger.info("Session input queue periodic recovery disabled; set LONGHOUSE_ENABLE_SESSION_INPUT_QUEUE_RECOVERY=1 to enable")
+                logger.info(
+                    "Session input queue periodic recovery disabled; set " "LONGHOUSE_ENABLE_SESSION_INPUT_QUEUE_RECOVERY=1 to enable"
+                )
 
             # Remote launch reaper: orphan expired launch rows.
             try:
@@ -373,7 +378,7 @@ async def lifespan(app: FastAPI):
             # dogfood databases can contain millions of append-only preview rows,
             # and a global startup scan can starve the runtime. Session-scoped
             # cleanup still runs when durable transcript ingest completes.
-            if _live_preview_cleanup_enabled():
+            if _live_preview_cleanup_enabled() and not archive_worker_owns_cold_background:
                 try:
                     from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
                     from zerg.services.write_serializer import get_write_serializer
@@ -447,34 +452,37 @@ async def lifespan(app: FastAPI):
             # Live session summary/title enrichment. This scans session revision
             # lag directly; it is intentionally separate from the legacy ingest
             # task workers.
-            try:
-                from zerg.services.session_enrichment_reconciler import run_summary_reconciler
+            if not archive_worker_owns_cold_background:
+                try:
+                    from zerg.services.session_enrichment_reconciler import run_summary_reconciler
 
-                asyncio.create_task(run_summary_reconciler())
-                started.append("summary_reconciler")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"summary_reconciler ({e})")
-                logger.exception("Failed to start summary_reconciler")
+                    asyncio.create_task(run_summary_reconciler())
+                    started.append("summary_reconciler")
+                except Exception as e:  # noqa: BLE001
+                    failed.append(f"summary_reconciler ({e})")
+                    logger.exception("Failed to start summary_reconciler")
 
             # Archive ingest can skip expensive derived projections on the hot
             # shipping path; this reconciler catches those sessions up later.
-            try:
-                from zerg.services.session_projection_reconciler import run_projection_reconciler
+            if not archive_worker_owns_cold_background:
+                try:
+                    from zerg.services.session_projection_reconciler import run_projection_reconciler
 
-                asyncio.create_task(run_projection_reconciler())
-                started.append("projection_reconciler")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"projection_reconciler ({e})")
-                logger.exception("Failed to start projection_reconciler")
+                    asyncio.create_task(run_projection_reconciler())
+                    started.append("projection_reconciler")
+                except Exception as e:  # noqa: BLE001
+                    failed.append(f"projection_reconciler ({e})")
+                    logger.exception("Failed to start projection_reconciler")
 
-            try:
-                from zerg.services.retrieval_index_jobs import start_recall_index_worker
+            if not archive_worker_owns_cold_background:
+                try:
+                    from zerg.services.retrieval_index_jobs import start_recall_index_worker
 
-                start_recall_index_worker()
-                started.append("recall_index_worker")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"recall_index_worker ({e})")
-                logger.exception("Failed to start recall_index_worker")
+                    start_recall_index_worker()
+                    started.append("recall_index_worker")
+                except Exception as e:  # noqa: BLE001
+                    failed.append(f"recall_index_worker ({e})")
+                    logger.exception("Failed to start recall_index_worker")
 
             # Periodic runtime maintenance (runner-health reconcile, etc.)
             if not _settings.testing:
