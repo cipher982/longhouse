@@ -8,7 +8,13 @@
  * Or:      make qa-live
  */
 
-import { test, expect, isIgnorablePlaywrightArtifactError, normalizeToken, buildRuntimeTokenStorageState } from "./fixtures";
+import {
+  test,
+  expect,
+  isIgnorablePlaywrightArtifactError,
+  normalizeToken,
+  buildRuntimeTokenStorageState,
+} from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { waitForPageReady } from "../helpers/ready-signals";
 
@@ -90,7 +96,9 @@ function numericField(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function isTranscriptBackedNonInternalSession(session: AgentsSessionCandidate): boolean {
+function isTranscriptBackedNonInternalSession(
+  session: AgentsSessionCandidate,
+): boolean {
   if (typeof session?.id !== "string" || session.id.length === 0) {
     return false;
   }
@@ -105,7 +113,9 @@ function isTranscriptBackedNonInternalSession(session: AgentsSessionCandidate): 
   );
 }
 
-async function findTranscriptBackedSessionIdsViaAgentsApi(request: APIRequestContext): Promise<string[]> {
+async function findTranscriptBackedSessionIdsViaAgentsApi(
+  request: APIRequestContext,
+): Promise<string[]> {
   const response = await request.get("/api/agents/sessions?limit=100");
   if (!response.ok()) {
     return [];
@@ -123,7 +133,9 @@ async function findTranscriptBackedSessionIdsViaAgentsApi(request: APIRequestCon
   return ids;
 }
 
-async function findEngineControlSessionIdViaAgentsApi(request: APIRequestContext): Promise<string | null> {
+async function findEngineControlSessionIdViaAgentsApi(
+  request: APIRequestContext,
+): Promise<string | null> {
   const response = await request.get("/api/agents/sessions?limit=25");
   if (!response.ok()) {
     return null;
@@ -148,7 +160,9 @@ async function findEngineControlSessionIdViaAgentsApi(request: APIRequestContext
   return null;
 }
 
-async function findClosedSessionIdViaAgentsApi(request: APIRequestContext): Promise<string | null> {
+async function findClosedSessionIdViaAgentsApi(
+  request: APIRequestContext,
+): Promise<string | null> {
   const response = await request.get("/api/agents/sessions?limit=100");
   if (!response.ok()) {
     return null;
@@ -199,7 +213,12 @@ test("auth + timeline loads with session rows", async ({ context }) => {
       break;
     }
 
-    if (authFailed || serverErrors.length > 0 || consoleErrors.length > 0 || attempt === 2) {
+    if (
+      authFailed ||
+      serverErrors.length > 0 ||
+      consoleErrors.length > 0 ||
+      attempt === 2
+    ) {
       break;
     }
 
@@ -311,9 +330,10 @@ test("removed loop login handoff resolves to timeline", async ({
       finalPath,
       `Expected removed /loop handoff to resolve to /timeline, got ${finalPath}`,
     ).toBe("/timeline");
-    expect(finalPath, "Removed /loop should not remain a visible destination").not.toContain(
-      "/loop",
-    );
+    expect(
+      finalPath,
+      "Removed /loop should not remain a visible destination",
+    ).not.toContain("/loop");
   } catch (error) {
     await failWithScreenshot(
       page,
@@ -381,7 +401,9 @@ test("forum route redirects to timeline without auth errors", async ({
   }
 
   await page
-    .locator('.sessions-page, .sessions-hero-empty, [data-testid="session-row"]')
+    .locator(
+      '.sessions-page, .sessions-hero-empty, [data-testid="session-row"]',
+    )
     .first()
     .waitFor({ timeout: 10_000 })
     .catch(async () => {
@@ -399,10 +421,15 @@ test("forum route redirects to timeline without auth errors", async ({
 // Test 3: Session detail loads events
 // ---------------------------------------------------------------------------
 
-test("session detail renders event timeline", async ({ context, agentsRequest }) => {
+test("session detail renders event timeline", async ({
+  context,
+  agentsRequest,
+}) => {
   test.setTimeout(45_000);
 
-  const candidateSessionIds = await findTranscriptBackedSessionIdsViaAgentsApi(agentsRequest).catch(() => []);
+  const candidateSessionIds = await findTranscriptBackedSessionIdsViaAgentsApi(
+    agentsRequest,
+  ).catch(() => []);
   expect(
     candidateSessionIds.length,
     "No transcript-backed non-internal sessions available for detail QA. Canary/heartbeat-only rows are intentionally not valid detail candidates.",
@@ -434,7 +461,9 @@ test("session detail renders event timeline", async ({ context, agentsRequest })
     authErrors.length = 0;
     detailPath = `/api/timeline/sessions/${sessionId}`;
 
-    await page.goto(`/timeline/${sessionId}`, { waitUntil: "domcontentloaded" });
+    await page.goto(`/timeline/${sessionId}`, {
+      waitUntil: "domcontentloaded",
+    });
 
     await waitForLivePageReady(
       page,
@@ -499,17 +528,26 @@ test("session detail renders event timeline", async ({ context, agentsRequest })
 // Test 4: Health + API sanity
 // ---------------------------------------------------------------------------
 
-test("health endpoint returns healthy", async ({ agentsRequest }) => {
+test("health endpoint confirms the hot lane is ready", async ({
+  agentsRequest,
+}) => {
   test.setTimeout(10_000);
 
   const res = await agentsRequest.get("/api/health");
   expect(res.ok(), `GET /api/health returned ${res.status()}`).toBe(true);
 
   const body = await res.json();
-  expect(
-    body.status,
-    `Expected health.status to be "healthy" or "ok", got: ${body.status}`,
-  ).toMatch(/^(healthy|ok)$/);
+  if (body.status === "degraded") {
+    const ready = await agentsRequest.get("/api/readyz");
+    expect(ready.ok(), `GET /api/readyz returned ${ready.status()}`).toBe(true);
+    const readiness = await ready.json();
+    expect(readiness.status).toBe("ready_with_archive_degraded");
+  } else {
+    expect(
+      body.status,
+      `Expected health.status to be "healthy" or "ok", got: ${body.status}`,
+    ).toMatch(/^(healthy|ok)$/);
+  }
 });
 
 test("agents sessions API returns list", async ({ agentsRequest }) => {
@@ -535,7 +573,9 @@ test("managed engine-control session stays enabled in workspace projection", asy
 }) => {
   test.setTimeout(20_000);
 
-  const sessionId = await findEngineControlSessionIdViaAgentsApi(agentsRequest).catch(() => null);
+  const sessionId = await findEngineControlSessionIdViaAgentsApi(
+    agentsRequest,
+  ).catch(() => null);
   if (!sessionId) {
     test.skip(true, "No connected managed engine-control session available");
     return;
@@ -564,7 +604,9 @@ test("closed session workspace projection never exposes live composer", async ({
 }) => {
   test.setTimeout(20_000);
 
-  const sessionId = await findClosedSessionIdViaAgentsApi(agentsRequest).catch(() => null);
+  const sessionId = await findClosedSessionIdViaAgentsApi(agentsRequest).catch(
+    () => null,
+  );
   if (!sessionId) {
     test.skip(true, "No closed session available to test composer gating");
     return;
@@ -600,7 +642,9 @@ test("closed session workspace projection never exposes live composer", async ({
 // or auth-surface regression fails the deploy instead of landing on a human.
 // ---------------------------------------------------------------------------
 
-test("launch picker: workspaces load via browser-cookie surface", async ({ context }) => {
+test("launch picker: workspaces load via browser-cookie surface", async ({
+  context,
+}) => {
   test.setTimeout(20_000);
 
   // Discover an enrolled machine through the same cookie-authed directory the
@@ -629,19 +673,29 @@ test("launch picker: workspaces load via browser-cookie surface", async ({ conte
   ).toBe(true);
 
   const body = await workspacesResponse.json();
-  expect(body.device_id, "response echoes the requested device_id").toBe(deviceId);
-  expect(Array.isArray(body.workspaces), "workspaces should be an array").toBe(true);
+  expect(body.device_id, "response echoes the requested device_id").toBe(
+    deviceId,
+  );
+  expect(Array.isArray(body.workspaces), "workspaces should be an array").toBe(
+    true,
+  );
 
   // Shape + frecency contract: scores are present and descending, paths are
   // absolute, and suggestions are scoped to the requested device (no env leak).
   let previousScore = Infinity;
   for (const workspace of body.workspaces) {
     expect(typeof workspace.path).toBe("string");
-    expect(workspace.path.startsWith("/"), `workspace path should be absolute: ${workspace.path}`).toBe(true);
+    expect(
+      workspace.path.startsWith("/"),
+      `workspace path should be absolute: ${workspace.path}`,
+    ).toBe(true);
     expect(typeof workspace.label).toBe("string");
     expect(typeof workspace.score).toBe("number");
     expect(typeof workspace.session_count).toBe("number");
-    expect(workspace.score <= previousScore, "workspaces must be ranked by descending score").toBe(true);
+    expect(
+      workspace.score <= previousScore,
+      "workspaces must be ranked by descending score",
+    ).toBe(true);
     previousScore = workspace.score;
   }
 });

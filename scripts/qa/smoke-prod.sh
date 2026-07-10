@@ -94,8 +94,8 @@ section() {
     echo "--- $1 ---"
 }
 
-# Wait for API readiness to return a healthy/ready status
-# Polls /api/readyz until status is healthy/ok/ready three times consecutively (or timeout)
+# Wait for API readiness to return a healthy/ready status. Archive-only
+# degradation is still ready: hot catalog/control routes remain available.
 wait_for_health() {
     local url="${1:-$API_URL/api/readyz}"
     local max_attempts="${2:-45}"   # 45 * 2s = 90s max
@@ -116,7 +116,7 @@ wait_for_health() {
         local status
         status=$(echo "$response" | jq -r '.status // "unknown"' 2>/dev/null)
 
-        if [[ "$status" == "healthy" || "$status" == "ok" || "$status" == "ready" ]]; then
+        if [[ "$status" == "healthy" || "$status" == "ok" || "$status" == "ready" || "$status" == "ready_with_archive_degraded" ]]; then
             consecutive_ok=$((consecutive_ok + 1))
             if [[ $consecutive_ok -ge $required_consecutive ]]; then
                 echo -e "${GREEN}✓${NC} API ready after $attempt attempts"
@@ -242,6 +242,34 @@ test_json() {
     fi
 }
 
+# Accept typed archive-only degradation, but never infer readiness from the
+# broad health status alone. /readyz returns 503 for live-lane failures.
+test_health_contract() {
+    local name="$1"
+    local health_url="$2"
+    local ready_url="$3"
+    local health_status ready_status ready_code ready_file
+
+    health_status=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "$health_url" 2>/dev/null | jq -r '.status // "unknown"' 2>/dev/null || echo "ERROR")
+    ready_file=$(mktemp)
+    if ! ready_code=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" -o "$ready_file" -w '%{http_code}' "$ready_url" 2>/dev/null); then
+        ready_code="000"
+    fi
+    ready_status=$(jq -r '.status // "unknown"' "$ready_file" 2>/dev/null || echo "ERROR")
+    rm -f "$ready_file"
+
+    if [[ "$health_status" == "healthy" || "$health_status" == "ok" ]]; then
+        pass "$name (health=$health_status readyz=$ready_status)"
+        return 0
+    fi
+    if [[ "$health_status" == "degraded" && "$ready_code" == "200" && "$ready_status" == "ready_with_archive_degraded" ]]; then
+        warn "$name (archive degraded; hot lane ready)"
+        return 0
+    fi
+    fail "$name (health=$health_status readyz=$ready_status HTTP $ready_code)"
+    return 1
+}
+
 test_json_eventually() {
     local name="$1"
     local url="$2"
@@ -337,7 +365,7 @@ test_caddy() {
 
 run_health_checks() {
     run_test test_http "API health" "$API_URL/api/health" "200"
-    run_test test_json "Health status" "$API_URL/api/health" ".status" "healthy"
+    run_test test_health_contract "Health contract" "$API_URL/api/health" "$API_URL/api/readyz"
     # /api/health hides per-check internals from unauthenticated callers, so read
     # auth state from the public /api/system/info (auth_disabled) instead of
     # .checks.environment.auth_enabled, and verify DB readiness via /api/readyz
@@ -486,7 +514,7 @@ if [[ "$MODE" == "fast" ]]; then
         echo "================================================"
         exit $FAILED
     fi
-    run_test test_json "Health status" "$API_URL/api/health" ".status" "healthy"
+    run_test test_health_contract "Health contract" "$API_URL/api/health" "$API_URL/api/readyz"
     INSTANCE_AUTH_DISABLED=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "$API_URL/api/system/info" 2>/dev/null | jq -r '.auth_disabled // "unknown"' 2>/dev/null)
     if [[ "$INSTANCE_AUTH_DISABLED" == "false" ]]; then
         pass "Auth enabled (true)"
