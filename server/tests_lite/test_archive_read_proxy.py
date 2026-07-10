@@ -123,6 +123,37 @@ def test_archive_child_opens_sqlite_files_read_only(tmp_path):
     assert _readonly_sqlite_url(readonly) == readonly
 
 
+def test_explicit_database_urls_win_over_dotenv(tmp_path):
+    explicit_archive = f"sqlite:///{tmp_path / 'explicit-archive.db'}"
+    explicit_live = f"sqlite:///{tmp_path / 'explicit-live.db'}"
+    (tmp_path / ".env").write_text(
+        "DATABASE_URL=sqlite:///dotenv-archive.db\n"
+        "LONGHOUSE_LIVE_DATABASE_URL=sqlite:///dotenv-live.db\n"
+    )
+    env = os.environ.copy()
+    env["DATABASE_URL"] = explicit_archive
+    env["LONGHOUSE_LIVE_DATABASE_URL"] = explicit_live
+    env.pop("TESTING", None)
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json; import zerg.database as database; "
+                "print(json.dumps([database._settings.database_url, database._settings.live_database_url]))"
+            ),
+        ],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+    assert json.loads(completed.stdout) == [explicit_archive, explicit_live]
+
+
 @pytest.mark.asyncio
 async def test_archive_read_proxy_preserves_child_response(monkeypatch):
     class Child:

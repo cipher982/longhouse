@@ -96,9 +96,9 @@ def _effective_auth_disabled() -> bool:
 def _load_repo_env_for_gate() -> None:
     """Load the repo-root .env so the public-bind gate sees runtime auth config.
 
-    Mirrors config._load_settings(): the real runtime loads .env with
-    override=True when not testing. Without this, an AUTH_DISABLED=1 / DEMO_MODE=1
-    in .env would bypass the gate (the gate runs before app config loads).
+    Mirrors config._load_settings(): .env supplies defaults while explicit
+    process configuration wins. Without this, an AUTH_DISABLED=1 / DEMO_MODE=1
+    present only in .env would bypass the gate (the gate runs before app config loads).
     Skipped under TESTING so unit tests are not polluted by a real .env.
     """
     if os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}:
@@ -110,7 +110,7 @@ def _load_repo_env_for_gate() -> None:
 
         env_path = _REPO_ROOT / ".env"
         if env_path.exists():
-            load_dotenv(env_path, override=True)
+            load_dotenv(env_path, override=False)
     except Exception:
         # Never let env discovery crash startup; the gate then sees process env only.
         pass

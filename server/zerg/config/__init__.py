@@ -508,9 +508,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
             ]:
                 preserved[key] = os.getenv(key)
 
-        # In tests, avoid overriding runtime env vars (monkeypatch/fixtures).
-        # In dev/prod, .env remains authoritative.
-        load_dotenv(env_path, override=not testing)
+        load_dotenv(env_path, override=False)
 
         # Restore E2E test environment variables if they were explicitly set
         if is_e2e_test_env:

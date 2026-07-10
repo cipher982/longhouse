@@ -1,18 +1,12 @@
 # E2E log suppression: only active when E2E_LOG_SUPPRESS=1 for test runs
 
 # CRITICAL: Load environment variables FIRST - before ANY other imports that might use os.getenv()
-# Use override=False in test/e2e contexts so Node-spawned overrides (ENVIRONMENT, TESTING, etc.)
-# are preserved; override=True for normal dev/prod to keep .env authoritative and strip quotes.
+# A .env file supplies defaults only. Explicit process configuration always wins.
 import json
-import os
 
 from dotenv import load_dotenv
 
-_env = os.getenv("ENVIRONMENT", "").lower()
-_testing = os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}
-_is_test_env = _testing or ("test" in _env) or ("e2e" in _env)
-
-load_dotenv(override=not _is_test_env)
+load_dotenv(override=False)
 
 # fmt: off
 # ruff: noqa: E402

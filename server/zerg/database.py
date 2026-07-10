@@ -166,10 +166,9 @@ def _get_or_create_live_worker_session_factories(worker_id: str) -> tuple[sessio
         return factory, write_factory
 
 
-# Use override=True to ensure proper quote stripping even if vars are inherited from parent process.
-# In test/E2E mode, do not override explicit env vars like ENVIRONMENT.
-_override_env = os.getenv("TESTING", "").strip().lower() not in {"1", "true", "yes", "on"}
-dotenv.load_dotenv(override=_override_env)
+# A .env file supplies defaults only. Archive helper processes set explicit
+# read-only database URLs before importing this module; those must always win.
+dotenv.load_dotenv(override=False)
 
 
 # SQLite-only: no schema support
