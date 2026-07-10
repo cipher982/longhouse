@@ -42,6 +42,7 @@ from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession as LiveSessionRow
+from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLivePreview
 from zerg.services.agents import AgentsStore
@@ -2106,6 +2107,14 @@ def test_runtime_events_touch_live_session_candidates(tmp_path):
 
     try:
         with LiveSession() as live_db:
+            live_db.add(
+                LiveSessionCatalog(
+                    session_id=str(session_id),
+                    provider="claude",
+                    environment="production",
+                    started_at=now,
+                )
+            )
             ingest_live_runtime_events(live_db, [event])
             live_db.commit()
 
