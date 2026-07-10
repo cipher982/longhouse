@@ -165,6 +165,7 @@ async def isolate_archive_reads(request, call_next):
 
     from zerg.database import catalog_db_session
     from zerg.database import live_catalog_enabled
+    from zerg.dependencies.agents_auth import require_single_tenant
     from zerg.dependencies.agents_auth import verify_agents_token
     from zerg.dependencies.browser_auth import _get_browser_session_user
     from zerg.services.archive_read_proxy import normalized_api_path
@@ -176,6 +177,7 @@ async def isolate_archive_reads(request, call_next):
             path = normalized_api_path(request)
             if path.startswith("/agents/"):
                 verify_agents_token(request)
+                require_single_tenant()
             else:
                 with catalog_db_session() as db:
                     if _get_browser_session_user(request, db) is None:
