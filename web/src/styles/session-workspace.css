@@ -1142,12 +1142,10 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border-top: 1px solid var(--session-energy-border);
-    background:
-      radial-gradient(circle at 18% 0%, var(--session-energy-soft), transparent 42%),
-      linear-gradient(180deg, rgba(22, 14, 10, 0.98), rgba(10, 8, 6, 0.99));
-    box-shadow: 0 -18px 46px rgba(0, 0, 0, 0.28);
+    align-items: center;
+    padding: var(--space-3) var(--space-4);
+    border-top: 1px solid rgba(158, 124, 90, 0.12);
+    background: linear-gradient(180deg, transparent, rgba(10, 8, 6, 0.56));
   }
 
   .session-control-dock {
@@ -1249,8 +1247,8 @@
        reading width. Tool rows are interleaved detail; they wrap/clamp
        to a narrower band so they don't dominate the eye, and so short
        commands don't stretch across a 160ch viewport. */
-    --tl-prose-max: 110ch;
-    --tl-tool-max: 96ch;
+    --tl-prose-max: 78ch;
+    --tl-tool-max: 126ch;
   }
 
   .tl-chip {
@@ -1281,11 +1279,11 @@
     flex-direction: column;
     gap: 4px;
     padding: var(--space-3) 0;
-    max-width: var(--tl-prose-max);
-    margin-inline: auto;
+    max-width: min(var(--tl-prose-max), 76%);
     width: 100%;
   }
-  .tl-msg--user { align-self: flex-start; }
+  .tl-msg--assistant { align-self: flex-start; }
+  .tl-msg--user { align-self: flex-end; }
   .tl-msg__head {
     display: flex;
     align-items: center;
@@ -2478,8 +2476,17 @@
   /* ===== Composer dock (bar layout) ===== */
 
   .session-control-dock--bar {
+    width: min(100%, var(--tl-tool-max));
     gap: 4px;
-    padding: 0;
+    padding: var(--space-2) var(--space-3);
+    border: 1px solid var(--session-energy-border);
+    border-radius: var(--radius-lg);
+    background:
+      radial-gradient(circle at 18% 0%, var(--session-energy-soft), transparent 52%),
+      rgba(18, 11, 9, 0.9);
+    box-shadow:
+      inset 3px 0 0 var(--session-control-accent),
+      0 12px 34px rgba(0, 0, 0, 0.24);
   }
 
   .session-control-dock--bar .session-control-dock__composer {
