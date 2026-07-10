@@ -249,7 +249,7 @@ def test_live_catalog_schema_inventory_is_created(tmp_path):
     assert set(live_catalog_table_names()).issubset(tables)
 
 
-def test_live_catalog_sync_repairs_legacy_null_with_live_default(tmp_path):
+def test_live_catalog_sync_normalizes_legacy_null_and_uuid_parent(tmp_path):
     archive_engine = make_engine(f"sqlite:///{tmp_path / 'archive.db'}")
     live_engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
     Base.metadata.create_all(archive_engine)
@@ -258,6 +258,8 @@ def test_live_catalog_sync_repairs_legacy_null_with_live_default(tmp_path):
     LiveSession = make_sessionmaker(live_engine)
     now = datetime.now(timezone.utc)
     session_id = uuid4()
+    parent_thread_id = uuid4()
+    child_thread_id = uuid4()
 
     with ArchiveSession() as archive_db:
         archive_db.add(
@@ -267,7 +269,29 @@ def test_live_catalog_sync_repairs_legacy_null_with_live_default(tmp_path):
                 environment="production",
                 started_at=now,
                 last_activity_at=now,
+                primary_thread_id=parent_thread_id,
             )
+        )
+        archive_db.add_all(
+            [
+                SessionThread(
+                    id=parent_thread_id,
+                    session_id=session_id,
+                    provider="codex",
+                    is_primary=1,
+                    created_at=now,
+                    updated_at=now,
+                ),
+                SessionThread(
+                    id=child_thread_id,
+                    session_id=session_id,
+                    provider="codex",
+                    parent_thread_id=parent_thread_id,
+                    branch_kind="subagent",
+                    created_at=now,
+                    updated_at=now,
+                ),
+            ]
         )
         archive_db.commit()
 
@@ -282,7 +306,10 @@ def test_live_catalog_sync_repairs_legacy_null_with_live_default(tmp_path):
         with LiveSession() as live_db:
             assert sync_live_catalog_session(archive_db, live_db, session_id=session_id) is True
             assert live_db.get(LiveSessionCatalog, str(session_id)).user_state == "active"
+            child = live_db.get(LiveSessionThread, str(child_thread_id))
+            assert child.parent_thread_id == str(parent_thread_id)
 
             result = backfill_live_catalog(archive_db, live_db, batch_size=1)
             assert result.sessions == 1
+            assert result.session_threads == 2
             assert live_db.get(LiveSessionCatalog, str(session_id)).user_state == "active"

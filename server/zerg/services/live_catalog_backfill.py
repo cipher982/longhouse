@@ -12,6 +12,7 @@ from dataclasses import asdict
 from dataclasses import dataclass
 from typing import Any
 from typing import Iterable
+from uuid import UUID
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -505,7 +506,9 @@ def _catalog_values(source: Any, target_model, *, id_mapping: dict[str, str] | N
         if not hasattr(source, source_name):
             continue
         value = getattr(source, source_name)
-        if column.name in {"session_id", "primary_thread_id", "id", "thread_id", "run_id"} and value is not None:
+        if isinstance(value, UUID):
+            value = str(value)
+        elif column.name in {"session_id", "primary_thread_id", "id", "thread_id", "run_id"} and value is not None:
             value = str(value)
         values[column.name] = value
     return _omit_legacy_null_defaults(target_model, values)
