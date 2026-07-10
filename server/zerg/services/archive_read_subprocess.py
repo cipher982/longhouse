@@ -29,10 +29,15 @@ def _readonly_sqlite_url(raw: str) -> str:
     return f"sqlite:///file:{quote(str(path), safe='/')}?mode=ro&uri=true"
 
 
+def _request_is_read_only(method: str, path: str) -> bool:
+    return method in {"GET", "HEAD"} or (method == "POST" and path == "/agents/source-lines/claims")
+
+
 async def _main() -> None:
     payload = json.loads(sys.stdin.buffer.read())
     method = str(payload.get("method") or "GET").upper()
-    read_only = method in {"GET", "HEAD"}
+    path = str(payload["path"])
+    read_only = _request_is_read_only(method, path)
     original_database_url = os.environ.get("DATABASE_URL", "")
     if read_only and not os.environ.get("LONGHOUSE_LIVE_DATABASE_URL") and not os.environ.get("LONGHOUSE_LIVE_DB_PATH"):
         from sqlalchemy.engine import make_url
@@ -59,7 +64,6 @@ async def _main() -> None:
     use_archive_database_for_process()
     from zerg.main import api_app
 
-    path = str(payload["path"])
     query = str(payload.get("query") or "")
     url = f"{path}?{query}" if query else path
     async with httpx.AsyncClient(

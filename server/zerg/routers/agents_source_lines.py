@@ -26,7 +26,7 @@ from zerg.services.session_archive import build_session_archive_bundle
 router = APIRouter(prefix="/agents/source-lines", tags=["agents"])
 
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
-_PROOF_VERSION = "head-archive-bundle-v1"
+_PROOF_VERSION = "head-archive-bundle-ro-v1"
 
 
 class SourceLineClaimItem(BaseModel):

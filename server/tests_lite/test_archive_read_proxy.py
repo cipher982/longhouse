@@ -22,6 +22,7 @@ from zerg.database import make_live_engine
 from zerg.main import api_app
 from zerg.services.archive_read_proxy import proxy_archive_request
 from zerg.services.archive_read_proxy import should_proxy_archive_request
+from zerg.services.archive_read_subprocess import _request_is_read_only
 from zerg.services.archive_read_subprocess import _readonly_sqlite_url
 
 
@@ -121,6 +122,12 @@ def test_archive_child_opens_sqlite_files_read_only(tmp_path):
         with pytest.raises(OperationalError, match="readonly database"):
             connection.exec_driver_sql("CREATE TABLE forbidden (id INTEGER)")
     assert _readonly_sqlite_url(readonly) == readonly
+
+
+def test_source_line_claim_post_uses_read_only_archive_connection():
+    assert _request_is_read_only("POST", "/agents/source-lines/claims")
+    assert _request_is_read_only("GET", "/agents/sessions/session/archive-bundle")
+    assert not _request_is_read_only("POST", "/agents/ingest")
 
 
 def test_explicit_database_urls_win_over_dotenv(tmp_path):

@@ -201,7 +201,7 @@ def test_source_line_claims_require_recoverable_raw_bytes(tmp_path, monkeypatch)
 
         assert response.status_code == 200, response.text
         assert response.json() == {
-            "proof_version": "head-archive-bundle-v1",
+            "proof_version": "head-archive-bundle-ro-v1",
             "present": [
                 {
                     "source_path": source_path,
