@@ -2331,6 +2331,7 @@
     .tl-msg {
       gap: 3px;
       padding: 8px 0;
+      max-width: 100%;
     }
 
     .tl-msg__head,
