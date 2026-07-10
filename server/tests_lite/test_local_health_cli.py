@@ -3518,6 +3518,11 @@ def test_collect_local_health_fast_uses_resolved_sessions_without_process_scan(m
         "_load_managed_session_phase_state",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fast local-health must not read phase overlay")),
     )
+    monkeypatch.setattr(
+        local_health_service,
+        "_enrich_managed_session_titles",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fast local-health must not use the network")),
+    )
     managed_id = "55c61956-7554-4713-8c9b-fb0fa6164c2c"
     unmanaged_id = "019dcac2-fd02-7a97-85b8-6f725b9d6252"
     _write_engine_status(
