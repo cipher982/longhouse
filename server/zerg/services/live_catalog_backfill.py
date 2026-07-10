@@ -100,7 +100,10 @@ def _upsert_rows(
     pk_names = [column.name for column in target_model.__table__.primary_key.columns]
     query = archive_db.query(source_model).order_by(*source_model.__table__.primary_key.columns)
     for source in query.yield_per(batch_size):
-        values = {target_name: transform(getattr(source, source_name)) for target_name, (source_name, transform) in fields.items()}
+        values = {}
+        for target_name, (source_name, transform) in fields.items():
+            values[target_name] = transform(getattr(source, source_name))
+        values = _omit_legacy_null_defaults(target_model, values)
         statement = sqlite_insert(target_model).values(**values)
         updates = {name: getattr(statement.excluded, name) for name in values if name not in pk_names}
         live_db.execute(
@@ -118,6 +121,31 @@ def _upsert_rows(
 
 def _same(*names: str) -> dict[str, tuple[str, Any]]:
     return {name: (name, _identity) for name in names}
+
+
+def _omit_legacy_null_defaults(target_model, values: dict[str, Any]) -> dict[str, Any]:
+    """Let live-store defaults repair nullable values from legacy schemas.
+
+    Some old archive databases predate current NOT NULL constraints.  Their
+    ORM models describe the current schema, but rows can still contain NULL in
+    fields such as ``user_state``.  Sending those NULLs to the stricter live
+    catalog defeats its server defaults and aborts the whole catalog sync.
+
+    Omit only target columns that are non-nullable *and* have an explicit
+    default.  Truly required values without a default still fail loudly.
+    """
+
+    columns = target_model.__table__.columns
+    return {
+        name: value
+        for name, value in values.items()
+        if not (
+            value is None
+            and name in columns
+            and not columns[name].nullable
+            and (columns[name].default is not None or columns[name].server_default is not None)
+        )
+    }
 
 
 def backfill_live_catalog(
@@ -480,7 +508,7 @@ def _catalog_values(source: Any, target_model, *, id_mapping: dict[str, str] | N
         if column.name in {"session_id", "primary_thread_id", "id", "thread_id", "run_id"} and value is not None:
             value = str(value)
         values[column.name] = value
-    return values
+    return _omit_legacy_null_defaults(target_model, values)
 
 
 def _upsert_catalog_values(live_db: Session, target_model, values: dict[str, Any]) -> None:
@@ -579,7 +607,8 @@ def sync_live_catalog_session(archive_db: Session, live_db: Session, *, session_
     attempts = archive_db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.session_id == source_session.id).all()
     for attempt in attempts:
         values = _catalog_values(attempt, LiveSessionLaunchAttempt)
-        existing_attempt = live_db.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == attempt.command_id).first()
+        attempt_query = live_db.query(LiveSessionLaunchAttempt)
+        existing_attempt = attempt_query.filter(LiveSessionLaunchAttempt.command_id == attempt.command_id).first()
         if existing_attempt is not None:
             values.pop("id", None)
             for key, value in values.items():
@@ -611,5 +640,7 @@ def sync_recent_live_catalog(*, limit: int = 25) -> int:
             )
         ]
         with live_factory() as live_db:
-            synced = sum(int(sync_live_catalog_session(archive_db, live_db, session_id=session_id)) for session_id in session_ids)
+            synced = 0
+            for session_id in session_ids:
+                synced += int(sync_live_catalog_session(archive_db, live_db, session_id=session_id))
     return synced

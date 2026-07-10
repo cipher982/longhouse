@@ -244,8 +244,45 @@ def test_live_catalog_schema_inventory_is_created(tmp_path):
     with live_engine.connect() as connection:
         tables = {
             str(row[0])
-            for row in connection.exec_driver_sql(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
     assert set(live_catalog_table_names()).issubset(tables)
+
+
+def test_live_catalog_sync_repairs_legacy_null_with_live_default(tmp_path):
+    archive_engine = make_engine(f"sqlite:///{tmp_path / 'archive.db'}")
+    live_engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
+    Base.metadata.create_all(archive_engine)
+    initialize_live_database(live_engine)
+    ArchiveSession = make_sessionmaker(archive_engine)
+    LiveSession = make_sessionmaker(live_engine)
+    now = datetime.now(timezone.utc)
+    session_id = uuid4()
+
+    with ArchiveSession() as archive_db:
+        archive_db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="production",
+                started_at=now,
+                last_activity_at=now,
+            )
+        )
+        archive_db.commit()
+
+        # Production archives can contain NULLs from schemas that predate the
+        # current NOT NULL constraint.  Model that legacy row in the identity
+        # map without trying to write it back into this fresh archive schema.
+        legacy_session = archive_db.get(AgentSession, session_id)
+        assert legacy_session is not None
+        archive_db.autoflush = False
+        legacy_session.user_state = None
+
+        with LiveSession() as live_db:
+            assert sync_live_catalog_session(archive_db, live_db, session_id=session_id) is True
+            assert live_db.get(LiveSessionCatalog, str(session_id)).user_state == "active"
+
+            result = backfill_live_catalog(archive_db, live_db, batch_size=1)
+            assert result.sessions == 1
+            assert live_db.get(LiveSessionCatalog, str(session_id)).user_state == "active"
