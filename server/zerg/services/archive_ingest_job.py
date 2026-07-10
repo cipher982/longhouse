@@ -27,7 +27,12 @@ def archive_ingest_worker_enabled() -> bool:
     # Dark until every remaining monolith writer has moved behind the process
     # boundary. Enabling this while the API WriteSerializer is active would
     # create two writer processes for longhouse.db.
-    value = os.getenv("LONGHOUSE_ARCHIVE_INGEST_WORKER_ENABLED", "0").strip().lower()
+    explicit = os.getenv("LONGHOUSE_ARCHIVE_INGEST_WORKER_ENABLED")
+    if explicit is None:
+        from zerg.database import live_catalog_enabled
+
+        return live_catalog_enabled()
+    value = explicit.strip().lower()
     return value not in {"0", "false", "no", "off"}
 
 
@@ -136,6 +141,15 @@ def execute_archive_ingest_job(payload: dict[str, Any]) -> dict[str, Any]:
             if not prepared_shadow.error and prepared_shadow.chunks:
                 insert_archive_chunk_manifests(db, prepared_shadow.chunks)
         db.commit()
+
+    from zerg.database import get_live_session_factory
+    from zerg.services.live_catalog_backfill import sync_live_catalog_session
+
+    live_session_factory = get_live_session_factory()
+    if live_session_factory is None:
+        raise RuntimeError("archive ingest worker requires live catalog session factory")
+    with session_factory() as archive_db, live_session_factory() as live_db:
+        sync_live_catalog_session(archive_db, live_db, session_id=result.session_id)
 
     return {
         "result": result.model_dump(mode="json"),

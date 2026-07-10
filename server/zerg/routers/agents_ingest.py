@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.config import get_settings
-from zerg.database import get_db
+from zerg.database import catalog_db_dependency
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import agents_ingest_decode_seconds
@@ -44,6 +44,7 @@ from zerg.services.write_serializer import InterruptedWriteError
 from zerg.services.write_serializer import WriteQueueTimeoutError
 
 logger = logging.getLogger(__name__)
+_catalog_db_dependency = catalog_db_dependency()
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 SHIP_TRACE_HEADER = "X-Longhouse-Ship-Trace"
@@ -927,7 +928,7 @@ def _decompress_bounded_zstd(body: bytes) -> bytes:
 async def ingest_session(
     request: Request,
     response: Response,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     auth_token: DeviceToken | ManagedLocalHookToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> IngestResponse:

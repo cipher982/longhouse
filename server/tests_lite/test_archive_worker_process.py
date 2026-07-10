@@ -10,6 +10,7 @@ from datetime import timedelta
 from datetime import timezone
 
 import pytest
+from cryptography.fernet import Fernet
 
 from zerg.database import Base
 from zerg.database import initialize_live_database
@@ -33,6 +34,8 @@ def _worker_env(tmp_path, archive_url: str, live_url: str) -> dict[str, str]:
         "LONGHOUSE_LIVE_DATABASE_URL": live_url,
         "LONGHOUSE_ARCHIVE_WORKER_ENABLED": "1",
         "LONGHOUSE_ARCHIVE_WORKER_STATUS_PATH": str(tmp_path / "archive-worker-status.json"),
+        "AUTH_DISABLED": "1",
+        "FERNET_SECRET": Fernet.generate_key().decode(),
         "TESTING": "0",
     }
 
@@ -235,16 +238,21 @@ def test_archive_worker_defaults_off_in_tests_and_can_be_enabled(monkeypatch):
     assert archive_worker_enabled() is True
 
 
-def test_archive_ingest_worker_stays_dark_until_single_writer_cutover(tmp_path, monkeypatch):
+def test_archive_ingest_worker_defaults_to_catalog_single_writer_mode(tmp_path, monkeypatch):
+    import zerg.database as database_module
     from zerg.services.archive_ingest_job import archive_ingest_worker_enabled
 
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_ENABLED", "1")
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_WORKER_STATUS_PATH", str(tmp_path / "status.json"))
     monkeypatch.delenv("LONGHOUSE_ARCHIVE_INGEST_WORKER_ENABLED", raising=False)
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: False)
     assert archive_ingest_worker_enabled() is False
 
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_WORKER_ENABLED", "1")
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     assert archive_ingest_worker_enabled() is True
+
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_WORKER_ENABLED", "0")
+    assert archive_ingest_worker_enabled() is False
 
 
 def test_archive_worker_stale_running_status_is_degraded(tmp_path, monkeypatch):

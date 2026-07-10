@@ -35,6 +35,7 @@ from zerg.models.refresh_session import RefreshSession
 from zerg.models.user import User
 from zerg.services.live_catalog_backfill import backfill_live_catalog
 from zerg.services.live_catalog_backfill import live_catalog_table_names
+from zerg.services.live_catalog_backfill import sync_live_catalog_session
 
 
 def test_live_catalog_backfill_is_idempotent_and_updates_rows(tmp_path):
@@ -216,6 +217,9 @@ def test_live_catalog_backfill_is_idempotent_and_updates_rows(tmp_path):
         archive_db.commit()
 
         with LiveSession() as live_db:
+            assert sync_live_catalog_session(archive_db, live_db, session_id=session_id) is True
+            assert live_db.query(LiveSessionCatalog).one().summary_title == "After"
+            assert live_db.query(LiveTimelineCard).one().summary_title == "After"
             second = backfill_live_catalog(archive_db, live_db, batch_size=3)
             assert second.as_dict() == first.as_dict()
             assert live_db.query(LiveUser).count() == 1

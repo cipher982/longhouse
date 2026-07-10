@@ -477,7 +477,7 @@ def _ensure_default_engines_from_env() -> Engine | None:
     return default_engine
 
 
-def configure_write_serializer() -> None:
+def configure_write_serializer(*, observe_api_activity: bool = True) -> None:
     """Configure the archive WriteSerializer with the dedicated write engine.
 
     Call once at startup (from lifespan) after database_url is set.
@@ -488,10 +488,11 @@ def configure_write_serializer() -> None:
     ws = get_write_serializer()
     if not ws.is_configured:
         ws.configure_resolver(_resolve_write_session_factory)
-    from zerg.services.archive_api_writer_status import write_archive_api_writer_status
+    if observe_api_activity:
+        from zerg.services.archive_api_writer_status import write_archive_api_writer_status
 
-    ws.set_activity_observer(write_archive_api_writer_status)
-    write_archive_api_writer_status({"active": False, "label": None, "job_id": None})
+        ws.set_activity_observer(write_archive_api_writer_status)
+        write_archive_api_writer_status({"active": False, "label": None, "job_id": None})
 
 
 def configure_live_write_serializer() -> None:

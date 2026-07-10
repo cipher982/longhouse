@@ -466,3 +466,78 @@ def live_catalog_table_names() -> tuple[str, ...]:
 def count_live_catalog_rows(live_db: Session, table_models: Iterable[Any] | None = None) -> dict[str, int]:
     models = tuple(table_models or (LiveUser, LiveDeviceToken, LiveSessionCatalog, LiveTimelineCard))
     return {model.__tablename__: int(live_db.query(model).count()) for model in models}
+
+
+def _catalog_values(source: Any, target_model, *, id_mapping: dict[str, str] | None = None) -> dict[str, Any]:
+    mapping = id_mapping or {}
+    values: dict[str, Any] = {}
+    for column in target_model.__table__.columns:
+        source_name = mapping.get(column.name, column.name)
+        if not hasattr(source, source_name):
+            continue
+        value = getattr(source, source_name)
+        if column.name in {"session_id", "primary_thread_id", "id", "thread_id", "run_id"} and value is not None:
+            value = str(value)
+        values[column.name] = value
+    return values
+
+
+def _upsert_catalog_values(live_db: Session, target_model, values: dict[str, Any]) -> None:
+    if not values:
+        return
+    primary_keys = [column.name for column in target_model.__table__.primary_key.columns]
+    statement = sqlite_insert(target_model).values(**values)
+    updates = {name: getattr(statement.excluded, name) for name in values if name not in primary_keys}
+    live_db.execute(
+        statement.on_conflict_do_update(
+            index_elements=[getattr(target_model, name) for name in primary_keys],
+            set_=updates,
+        )
+    )
+
+
+def sync_live_catalog_session(archive_db: Session, live_db: Session, *, session_id: Any) -> bool:
+    """Refresh one bounded session/card projection after a cold worker commit."""
+
+    source_session = archive_db.get(AgentSession, session_id)
+    if source_session is None:
+        return False
+    _upsert_catalog_values(
+        live_db,
+        LiveSessionCatalog,
+        _catalog_values(source_session, LiveSessionCatalog, id_mapping={"session_id": "id"}),
+    )
+    source_card = archive_db.get(TimelineCard, session_id)
+    if source_card is not None:
+        _upsert_catalog_values(
+            live_db,
+            LiveTimelineCard,
+            _catalog_values(source_card, LiveTimelineCard),
+        )
+    live_db.commit()
+    return True
+
+
+def sync_recent_live_catalog(*, limit: int = 25) -> int:
+    """Refresh the most recently changed cold sessions from inside the worker."""
+
+    from zerg.database import get_live_session_factory
+    from zerg.database import get_write_session_factory
+
+    archive_factory = get_write_session_factory()
+    live_factory = get_live_session_factory()
+    if archive_factory is None or live_factory is None:
+        return 0
+    with archive_factory() as archive_db:
+        session_ids = [
+            row[0]
+            for row in (
+                archive_db.query(AgentSession.id)
+                .order_by(AgentSession.updated_at.desc(), AgentSession.last_activity_at.desc(), AgentSession.id.desc())
+                .limit(max(1, int(limit)))
+                .all()
+            )
+        ]
+        with live_factory() as live_db:
+            synced = sum(int(sync_live_catalog_session(archive_db, live_db, session_id=session_id)) for session_id in session_ids)
+    return synced
