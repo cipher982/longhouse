@@ -255,6 +255,25 @@ def test_health_db_minimal_for_untrusted(monkeypatch):
     assert "missing_table" not in body
 
 
+def test_health_db_uses_live_catalog_engine_when_enabled(tmp_path, monkeypatch):
+    import zerg.database as database_module
+    from zerg.database import initialize_live_database
+    from zerg.database import make_live_engine
+    from zerg.routers import health as health_mod
+
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'live-health.db'}")
+    initialize_live_database(engine)
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(database_module, "get_live_engine", lambda: engine)
+    monkeypatch.setattr(health_mod, "_request_is_trusted", lambda request: True)
+
+    with _client() as client:
+        response = client.get("/api/health/db")
+
+    assert response.status_code == 200
+    assert "live_session_catalog" in response.json()["tables_verified"]
+
+
 # ---------------------------------------------------------------------------
 # agents API rate limit helper
 # ---------------------------------------------------------------------------

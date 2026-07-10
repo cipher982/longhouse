@@ -242,6 +242,11 @@ def refresh_device_gauges() -> None:
     but we also export the heartbeat's own offline flag for convenience.
     """
     try:
+        from zerg.database import live_catalog_enabled
+
+        if live_catalog_enabled():
+            _refresh_live_device_gauges()
+            return
         from zerg.database import get_session_factory
         from zerg.services.agent_heartbeat_health import load_machine_transport_health_map
 
@@ -270,6 +275,50 @@ def refresh_device_gauges() -> None:
         pending_ranges = float(archive.get("pending_ranges", 0) or 0)
         metrics.device_archive_backlog_pending_bytes.labels(device=device).set(pending_bytes)
         metrics.device_archive_backlog_pending_ranges.labels(device=device).set(pending_ranges)
+
+
+def _refresh_live_device_gauges() -> None:
+    """Refresh device gauges from bounded heartbeat stamps only."""
+
+    import json
+    from datetime import timezone
+
+    from sqlalchemy import func
+    from sqlalchemy import select
+
+    from zerg.database import get_live_session_factory
+    from zerg.models.live_store import LiveHeartbeatStamp
+
+    factory = get_live_session_factory()
+    if factory is None:
+        return
+    with factory() as db:
+        latest_ids = select(func.max(LiveHeartbeatStamp.id)).group_by(LiveHeartbeatStamp.device_id)
+        rows = db.query(LiveHeartbeatStamp).filter(LiveHeartbeatStamp.id.in_(latest_ids)).all()
+    for row in rows:
+        device = str(row.device_id or "unknown")
+        received_at = row.received_at
+        if received_at.tzinfo is None:
+            received_at = received_at.replace(tzinfo=timezone.utc)
+        metrics.device_last_heartbeat_timestamp_seconds.labels(device=device).set(received_at.timestamp())
+        if row.ship_latency_p50_ms_1h is not None:
+            metrics.device_ship_latency_ms.labels(device=device, quantile="p50").set(float(row.ship_latency_p50_ms_1h))
+        if row.ship_latency_p95_ms_1h is not None:
+            metrics.device_ship_latency_ms.labels(device=device, quantile="p95").set(float(row.ship_latency_p95_ms_1h))
+        metrics.device_spool_pending.labels(device=device).set(float(row.spool_pending or 0))
+        metrics.device_spool_dead.labels(device=device).set(float(row.spool_dead or 0))
+        metrics.device_consecutive_ship_failures.labels(device=device).set(float(row.consecutive_failures or 0))
+        metrics.device_parse_errors_1h.labels(device=device).set(float(row.parse_errors_1h or 0))
+        metrics.device_disk_free_bytes.labels(device=device).set(float(row.disk_free_bytes or 0))
+        metrics.device_reported_offline.labels(device=device).set(1.0 if row.is_offline else 0.0)
+        try:
+            raw = json.loads(row.raw_json or "{}")
+        except (TypeError, ValueError):
+            raw = {}
+        archive = raw.get("archive_repair") if isinstance(raw, dict) else {}
+        archive = archive if isinstance(archive, dict) else {}
+        metrics.device_archive_backlog_pending_bytes.labels(device=device).set(float(archive.get("pending_bytes") or 0))
+        metrics.device_archive_backlog_pending_ranges.labels(device=device).set(float(archive.get("pending_ranges") or 0))
 
 
 def refresh_godview_gauges() -> None:

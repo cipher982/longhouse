@@ -28,6 +28,7 @@ from zerg.database import make_live_engine  # noqa: E402
 from zerg.database import make_sessionmaker  # noqa: E402
 from zerg.models.agents import AgentHeartbeat  # noqa: E402
 from zerg.models.live_store import LiveArchiveOutbox  # noqa: E402
+from zerg.models.live_store import LiveHeartbeatStamp  # noqa: E402
 from zerg.models.live_store import LiveSession as LiveSessionRow  # noqa: E402
 
 
@@ -111,6 +112,37 @@ def test_device_gauges_reflect_latest_heartbeat(tmp_path, monkeypatch):
     assert _gauge_value(metrics.device_ship_latency_ms, device="dev-1", quantile="p95") == 240.0
     ts = _gauge_value(metrics.device_last_heartbeat_timestamp_seconds, device="dev-1")
     assert ts == pytest.approx((pinned_now - timedelta(minutes=1)).timestamp())
+
+
+def test_device_gauges_use_live_heartbeat_stamps_in_catalog_mode(tmp_path, monkeypatch):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'live-heartbeats.db'}")
+    initialize_live_database(engine)
+    factory = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    with factory() as db:
+        db.add(
+            LiveHeartbeatStamp(
+                device_id="catalog-device",
+                received_at=now,
+                spool_pending=7,
+                spool_dead=1,
+                parse_errors_1h=2,
+                consecutive_failures=3,
+                disk_free_bytes=8192,
+                is_offline=0,
+            )
+        )
+        db.commit()
+
+    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: True)
+    monkeypatch.setattr("zerg.database.get_live_session_factory", lambda: factory)
+
+    import zerg.services.godview_metrics as godview
+
+    godview.refresh_device_gauges()
+
+    assert _gauge_value(metrics.device_spool_pending, device="catalog-device") == 7.0
+    assert _gauge_value(metrics.device_consecutive_ship_failures, device="catalog-device") == 3.0
 
 
 @pytest.mark.asyncio

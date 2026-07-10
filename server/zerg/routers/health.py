@@ -195,10 +195,10 @@ def _request_is_trusted(request: Request) -> bool:
     # only be a trust signal when auth is actually enforced.
     if not settings.auth_disabled:
         try:
-            from zerg.database import get_session_factory
+            from zerg.database import get_catalog_session_factory
             from zerg.dependencies.browser_auth import _get_browser_session_user
 
-            db = get_session_factory()()
+            db = get_catalog_session_factory()()
             try:
                 user = _get_browser_session_user(request, db)
             finally:
@@ -220,12 +220,22 @@ def health_db(request: Request):
     status so this isn't a public schema-disclosure surface.
     """
     from zerg.database import default_engine
+    from zerg.database import get_live_engine
+    from zerg.database import live_catalog_enabled
 
     trusted = _request_is_trusted(request)
-    required_tables = ["users", "sessions", "events", "events_fts"]
+    catalog_mode = live_catalog_enabled()
+    health_engine = get_live_engine() if catalog_mode else default_engine
+    required_tables = (
+        ["users", "live_session_catalog", "live_timeline_cards", "live_runtime_state"]
+        if catalog_mode
+        else ["users", "sessions", "events", "events_fts"]
+    )
 
     try:
-        with default_engine.connect() as conn:
+        if health_engine is None:
+            raise RuntimeError("database engine unavailable")
+        with health_engine.connect() as conn:
             for table in required_tables:
                 result = conn.execute(text(f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"))
                 if not result.fetchone():
@@ -569,9 +579,11 @@ def health_check(request: Request):
     # 2b. Request DB pool pressure. This is intentionally passive telemetry:
     # it reads SQLAlchemy pool counters without checking out another connection.
     try:
+        from zerg.database import get_live_engine
         from zerg.database import get_pool_status
+        from zerg.database import live_catalog_enabled
 
-        pool_status = get_pool_status()
+        pool_status = get_pool_status(get_live_engine() if live_catalog_enabled() else None)
         if pool_status is None:
             checks["db_pool"] = {"status": "skip", "reason": "engine unavailable"}
         else:
