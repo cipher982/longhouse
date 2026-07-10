@@ -39,6 +39,7 @@ const BACKLOG_CAP_FLOOR: usize = 1;
 /// behind a single mutex, so concurrency past ~16 mostly adds queue wait
 /// without raising goodput. Capped here to bound the AIMD search space.
 const BACKLOG_CAP_CEILING: usize = 16;
+const SCAN_IN_FLIGHT_CAP: usize = 1;
 
 /// Target SLO for server-side ingest queue wait. AIMD increases the cap when
 /// the EWMA stays below this and halves it when the EWMA crosses above.
@@ -1007,16 +1008,17 @@ impl PathScheduler {
     fn can_launch_priority(&self, priority: WorkPriority) -> bool {
         match priority {
             WorkPriority::Live => self.in_flight_count(WorkPriority::Live) < LIVE_IN_FLIGHT_CAP,
-            WorkPriority::Retry | WorkPriority::Scan => {
-                let backlog_in_flight = self.in_flight_count(WorkPriority::Retry)
-                    + self.in_flight_count(WorkPriority::Scan);
+            WorkPriority::Retry => {
                 // `LIVE_RESERVED` is kept as a hard floor for live latency
-                // safety. The adaptive limiter chooses how aggressive to be
-                // *within* the remaining backlog budget; defense in depth.
+                // safety. The adaptive limiter controls replay concurrency.
                 let backlog_room = self.max_in_flight.saturating_sub(LIVE_RESERVED).max(1);
                 let backlog_cap = backlog_room.min(self.limiter.current_cap());
-                backlog_in_flight < backlog_cap
+                self.in_flight_count(WorkPriority::Retry) < backlog_cap
             }
+            // Reconciliation has its own single slot so a huge spool replay
+            // cannot indefinitely hide missed local source bytes. Live work
+            // still launches first and keeps its reserved capacity.
+            WorkPriority::Scan => self.in_flight_count(WorkPriority::Scan) < SCAN_IN_FLIGHT_CAP,
         }
     }
 
@@ -1093,7 +1095,7 @@ mod tests {
     }
 
     #[test]
-    fn test_background_archive_work_is_capped_to_one_slot() {
+    fn test_retry_and_reconciliation_each_get_one_bounded_slot() {
         let mut scheduler = PathScheduler::new(32);
 
         scheduler.enqueue(
@@ -1113,10 +1115,12 @@ mod tests {
         );
 
         let first = scheduler.pop_launchable().unwrap();
-        assert_ne!(first.priority, WorkPriority::Live);
+        assert_eq!(first.priority, WorkPriority::Retry);
+        let second = scheduler.pop_launchable().unwrap();
+        assert_eq!(second.priority, WorkPriority::Scan);
         assert!(
             scheduler.pop_launchable().is_none(),
-            "background retry/scan work should not fan out even when many workers are configured"
+            "retry and reconciliation lanes should each remain bounded"
         );
     }
 
@@ -1617,15 +1621,12 @@ mod tests {
         assert_eq!(live.priority, WorkPriority::Live);
         assert_eq!(live.path, PathBuf::from("/tmp/live.jsonl"));
 
-        // With combined backlog cap (= max_in_flight - LIVE_RESERVED, floored
-        // at 1), retry and scan share one slot. Drain one before the other.
+        // Replay and reconciliation each have one bounded background slot.
         let retry_job = scheduler.pop_launchable().unwrap();
         assert_eq!(retry_job.priority, WorkPriority::Retry);
-        assert!(scheduler.pop_launchable().is_none());
-
-        scheduler.complete(&retry_path, None);
         let scan_job = scheduler.pop_launchable().unwrap();
         assert_eq!(scan_job.priority, WorkPriority::Scan);
+        assert!(scheduler.pop_launchable().is_none());
     }
 
     #[test]
@@ -1660,13 +1661,11 @@ mod tests {
             scheduler.pop_launchable().unwrap().priority,
             WorkPriority::Retry
         );
-        assert!(scheduler.pop_launchable().is_none());
-
-        scheduler.complete(&PathBuf::from("/tmp/retry.jsonl"), None);
         assert_eq!(
             scheduler.pop_launchable().unwrap().priority,
             WorkPriority::Scan
         );
+        assert!(scheduler.pop_launchable().is_none());
     }
 
     /// Steady well-below-target queue waits should ramp the cap monotonically
