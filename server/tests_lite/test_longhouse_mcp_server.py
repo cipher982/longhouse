@@ -6,7 +6,31 @@ from unittest.mock import patch
 
 import pytest
 
+from zerg.cli.mcp_serve import mcp_server
 from zerg.mcp_server.server import create_server
+
+
+def test_mcp_server_initializes_without_hosted_probe(monkeypatch):
+    started = []
+
+    class FakeServer:
+        def run(self):
+            started.append(True)
+
+    monkeypatch.setattr("zerg.mcp_server.create_server", lambda **kwargs: FakeServer())
+    monkeypatch.setattr(
+        "httpx.get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("MCP startup must not use the network")),
+    )
+
+    mcp_server(
+        url="https://demo.longhouse.test",
+        token="test-token",
+        transport="stdio",
+        port=8001,
+    )
+
+    assert started == [True]
 
 
 def test_create_server_exposes_only_continuity_tools():

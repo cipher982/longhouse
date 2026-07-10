@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sys
 
 import typer
 
@@ -43,25 +42,6 @@ def mcp_server(
         url = get_zerg_url() or "http://localhost:8080"
     if not token:
         token = load_token()
-
-    # Probe the server URL — warn early if unreachable so the user
-    # doesn't get silent empty errors from every tool call.
-    import httpx
-
-    try:
-        resp = httpx.get(f"{url}/api/readyz", timeout=2)
-        if resp.status_code != 200:
-            print(
-                f"WARNING: Longhouse at {url} returned {resp.status_code}. Tools may fail.",
-                file=sys.stderr,
-            )
-    except httpx.ConnectError:
-        print(
-            f"WARNING: Cannot connect to Longhouse at {url}. Is the server running? (longhouse serve)",
-            file=sys.stderr,
-        )
-    except Exception:
-        pass  # Don't block startup on probe failures
 
     from zerg.mcp_server import create_server
 
