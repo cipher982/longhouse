@@ -9,6 +9,7 @@ from fastapi import HTTPException
 
 import zerg.database as database_module
 from zerg.database import get_catalog_session_factory
+from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
@@ -44,8 +45,16 @@ def test_catalog_factory_uses_live_database_without_opening_archive(tmp_path, mo
         assert catalog_db.query(User).one().email == "live-only@example.com"
 
 
+def test_catalog_dependency_stays_overrideable_during_tests(monkeypatch):
+    monkeypatch.setattr(database_module._settings, "live_database_url", "sqlite:////tmp/live.db")
+    monkeypatch.setattr(database_module._settings, "testing", True)
+    monkeypatch.setenv("TESTING", "1")
+    assert catalog_db_dependency() is get_db
+
+
 def test_archive_route_process_keeps_catalog_auth_on_live_database(monkeypatch):
     live_sentinel = object()
+    monkeypatch.setattr(database_module, "_archive_route_process", True)
     monkeypatch.setattr(database_module._settings, "database_url", "sqlite:///file:/tmp/archive.db?mode=ro&uri=true")
     monkeypatch.setattr(database_module._settings, "live_database_url", "sqlite:////tmp/live.db")
     monkeypatch.setattr(database_module, "get_session_factory", lambda: pytest.fail("catalog auth must not use cold rows"))

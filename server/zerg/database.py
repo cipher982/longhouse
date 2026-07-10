@@ -615,7 +615,7 @@ def get_catalog_session_factory() -> sessionmaker:
     authentication and bounded control state never fall back to cold copies.
     """
 
-    if live_store_configured():
+    if live_catalog_enabled() or (_archive_route_process and live_store_configured()):
         factory = get_live_session_factory()
         if factory is None:
             raise RuntimeError("Live catalog is enabled but its session factory is unavailable")
@@ -756,6 +756,8 @@ def get_catalog_db() -> Iterator[Session]:
 def catalog_db_dependency():
     """Select the canonical catalog dependency for this process role."""
 
+    if _settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return get_db
     return get_catalog_db if live_store_configured() else get_db
 
 
