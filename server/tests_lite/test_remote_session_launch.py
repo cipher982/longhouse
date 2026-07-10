@@ -37,7 +37,6 @@ from zerg.models.agents import AgentEvent  # noqa: E402
 from zerg.models.agents import AgentSession  # noqa: E402
 from zerg.models.agents import AgentSourceLine  # noqa: E402
 from zerg.models.agents import SessionConnection  # noqa: E402
-from zerg.models.agents import SessionLivePreview  # noqa: E402
 from zerg.models.agents import SessionLaunchAttempt  # noqa: E402
 from zerg.models.agents import SessionRun  # noqa: E402
 from zerg.models.agents import SessionThreadAlias  # noqa: E402
@@ -47,6 +46,7 @@ from zerg.models.live_store import LiveLaunchReadiness  # noqa: E402
 from zerg.models.live_store import LiveSessionCatalog  # noqa: E402
 from zerg.models.live_store import LiveSessionConnection  # noqa: E402
 from zerg.models.live_store import LiveSessionLaunchAttempt  # noqa: E402
+from zerg.models.live_store import LiveSessionLivePreview  # noqa: E402
 from zerg.models.live_store import LiveSessionThread  # noqa: E402
 from zerg.models.live_store import LiveSessionThreadAlias  # noqa: E402
 from zerg.services.agents import AgentsStore  # noqa: E402
@@ -1586,11 +1586,11 @@ def test_live_launch_mobile_tail_uses_placeholder_while_shell_is_catching_up(tmp
         # The archive shell can still have a live provisional assistant preview
         # while durable events are catching up. The placeholder must carry that
         # preview through so clients can paint useful transcript content.
-        with SessionLocal() as db:
+        with LiveSession() as db:
             preview_at = datetime.now(timezone.utc)
             db.add(
-                SessionLivePreview(
-                    session_id=result.session_id,
+                LiveSessionLivePreview(
+                    session_id=str(result.session_id),
                     thread_id="codex-thread",
                     turn_key="codex_bridge_live:turn-1",
                     seq=1,
@@ -1605,6 +1605,7 @@ def test_live_launch_mobile_tail_uses_placeholder_while_shell_is_catching_up(tmp
                 )
             )
             db.commit()
+        with SessionLocal() as db:
             mobile_tail = build_session_mobile_tail(
                 db=db,
                 session_id=result.session_id,

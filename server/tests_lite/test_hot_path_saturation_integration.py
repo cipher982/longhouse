@@ -255,6 +255,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
     monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
     monkeypatch.setattr(data_plane_module, "create_archive_store", _cold_store_unavailable)
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: live_factory)
     monkeypatch.setattr(heartbeat_router, "live_store_configured", lambda: True)
     monkeypatch.setattr(heartbeat_router, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(heartbeat_router, "get_live_write_serializer", lambda: live_serializer)
