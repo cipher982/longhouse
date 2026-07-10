@@ -393,17 +393,21 @@ async def short_session_link(prefix: str):
     """
     from fastapi.responses import RedirectResponse
 
-    from zerg.database import db_session
+    from zerg.database import catalog_db_session
+    from zerg.database import live_catalog_enabled
     from zerg.models.agents import AgentSession
+    from zerg.models.live_store import LiveSessionCatalog
 
     cleaned = (prefix or "").strip().lower()
     if not cleaned or any(ch not in "0123456789abcdef-" for ch in cleaned):
         return RedirectResponse(url="/timeline", status_code=302)
 
-    with db_session() as db:
+    session_model = LiveSessionCatalog if live_catalog_enabled() else AgentSession
+    session_id_column = session_model.session_id if live_catalog_enabled() else session_model.id
+    with catalog_db_session() as db:
         matches = (
-            db.query(AgentSession.id)
-            .filter(AgentSession.id.like(f"{cleaned}%"))
+            db.query(session_id_column)
+            .filter(session_id_column.like(f"{cleaned}%"))
             .limit(2)
             .all()
         )
@@ -428,24 +432,28 @@ async def short_session_link_preview(prefix: str):
     """
     from fastapi.responses import JSONResponse
 
-    from zerg.database import db_session
+    from zerg.database import catalog_db_session
+    from zerg.database import live_catalog_enabled
     from zerg.models.agents import AgentSession
+    from zerg.models.live_store import LiveSessionCatalog
     from zerg.models.user import User
 
     cleaned = (prefix or "").strip().lower()
     if not cleaned or any(ch not in "0123456789abcdef-" for ch in cleaned):
         raise HTTPException(status_code=404, detail="Session not found")
 
-    with db_session() as db:
+    session_model = LiveSessionCatalog if live_catalog_enabled() else AgentSession
+    session_id_column = session_model.session_id if live_catalog_enabled() else session_model.id
+    with catalog_db_session() as db:
         row = (
             db.query(
-                AgentSession.id,
-                AgentSession.provider,
-                AgentSession.device_name,
-                AgentSession.started_at,
-                AgentSession.ended_at,
+                session_id_column,
+                session_model.provider,
+                session_model.device_name,
+                session_model.started_at,
+                session_model.ended_at,
             )
-            .filter(AgentSession.id.like(f"{cleaned}%"))
+            .filter(session_id_column.like(f"{cleaned}%"))
             .limit(2)
             .all()
         )
@@ -471,7 +479,7 @@ async def short_session_link_preview(prefix: str):
 
     return JSONResponse(
         content={
-            "session_id": str(session_row.id),
+            "session_id": str(session_row[0]),
             "provider": session_row.provider,
             "device_name": session_row.device_name,
             "started_at": session_row.started_at.isoformat() if session_row.started_at else None,

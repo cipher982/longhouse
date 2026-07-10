@@ -1320,8 +1320,6 @@ async def stream_canary_workspace(
     if not canary_token_matches(request):
         raise HTTPException(status_code=401, detail="canary token required")
 
-    session_factory = get_session_factory()
-
     last_event_id: int | None = None
     raw = request.headers.get("Last-Event-ID")
     if raw:
@@ -1330,10 +1328,19 @@ async def stream_canary_workspace(
         except ValueError:
             last_event_id = None
 
+    if database_module.live_catalog_enabled():
+        return EventSourceResponse(
+            _live_catalog_workspace_stream(
+                request,
+                session_id=session_id,
+                skip_initial=skip_initial,
+                last_event_id=last_event_id,
+            )
+        )
     return EventSourceResponse(
         _session_workspace_stream(
             request,
-            session_factory=session_factory,
+            session_factory=get_session_factory(),
             session_id=session_id,
             skip_initial=skip_initial,
             last_event_id=last_event_id,
