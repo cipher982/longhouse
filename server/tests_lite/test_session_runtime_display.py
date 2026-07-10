@@ -23,7 +23,9 @@ def _make_kernel_capabilities(
     live: bool = False,
     reattach: bool = False,
     control_plane: str | None = None,
+    can_send_input: bool | None = None,
 ) -> KernelSessionCapabilities:
+    sendable = live if can_send_input is None else can_send_input
     return KernelSessionCapabilities(
         session_id="00000000-0000-0000-0000-000000000000",
         thread_id=None,
@@ -36,7 +38,7 @@ def _make_kernel_capabilities(
         host_reattach_available=reattach or live,
         observe_only=False,
         search_only=not (live or reattach),
-        can_send_input=live,
+        can_send_input=sendable,
         can_interrupt=live,
         can_terminate=live,
         can_tail_output=live,
@@ -657,7 +659,7 @@ def test_managed_stale_thinking_without_active_tool_is_not_current_state():
     assert display.state is None
     assert display.tone == "idle"
     assert display.headline == "Ready"
-    assert display.detail == "Waiting for next prompt"
+    assert display.detail == "Live control connected"
     assert display.phase_label == "Ready"
     assert display.is_executing is False
     assert display.needs_attention is False
@@ -766,6 +768,55 @@ def test_managed_live_control_with_offline_host_is_not_ready():
     assert display.control_path == "managed"
     assert display.host_state == "offline"
     assert display.state is None
+    assert display.headline == "Not connected"
+    assert display.phase_label == "Inactive"
+    assert display.tone == "inactive"
+
+
+def test_managed_live_control_without_send_capability_is_not_ready():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="idle",
+            runtime_source="semantic",
+            status="idle",
+            presence_state=None,
+            confidence="stale",
+            display_phase="Idle",
+        ),
+        capabilities=_make_kernel_capabilities(
+            live=True,
+            reattach=True,
+            control_plane="claude_channel_bridge",
+            can_send_input=False,
+        ),
+        ended_at=None,
+    )
+
+    assert display.control_path == "managed"
+    assert display.headline == "Not connected"
+    assert display.phase_label == "Inactive"
+    assert display.tone == "inactive"
+
+
+def test_managed_reattach_only_control_is_not_ready():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            runtime_phase="idle",
+            runtime_source="semantic",
+            status="idle",
+            presence_state=None,
+            confidence="stale",
+            display_phase="Idle",
+        ),
+        capabilities=_make_kernel_capabilities(
+            live=False,
+            reattach=True,
+            control_plane="claude_channel_bridge",
+        ),
+        ended_at=None,
+    )
+
+    assert display.control_path == "managed"
     assert display.headline == "Not connected"
     assert display.phase_label == "Inactive"
     assert display.tone == "inactive"

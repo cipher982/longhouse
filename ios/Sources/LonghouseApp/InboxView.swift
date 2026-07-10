@@ -332,9 +332,7 @@ private struct CompactRuntimeLine: View {
     let signal: TimelineSignal
 
     var body: some View {
-        let sessionStale = signal == .quiet
-            && !session.isClosed
-            && session.runtimeDisplay.activityRecency != "live"
+        let sessionStale = signal == .quiet && session.shouldAnnotateTimelineStatusAsStale
 
         HStack(spacing: 5) {
             Text(session.timelineStatusLabel)

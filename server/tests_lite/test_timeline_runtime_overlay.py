@@ -1334,6 +1334,59 @@ def test_claude_channel_kernel_truth_marks_non_runner_session_online(tmp_path):
         assert data["capabilities"]["display_label"] == "Live on this Mac"
 
 
+def test_sessions_list_uses_fresh_managed_control_when_provider_phase_expires(tmp_path):
+    factory = _make_db(tmp_path, "managed_ready_after_phase_expiry.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(hours=1),
+            ended_at=None,
+            project="managed-ready-after-phase-expiry",
+            execution_home="managed_local",
+            managed_transport="claude_channel_bridge",
+        )
+        _upsert_runtime_state(
+            db,
+            session_id=str(session.id),
+            phase="needs_user",
+            updated_at=now - timedelta(minutes=20),
+            freshness_window=timedelta(minutes=10),
+        )
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        live_resp = client.get("/agents/sessions?days_back=1", headers={"X-Agents-Token": "dev"})
+        assert live_resp.status_code == 200, live_resp.text
+        live = live_resp.json()["sessions"][0]
+        assert live["capabilities"]["live_control_available"] is True
+        assert live["runtime_display"]["state"] is None
+        assert live["runtime_display"]["phase_label"] == "Ready"
+        assert live["timeline_card"]["status"] == {
+            "label": "Ready",
+            "tone": "idle",
+            "seen_at": None,
+            "seen_at_prefix": "Checked",
+        }
+
+        db = factory()
+        try:
+            connection = db.query(SessionConnection).one()
+            connection.last_health_at = now - timedelta(minutes=20)
+            db.commit()
+        finally:
+            db.close()
+
+        stale_resp = client.get("/agents/sessions?days_back=1", headers={"X-Agents-Token": "dev"})
+        assert stale_resp.status_code == 200, stale_resp.text
+        stale = stale_resp.json()["sessions"][0]
+        assert stale["capabilities"]["live_control_available"] is False
+        assert stale["timeline_card"]["status"]["label"] == "No live signal"
+
+
 def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):
     factory = _make_db(tmp_path, "presence_beats_ended.db")
     now = datetime.now(timezone.utc)
@@ -1628,7 +1681,7 @@ def test_sessions_list_suppresses_stale_progress_running_phase(tmp_path):
         assert row["runtime_display"]["tone"] == "inactive"
 
 
-def test_sessions_list_suppresses_stale_phase_signal_from_timeline_status(tmp_path):
+def test_sessions_list_uses_managed_ready_when_phase_signal_is_stale(tmp_path):
     factory = _make_db(tmp_path, "stale_phase_signal_timeline_status.db")
     now = datetime.now(timezone.utc)
 
@@ -1680,9 +1733,10 @@ def test_sessions_list_suppresses_stale_phase_signal_from_timeline_status(tmp_pa
         assert row["id"] == str(session.id)
         assert row["confidence"] == "stale"
         assert row["runtime_phase"] is None
-        assert row["timeline_card"]["status"]["label"] == "No live signal"
-        assert row["timeline_card"]["status"]["seen_at"] is not None
-        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Last signal"
+        assert row["timeline_card"]["status"]["label"] == "Ready"
+        assert row["timeline_card"]["status"]["tone"] == "idle"
+        assert row["timeline_card"]["status"]["seen_at"] is None
+        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Checked"
 
 
 def test_sessions_list_marks_materialized_needs_user_as_idle(tmp_path):

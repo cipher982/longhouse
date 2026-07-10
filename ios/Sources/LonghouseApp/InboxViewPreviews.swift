@@ -173,14 +173,14 @@ private func mockSession(
             id: "5",
             project: "hdr",
             title: "Photo Pipeline Rebuild",
-            summary: "Investigating tone-mapping regressions; runner went silent mid-job.",
+            summary: "The provider is idle, but Longhouse still has a fresh send-capable control path to the terminal session.",
             provider: "claude",
             branch: "feat/tone-mapping",
-            statusLabel: "Idle",
+            statusLabel: "Ready",
             statusTone: "idle",
             activityRecency: "stale",
             anchorSecondsAgo: 18 * 60,
-            seenAtSecondsAgo: 95,
+            seenAtSecondsAgo: nil,
             phaseExpiresInSeconds: -45 // server already declared this stale
         ),
         mockSession(

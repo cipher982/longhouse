@@ -291,7 +291,7 @@ def _managed_copy(
         return "Needs permission", f"Approval needed • {compact_tool}" if compact_tool else "Approval needed"
     if presence_state is None:
         if live_control_ready:
-            return "Ready", "Waiting for next prompt"
+            return "Ready", "Live control connected"
         return "Not connected", None
     return "Idle", "Waiting for next prompt"
 

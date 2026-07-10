@@ -180,6 +180,12 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         return "inactive"
     }
 
+    var shouldAnnotateTimelineStatusAsStale: Bool {
+        !isClosed
+            && timelineStatusTone.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "inactive"
+            && runtimeDisplay.activityRecency != "live"
+    }
+
     var timelineBorderTone: String {
         if let tone = timelineCard?.borderTone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
             return tone

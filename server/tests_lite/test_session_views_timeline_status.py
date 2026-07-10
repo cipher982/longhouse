@@ -45,15 +45,17 @@ def _display(
     signal_tier: str = "none",
     host_state: str = "unknown",
     control_path: str = "managed",
+    tone: str = "inactive",
+    phase_label: str = "",
 ) -> SessionRuntimeDisplayResponse:
     return SessionRuntimeDisplayResponse(
         truth_tier="none",
         signal_tier=signal_tier,
         state=state,
-        tone="inactive",
+        tone=tone,
         headline="",
         detail=None,
-        phase_label="",
+        phase_label=phase_label,
         compact_tool_label=compact_tool_label,
         is_live=False,
         is_executing=False,
@@ -109,6 +111,49 @@ def test_timeline_status_marks_process_binding_active_without_phase_state():
     assert status.tone == "inactive"
     assert status.seen_at == progress_at
     assert status.seen_at_prefix == "Verified"
+
+
+def test_timeline_status_marks_live_managed_control_ready_without_provider_phase():
+    status = _timeline_status_from_display(
+        _display(
+            state=None,
+            lifecycle="open",
+            control_path="managed",
+            tone="idle",
+            phase_label="Ready",
+        ),
+        runtime_view=_runtime_view(last_live_at=datetime(2026, 3, 21, 11, 30, tzinfo=timezone.utc)),
+    )
+
+    assert status.label == "Ready"
+    assert status.tone == "idle"
+    assert status.seen_at is None
+    assert status.seen_at_prefix == "Checked"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"control_path": "unmanaged"},
+        {"lifecycle": "closed"},
+        {"tone": "inactive"},
+        {"phase_label": "Inactive"},
+        {"state": "idle"},
+    ],
+)
+def test_timeline_status_ready_predicate_does_not_overclaim(overrides):
+    values = {
+        "state": None,
+        "lifecycle": "open",
+        "control_path": "managed",
+        "tone": "idle",
+        "phase_label": "Ready",
+    }
+    values.update(overrides)
+
+    status = _timeline_status_from_display(_display(**values), runtime_view=_runtime_view())
+
+    assert status.label != "Ready"
 
 
 def test_timeline_status_closed_label_is_generic():

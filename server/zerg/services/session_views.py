@@ -523,12 +523,30 @@ def _timeline_status_from_display(
             seen_at=progress_at or last_live_at,
             seen_at_prefix="Verified",
         )
+    if _managed_control_ready_for_timeline(runtime_display):
+        return TimelineStatusPresentationResponse(
+            label="Ready",
+            tone="idle",
+            seen_at=None,
+            seen_at_prefix="Checked",
+        )
     last_signal = presence_at or last_live_at
     return TimelineStatusPresentationResponse(
         label="No live signal",
         tone="inactive",
         seen_at=last_signal,
         seen_at_prefix="Last signal" if last_signal is not None else "Checked",
+    )
+
+
+def _managed_control_ready_for_timeline(runtime_display: SessionRuntimeDisplayResponse) -> bool:
+    """Recognize live, send-capable managed control without inventing a provider phase."""
+    return bool(
+        runtime_display.control_path == ControlPath.MANAGED
+        and runtime_display.lifecycle == Lifecycle.OPEN
+        and runtime_display.state is None
+        and runtime_display.tone == Tone.IDLE
+        and runtime_display.phase_label == "Ready"
     )
 
 

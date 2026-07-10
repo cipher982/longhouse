@@ -3,7 +3,7 @@ import Testing
 @testable import Longhouse
 
 struct SessionModelsTests {
-    private func runtimeDisplay(activityRecency: String) -> SessionRuntimeDisplay {
+    private func runtimeDisplay(activityRecency: String, lifecycle: String = "open") -> SessionRuntimeDisplay {
         SessionRuntimeDisplay(
             truthTier: "managed-local",
             signalTier: "phase_signal",
@@ -22,10 +22,61 @@ struct SessionModelsTests {
             hasSignal: true,
             controlPath: "managed",
             activityRecency: activityRecency,
-            lifecycle: "open",
+            lifecycle: lifecycle,
             hostState: "online",
             terminalReason: nil
         )
+    }
+
+    private func timelineSummary(
+        activityRecency: String,
+        lifecycle: String = "open",
+        status: TimelineStatusPresentation? = nil
+    ) -> SessionSummary {
+        SessionSummary(
+            id: "timeline-stale-contract",
+            title: "Managed idle session",
+            presenceState: "idle",
+            provider: "codex",
+            project: "zerg",
+            lastActivityAt: "2026-07-10T00:47:16Z",
+            runtimeDisplay: runtimeDisplay(activityRecency: activityRecency, lifecycle: lifecycle),
+            timelineCard: status.map {
+                TimelineCardPresentation(
+                    ownership: TimelineBadgePresentation(label: "Managed", tone: "neutral"),
+                    status: $0,
+                    borderTone: $0.tone
+                )
+            }
+        )
+    }
+
+    @Test
+    func timelineStaleAnnotationFollowsServerStatusTone() {
+        let ready = timelineSummary(
+            activityRecency: "stale",
+            status: TimelineStatusPresentation(label: "Ready", tone: "idle", seenAt: nil, seenAtPrefix: "Checked")
+        )
+        let noSignal = timelineSummary(
+            activityRecency: "stale",
+            status: TimelineStatusPresentation(
+                label: "No live signal",
+                tone: "inactive",
+                seenAt: "2026-07-10T00:47:16Z",
+                seenAtPrefix: "Last signal"
+            )
+        )
+        let closed = timelineSummary(
+            activityRecency: "stale",
+            lifecycle: "closed",
+            status: TimelineStatusPresentation(label: "Closed", tone: "closed", seenAt: nil, seenAtPrefix: "Closed")
+        )
+        let legacy = timelineSummary(activityRecency: "stale")
+
+        #expect(!ready.shouldAnnotateTimelineStatusAsStale)
+        #expect(noSignal.shouldAnnotateTimelineStatusAsStale)
+        #expect(!closed.shouldAnnotateTimelineStatusAsStale)
+        #expect(legacy.shouldAnnotateTimelineStatusAsStale)
     }
 
     private func apiSessionJSON(id: String = "session-card-contract") -> String {
