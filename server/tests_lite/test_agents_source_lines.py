@@ -21,6 +21,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 
 
@@ -212,6 +213,80 @@ def test_source_line_claims_require_recoverable_raw_bytes(tmp_path, monkeypatch)
             ],
             "rejected": [],
         }
+    finally:
+        cleanup()
+
+
+def test_source_line_claims_do_not_use_inline_bytes_from_non_head_branch(tmp_path):
+    factory, cleanup = _setup_app(tmp_path)
+    client = TestClient(api_app)
+    session_id = uuid4()
+    source_path = "/tmp/opencode.db#opencode:ses_branch"
+    raw_line = '{"part":"same-identity"}'
+    line_hash = hashlib.sha256(raw_line.encode()).hexdigest()
+
+    try:
+        with factory() as db:
+            db.add(
+                AgentSession(
+                    id=session_id,
+                    provider="opencode",
+                    environment="test",
+                    started_at=datetime.now(timezone.utc),
+                )
+            )
+            db.flush()
+            stale_branch = AgentSessionBranch(session_id=session_id, branch_reason="root", is_head=0)
+            head_branch = AgentSessionBranch(session_id=session_id, branch_reason="rewind", is_head=1)
+            db.add_all([stale_branch, head_branch])
+            db.flush()
+            db.add_all(
+                [
+                    AgentSourceLine(
+                        session_id=session_id,
+                        source_path=source_path,
+                        source_offset=10,
+                        branch_id=stale_branch.id,
+                        raw_json=raw_line,
+                        line_hash=line_hash,
+                    ),
+                    AgentSourceLine(
+                        session_id=session_id,
+                        source_path=source_path,
+                        source_offset=10,
+                        branch_id=head_branch.id,
+                        raw_json="",
+                        raw_json_z=None,
+                        raw_json_codec=0,
+                        line_hash=line_hash,
+                    ),
+                ]
+            )
+            db.commit()
+
+        response = client.post(
+            "/agents/source-lines/claims",
+            json={
+                "items": [
+                    {
+                        "session_id": str(session_id),
+                        "source_path": source_path,
+                        "source_offset": 10,
+                        "line_hash": line_hash,
+                    }
+                ]
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["present"] == []
+        assert response.json()["missing"] == [
+            {
+                "source_path": source_path,
+                "source_offset": 10,
+                "line_hash": line_hash,
+            }
+        ]
     finally:
         cleanup()
 

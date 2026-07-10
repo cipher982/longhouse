@@ -74,6 +74,7 @@ pub(crate) enum OpenCodeShipMode {
 }
 
 const OPENCODE_RECONCILIATION_SESSION_LIMIT: usize = 4;
+const OPENCODE_DURABILITY_PROOF_VERSION: &str = "exportable-v2";
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct OpenCodeShipOutcome {
@@ -276,9 +277,10 @@ pub(crate) async fn ship_opencode_database_with_trace(
             get_opencode_sqlite_longhouse_session_id(conn, &candidate.source_key)?;
         let unchanged = candidate.version <= current_offset
             && current_fingerprint.as_deref() == Some(candidate.fingerprint.as_str());
+        let expected_durability_proof = opencode_durability_proof(&candidate.fingerprint);
         let durability_proven = get_opencode_source_line_durability(conn, &candidate.source_key)?
             .as_deref()
-            == Some(candidate.fingerprint.as_str());
+            == Some(expected_durability_proof.as_str());
         if unchanged && (mode == OpenCodeShipMode::ChangedOnly || durability_proven) {
             continue;
         }
@@ -579,15 +581,20 @@ fn set_opencode_source_line_durability(
     source_key: &str,
     fingerprint: &str,
 ) -> Result<()> {
+    let proof = opencode_durability_proof(fingerprint);
     conn.execute(
         "INSERT INTO opencode_source_line_durability (source_key, fingerprint, proven_at)
          VALUES (?1, ?2, ?3)
          ON CONFLICT(source_key) DO UPDATE SET
              fingerprint = excluded.fingerprint,
              proven_at = excluded.proven_at",
-        rusqlite::params![source_key, fingerprint, Utc::now().to_rfc3339()],
+        rusqlite::params![source_key, proof, Utc::now().to_rfc3339()],
     )?;
     Ok(())
+}
+
+fn opencode_durability_proof(fingerprint: &str) -> String {
+    format!("{OPENCODE_DURABILITY_PROOF_VERSION}:{fingerprint}")
 }
 
 fn get_opencode_sqlite_fingerprint(conn: &Connection, source_key: &str) -> Result<Option<String>> {

@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.raw_json_compression import decode_raw_json
@@ -123,10 +124,20 @@ async def create_source_line_claims(
         )
         .all()
     )
+    session_ids = {item.session_id for item, _normalized in valid}
+    head_branch_ids = dict(
+        db.query(AgentSessionBranch.session_id, AgentSessionBranch.id)
+        .filter(AgentSessionBranch.session_id.in_(session_ids))
+        .filter(AgentSessionBranch.is_head == 1)
+        .all()
+    )
 
     durable: set[tuple[UUID, str, int, str]] = set()
     slim_sessions: set[UUID] = set()
     for row in rows:
+        head_branch_id = head_branch_ids.get(row.session_id)
+        if head_branch_id is not None and int(row.branch_id) != int(head_branch_id):
+            continue
         identity = (row.session_id, row.source_path, int(row.source_offset), row.line_hash)
         try:
             raw_json = decode_raw_json(row)
