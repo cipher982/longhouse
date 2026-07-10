@@ -28,6 +28,13 @@ const BRIDGE_RUNTIME_SOURCE: &str =
 const DEFAULT_PROGRESS_THROTTLE_MS: u64 = 1500;
 const LIVE_RUNTIME_EVENT_TIMEOUT: Duration = Duration::from_millis(1500);
 const LIVE_RUNTIME_EVENT_SLOW_LOG_MS: u128 = 500;
+// Runtime events are the live transcript/control signal. A transient Runtime
+// Host restart must not turn into a permanent blank mobile transcript. Keep a
+// batch in the bridge for a bounded retry window, while non-retryable 4xx
+// responses still fail fast.
+const RUNTIME_EVENT_RETRY_DELAYS_MS: &[u64] = &[
+    100, 500, 1_000, 2_500, 5_000, 10_000, 20_000, 30_000, 30_000, 30_000, 30_000, 30_000,
+];
 const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
 const QUIET_ACTIVE_TURN_STALL_MS: u64 = 120_000;
 const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
@@ -4767,10 +4774,16 @@ impl BridgeRuntimeSink {
                 let retryable = status.is_server_error() || status.as_u16() == 429;
                 let body = response.text().await.unwrap_or_default();
                 if retryable {
-                    eprintln!("[codex-bridge] live runtime ingest retrying after {status}: {body}");
+                    eprintln!(
+                        "[codex-bridge] live runtime ingest retrying after {status}: {}",
+                        truncate_tail_chars(&body, 512)
+                    );
                     self.post_runtime_events_blocking(events).await;
                 } else {
-                    eprintln!("[codex-bridge] live runtime ingest dropped: {status} {body}");
+                    eprintln!(
+                        "[codex-bridge] live runtime ingest dropped: {status} {}",
+                        truncate_tail_chars(&body, 512)
+                    );
                 }
             }
             Err(err) => {
@@ -4785,7 +4798,12 @@ impl BridgeRuntimeSink {
             "{}/api/agents/runtime/events/batch",
             self.api_url.trim_end_matches('/')
         );
-        for attempt in 0..3 {
+        for (attempt, retry_delay_ms) in RUNTIME_EVENT_RETRY_DELAYS_MS
+            .iter()
+            .copied()
+            .chain(std::iter::once(0))
+            .enumerate()
+        {
             let response = match self
                 .http
                 .post(&url)
@@ -4796,8 +4814,8 @@ impl BridgeRuntimeSink {
             {
                 Ok(r) => r,
                 Err(e) => {
-                    if attempt < 2 {
-                        tokio::time::sleep(Duration::from_millis(100 * (attempt + 1) as u64)).await;
+                    if retry_delay_ms > 0 {
+                        tokio::time::sleep(Duration::from_millis(retry_delay_ms)).await;
                         continue;
                     }
                     eprintln!("[codex-bridge] runtime ingest network error: {e}");
@@ -4810,11 +4828,15 @@ impl BridgeRuntimeSink {
             let status = response.status();
             let retryable = status.is_server_error() || status.as_u16() == 429;
             let body = response.text().await.unwrap_or_default();
-            if retryable && attempt < 2 {
-                tokio::time::sleep(Duration::from_millis(100 * (attempt + 1) as u64)).await;
+            if retryable && retry_delay_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(retry_delay_ms)).await;
                 continue;
             }
-            eprintln!("[codex-bridge] runtime ingest failed: {status} {body}");
+            eprintln!(
+                "[codex-bridge] runtime ingest failed after {} attempts: {status} {}",
+                attempt + 1,
+                truncate_tail_chars(&body, 512)
+            );
             return;
         }
     }
