@@ -364,6 +364,7 @@ def drain_live_archive_outbox(
     *,
     limit: int = 100,
     now: datetime | None = None,
+    exclude_kinds: set[str] | None = None,
 ) -> LiveArchiveDrainResult:
     """Drain a bounded Live Store outbox batch into archive SQLite.
 
@@ -376,13 +377,10 @@ def drain_live_archive_outbox(
         return LiveArchiveDrainResult()
 
     drained_at = now or datetime.now(timezone.utc)
-    rows = (
-        live_db.query(LiveArchiveOutbox)
-        .filter(LiveArchiveOutbox.drained_at.is_(None))
-        .order_by(LiveArchiveOutbox.created_at.asc(), LiveArchiveOutbox.id.asc())
-        .limit(limit)
-        .all()
-    )
+    query = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.drained_at.is_(None))
+    if exclude_kinds:
+        query = query.filter(LiveArchiveOutbox.kind.notin_(sorted(exclude_kinds)))
+    rows = query.order_by(LiveArchiveOutbox.created_at.asc(), LiveArchiveOutbox.id.asc()).limit(limit).all()
     if not rows:
         return LiveArchiveDrainResult()
 

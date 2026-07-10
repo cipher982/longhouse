@@ -18,6 +18,8 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+from zerg.services.archive_worker_status import archive_worker_enabled
+
 logger = logging.getLogger(__name__)
 
 # Interval between runner-health reconcile passes (seconds).
@@ -94,12 +96,12 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
             return cleaned
 
     with live_session_factory() as live_db:
-        pending = (
-            live_db.query(LiveArchiveOutbox.id)
-            .filter(LiveArchiveOutbox.drained_at.is_(None))
-            .order_by(LiveArchiveOutbox.created_at.asc(), LiveArchiveOutbox.id.asc())
-            .first()
-        )
+        pending_query = live_db.query(LiveArchiveOutbox.id).filter(LiveArchiveOutbox.drained_at.is_(None))
+        if archive_worker_enabled():
+            from zerg.services.archive_worker import worker_owned_outbox_kinds
+
+            pending_query = pending_query.filter(LiveArchiveOutbox.kind.notin_(sorted(worker_owned_outbox_kinds())))
+        pending = pending_query.order_by(LiveArchiveOutbox.created_at.asc(), LiveArchiveOutbox.id.asc()).first()
     if pending is None:
         cleaned = _cleanup_drained()
         return {"processed": 0, "drained": 0, "failed": 0, "cleaned": cleaned}
@@ -107,11 +109,21 @@ async def _drain_live_archive_outbox_once() -> dict[str, int]:
     ws = get_write_serializer()
 
     def _drain_serialized(archive_db):
+        excluded_kinds: set[str] | None = None
+        if archive_worker_enabled():
+            from zerg.services.archive_worker import worker_owned_outbox_kinds
+
+            excluded_kinds = worker_owned_outbox_kinds()
         totals = {"processed": 0, "drained": 0, "failed": 0}
         max_batches = max(1, LIVE_ARCHIVE_OUTBOX_DRAIN_MAX_BATCHES_PER_TICK)
         for _batch_index in range(max_batches):
             with live_session_factory() as live_db:
-                result = drain_live_archive_outbox(live_db, archive_db, limit=LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE)
+                result = drain_live_archive_outbox(
+                    live_db,
+                    archive_db,
+                    limit=LIVE_ARCHIVE_OUTBOX_DRAIN_BATCH_SIZE,
+                    exclude_kinds=excluded_kinds,
+                )
             batch = result.as_dict()
             for key in totals:
                 totals[key] += batch[key]

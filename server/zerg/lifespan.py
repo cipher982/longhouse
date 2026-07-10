@@ -479,6 +479,15 @@ async def lifespan(app: FastAPI):
             # Periodic runtime maintenance (runner-health reconcile, etc.)
             if not _settings.testing:
                 try:
+                    from zerg.services.archive_worker_supervisor import start_archive_worker_supervisor
+
+                    start_archive_worker_supervisor()
+                    started.append("archive_worker_supervisor")
+                except Exception as e:  # noqa: BLE001
+                    failed.append(f"archive_worker_supervisor ({e})")
+                    logger.exception("Failed to start archive worker supervisor")
+
+                try:
                     from zerg.services.maintenance import start_maintenance_loop
 
                     start_maintenance_loop()
@@ -579,6 +588,13 @@ async def lifespan(app: FastAPI):
                 await stop_maintenance_loop()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop maintenance loop")
+
+            try:
+                from zerg.services.archive_worker_supervisor import stop_archive_worker_supervisor
+
+                await stop_archive_worker_supervisor()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop archive worker supervisor")
 
             try:
                 from zerg.services.retrieval_index_jobs import stop_recall_index_worker
