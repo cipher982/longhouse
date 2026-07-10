@@ -22,10 +22,11 @@ from zerg.auth.redirects import normalize_local_return_to
 from zerg.auth.session_tokens import _clear_refresh_cookie
 from zerg.auth.session_tokens import _set_session_cookie
 from zerg.config import get_settings
-from zerg.database import get_db
+from zerg.database import catalog_db_dependency
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
+_catalog_db_dependency = catalog_db_dependency()
 
 
 class NativeHandoffRequest(BaseModel):
@@ -94,7 +95,7 @@ async def accept_handoff_request(
     response: Response,
     return_to: str | None = None,
     tenant_state: str | None = None,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
 ):
     settings = get_settings()
     control_plane_url = getattr(settings, "control_plane_url", None)
@@ -143,7 +144,7 @@ async def accept_handoff_request(
 
 
 @router.post("/accept-native-handoff")
-async def accept_native_handoff(body: NativeHandoffRequest, db: Session = Depends(get_db)):
+async def accept_native_handoff(body: NativeHandoffRequest, db: Session = Depends(_catalog_db_dependency)):
     settings = get_settings()
     control_plane_url = getattr(settings, "control_plane_url", None)
     if not control_plane_url:

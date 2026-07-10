@@ -11,8 +11,13 @@ from sqlalchemy.orm import Session
 import zerg.dependencies.auth as auth_deps
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
 from zerg.config import get_settings
-from zerg.database import db_session
-from zerg.database import get_db
+from zerg.database import catalog_db_dependency
+from zerg.database import catalog_db_session
+
+_catalog_db_dependency = catalog_db_dependency()
+# Compatibility seam for tests/extensions; catalog_db_session itself chooses
+# archive while dark and live after explicit cutover.
+db_session = catalog_db_session
 
 
 def _bearer_token(request: Request) -> str | None:
@@ -71,7 +76,7 @@ def _get_browser_session_user(request: Request, db: Session):
     return None
 
 
-def get_current_browser_user(request: Request, db: Session = Depends(get_db)):
+def get_current_browser_user(request: Request, db: Session = Depends(_catalog_db_dependency)):
     """Return the authenticated browser user or raise **401**."""
     user = _get_browser_session_user(request, db)
     if user is None:
@@ -109,7 +114,7 @@ def require_current_browser_user_short_lived(request: Request) -> None:
     _get_current_browser_user_short_lived(request)
 
 
-def get_optional_browser_user(request: Request, db: Session = Depends(get_db)):
+def get_optional_browser_user(request: Request, db: Session = Depends(_catalog_db_dependency)):
     """Return the authenticated browser user or **None**."""
     return _get_browser_session_user(request, db)
 

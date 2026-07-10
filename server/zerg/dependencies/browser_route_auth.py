@@ -10,14 +10,16 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
-from zerg.database import get_db
+from zerg.database import catalog_db_dependency
 from zerg.dependencies.auth import _get_strategy
 from zerg.dependencies.browser_auth import get_current_browser_user
+
+_catalog_db_dependency = catalog_db_dependency()
 
 
 def get_current_browser_route_user(
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     token: str | None = Query(
         None,
         description="Optional JWT token (used by EventSource/SSE which can't send Authorization headers).",

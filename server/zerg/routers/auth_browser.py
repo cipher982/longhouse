@@ -39,13 +39,17 @@ from zerg.crud import count_users
 from zerg.crud import create_user
 from zerg.crud import get_user_by_email
 from zerg.crud import update_user
-from zerg.database import get_db
+from zerg.database import catalog_db_dependency
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_auth import get_optional_browser_user
 from zerg.schemas.schemas import TokenOut
-from zerg.services.write_serializer import get_write_serializer
+from zerg.services.write_serializer import get_catalog_write_serializer
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+_catalog_db_dependency = catalog_db_dependency()
+
+# Preserve the established patch seam while routing it to the catalog owner.
+get_write_serializer = get_catalog_write_serializer
 
 # Refresh token cookie max-age: 90 days (matches absolute lifetime in refresh_tokens module).
 _REFRESH_COOKIE_MAX_AGE = 90 * 24 * 60 * 60
@@ -220,7 +224,7 @@ def _verify_google_id_token(id_token_str: str) -> dict[str, Any]:
 
 
 @router.post("/dev-login", response_model=TokenOut)
-async def dev_login(response: Response, db: Session = Depends(get_db)) -> TokenOut:
+async def dev_login(response: Response, db: Session = Depends(_catalog_db_dependency)) -> TokenOut:
     settings = get_settings()
     if not settings.auth_disabled:
         raise HTTPException(
@@ -243,7 +247,7 @@ async def dev_login(response: Response, db: Session = Depends(get_db)) -> TokenO
 
 
 @router.post("/service-login", response_model=TokenOut, include_in_schema=False)
-async def service_login(request: Request, response: Response, db: Session = Depends(get_db)) -> TokenOut:
+async def service_login(request: Request, response: Response, db: Session = Depends(_catalog_db_dependency)) -> TokenOut:
     settings = get_settings()
     if _control_plane_url(settings):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted local service login is disabled")
@@ -282,7 +286,7 @@ async def service_login(request: Request, response: Response, db: Session = Depe
 
 
 @router.post("/google", response_model=TokenOut)
-async def google_sign_in(response: Response, body: dict[str, str], db: Session = Depends(get_db)) -> TokenOut:
+async def google_sign_in(response: Response, body: dict[str, str], db: Session = Depends(_catalog_db_dependency)) -> TokenOut:
     if _control_plane_url():
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted local Google login is disabled")
 
@@ -348,7 +352,7 @@ async def google_sign_in(response: Response, body: dict[str, str], db: Session =
 
 
 @router.get("/verify", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-def verify_session(request: Request, db: Session = Depends(get_db)):
+def verify_session(request: Request, db: Session = Depends(_catalog_db_dependency)):
     settings = get_settings()
     if settings.auth_disabled:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -357,7 +361,7 @@ def verify_session(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/status")
-def auth_status(request: Request, db: Session = Depends(get_db)):
+def auth_status(request: Request, db: Session = Depends(_catalog_db_dependency)):
     user = get_optional_browser_user(request, db)
     if not user:
         return {"authenticated": False, "user": None}
@@ -380,7 +384,7 @@ def auth_status(request: Request, db: Session = Depends(get_db)):
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-async def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+async def logout(request: Request, response: Response, db: Session = Depends(_catalog_db_dependency)):
     # Revoke the refresh token family so the RT can't be replayed after logout.
     raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
     if raw_rt:
@@ -398,7 +402,7 @@ async def logout(request: Request, response: Response, db: Session = Depends(get
 
 
 @router.post("/refresh", response_model=TokenOut)
-async def refresh_session(request: Request, response: Response, db: Session = Depends(get_db)) -> TokenOut:
+async def refresh_session(request: Request, response: Response, db: Session = Depends(_catalog_db_dependency)) -> TokenOut:
     """Exchange a valid refresh token for a new access token + rotated refresh token.
 
     This is the silent-refresh endpoint called by the frontend on 401.
@@ -514,7 +518,7 @@ async def password_login(
     request: Request,
     response: Response,
     body: PasswordLoginRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
 ) -> TokenOut:
     settings = get_settings()
     if _control_plane_url(settings):
@@ -554,7 +558,7 @@ class CLILoginRequest(BaseModel):
 def cli_login(
     request: Request,
     body: CLILoginRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
 ) -> dict[str, str]:
     settings = get_settings()
     if _control_plane_url(settings):

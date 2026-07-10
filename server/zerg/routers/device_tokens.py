@@ -24,15 +24,19 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
-from zerg.database import get_db
+from zerg.database import catalog_db_dependency
 from zerg.dependencies.auth import get_current_user
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.device_token import DeviceToken
-from zerg.services.write_serializer import get_write_serializer
+from zerg.services.write_serializer import get_catalog_write_serializer
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
+_catalog_db_dependency = catalog_db_dependency()
+
+# Preserve the established patch seam while routing it to the catalog owner.
+get_write_serializer = get_catalog_write_serializer
 
 router = APIRouter(prefix="/devices", tags=["devices"])
 
@@ -154,7 +158,7 @@ class APNSLiveActivityEndRequest(BaseModel):
 @router.post("/tokens", response_model=CreateTokenResponse, status_code=status.HTTP_201_CREATED)
 async def create_device_token(
     request: CreateTokenRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ) -> CreateTokenResponse:
     """Create a new device token.
@@ -198,7 +202,7 @@ async def create_device_token(
 @router.get("/tokens", response_model=TokenListResponse)
 def list_device_tokens(
     include_revoked: bool = False,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ) -> TokenListResponse:
     """List all device tokens for the current user.
@@ -233,7 +237,7 @@ def list_device_tokens(
 @router.post("/apns-register", response_model=APNSRegisterResponse)
 async def register_apns_device(
     request: APNSRegisterRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ) -> APNSRegisterResponse:
     """Register or refresh an APNs device token for the current browser user."""
@@ -299,7 +303,7 @@ async def register_apns_device(
 @router.post("/apns-live-activity/register", response_model=APNSLiveActivityRegisterResponse)
 async def register_apns_live_activity(
     request: APNSLiveActivityRegisterRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ) -> APNSLiveActivityRegisterResponse:
     """Register or refresh an ActivityKit update token for one watched session."""
@@ -389,7 +393,7 @@ async def register_apns_live_activity(
 @router.post("/apns-live-activity/end", status_code=status.HTTP_204_NO_CONTENT)
 async def end_apns_live_activity(
     request: APNSLiveActivityEndRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ) -> None:
     """Mark an ActivityKit update token as ended after the user stops watching."""
@@ -420,7 +424,7 @@ async def end_apns_live_activity(
 @router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_device_token(
     token_id: UUID,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ) -> None:
     """Revoke a device token.
@@ -459,7 +463,7 @@ async def revoke_device_token(
 @router.get("/tokens/{token_id}", response_model=TokenResponse)
 def get_device_token(
     token_id: UUID,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ) -> TokenResponse:
     """Get details of a specific device token."""

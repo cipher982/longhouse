@@ -5,6 +5,7 @@ archive ``Base`` here would make ``initialize_live_database`` create the full
 archive schema inside the hot DB, which would turn the split into ceremony.
 """
 
+from sqlalchemy import JSON
 from sqlalchemy import BigInteger
 from sqlalchemy import Boolean
 from sqlalchemy import Column
@@ -27,7 +28,10 @@ LiveBase = declarative_base()
 class LiveUser(LiveBase):
     """Bounded account identity required while the cold store is unavailable."""
 
-    __tablename__ = "live_users"
+    # Keep the physical name/shape compatible with the existing ``User`` ORM
+    # mapping. A live-catalog Session can therefore reuse mature auth strategy
+    # code without teaching it a second account model.
+    __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
     provider = Column(String(64), nullable=True)
@@ -36,11 +40,11 @@ class LiveUser(LiveBase):
     cp_user_id = Column(Integer, nullable=True, index=True)
     email_verified = Column(Boolean, nullable=False, server_default=text("1"))
     is_active = Column(Boolean, nullable=False, server_default=text("1"))
-    role = Column(String(32), nullable=False, server_default=text("'user'"))
+    role = Column(String(32), nullable=False, server_default=text("'USER'"))
     display_name = Column(String(255), nullable=True)
     avatar_url = Column(Text, nullable=True)
-    prefs_json = Column(Text, nullable=True)
-    context_json = Column(Text, nullable=True)
+    prefs = Column(JSON, nullable=True)
+    context = Column(JSON, nullable=False, server_default=text("'{}'"))
     last_login = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), nullable=True)
@@ -49,7 +53,7 @@ class LiveUser(LiveBase):
 class LiveRefreshSession(LiveBase):
     """Browser refresh-token lineage owned by the live authentication lane."""
 
-    __tablename__ = "live_refresh_sessions"
+    __tablename__ = "refresh_sessions"
 
     id = Column(Integer, primary_key=True)
     token_hash = Column(String(64), nullable=False, unique=True, index=True)
@@ -66,7 +70,7 @@ class LiveRefreshSession(LiveBase):
 class LiveDeviceToken(LiveBase):
     """Machine credential required for ingest, launch, and control."""
 
-    __tablename__ = "live_device_tokens"
+    __tablename__ = "device_tokens"
 
     id = Column(String(36), primary_key=True)
     owner_id = Column(Integer, nullable=False, index=True)
@@ -76,7 +80,61 @@ class LiveDeviceToken(LiveBase):
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     revoked_at = Column(DateTime(timezone=True), nullable=True)
 
-    __table_args__ = (Index("ix_live_device_tokens_owner_device", "owner_id", "device_id"),)
+    __table_args__ = (Index("ix_device_tokens_owner_device", "owner_id", "device_id"),)
+
+
+class LiveAPNSDeviceRegistration(LiveBase):
+    __tablename__ = "apns_device_registrations"
+
+    id = Column(String(36), primary_key=True)
+    owner_id = Column(Integer, nullable=False, index=True)
+    platform = Column(String(32), nullable=False, server_default=text("'ios'"))
+    device_token = Column(String(255), nullable=False)
+    push_environment = Column(String(32), nullable=False, server_default=text("'sandbox'"))
+    app_build_id = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "device_token", name="uq_apns_registration_owner_token"),
+        Index("ix_apns_registration_owner_platform", "owner_id", "platform"),
+    )
+
+
+class LiveAPNSLiveActivityRegistration(LiveBase):
+    __tablename__ = "apns_live_activity_registrations"
+
+    id = Column(String(36), primary_key=True)
+    owner_id = Column(Integer, nullable=False, index=True)
+    session_id = Column(String(64), nullable=False, index=True)
+    activity_id = Column(String(255), nullable=False)
+    push_token = Column(String(255), nullable=False)
+    push_environment = Column(String(32), nullable=False, server_default=text("'sandbox'"))
+    app_build_id = Column(String(255), nullable=True)
+    last_state_hash = Column(String(64), nullable=True)
+    last_push_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("owner_id", "activity_id", name="uq_apns_live_activity_owner_activity"),
+        UniqueConstraint("owner_id", "push_token", name="uq_apns_live_activity_owner_token"),
+        Index("ix_apns_live_activity_owner_session", "owner_id", "session_id", "ended_at"),
+    )
+
+
+class LiveAPNSWidgetPushState(LiveBase):
+    __tablename__ = "apns_widget_push_states"
+
+    owner_id = Column(Integer, primary_key=True)
+    state_hash = Column(String(64), nullable=True)
+    last_push_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
 
 
 class LiveSessionCatalog(LiveBase):

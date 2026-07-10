@@ -23,7 +23,9 @@ from zerg.auth.strategy import HostedCPAuthStrategy
 from zerg.auth.strategy import JWTAuthStrategy
 from zerg.auth.strategy import _decode_jwt_fallback as _decode_jwt_fallback  # type: ignore
 from zerg.config import get_settings
-from zerg.database import get_db
+from zerg.database import catalog_db_dependency
+
+_catalog_db_dependency = catalog_db_dependency()
 
 # ---------------------------------------------------------------------------
 # Choose strategy once per interpreter – no per-request branching.
@@ -83,7 +85,7 @@ def _get_strategy():  # noqa: D401 – internal helper
 # ---------------------------------------------------------------------------
 
 
-def get_current_user(request: Request, db: Session = Depends(get_db)):
+def get_current_user(request: Request, db: Session = Depends(_catalog_db_dependency)):
     """Return the authenticated *User* row or raise **401**.
 
     Accepts auth from:
@@ -103,7 +105,7 @@ def get_current_user(request: Request, db: Session = Depends(get_db)):
     return _get_strategy().get_current_user(request, db)
 
 
-def get_optional_user(request: Request, db: Session = Depends(get_db)):
+def get_optional_user(request: Request, db: Session = Depends(_catalog_db_dependency)):
     """Return the authenticated *User* row or **None**.
 
     This is a non-throwing variant for endpoints that need to detect auth

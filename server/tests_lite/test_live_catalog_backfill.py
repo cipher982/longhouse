@@ -17,6 +17,9 @@ from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import TimelineCard
+from zerg.models.apns_device_registration import APNSDeviceRegistration
+from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
+from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.device_token import DeviceToken
 from zerg.models.enums import UserRole
 from zerg.models.live_store import LiveDeviceToken
@@ -57,6 +60,39 @@ def test_live_catalog_backfill_is_idempotent_and_updates_rows(tmp_path):
         )
         archive_db.add(user)
         archive_db.flush()
+        archive_db.add(
+            APNSDeviceRegistration(
+                id=uuid4(),
+                owner_id=7,
+                platform="ios",
+                device_token="a" * 64,
+                push_environment="sandbox",
+                created_at=now,
+                updated_at=now,
+                last_seen_at=now,
+            )
+        )
+        archive_db.add(
+            APNSLiveActivityRegistration(
+                id=uuid4(),
+                owner_id=7,
+                session_id=str(session_id),
+                activity_id="activity-1",
+                push_token="b" * 64,
+                push_environment="sandbox",
+                created_at=now,
+                updated_at=now,
+                last_seen_at=now,
+            )
+        )
+        archive_db.add(
+            APNSWidgetPushState(
+                owner_id=7,
+                state_hash="widget-state",
+                created_at=now,
+                updated_at=now,
+            )
+        )
         archive_db.add(
             RefreshSession(
                 id=11,
@@ -169,7 +205,7 @@ def test_live_catalog_backfill_is_idempotent_and_updates_rows(tmp_path):
 
         with LiveSession() as live_db:
             first = backfill_live_catalog(archive_db, live_db, batch_size=2)
-            assert first.total == 10
+            assert first.total == 13
 
         session = archive_db.get(AgentSession, session_id)
         card = archive_db.get(TimelineCard, session_id)
@@ -184,6 +220,11 @@ def test_live_catalog_backfill_is_idempotent_and_updates_rows(tmp_path):
             assert second.as_dict() == first.as_dict()
             assert live_db.query(LiveUser).count() == 1
             assert live_db.query(LiveDeviceToken).count() == 1
+            # Auth/device code intentionally reuses the mature archive ORM
+            # mappings against compatible physical tables in the live DB.
+            assert live_db.query(User).one().email == "catalog@example.com"
+            assert live_db.query(RefreshSession).one().user_id == 7
+            assert live_db.query(DeviceToken).one().device_id == "laptop"
             assert live_db.query(LiveSessionCatalog).one().summary_title == "After"
             assert live_db.query(LiveTimelineCard).one().summary_title == "After"
             assert live_db.query(LiveSessionThread).count() == 1

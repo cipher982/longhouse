@@ -573,6 +573,28 @@ def live_store_configured() -> bool:
     return bool(_settings.live_database_url)
 
 
+def live_catalog_enabled() -> bool:
+    """Return whether bounded auth/session catalog state is authoritative live."""
+
+    return bool(_settings.live_catalog_enabled and live_store_configured())
+
+
+def get_catalog_session_factory() -> sessionmaker:
+    """Return the active bounded-catalog session factory.
+
+    The feature flag keeps the additive backfill deploy dark until parity has
+    been proven. After cutover, auth and other catalog consumers never need to
+    open the cold monolith.
+    """
+
+    if live_catalog_enabled():
+        factory = get_live_session_factory()
+        if factory is None:
+            raise RuntimeError("Live catalog is enabled but its session factory is unavailable")
+        return factory
+    return get_session_factory()
+
+
 def get_pool_status(engine: Engine | None = None) -> dict[str, Any] | None:
     """Return cheap SQLAlchemy pool counters for health diagnostics.
 
@@ -685,6 +707,24 @@ def get_db() -> Iterator[Session]:
     yield from _get_db_from_factory()
 
 
+def get_catalog_db() -> Iterator[Session]:
+    """FastAPI dependency for bounded account/session catalog state."""
+
+    yield from _get_db_from_factory(get_catalog_session_factory())
+
+
+def catalog_db_dependency():
+    """Select the FastAPI dependency identity once at process import/startup.
+
+    Returning the canonical ``get_db`` object while the migration flag is dark
+    preserves existing dependency overrides. An explicitly enabled process
+    receives the live-only provider and never opens the archive as a hidden
+    fallback.
+    """
+
+    return get_catalog_db if live_catalog_enabled() else get_db
+
+
 @contextmanager
 def db_session(session_factory: Any = None):
     """
@@ -717,6 +757,14 @@ def db_session(session_factory: Any = None):
 
     finally:
         session.close()
+
+
+@contextmanager
+def catalog_db_session():
+    """Context-managed bounded catalog session with commit/rollback."""
+
+    with db_session(get_catalog_session_factory()) as session:
+        yield session
 
 
 # Minimum SQLite version for required features.

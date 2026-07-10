@@ -15,10 +15,14 @@ from fastapi import status
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.auth.managed_local_hook_tokens import validate_managed_local_hook_token
 from zerg.config import get_settings
-from zerg.database import get_session_factory
+from zerg.database import get_catalog_session_factory
 from zerg.models.device_token import DeviceToken
 
 logger = logging.getLogger(__name__)
+
+# Compatibility alias for focused tests and extensions that patch the former
+# dependency seam. It now resolves the active bounded catalog factory.
+get_session_factory = get_catalog_session_factory
 
 # ---------------------------------------------------------------------------
 # Per-token sliding-window rate limit for agents write endpoints.

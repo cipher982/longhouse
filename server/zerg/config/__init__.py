@@ -271,6 +271,7 @@ class Settings:  # noqa: D401 – simple data container
     umami_domains: str | None = None
     umami_tag: str | None = None
     live_database_url: str = ""
+    live_catalog_enabled: bool = False
 
     # Telegram channel integration ------------------------------------
     telegram_bot_token: str | None = None  # TELEGRAM_BOT_TOKEN from @BotFather
@@ -557,6 +558,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         github_client_secret=os.getenv("GITHUB_CLIENT_SECRET"),
         database_url=database_url,
         live_database_url=live_database_url,
+        live_catalog_enabled=_truthy(os.getenv("LONGHOUSE_LIVE_CATALOG_ENABLED")),
         archive_root=archive_root,
         archive_shadow_write_enabled=_truthy(os.getenv("LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED")),
         archive_primary_write_enabled=_truthy(os.getenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED")),

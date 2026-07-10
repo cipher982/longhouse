@@ -23,7 +23,13 @@ from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import TimelineCard
+from zerg.models.apns_device_registration import APNSDeviceRegistration
+from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
+from zerg.models.apns_widget_push_state import APNSWidgetPushState
 from zerg.models.device_token import DeviceToken
+from zerg.models.live_store import LiveAPNSDeviceRegistration
+from zerg.models.live_store import LiveAPNSLiveActivityRegistration
+from zerg.models.live_store import LiveAPNSWidgetPushState
 from zerg.models.live_store import LiveDeviceToken
 from zerg.models.live_store import LiveRefreshSession
 from zerg.models.live_store import LiveSessionCatalog
@@ -43,6 +49,9 @@ class LiveCatalogBackfillResult:
     users: int = 0
     refresh_sessions: int = 0
     device_tokens: int = 0
+    apns_device_registrations: int = 0
+    apns_live_activity_registrations: int = 0
+    apns_widget_push_states: int = 0
     sessions: int = 0
     timeline_cards: int = 0
     session_threads: int = 0
@@ -73,8 +82,8 @@ def _string(value: Any) -> str | None:
     return None if value is None else str(value)
 
 
-def _enum_value(value: Any) -> Any:
-    return getattr(value, "value", value)
+def _enum_name(value: Any) -> Any:
+    return getattr(value, "name", value)
 
 
 def _upsert_rows(
@@ -146,9 +155,9 @@ def backfill_live_catalog(
                 "created_at",
                 "updated_at",
             ),
-            "role": ("role", _enum_value),
-            "prefs_json": ("prefs", _json_text),
-            "context_json": ("context", _json_text),
+            "role": ("role", _enum_name),
+            "prefs": ("prefs", _identity),
+            "context": ("context", _identity),
         },
     )
     result.refresh_sessions = _upsert_rows(
@@ -180,6 +189,59 @@ def backfill_live_catalog(
             "id": ("id", _string),
             **_same("owner_id", "device_id", "token_hash", "created_at", "last_used_at", "revoked_at"),
         },
+    )
+    result.apns_device_registrations = _upsert_rows(
+        archive_db,
+        live_db,
+        source_model=APNSDeviceRegistration,
+        target_model=LiveAPNSDeviceRegistration,
+        batch_size=size,
+        fields={
+            "id": ("id", _string),
+            **_same(
+                "owner_id",
+                "platform",
+                "device_token",
+                "push_environment",
+                "app_build_id",
+                "created_at",
+                "updated_at",
+                "last_seen_at",
+                "revoked_at",
+            ),
+        },
+    )
+    result.apns_live_activity_registrations = _upsert_rows(
+        archive_db,
+        live_db,
+        source_model=APNSLiveActivityRegistration,
+        target_model=LiveAPNSLiveActivityRegistration,
+        batch_size=size,
+        fields={
+            "id": ("id", _string),
+            **_same(
+                "owner_id",
+                "session_id",
+                "activity_id",
+                "push_token",
+                "push_environment",
+                "app_build_id",
+                "last_state_hash",
+                "last_push_at",
+                "created_at",
+                "updated_at",
+                "last_seen_at",
+                "ended_at",
+            ),
+        },
+    )
+    result.apns_widget_push_states = _upsert_rows(
+        archive_db,
+        live_db,
+        source_model=APNSWidgetPushState,
+        target_model=LiveAPNSWidgetPushState,
+        batch_size=size,
+        fields=_same("owner_id", "state_hash", "last_push_at", "created_at", "updated_at"),
     )
     result.sessions = _upsert_rows(
         archive_db,
@@ -385,9 +447,12 @@ def live_catalog_table_names() -> tuple[str, ...]:
     """Stable inventory used by readiness and repository guard tests."""
 
     return (
-        "live_users",
-        "live_refresh_sessions",
-        "live_device_tokens",
+        "users",
+        "refresh_sessions",
+        "device_tokens",
+        "apns_device_registrations",
+        "apns_live_activity_registrations",
+        "apns_widget_push_states",
         "live_session_catalog",
         "live_timeline_cards",
         "live_session_threads",
