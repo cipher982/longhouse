@@ -122,7 +122,7 @@ def read_current_user_usage(
 @publish_event(EventType.USER_UPDATED)
 async def update_current_user(
     patch: UserUpdate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ):
     """Patch the authenticated user's profile (display name, avatar, prefs)."""
@@ -160,7 +160,7 @@ def read_current_user_notification_settings(current_user=Depends(get_current_use
 @publish_event(EventType.USER_UPDATED)
 async def update_current_user_notification_settings(
     patch: UserNotificationSettingsUpdate,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ) -> UserNotificationSettingsResponse:
     """Update mobile notification preferences for the authenticated user."""
@@ -252,7 +252,7 @@ async def update_current_user_client_presence(
 async def upload_current_user_avatar(
     *,
     file: UploadFile = File(..., description="Avatar image file (PNG/JPEG/WebP ≤2 MB)"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ):
     """Handle *multipart/form-data* avatar upload for the authenticated user."""

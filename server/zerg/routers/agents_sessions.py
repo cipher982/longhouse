@@ -30,6 +30,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
+from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
@@ -917,7 +918,7 @@ def get_filters(
 async def set_session_action(
     session_id: UUID,
     body: SessionActionRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionActionResponse:
@@ -929,7 +930,8 @@ async def set_session_action(
             detail=f"Invalid action '{body.action}'. Must be one of: {', '.join(sorted(action_to_state))}",
         )
 
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    session_model = LiveSessionCatalog if database_module.live_catalog_enabled() else AgentSession
+    session = db.query(session_model).filter(session_model.id == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
@@ -945,12 +947,13 @@ async def set_session_action(
 async def set_session_loop_mode(
     session_id: UUID,
     body: SessionLoopModeRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionLoopModeResponse:
     """Set the explicit loop mode for a coding session."""
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    session_model = LiveSessionCatalog if database_module.live_catalog_enabled() else AgentSession
+    session = db.query(session_model).filter(session_model.id == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 
@@ -964,12 +967,13 @@ async def set_session_loop_mode(
 async def set_session_notification_watch(
     session_id: UUID,
     body: SessionNotificationWatchRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionNotificationWatchResponse:
     """Mute or unmute session attention notifications."""
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    session_model = LiveSessionCatalog if database_module.live_catalog_enabled() else AgentSession
+    session = db.query(session_model).filter(session_model.id == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
 

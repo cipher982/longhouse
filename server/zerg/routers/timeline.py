@@ -480,7 +480,7 @@ async def seed_timeline_demo_sessions(
 async def set_timeline_session_action(
     session_id: UUID,
     body: SessionActionRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
 ):
     return await _sessions_router.set_session_action(
         session_id=session_id,
@@ -495,7 +495,7 @@ async def set_timeline_session_action(
 async def set_timeline_session_loop_mode(
     session_id: UUID,
     body: SessionLoopModeRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
 ):
     return await _sessions_router.set_session_loop_mode(
         session_id=session_id,
@@ -510,7 +510,7 @@ async def set_timeline_session_loop_mode(
 async def set_timeline_session_notification_watch(
     session_id: UUID,
     body: SessionNotificationWatchRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
 ):
     return await _sessions_router.set_session_notification_watch(
         session_id=session_id,
