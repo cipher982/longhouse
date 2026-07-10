@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from zerg.config import get_settings
 from zerg.database import initialize_database
 from zerg.database import initialize_live_database
+from zerg.database import live_catalog_enabled
 from zerg.database import live_store_configured
 from zerg.observability import configure_observability
 from zerg.observability import shutdown_observability
@@ -60,7 +61,7 @@ def _enforce_single_tenant_startup(app: FastAPI) -> None:
     if not _settings.single_tenant or _settings.testing:
         return
 
-    from zerg.database import db_session
+    from zerg.database import catalog_db_session
     from zerg.services.single_tenant import SingleTenantViolation
     from zerg.services.single_tenant import bootstrap_owner_user
     from zerg.services.single_tenant import validate_single_tenant
@@ -73,7 +74,7 @@ def _enforce_single_tenant_startup(app: FastAPI) -> None:
         raise RuntimeError(config_error)
 
     try:
-        with db_session() as db:
+        with catalog_db_session() as db:
             validate_single_tenant(db)
             bootstrap_owner_user(db)
     except SingleTenantViolation as exc:
@@ -140,11 +141,15 @@ def _validate_models_config_startup() -> None:
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown lifecycle."""
     startup_started = time.monotonic()
+    catalog_mode = live_catalog_enabled()
     try:
         with _timed_startup_step("configure_observability"):
             configure_observability()
-        with _timed_startup_step("initialize_database"):
-            initialize_database()
+        if not catalog_mode:
+            with _timed_startup_step("initialize_database"):
+                initialize_database()
+        else:
+            logger.info("Live catalog mode: cold database initialization is owned by archive worker")
         if live_store_configured():
             with _timed_startup_step("initialize_live_database"):
                 initialize_live_database()
@@ -152,8 +157,9 @@ async def lifespan(app: FastAPI):
         from zerg.database import configure_live_write_serializer
         from zerg.database import configure_write_serializer
 
-        with _timed_startup_step("configure_write_serializer"):
-            configure_write_serializer()
+        if not catalog_mode:
+            with _timed_startup_step("configure_write_serializer"):
+                configure_write_serializer()
         with _timed_startup_step("configure_live_write_serializer"):
             configure_live_write_serializer()
 
@@ -173,7 +179,7 @@ async def lifespan(app: FastAPI):
         # SessionInput reconciliation: run one bounded queue recovery tick at
         # boot so startup, periodic recovery, and missed-signal recovery share
         # the same policy.
-        if not _settings.testing and _session_input_queue_recovery_enabled():
+        if not catalog_mode and not _settings.testing and _session_input_queue_recovery_enabled():
             try:
                 with _timed_startup_step("session_input_reconciliation"):
                     from zerg.database import default_engine
@@ -205,31 +211,32 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-        with _timed_startup_step("fts5_readiness_check"):
-            try:
-                from sqlalchemy import text
+        if not catalog_mode:
+            with _timed_startup_step("fts5_readiness_check"):
+                try:
+                    from sqlalchemy import text
 
-                from zerg.database import default_engine
+                    from zerg.database import default_engine
 
-                if default_engine is not None and default_engine.dialect.name == "sqlite":
-                    with default_engine.connect() as conn:
-                        fts_row = conn.execute(
-                            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")
-                        ).fetchone()
-                        if not fts_row:
-                            raise RuntimeError("events_fts table is missing (FTS5 required).")
-                        fts_probe_sql = "SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1"
-                        conn.execute(text(fts_probe_sql)).fetchone()
-            except Exception as fts_error:
-                app.state.fts_violation = str(fts_error)
-                logger.error(f"FTS5 readiness check failed: {fts_error}")
-                raise
+                    if default_engine is not None and default_engine.dialect.name == "sqlite":
+                        with default_engine.connect() as conn:
+                            fts_row = conn.execute(
+                                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")
+                            ).fetchone()
+                            if not fts_row:
+                                raise RuntimeError("events_fts table is missing (FTS5 required).")
+                            fts_probe_sql = "SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1"
+                            conn.execute(text(fts_probe_sql)).fetchone()
+                except Exception as fts_error:
+                    app.state.fts_violation = str(fts_error)
+                    logger.error(f"FTS5 readiness check failed: {fts_error}")
+                    raise
 
         with _timed_startup_step("single_tenant_startup"):
             _enforce_single_tenant_startup(app)
 
         # Auto-seed
-        if not _settings.testing:
+        if not catalog_mode and not _settings.testing:
             try:
                 from zerg.services.auto_seed import run_auto_seed
 
@@ -240,7 +247,7 @@ async def lifespan(app: FastAPI):
                 logger.warning(f"Auto-seed failed (non-fatal): {e}")
 
         # Demo session seeding
-        if _settings.demo_mode and not _settings.testing:
+        if not catalog_mode and _settings.demo_mode and not _settings.testing:
             try:
                 from zerg.database import get_session_factory
                 from zerg.services.demo_seed import seed_missing_demo_sessions
@@ -269,8 +276,17 @@ async def lifespan(app: FastAPI):
 
         get_shared_runner().start()
 
+        if catalog_mode and not _settings.testing:
+            try:
+                from zerg.services.archive_worker_supervisor import start_archive_worker_supervisor
+
+                start_archive_worker_supervisor()
+                logger.info("Live catalog mode: archive worker supervisor started; cold API loops remain disabled")
+            except Exception:
+                logger.exception("Failed to start archive worker supervisor")
+
         # Core background services
-        if not _settings.testing:
+        if not catalog_mode and not _settings.testing:
             started: list[str] = []
             failed: list[str] = []
 
@@ -506,7 +522,7 @@ async def lifespan(app: FastAPI):
                 logger.info("Background services started: %s", started)
 
         # Telegram channel
-        if not _settings.testing and _settings.telegram_bot_token:
+        if not catalog_mode and not _settings.testing and _settings.telegram_bot_token:
             try:
                 from zerg.channels.plugins.telegram import TelegramChannel
                 from zerg.channels.registry import register_channel
@@ -530,25 +546,26 @@ async def lifespan(app: FastAPI):
                 logger.exception("Telegram startup failed (non-fatal) — bot will be unavailable")
 
         # Mark runners offline
-        try:
-            from sqlalchemy import update
+        if not catalog_mode:
+            try:
+                from sqlalchemy import update
 
-            from zerg.database import db_session
-            from zerg.models.models import Runner
+                from zerg.database import db_session
+                from zerg.models.models import Runner
 
-            with db_session() as db:
-                result = db.execute(update(Runner).where(Runner.status == "online").values(status="offline"))
-                if result.rowcount:
-                    logger.info("Startup: marked %d stale runner(s) offline", result.rowcount)
-        except Exception as e:
-            logger.warning("Startup: failed to reset runner statuses (non-fatal): %s", e)
+                with db_session() as db:
+                    result = db.execute(update(Runner).where(Runner.status == "online").values(status="offline"))
+                    if result.rowcount:
+                        logger.info("Startup: marked %d stale runner(s) offline", result.rowcount)
+            except Exception as e:
+                logger.warning("Startup: failed to reset runner statuses (non-fatal): %s", e)
 
         # WAL checkpoints
         if not _settings.testing:
             try:
                 from zerg.database import start_wal_checkpoint_loop
 
-                await start_wal_checkpoint_loop()
+                await start_wal_checkpoint_loop(include_archive=not catalog_mode)
                 logger.info("WAL checkpoint loop started")
             except Exception as e:
                 logger.warning("Startup: WAL checkpoint loop failed (non-fatal): %s", e)

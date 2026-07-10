@@ -15,7 +15,7 @@ from fastapi import Response
 from fastapi import status
 from sqlalchemy.orm import Session
 
-from zerg.database import get_db
+from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -53,6 +53,7 @@ from zerg.services.write_serializer import post_write_db_session
 from zerg.services.write_serializer import post_write_fallback_db
 
 router = APIRouter(prefix="/agents/runtime", tags=["agents"])
+_catalog_db_dependency = catalog_db_dependency()
 
 _HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS = 2.0
 _AUTO_RESUME_PHASES = {"thinking", "running"}
@@ -62,7 +63,7 @@ _AUTO_RESUME_PHASES = {"thinking", "running"}
 async def ingest_runtime_observation_batch(
     payload: RuntimeEventBatchIngest,
     response: Response,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _token: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> RuntimeEventBatchResult:

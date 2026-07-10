@@ -42,7 +42,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
-from zerg.database import get_db
+from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
@@ -81,6 +81,7 @@ from zerg.services.write_serializer import post_write_db_session
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
+_catalog_db_dependency = catalog_db_dependency()
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -114,7 +115,7 @@ class PresenceIn(UTCBaseModel):
 async def upsert_presence(
     payload: PresenceIn,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _token: object = Depends(verify_agents_token),
 ) -> Response:
     """Upsert real-time presence state for a session."""

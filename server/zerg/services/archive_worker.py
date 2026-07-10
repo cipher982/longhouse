@@ -229,6 +229,12 @@ def drain_once(
 
 
 def run_worker(*, once: bool = False) -> int:
+    # Cold schema checks/migrations belong inside this crash boundary. A native
+    # SQLite failure here must restart the child, not terminate the Runtime Host.
+    from zerg.database import initialize_database
+
+    initialize_database()
+
     from zerg.services.archive_worker_jobs import archive_worker_job_counts
     from zerg.services.archive_worker_jobs import process_next_archive_worker_job
     from zerg.services.archive_worker_jobs import prune_archive_worker_jobs

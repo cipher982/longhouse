@@ -30,7 +30,7 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
-from zerg.database import get_db
+from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import agents_heartbeat_payload_bytes
@@ -68,6 +68,7 @@ from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
+_catalog_db_dependency = catalog_db_dependency()
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -747,7 +748,7 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
 async def ingest_heartbeat(
     payload: HeartbeatIn,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _token: DeviceToken | None = Depends(verify_agents_token),
 ) -> Response:
     """Accept a heartbeat from an engine daemon.
@@ -1161,7 +1162,11 @@ async def ingest_heartbeat(
                 except Exception:
                     logger.exception("Failed to run heartbeat bookkeeping for device %s", _device_id)
 
-            if os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV:
+            from zerg.database import live_catalog_enabled
+
+            if live_catalog_enabled():
+                pass
+            elif os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV:
                 await _run_heartbeat_bookkeeping()
             else:
                 task = asyncio.create_task(_run_heartbeat_bookkeeping())

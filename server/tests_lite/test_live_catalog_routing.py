@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException
 
 import zerg.database as database_module
 from zerg.database import get_catalog_session_factory
+from zerg.database import get_db
 from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
@@ -49,3 +51,13 @@ def test_catalog_factory_stays_archive_backed_until_explicit_cutover(monkeypatch
 def test_catalog_serializer_follows_catalog_owner(monkeypatch):
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     assert get_catalog_write_serializer() is get_live_write_serializer()
+
+
+def test_archive_dependency_returns_typed_degradation_after_cutover(monkeypatch):
+    monkeypatch.setattr(database_module._settings, "live_catalog_enabled", True)
+    monkeypatch.setattr(database_module._settings, "live_database_url", "sqlite:///live.db")
+    dependency = get_db()
+    with pytest.raises(HTTPException) as error:
+        next(dependency)
+    assert error.value.status_code == 503
+    assert error.value.detail["code"] == "archive_route_unavailable"

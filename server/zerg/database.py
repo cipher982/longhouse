@@ -704,6 +704,18 @@ def _get_db_from_factory(session_factory: Any = None) -> Iterator[Session]:
 
 def get_db() -> Iterator[Session]:
     """FastAPI dependency provider for database sessions."""
+
+    if live_catalog_enabled():
+        from fastapi import HTTPException
+        from fastapi import status
+
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "archive_route_unavailable",
+                "message": "This archive-backed operation is temporarily unavailable.",
+            },
+        )
     yield from _get_db_from_factory()
 
 
@@ -2448,7 +2460,7 @@ def _run_wal_checkpoint(engine: Engine | None, *, label: str, truncate_bytes: in
         return _record_wal_checkpoint_result(payload)
 
 
-async def start_wal_checkpoint_loop() -> None:
+async def start_wal_checkpoint_loop(*, include_archive: bool = True) -> None:
     """Start periodic PASSIVE WAL checkpoints.
 
     PASSIVE never blocks readers or writers — it checkpoints whatever pages
@@ -2461,7 +2473,8 @@ async def start_wal_checkpoint_loop() -> None:
 
     def _do_checkpoint():
         """Run checkpoint in a thread — never block the event loop."""
-        _run_wal_checkpoint(default_engine, label="archive", truncate_bytes=WAL_TRUNCATE_BYTES)
+        if include_archive:
+            _run_wal_checkpoint(default_engine, label="archive", truncate_bytes=WAL_TRUNCATE_BYTES)
         _run_wal_checkpoint(live_engine, label="live", truncate_bytes=LIVE_WAL_TRUNCATE_BYTES)
 
     async def _loop():
