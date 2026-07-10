@@ -31,6 +31,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 from sse_starlette.sse import EventSourceResponse
 
+import zerg.database as database_module
+from zerg.database import catalog_db_dependency
+from zerg.database import get_catalog_session_factory
 from zerg.database import get_db
 from zerg.database import get_session_factory
 from zerg.dependencies.agents_auth import require_single_tenant
@@ -46,6 +49,8 @@ from zerg.schemas.machines import MachineDirectoryResponse
 from zerg.schemas.machines import WorkspaceSuggestion
 from zerg.schemas.machines import WorkspaceSuggestionsResponse
 from zerg.services.agents import AgentsStore
+from zerg.services.live_catalog_timeline import list_live_catalog_timeline
+from zerg.services.live_catalog_timeline import stream_live_catalog_timeline
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_shares import SessionShareError
@@ -83,6 +88,7 @@ from zerg.services.workspace_suggestions import build_workspace_suggestions
 from zerg.utils.server_timing import ServerTimingRecorder
 
 logger = logging.getLogger(__name__)
+_catalog_db_dependency = catalog_db_dependency()
 
 router = APIRouter(
     prefix="/timeline",
@@ -238,31 +244,45 @@ async def list_timeline_sessions(
     ),
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_browser_user),
 ):
     effective_limit = min(limit, 100)
     response.headers["X-Limit-Cap"] = "100"
     timing = ServerTimingRecorder()
+    params = TimelineSessionListParams(
+        project=project,
+        provider=provider,
+        environment=environment,
+        include_test=include_test,
+        hide_autonomous=hide_autonomous,
+        include_automation=include_automation,
+        device_id=device_id,
+        days_back=days_back,
+        query=query,
+        limit=effective_limit,
+        offset=offset,
+        sort=sort,
+        mode=mode,
+        context_mode=context_mode,
+    )
+    if database_module.live_catalog_enabled():
+        try:
+            return list_live_catalog_timeline(db, params=params)
+        except ValueError as exc:
+            if str(exc) == "search_requires_archive":
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "code": "archive_search_unavailable",
+                        "message": "Timeline search is temporarily unavailable while the archive worker is offline.",
+                    },
+                ) from exc
+            raise
     try:
         result = await list_timeline_sessions_for_browser(
             db=db,
-            params=TimelineSessionListParams(
-                project=project,
-                provider=provider,
-                environment=environment,
-                include_test=include_test,
-                hide_autonomous=hide_autonomous,
-                include_automation=include_automation,
-                device_id=device_id,
-                days_back=days_back,
-                query=query,
-                limit=effective_limit,
-                offset=offset,
-                sort=sort,
-                mode=mode,
-                context_mode=context_mode,
-            ),
+            params=params,
             timing=timing,
             owner_id=_browser_owner_id(current_user),
         )
@@ -317,7 +337,7 @@ async def stream_timeline_sessions(
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     effective_limit = min(limit, 100)
-    session_factory = get_session_factory()
+    session_factory = get_catalog_session_factory() if database_module.live_catalog_enabled() else get_session_factory()
     params = TimelineSessionListParams(
         project=project,
         provider=provider,
@@ -335,15 +355,22 @@ async def stream_timeline_sessions(
         context_mode=context_mode,
     )
 
-    sse_response = EventSourceResponse(
-        stream_timeline_sessions_for_browser(
+    if database_module.live_catalog_enabled():
+        stream = stream_live_catalog_timeline(
+            request,
+            session_factory=session_factory,
+            params=params,
+            skip_initial_replay=skip_initial_replay,
+        )
+    else:
+        stream = stream_timeline_sessions_for_browser(
             request,
             session_factory=session_factory,
             params=params,
             skip_initial_replay=skip_initial_replay,
             owner_id=current_user_id if isinstance(current_user_id, int) else None,
         )
-    )
+    sse_response = EventSourceResponse(stream)
     sse_response.headers["X-Limit-Cap"] = "100"
     return sse_response
 
