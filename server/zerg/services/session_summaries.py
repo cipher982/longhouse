@@ -308,7 +308,9 @@ async def generate_initial_title_impl(session_id: str) -> bool:
     if settings.testing:
         return False
     if settings.llm_disabled:
-        await record_initial_title_failure(session_id, "llm_disabled")
+        # Disabled is an intentional capability state, not a failed attempt.
+        # Recording retry evidence here schedules a monolith write for every
+        # newly ingested session even though no retry can succeed.
         return False
 
     factory = get_session_factory()

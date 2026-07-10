@@ -309,6 +309,21 @@ async def test_generate_initial_title_impl_persists_stable_title(tmp_path, monke
 
 
 @pytest.mark.asyncio
+async def test_generate_initial_title_impl_skips_all_db_work_when_llm_disabled():
+    from zerg.services.session_summaries import generate_initial_title_impl
+
+    settings = SimpleNamespace(testing=False, llm_disabled=True)
+    with (
+        patch("zerg.database.get_session_factory") as get_factory,
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+    ):
+        updated = await generate_initial_title_impl("11111111-2222-3333-4444-555555555555")
+
+    assert updated is False
+    get_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_generate_initial_title_impl_does_not_publish_when_title_empty(tmp_path, monkeypatch):
     from zerg.services.session_pubsub import TOPIC_TIMELINE
     from zerg.services.session_pubsub import get_pubsub
