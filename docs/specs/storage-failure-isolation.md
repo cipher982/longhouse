@@ -100,23 +100,32 @@ The first containment release now implements:
 - live-store readiness and health that remain available while the archive child
   is dead, stalled, or backing off.
 
+The completed catalog cutover additionally implements:
+
+- live-catalog ownership for auth, machine/session directories, launch workspace
+  suggestions, timeline cards, launch/control state, and input receipts;
+- a cold-writer-only archive worker for ingest, projection, repair, enrichment,
+  and maintenance;
+- authenticated archive detail/search/recall GETs in bounded disposable child
+  processes, with a four-process concurrency cap and typed pressure/timeout/native
+  failure responses;
+- a live-only workspace invalidation stream so active detail views keep updating
+  without opening cold SQLite in the Runtime Host.
+
+The migration flag remains dark until an explicit idempotent catalog backfill and
+hosted parity check complete. Once enabled, the API process does not open the cold
+monolith; normal archive reads cross a crash boundary and a cold native failure
+degrades only the affected request.
+
 The synchronous ingest job cutover remains deliberately disabled by default.
 Enabling it while the Runtime Host still configures its monolith
 `WriteSerializer` would create an uncoordinated second writer. The job protocol
 is landed as a tested migration seam, not as a hidden mode switch.
 
-The remaining architectural work includes the cold-writer cutover and catalog
-boundary. The implementation order is intentionally interleaved: bounded
-auth/session/card writes must move to the live catalog before the API can stop
-configuring the monolith writer. Summary/title, projection, recall indexing,
-preview cleanup, archive WAL, and synchronous ingest remain in the Runtime Host
-until the worker can become the sole monolith writer; moving those loops early
-caused real cross-process lock contention in the full shipper harness.
-Authentication, device tokens, session/thread cards, turns, runner state, and
-some request-time session projections also still live in `longhouse.db`.
-Therefore this checkpoint must be described as outbox crash containment, not
-complete monolith failure isolation. The API still needs the catalog at boot
-and for timeline/detail reads.
+Large archive reads such as bulk export remain explicitly archive-degraded in
+catalog mode rather than buffering unbounded bodies through the child envelope.
+They are not part of the live launch/find/control loop and can move to streamed
+archive artifacts separately.
 
 ## Worker Contract
 

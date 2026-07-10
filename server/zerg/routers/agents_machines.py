@@ -20,6 +20,7 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
+from zerg.models.live_store import LiveSessionCatalog
 from zerg.schemas.machines import ArchiveBacklogControlRequest
 from zerg.schemas.machines import ArchiveBacklogControlResponse
 from zerg.schemas.machines import ArchiveBacklogResponse
@@ -99,13 +100,20 @@ def list_machine_workspaces(
     device_id: str,
     limit: int = Query(12, ge=1, le=50, description="Max ranked workspaces to return"),
     days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> WorkspaceSuggestionsResponse:
     """Frecency-ranked recent workspaces for the launch picker, scoped to one machine."""
     owner_id = _resolve_agents_owner_id(db, device_token)
-    entries = build_workspace_suggestions(db, owner_id=owner_id, device_id=device_id, limit=limit, days_back=days_back)
+    entries = build_workspace_suggestions(
+        db,
+        owner_id=owner_id,
+        device_id=device_id,
+        limit=limit,
+        days_back=days_back,
+        session_model=LiveSessionCatalog if database_module.live_catalog_enabled() else None,
+    )
     return WorkspaceSuggestionsResponse(
         device_id=device_id,
         workspaces=[WorkspaceSuggestion(**entry.to_response()) for entry in entries],

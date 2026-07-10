@@ -20,7 +20,9 @@ from fastapi import status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+import zerg.database as database_module
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
+from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.database import get_live_session_factory
 from zerg.database import live_store_configured
@@ -32,6 +34,7 @@ from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
+from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
@@ -115,6 +118,7 @@ from zerg.utils.time import UTCBaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+_catalog_db_dependency = catalog_db_dependency()
 
 VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
@@ -310,7 +314,7 @@ async def list_sessions(
     ),
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionsListResponse:
@@ -332,6 +336,8 @@ async def list_sessions(
             mode=mode,
             context_mode=context_mode,
         )
+        if database_module.live_catalog_enabled():
+            return list_live_catalog_sessions(db, params=params)
         owner_id = _owner_id_from_agents_auth(db, _auth)
         result = await list_agent_sessions(db=db, auth=_auth, params=params, owner_id=owner_id)
         if result.headers:

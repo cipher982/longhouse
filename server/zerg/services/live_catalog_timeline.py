@@ -21,6 +21,7 @@ from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import latest_live_launch_readiness_map
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
+from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import build_live_launch_placeholder_response
 from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
@@ -241,6 +242,17 @@ def list_live_catalog_timeline(
         )
     has_real = any((session.device_id or "") != "demo-mac" for _card, session in rows) or total == 0
     return TimelineSessionsListResponse(sessions=cards, total=total, has_real_sessions=has_real)
+
+
+def list_live_catalog_sessions(db: Session, *, params: TimelineSessionListParams) -> SessionsListResponse:
+    """Machine-facing flat session list from the same bounded card projection."""
+
+    timeline = list_live_catalog_timeline(db, params=params)
+    return SessionsListResponse(
+        sessions=[card.head for card in timeline.sessions],
+        total=timeline.total,
+        has_real_sessions=timeline.has_real_sessions,
+    )
 
 
 async def stream_live_catalog_timeline(

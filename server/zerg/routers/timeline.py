@@ -41,6 +41,7 @@ from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_auth import get_current_browser_user_id_short_lived
 from zerg.dependencies.browser_auth import require_current_browser_user_short_lived
 from zerg.models.agents import AgentSession
+from zerg.models.live_store import LiveSessionCatalog
 from zerg.routers import agents_demo as _demo_router
 from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
@@ -148,7 +149,7 @@ def list_browser_machine_workspaces(
     device_id: str,
     limit: int = Query(12, ge=1, le=50, description="Max ranked workspaces to return"),
     days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_browser_user),
 ) -> WorkspaceSuggestionsResponse:
     """Browser launch-picker workspaces. Same body shape as ``/api/agents/machines/{id}/workspaces``."""
@@ -158,6 +159,7 @@ def list_browser_machine_workspaces(
         device_id=device_id,
         limit=limit,
         days_back=days_back,
+        session_model=LiveSessionCatalog if database_module.live_catalog_enabled() else None,
     )
     return WorkspaceSuggestionsResponse(
         device_id=device_id,
@@ -1170,6 +1172,78 @@ async def _wait_for_session_change(subscription):
     return await subscription.next_message(timeout=WORKSPACE_STREAM_CHANGE_WAIT_SECONDS)
 
 
+async def _live_catalog_workspace_stream(
+    request: Request,
+    *,
+    session_id: UUID,
+    skip_initial: bool,
+    last_event_id: int | None,
+):
+    """Live-only invalidation stream; archive detail is fetched via a child."""
+
+    from zerg.services.session_pubsub import get_pubsub
+    from zerg.services.session_pubsub import topic_session
+
+    yield {
+        "event": "connected",
+        "data": json.dumps(
+            {
+                "session_id": str(session_id),
+                "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+            }
+        ),
+    }
+    bus = get_pubsub()
+    topic = topic_session(str(session_id))
+    replay_gap = bus.replay_gap(topic, since_seq=last_event_id)
+    subscribe_since_seq = None if replay_gap else last_event_id
+    with bus.subscribe(topic, since_seq=subscribe_since_seq) as subscription:
+        if replay_gap:
+            yield {
+                "event": "replay_gap",
+                "id": str(replay_gap.latest_seq) if replay_gap.latest_seq else None,
+                "data": json.dumps(
+                    {
+                        "session_id": str(session_id),
+                        "requested_seq": replay_gap.requested_seq,
+                        "earliest_seq": replay_gap.earliest_seq,
+                        "latest_seq": replay_gap.latest_seq,
+                        "reason": replay_gap.reason,
+                    }
+                ),
+            }
+        if not skip_initial:
+            yield {
+                "event": "workspace_changed",
+                "data": json.dumps(
+                    {
+                        "session_id": str(session_id),
+                        "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+                        "pubsub_seq": 0,
+                    }
+                ),
+            }
+        while not await request.is_disconnected():
+            message = await _wait_for_session_change(subscription)
+            if message is None:
+                yield {"event": "heartbeat", "data": json.dumps({"timestamp": _utc_now_z()})}
+                continue
+            preview = _workspace_transcript_preview_from_payload(message.payload)
+            yield {
+                "event": "workspace_changed",
+                "id": str(message.seq),
+                "data": json.dumps(
+                    {
+                        "session_id": str(session_id),
+                        "server_now_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
+                        "server_fanout_at_ms": _workspace_server_fanout_at_ms(message.payload),
+                        "pubsub_seq": message.seq,
+                        "transcript_preview": preview,
+                    }
+                ),
+            }
+
+
 @timeline_stream_router.get("/sessions/{session_id}/workspace/stream")
 async def stream_session_workspace(
     request: Request,
@@ -1189,8 +1263,6 @@ async def stream_session_workspace(
     invalidate React Query caches — replacing the 5-second polling interval
     with event-driven refresh.
     """
-    session_factory = get_session_factory()
-
     # SSE Last-Event-ID for replay on reconnect. Header is canonical; ignore
     # malformed values rather than 400ing the reconnect.
     last_event_id: int | None = None
@@ -1201,10 +1273,19 @@ async def stream_session_workspace(
         except ValueError:
             last_event_id = None
 
+    if database_module.live_catalog_enabled():
+        return EventSourceResponse(
+            _live_catalog_workspace_stream(
+                request,
+                session_id=session_id,
+                skip_initial=skip_initial,
+                last_event_id=last_event_id,
+            )
+        )
     return EventSourceResponse(
         _session_workspace_stream(
             request,
-            session_factory=session_factory,
+            session_factory=get_session_factory(),
             session_id=session_id,
             skip_initial=skip_initial,
             last_event_id=last_event_id,

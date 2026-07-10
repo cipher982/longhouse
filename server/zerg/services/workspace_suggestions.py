@@ -97,12 +97,14 @@ def build_workspace_suggestions(
     device_id: str,
     limit: int = 12,
     days_back: int = 45,
+    session_model=AgentSession,
 ) -> list[WorkspaceSuggestionEntry]:
     """Ranked recent workspaces for ``device_id`` owned by ``owner_id``.
 
     Returns ``[]`` for an unknown/unenrolled device so the picker degrades to
     manual path entry instead of erroring.
     """
+    session_model = session_model or AgentSession
     enrolled = {entry.device_id for entry in build_machines_directory(db, owner_id=owner_id)}
     if device_id not in enrolled:
         return []
@@ -112,16 +114,16 @@ def build_workspace_suggestions(
 
     stmt = (
         select(
-            AgentSession.cwd,
-            AgentSession.git_repo,
-            AgentSession.git_branch,
-            AgentSession.last_activity_at,
-            AgentSession.started_at,
+            session_model.cwd,
+            session_model.git_repo,
+            session_model.git_branch,
+            session_model.last_activity_at,
+            session_model.started_at,
         )
-        .where(AgentSession.device_id == device_id)
-        .where(AgentSession.cwd.is_not(None))
-        .where(AgentSession.cwd.like("/%"))
-        .where(AgentSession.environment.notin_(_EXCLUDED_ENVIRONMENTS))
+        .where(session_model.device_id == device_id)
+        .where(session_model.cwd.is_not(None))
+        .where(session_model.cwd.like("/%"))
+        .where(session_model.environment.notin_(_EXCLUDED_ENVIRONMENTS))
     )
 
     @dataclass

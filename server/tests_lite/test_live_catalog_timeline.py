@@ -12,6 +12,7 @@ from zerg.database import make_sessionmaker
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveTimelineCard
+from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import list_live_catalog_timeline
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 
@@ -120,3 +121,46 @@ def test_live_catalog_timeline_returns_typed_archive_requirement_for_search(tmp_
     LiveSession = make_sessionmaker(engine)
     with LiveSession() as db, pytest.raises(ValueError, match="search_requires_archive"):
         list_live_catalog_timeline(db, params=_params(query="sqlite"))
+
+
+def test_live_catalog_machine_list_reuses_bounded_projection(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
+    initialize_live_database(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    session_id = uuid4()
+    with LiveSession() as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=str(session_id),
+                provider="codex",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/workspace/longhouse",
+                started_at=now,
+                last_activity_at=now,
+                user_messages=1,
+            )
+        )
+        db.add(
+            LiveTimelineCard(
+                session_id=str(session_id),
+                provider="codex",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/workspace/longhouse",
+                started_at=now,
+                last_activity_at=now,
+                user_messages=1,
+                archive_state="current",
+                derived_state="current",
+                parser_revision="test",
+            )
+        )
+        db.commit()
+        response = list_live_catalog_sessions(db, params=_params())
+
+    assert response.total == 1
+    assert response.sessions[0].id == str(session_id)
