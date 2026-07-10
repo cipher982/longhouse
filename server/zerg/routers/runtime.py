@@ -22,6 +22,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import event_age_at_ingest_seconds
 from zerg.models.agents import AgentSession
+from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.apns_sender import WIDGET_PUSH_PLATFORM
 from zerg.services.apns_sender import active_ios_targets_for_owner
 from zerg.services.apns_sender import prepare_long_run_waiting_push
@@ -58,6 +59,23 @@ _catalog_db_dependency = catalog_db_dependency()
 
 _HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS = 2.0
 _AUTO_RESUME_PHASES = {"thinking", "running"}
+
+
+def _resume_live_snoozed_sessions(live_db: Session, push_contexts: list[dict], *, occurred_at: datetime) -> int:
+    session_ids = [str(item["session_id"]) for item in push_contexts if item.get("auto_resume")]
+    if not session_ids:
+        return 0
+    return (
+        live_db.query(LiveSessionCatalog)
+        .filter(
+            LiveSessionCatalog.session_id.in_(session_ids),
+            LiveSessionCatalog.user_state == "snoozed",
+        )
+        .update(
+            {"user_state": "active", "user_state_at": occurred_at},
+            synchronize_session=False,
+        )
+    )
 
 
 @router.post("/events/batch", response_model=RuntimeEventBatchResult)
@@ -387,6 +405,11 @@ async def ingest_runtime_observation_batch(
 
             def _do_live_runtime_state(live_db: Session):
                 result = ingest_live_runtime_events(live_db, events)
+                _resume_live_snoozed_sessions(
+                    live_db,
+                    _push_contexts_for_result(result),
+                    occurred_at=now_utc,
+                )
                 # Bridge live transcript deltas are high-frequency provisional
                 # preview facts; final transcript ingest owns durable history.
                 archive_events = [event for event in events if not _is_bridge_live_transcript_event(event)]

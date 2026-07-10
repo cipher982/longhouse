@@ -17,6 +17,7 @@ from zerg.database import make_sessionmaker
 from zerg.models.user import User
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.routers.agents_sessions import set_session_loop_mode
+from zerg.routers.runtime import _resume_live_snoozed_sessions
 from zerg.services.session_views import SessionLoopModeRequest
 from zerg.services.write_serializer import get_catalog_write_serializer
 from zerg.services.write_serializer import get_live_write_serializer
@@ -106,3 +107,32 @@ def test_session_preference_mutation_uses_live_session_primary_key(tmp_path, mon
         )
         assert response.loop_mode.value == "autopilot"
         assert live_db.get(LiveSessionCatalog, session_id).loop_mode == "autopilot"
+
+
+def test_runtime_activity_resumes_live_snoozed_session(tmp_path):
+    live_engine = make_live_engine(f"sqlite:///{tmp_path / 'live-auto-resume.db'}")
+    initialize_live_database(live_engine)
+    LiveSession = make_sessionmaker(live_engine)
+    session_id = "00000000-0000-0000-0000-000000000002"
+    now = datetime.now(timezone.utc)
+    with LiveSession() as live_db:
+        live_db.add(
+            LiveSessionCatalog(
+                session_id=session_id,
+                provider="codex",
+                environment="production",
+                started_at=now,
+                user_state="snoozed",
+            )
+        )
+        live_db.commit()
+
+        updated = _resume_live_snoozed_sessions(
+            live_db,
+            [{"session_id": session_id, "auto_resume": True}],
+            occurred_at=now,
+        )
+        live_db.commit()
+
+        assert updated == 1
+        assert live_db.get(LiveSessionCatalog, session_id).user_state == "active"

@@ -729,12 +729,7 @@ def list_active_sessions(
     try:
         store = AgentsStore(db)
         now = datetime.now(timezone.utc)
-        live_candidate_ids: list[UUID] | None
-        try:
-            live_candidate_ids = _active_live_session_candidates(limit=limit, days_back=days_back, now=now)
-        except Exception:
-            logger.warning("Failed to query live active-session candidates; falling back to archive", exc_info=True)
-            live_candidate_ids = None
+        live_candidate_ids = _active_live_session_candidates(limit=limit, days_back=days_back, now=now)
 
         if live_candidate_ids is None:
             since = now - timedelta(days=days_back)
@@ -760,8 +755,6 @@ def list_active_sessions(
                 [session_id for session_id in unique_live_candidate_ids if session_id not in hydrated_live_ids]
             )
             for session in hydrated_live_sessions:
-                if (session.user_state or "active") in {"archived", "snoozed"}:
-                    continue
                 if not include_automation and int(session.hidden_from_default_timeline or 0) == 1:
                     continue
                 if project and session.project != project:
@@ -769,34 +762,8 @@ def list_active_sessions(
                 sessions.append(session)
                 if len(sessions) >= limit:
                     break
-            if missing_live_candidate_count and len(sessions) < limit:
-                logger.info(
-                    "Active session live candidates included %s archive-missing ids; backfilling page from archive",
-                    missing_live_candidate_count,
-                )
-                since = now - timedelta(days=days_back)
-                backfill_limit = min(_ACTIVE_LIVE_SESSION_CANDIDATE_MAX, limit + len(unique_live_candidate_ids))
-                backfill_sessions, _total = store.list_sessions(
-                    project=project,
-                    provider=None,
-                    environment=None,
-                    include_test=False,
-                    device_id=None,
-                    since=since,
-                    query=None,
-                    limit=backfill_limit,
-                    offset=0,
-                    exclude_user_states=["archived", "snoozed"],
-                    anchor_on_activity=True,
-                )
-                seen_ids = {session.id for session in sessions}
-                for session in backfill_sessions:
-                    if session.id in seen_ids:
-                        continue
-                    sessions.append(session)
-                    seen_ids.add(session.id)
-                    if len(sessions) >= limit:
-                        break
+            if missing_live_candidate_count:
+                logger.info("Active session catalog included %s archive-missing ids", missing_live_candidate_count)
 
         session_ids = [s.id for s in sessions]
         last_activity = store.get_last_activity_map(session_ids)

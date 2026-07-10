@@ -24,6 +24,7 @@ from zerg.database import Base, get_db, initialize_live_database, make_engine, m
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession, SessionRuntimeState
 from zerg.models.live_store import LiveSession as LiveSessionRow
+from zerg.models.live_store import LiveSessionCatalog
 from zerg.routers import agents_sessions as agents_sessions_router
 from zerg.services.agents import AgentsStore
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
@@ -244,6 +245,46 @@ def test_active_sessions_uses_live_store_candidates_when_configured(tmp_path, mo
     with live_factory() as live_db:
         live_db.add_all(
             [
+                LiveSessionCatalog(
+                    session_id=newest_live_id,
+                    provider="claude",
+                    environment="production",
+                    project="zerg",
+                    started_at=old,
+                    user_state="active",
+                ),
+                LiveSessionCatalog(
+                    session_id=older_live_id,
+                    provider="claude",
+                    environment="production",
+                    project="zerg",
+                    started_at=old,
+                    user_state="active",
+                ),
+                LiveSessionCatalog(
+                    session_id=archived_live_id,
+                    provider="claude",
+                    environment="production",
+                    project="zerg",
+                    started_at=old,
+                    user_state="archived",
+                ),
+                LiveSessionCatalog(
+                    session_id=wrong_project_live_id,
+                    provider="claude",
+                    environment="production",
+                    project="other",
+                    started_at=old,
+                    user_state="active",
+                ),
+                LiveSessionCatalog(
+                    session_id=missing_live_id,
+                    provider="claude",
+                    environment="production",
+                    project="zerg",
+                    started_at=old,
+                    user_state="active",
+                ),
                 LiveSessionRow(
                     session_id=newest_live_id,
                     provider="claude",
@@ -308,8 +349,8 @@ def test_active_sessions_uses_live_store_candidates_when_configured(tmp_path, mo
         live_engine.dispose()
 
 
-def test_active_sessions_backfills_archive_rows_when_live_candidates_are_ghosts(tmp_path, monkeypatch):
-    """Stale live_sessions rows must not make the active page artificially short."""
+def test_active_sessions_do_not_backfill_archive_rows_when_live_candidates_are_ghosts(tmp_path, monkeypatch):
+    """The active page stays on canonical live candidates even when an old liveness row is stale."""
     factory = _make_db(tmp_path, "live_candidate_ghost_archive.db")
     live_engine, live_factory = _make_live_db(tmp_path, "live_candidate_ghost_hot.db")
     now = datetime.now(timezone.utc)
@@ -321,6 +362,14 @@ def test_active_sessions_backfills_archive_rows_when_live_candidates_are_ghosts(
     with live_factory() as live_db:
         live_db.add_all(
             [
+                LiveSessionCatalog(
+                    session_id=live_session_id,
+                    provider="claude",
+                    environment="production",
+                    project="zerg",
+                    started_at=old,
+                    user_state="active",
+                ),
                 LiveSessionRow(
                     session_id=ghost_session_id,
                     provider="claude",
@@ -350,7 +399,8 @@ def test_active_sessions_backfills_archive_rows_when_live_candidates_are_ghosts(
         resp = client.get("/agents/sessions/active?days_back=14&limit=2&project=zerg", headers={"X-Agents-Token": "dev"})
         assert resp.status_code == 200
         ids = [s["id"] for s in resp.json()["sessions"]]
-        assert ids == [live_session_id, archive_backfill_id]
+        assert ids == [live_session_id]
+        assert archive_backfill_id not in ids
     finally:
         from zerg.main import api_app
 

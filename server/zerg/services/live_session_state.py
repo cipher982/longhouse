@@ -11,6 +11,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from zerg.models.live_store import LiveSession
+from zerg.models.live_store import LiveSessionCatalog
 from zerg.utils.time import normalize_utc
 
 
@@ -130,7 +131,9 @@ def list_active_live_session_ids(
     cutoff = normalized_now - timedelta(days=days_back)
     rows = (
         db.query(LiveSession.session_id)
+        .join(LiveSessionCatalog, LiveSessionCatalog.session_id == LiveSession.session_id)
         .filter(LiveSession.state.notin_(("missing", "ended")))
+        .filter(LiveSessionCatalog.user_state.notin_(("archived", "snoozed")))
         .filter(LiveSession.last_seen_at >= cutoff)
         .order_by(LiveSession.last_seen_at.desc(), LiveSession.updated_at.desc(), LiveSession.session_id.desc())
         .limit(limit)
