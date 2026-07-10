@@ -48,6 +48,7 @@ _worker_session_factories: dict[str, sessionmaker] = {}
 _live_worker_session_factories: dict[str, sessionmaker] = {}
 _live_worker_write_session_factories: dict[str, sessionmaker] = {}
 _worker_factories_lock = Lock()
+_archive_route_process = False
 
 
 @contextmanager
@@ -588,27 +589,33 @@ def archive_database_is_read_only(database_url: str | None = None) -> bool:
     return parsed.drivername.startswith("sqlite") and parsed.query.get("mode") == "ro"
 
 
+def use_archive_database_for_process() -> None:
+    """Route legacy archive dependencies to the cold database in this helper."""
+
+    global _archive_route_process
+    _archive_route_process = True
+
+
 def live_catalog_enabled() -> bool:
     """Return whether this process owns the canonical live catalog.
 
-    Normal Runtime Hosts always use the live catalog. Disposable archive-read
-    children are identified by their read-only archive URL and intentionally
-    execute the cold route against the monolith.
+    Normal Runtime Hosts always use the live catalog. Disposable archive-route
+    children explicitly execute their one request against the cold database.
     """
 
     if _settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}:
         return False
-    return bool(live_store_configured() and not archive_database_is_read_only())
+    return bool(live_store_configured() and not (_archive_route_process or archive_database_is_read_only()))
 
 
 def get_catalog_session_factory() -> sessionmaker:
     """Return the active bounded-catalog session factory.
 
-    Runtime Hosts use the live catalog. Archive-read children use the cold
-    database directly and never silently fall back between stores.
+    The live catalog remains authoritative inside archive-route helpers so
+    authentication and bounded control state never fall back to cold copies.
     """
 
-    if live_catalog_enabled():
+    if live_store_configured():
         factory = get_live_session_factory()
         if factory is None:
             raise RuntimeError("Live catalog is enabled but its session factory is unavailable")
@@ -749,7 +756,7 @@ def get_catalog_db() -> Iterator[Session]:
 def catalog_db_dependency():
     """Select the canonical catalog dependency for this process role."""
 
-    return get_catalog_db if live_catalog_enabled() else get_db
+    return get_catalog_db if live_store_configured() else get_db
 
 
 @contextmanager

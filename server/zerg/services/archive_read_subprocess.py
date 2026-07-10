@@ -1,4 +1,4 @@
-"""One-request ASGI child for crash-isolated archive reads."""
+"""One-request ASGI child for crash-isolated archive operations."""
 
 from __future__ import annotations
 
@@ -31,12 +31,10 @@ def _readonly_sqlite_url(raw: str) -> str:
 
 async def _main() -> None:
     payload = json.loads(sys.stdin.buffer.read())
-    # The read-only archive URL is authoritative before importing settings or
-    # route modules. It identifies this process as an archive reader without a
-    # deployment feature flag.
-    os.environ["AUTH_DISABLED"] = "1"
+    method = str(payload.get("method") or "GET").upper()
+    read_only = method in {"GET", "HEAD"}
     original_database_url = os.environ.get("DATABASE_URL", "")
-    if not os.environ.get("LONGHOUSE_LIVE_DATABASE_URL") and not os.environ.get("LONGHOUSE_LIVE_DB_PATH"):
+    if read_only and not os.environ.get("LONGHOUSE_LIVE_DATABASE_URL") and not os.environ.get("LONGHOUSE_LIVE_DB_PATH"):
         from sqlalchemy.engine import make_url
 
         parsed = make_url(original_database_url)
@@ -45,16 +43,20 @@ async def _main() -> None:
             live_path = archive_path.with_name(f"{archive_path.stem}-live.db")
             if live_path.exists():
                 os.environ["LONGHOUSE_LIVE_DATABASE_URL"] = _readonly_sqlite_url(f"sqlite:///{live_path}")
-    explicit_live_path = os.environ.get("LONGHOUSE_LIVE_DB_PATH", "")
-    if explicit_live_path:
-        os.environ["LONGHOUSE_LIVE_DATABASE_URL"] = _readonly_sqlite_url(f"sqlite:///{explicit_live_path}")
-    os.environ["DATABASE_URL"] = _readonly_sqlite_url(original_database_url)
-    explicit_live_url = os.environ.get("LONGHOUSE_LIVE_DATABASE_URL", "")
-    if explicit_live_url:
-        os.environ["LONGHOUSE_LIVE_DATABASE_URL"] = _readonly_sqlite_url(explicit_live_url)
+    if read_only:
+        os.environ["DATABASE_URL"] = _readonly_sqlite_url(original_database_url)
+        explicit_live_path = os.environ.get("LONGHOUSE_LIVE_DB_PATH", "")
+        if explicit_live_path:
+            os.environ["LONGHOUSE_LIVE_DATABASE_URL"] = _readonly_sqlite_url(f"sqlite:///{explicit_live_path}")
+        explicit_live_url = os.environ.get("LONGHOUSE_LIVE_DATABASE_URL", "")
+        if explicit_live_url:
+            os.environ["LONGHOUSE_LIVE_DATABASE_URL"] = _readonly_sqlite_url(explicit_live_url)
 
     import httpx
 
+    from zerg.database import use_archive_database_for_process
+
+    use_archive_database_for_process()
     from zerg.main import api_app
 
     path = str(payload["path"])
@@ -64,7 +66,12 @@ async def _main() -> None:
         transport=httpx.ASGITransport(app=api_app),
         base_url="http://archive-reader",
     ) as client:
-        response = await client.request(str(payload.get("method") or "GET"), url)
+        response = await client.request(
+            method,
+            url,
+            headers={str(key): str(value) for key, value in (payload.get("headers") or {}).items()},
+            content=base64.b64decode(payload.get("body_b64") or ""),
+        )
     result = {
         "status_code": response.status_code,
         "headers": dict(response.headers),

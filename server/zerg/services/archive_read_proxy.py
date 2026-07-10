@@ -1,8 +1,8 @@
-"""Crash-isolated reads for cold archive-backed HTTP surfaces.
+"""Crash-isolated requests for cold archive-backed HTTP surfaces.
 
-The Runtime Host authenticates against the live catalog, then delegates cold
-GET requests to a fresh helper process.  A corrupt/native-failing cold
-SQLite read can therefore fail one request without terminating the hot API.
+The Runtime Host delegates any route that depends on the cold database to a
+fresh helper process. A corrupt/native-failing SQLite operation can therefore
+fail one request without terminating the hot API.
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ def _depends_on_archive_db(dependant: Any) -> bool:
     return False
 
 
-def _agent_route_reads_archive(path: str, method: str, routes: Iterable[Any]) -> bool:
+def _route_uses_archive_db(path: str, method: str, routes: Iterable[Any]) -> bool:
     for route in routes:
         methods = getattr(route, "methods", ()) or ()
         path_regex = getattr(route, "path_regex", None)
@@ -70,37 +70,38 @@ def _agent_route_reads_archive(path: str, method: str, routes: Iterable[Any]) ->
     return False
 
 
-def should_proxy_archive_read(request: Request, *, routes: Iterable[Any] = ()) -> bool:
-    if request.method.upper() not in {"GET", "HEAD"}:
-        return False
+def should_proxy_archive_request(request: Request, *, routes: Iterable[Any] = ()) -> bool:
     path = normalized_api_path(request)
+    method = request.method.upper()
     if path == "/timeline/sessions/stream":
         return False
-    if path in _EXACT_ARCHIVE_READS:
+    if method in {"GET", "HEAD"} and path in _EXACT_ARCHIVE_READS:
         return True
-    if path == "/timeline/sessions":
+    if method in {"GET", "HEAD"} and path == "/timeline/sessions":
         return "query" in request.query_params or request.query_params.get("mode", "lexical") != "lexical"
-    if path == "/agents/sessions":
+    if method in {"GET", "HEAD"} and path == "/agents/sessions":
         return "query" in request.query_params or request.query_params.get("mode", "lexical") != "lexical"
-    if path.startswith("/agents/") and _agent_route_reads_archive(path, request.method.upper(), routes):
+    if method in {"GET", "HEAD"} and _TIMELINE_SESSION_READ.fullmatch(path):
         return True
-    return bool(_TIMELINE_SESSION_READ.fullmatch(path))
+    return _route_uses_archive_db(path, method, routes)
 
 
-async def proxy_archive_read(request: Request) -> Response:
+async def proxy_archive_request(request: Request) -> Response:
+    body = await request.body()
     payload = {
         "method": request.method.upper(),
         "path": normalized_api_path(request),
         "query": request.url.query,
+        "headers": dict(request.headers),
+        "body_b64": base64.b64encode(body).decode("ascii"),
     }
     env = dict(os.environ)
-    env["AUTH_DISABLED"] = "1"
     try:
         await asyncio.wait_for(_ARCHIVE_READ_SLOTS.acquire(), timeout=1.0)
     except TimeoutError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "archive_read_pressure", "message": "Archive readers are busy; retry shortly."},
+            detail={"code": "archive_request_pressure", "message": "Archive workers are busy; retry shortly."},
         ) from None
     timeout = 30.0
     try:
@@ -124,21 +125,21 @@ async def proxy_archive_read(request: Request) -> Response:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
-                    "code": "archive_read_timeout",
-                    "message": "Archive read timed out; live control remains available.",
+                    "code": "archive_request_timeout",
+                    "message": "Archive operation timed out; live control remains available.",
                 },
             ) from None
     except OSError as exc:
-        logger.warning("Could not start archive read child for %s: %s", payload["path"], exc)
+        logger.warning("Could not start archive request child for %s: %s", payload["path"], exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "archive_read_unavailable", "message": "Archive reader could not start."},
+            detail={"code": "archive_request_unavailable", "message": "Archive worker could not start."},
         ) from None
     finally:
         _ARCHIVE_READ_SLOTS.release()
     if proc.returncode != 0:
         logger.warning(
-            "Archive read child failed returncode=%s path=%s stderr=%s",
+            "Archive request child failed returncode=%s path=%s stderr=%s",
             proc.returncode,
             payload["path"],
             stderr.decode("utf-8", errors="replace")[-1000:],
@@ -146,15 +147,15 @@ async def proxy_archive_read(request: Request) -> Response:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
-                "code": "archive_read_unavailable",
-                "message": "Archive detail is temporarily unavailable; live control remains available.",
+                "code": "archive_request_unavailable",
+                "message": "Archive operation is temporarily unavailable; live control remains available.",
             },
         )
     try:
         result = json.loads(stdout)
         body = base64.b64decode(result["body_b64"])
     except (KeyError, ValueError, TypeError, json.JSONDecodeError):
-        logger.warning("Archive read child returned an invalid envelope for %s", payload["path"])
-        raise HTTPException(status_code=503, detail={"code": "archive_read_invalid_response"}) from None
+        logger.warning("Archive request child returned an invalid envelope for %s", payload["path"])
+        raise HTTPException(status_code=503, detail={"code": "archive_request_invalid_response"}) from None
     headers = {str(k): str(v) for k, v in result.get("headers", {}).items() if str(k).lower() in _PASSTHROUGH_HEADERS}
     return Response(content=body, status_code=int(result["status_code"]), headers=headers)

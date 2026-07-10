@@ -37,17 +37,13 @@ def test_catalog_factory_uses_live_database_without_opening_archive(tmp_path, mo
         assert catalog_db.query(User).one().email == "live-only@example.com"
 
 
-def test_archive_reader_process_uses_read_only_archive(monkeypatch):
-    sentinel = object()
+def test_archive_route_process_keeps_catalog_auth_on_live_database(monkeypatch):
+    live_sentinel = object()
     monkeypatch.setattr(database_module._settings, "database_url", "sqlite:///file:/tmp/archive.db?mode=ro&uri=true")
     monkeypatch.setattr(database_module._settings, "live_database_url", "sqlite:////tmp/live.db")
-    monkeypatch.setattr(database_module, "get_session_factory", lambda: sentinel)
-    monkeypatch.setattr(
-        database_module,
-        "get_live_session_factory",
-        lambda: pytest.fail("archive reader must not select the live catalog"),
-    )
-    assert get_catalog_session_factory() is sentinel
+    monkeypatch.setattr(database_module, "get_session_factory", lambda: pytest.fail("catalog auth must not use cold rows"))
+    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: live_sentinel)
+    assert get_catalog_session_factory() is live_sentinel
 
 
 def test_catalog_serializer_follows_catalog_owner(monkeypatch):
