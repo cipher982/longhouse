@@ -50,14 +50,14 @@ def test_archive_read_proxy_routes_only_cold_get_surfaces():
         return {}
 
     @app.get("/agents/sessions/{session_id}/archive-bundle")
-    def unbounded_agent_read(_db=Depends(get_db)):
+    def archive_bundle_read(_db=Depends(get_db)):
         return {}
 
     assert should_proxy_archive_read(_request("/timeline/sessions/00000000-0000-0000-0000-000000000001/workspace"))
     assert should_proxy_archive_read(_request("/agents/sessions", "query=sqlite"))
     assert should_proxy_archive_read(_request("/timeline/recall", "query=sqlite"))
     assert should_proxy_archive_read(_request("/agents/worklog/day"), routes=app.routes)
-    assert not should_proxy_archive_read(
+    assert should_proxy_archive_read(
         _request("/agents/sessions/00000000-0000-0000-0000-000000000001/archive-bundle"),
         routes=app.routes,
     )

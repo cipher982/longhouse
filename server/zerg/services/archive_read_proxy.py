@@ -1,7 +1,7 @@
 """Crash-isolated reads for cold archive-backed HTTP surfaces.
 
-The Runtime Host authenticates against the live catalog, then delegates only
-bounded GET requests to a fresh helper process.  A corrupt/native-failing cold
+The Runtime Host authenticates against the live catalog, then delegates cold
+GET requests to a fresh helper process.  A corrupt/native-failing cold
 SQLite read can therefore fail one request without terminating the hot API.
 """
 
@@ -33,7 +33,6 @@ _EXACT_ARCHIVE_READS = {
     "/timeline/filters",
     "/timeline/sessions/summary",
 }
-_UNBOUNDED_AGENT_READ = re.compile(r"^/agents/sessions/[^/]+/(?:export|archive-bundle)$")
 _PASSTHROUGH_HEADERS = {
     "cache-control",
     "content-disposition",
@@ -61,8 +60,6 @@ def _depends_on_archive_db(dependant: Any) -> bool:
 
 
 def _agent_route_reads_archive(path: str, method: str, routes: Iterable[Any]) -> bool:
-    if _UNBOUNDED_AGENT_READ.fullmatch(path):
-        return False
     for route in routes:
         methods = getattr(route, "methods", ()) or ()
         path_regex = getattr(route, "path_regex", None)
