@@ -12,7 +12,6 @@ from fastapi import status
 from pydantic import BaseModel
 from sqlalchemy import and_
 from sqlalchemy import or_
-from sqlalchemy import tuple_
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
@@ -137,19 +136,6 @@ async def create_source_line_claims(
     if not valid:
         return SourceLineClaimsResponse(present=present, missing=missing, rejected=rejected)
 
-    identities = {(item.session_id, normalized.source_path, normalized.source_offset, normalized.line_hash) for item, normalized in valid}
-    rows = (
-        db.query(AgentSourceLine)
-        .filter(
-            tuple_(
-                AgentSourceLine.session_id,
-                AgentSourceLine.source_path,
-                AgentSourceLine.source_offset,
-                AgentSourceLine.line_hash,
-            ).in_(identities)
-        )
-        .all()
-    )
     session_ids = {item.session_id for item, _normalized in valid}
     head_branch_ids = dict(
         db.query(AgentSessionBranch.session_id, AgentSessionBranch.id)
@@ -157,14 +143,27 @@ async def create_source_line_claims(
         .filter(AgentSessionBranch.is_head == 1)
         .all()
     )
+    identities_by_session: dict[UUID, set[tuple[UUID, str, int, str]]] = {}
+    for item, normalized in valid:
+        identities_by_session.setdefault(item.session_id, set()).add(
+            (item.session_id, normalized.source_path, normalized.source_offset, normalized.line_hash)
+        )
+
+    # SQLite does not use the source-line indexes for a four-column tuple IN
+    # predicate. Group by session and constrain the head branch + offsets so the
+    # existing (session_id, branch_id, source_offset) index owns every lookup.
+    rows: list[AgentSourceLine] = []
+    for session_id, identities in identities_by_session.items():
+        query = db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id)
+        if head_branch_id := head_branch_ids.get(session_id):
+            query = query.filter(AgentSourceLine.branch_id == head_branch_id)
+        query = query.filter(AgentSourceLine.source_offset.in_({identity[2] for identity in identities}))
+        rows.extend(row for row in query.all() if (row.session_id, row.source_path, int(row.source_offset), row.line_hash) in identities)
 
     durable: set[tuple[UUID, str, int, str]] = set()
     slim_sessions: set[UUID] = set()
     archived_by_session: dict[UUID, dict[tuple[str, int, str], str]] = {}
     for row in rows:
-        head_branch_id = head_branch_ids.get(row.session_id)
-        if head_branch_id is not None and int(row.branch_id) != int(head_branch_id):
-            continue
         identity = (row.session_id, row.source_path, int(row.source_offset), row.line_hash)
         try:
             raw_json = decode_raw_json(row)
