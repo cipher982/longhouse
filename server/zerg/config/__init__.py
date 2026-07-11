@@ -74,6 +74,13 @@ def _sqlite_file_path(database_url: str) -> Path | None:
     raw_path = parsed.path or ""
     if not raw_path or raw_path in {":memory:", "/:memory:"}:
         return None
+    # Read-only archive helpers use SQLAlchemy's SQLite URI form:
+    # sqlite:///file:/absolute/path.db?mode=ro&uri=true. The file: prefix is
+    # SQLite syntax, not part of the filesystem path.
+    if raw_path.startswith("/file:/"):
+        return Path(raw_path.removeprefix("/file:"))
+    if raw_path.startswith("file:/"):
+        return Path(raw_path.removeprefix("file:"))
     # sqlite:///relative.db parses as /relative.db. SQLAlchemy treats that as a
     # relative database path, so remove one leading slash for the three-slash
     # form while preserving sqlite:////absolute.db. Driver-qualified SQLite

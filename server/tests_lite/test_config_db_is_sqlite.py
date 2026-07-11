@@ -120,3 +120,10 @@ class TestDbIsSqlite:
         """In-memory SQLite URL should be detected."""
         settings = self._make_settings("sqlite:///:memory:")
         assert settings.db_is_sqlite is True
+
+
+def test_archive_root_resolves_beside_readonly_sqlite_uri(monkeypatch):
+    from zerg.config import _resolve_archive_root
+
+    monkeypatch.delenv("LONGHOUSE_ARCHIVE_ROOT", raising=False)
+    assert _resolve_archive_root("sqlite:///file:/data/longhouse.db?mode=ro&uri=true") == "/data/archive"
