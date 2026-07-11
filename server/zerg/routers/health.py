@@ -503,9 +503,7 @@ def health_check(request: Request):
         health_status["status"] = "unhealthy"
         critical_failure = True
 
-    # 2a. Optional Live Store topology. Disabled is healthy in the current
-    # compatibility mode; configured-but-risky paths are warnings until hot
-    # routes actually depend on the live store.
+    # 2a. Canonical Live Store topology.
     try:
         from zerg.database import get_live_session_factory
         from zerg.database import live_store_configured
@@ -528,8 +526,7 @@ def health_check(request: Request):
 
         live_status = live_store.get("status")
         live_warnings = live_store.get("warnings") or []
-        live_db_was_derived = not os.getenv("LONGHOUSE_LIVE_DATABASE_URL") and not os.getenv("LONGHOUSE_LIVE_DB_PATH")
-        if live_db_was_derived and "same_directory_as_archive_db" in live_warnings:
+        if "same_directory_as_archive_db" in live_warnings:
             live_warnings = [w for w in live_warnings if w != "same_directory_as_archive_db"]
         outbox = live_store.get("live_archive_outbox") or {}
         outbox_warn = False

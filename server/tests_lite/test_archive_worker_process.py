@@ -31,7 +31,6 @@ def _worker_env(tmp_path, archive_url: str, live_url: str) -> dict[str, str]:
     return {
         **os.environ,
         "DATABASE_URL": archive_url,
-        "LONGHOUSE_LIVE_DATABASE_URL": live_url,
         "AUTH_DISABLED": "1",
         "FERNET_SECRET": Fernet.generate_key().decode(),
         "TESTING": "0",
@@ -40,7 +39,7 @@ def _worker_env(tmp_path, archive_url: str, live_url: str) -> dict[str, str]:
 
 def _seed_worker_databases(tmp_path):
     archive_url = f"sqlite:///{tmp_path / 'archive.db'}"
-    live_url = f"sqlite:///{tmp_path / 'live.db'}"
+    live_url = f"sqlite:///{tmp_path / 'archive-live.db'}"
     archive_engine = make_engine(archive_url)
     live_engine = make_engine(live_url)
     Base.metadata.create_all(archive_engine)
@@ -117,7 +116,7 @@ def test_archive_worker_drains_real_heartbeat_outbox_in_child_process(tmp_path, 
         assert outbox.attempts == 1
 
     monkeypatch.setenv("TESTING", "0")
-    monkeypatch.setenv("LONGHOUSE_LIVE_DATABASE_URL", live_url)
+    monkeypatch.setenv("DATABASE_URL", archive_url)
     status = read_archive_worker_status()
     assert status["status"] == "stopped"
     assert status["drained"] == 1
@@ -235,7 +234,7 @@ def test_archive_ingest_worker_defaults_to_catalog_single_writer_mode(tmp_path, 
     import zerg.database as database_module
     from zerg.services.archive_ingest_job import archive_ingest_worker_enabled
 
-    monkeypatch.setenv("LONGHOUSE_LIVE_DB_PATH", str(tmp_path / "live.db"))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'archive.db'}")
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: False)
     assert archive_ingest_worker_enabled() is False
 
@@ -246,7 +245,7 @@ def test_archive_ingest_worker_defaults_to_catalog_single_writer_mode(tmp_path, 
 def test_archive_worker_stale_running_status_is_degraded(tmp_path, monkeypatch):
     path = tmp_path / "archive-worker-status.json"
     monkeypatch.setenv("TESTING", "0")
-    monkeypatch.setenv("LONGHOUSE_LIVE_DB_PATH", str(tmp_path / "live.db"))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'archive.db'}")
     write_archive_worker_status({"status": "running", "pid": 123})
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["observed_at"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
@@ -261,7 +260,7 @@ def test_archive_worker_stale_running_status_is_degraded(tmp_path, monkeypatch):
 
 def test_archive_worker_long_active_operation_is_degraded(tmp_path, monkeypatch):
     monkeypatch.setenv("TESTING", "0")
-    monkeypatch.setenv("LONGHOUSE_LIVE_DB_PATH", str(tmp_path / "live.db"))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'archive.db'}")
     write_archive_worker_status(
         {
             "status": "running",

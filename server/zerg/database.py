@@ -139,7 +139,7 @@ def _get_or_create_worker_session_factory(worker_id: str) -> sessionmaker:
 def _live_worker_db_url(worker_id: str) -> str:
     base_url = _settings.live_database_url
     if not base_url:
-        raise ValueError("LONGHOUSE_LIVE_DATABASE_URL not set in environment")
+        raise ValueError("DATABASE_URL does not resolve to a Live Store")
     return _derived_worker_db_url(base_url, worker_id, "live_worker")
 
 

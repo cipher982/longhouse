@@ -132,16 +132,13 @@ def test_source_line_claim_post_uses_read_only_archive_connection():
     assert not _request_is_read_only("POST", "/agents/ingest")
 
 
-def test_explicit_database_urls_win_over_dotenv(tmp_path):
+def test_database_url_deterministically_selects_live_sibling(tmp_path):
     explicit_archive = f"sqlite:///{tmp_path / 'explicit-archive.db'}"
-    explicit_live = f"sqlite:///{tmp_path / 'explicit-live.db'}"
     (tmp_path / ".env").write_text(
         "DATABASE_URL=sqlite:///dotenv-archive.db\n"
-        "LONGHOUSE_LIVE_DATABASE_URL=sqlite:///dotenv-live.db\n"
     )
     env = os.environ.copy()
     env["DATABASE_URL"] = explicit_archive
-    env["LONGHOUSE_LIVE_DATABASE_URL"] = explicit_live
     env.pop("TESTING", None)
     completed = subprocess.run(
         [
@@ -160,7 +157,7 @@ def test_explicit_database_urls_win_over_dotenv(tmp_path):
         timeout=10,
     )
 
-    assert json.loads(completed.stdout) == [explicit_archive, explicit_live]
+    assert json.loads(completed.stdout) == [explicit_archive, f"sqlite:///{tmp_path / 'explicit-archive-live.db'}"]
 
 
 @pytest.mark.asyncio
@@ -280,8 +277,6 @@ def test_archive_read_child_serves_real_archive_route(tmp_path):
         {
             "AUTH_DISABLED": "1",
             "DATABASE_URL": f"sqlite:///{database_path}",
-            "LONGHOUSE_LIVE_DATABASE_URL": f"sqlite:///{live_path}",
-            "LONGHOUSE_LIVE_DB_PATH": str(live_path),
         }
     )
     completed = subprocess.run(
@@ -308,8 +303,6 @@ def test_archive_child_serves_real_archive_mutation(tmp_path):
         {
             "AUTH_DISABLED": "1",
             "DATABASE_URL": f"sqlite:///{database_path}",
-            "LONGHOUSE_LIVE_DATABASE_URL": f"sqlite:///{live_path}",
-            "LONGHOUSE_LIVE_DB_PATH": str(live_path),
         }
     )
     from_session_id = uuid4()

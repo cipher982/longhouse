@@ -14,6 +14,7 @@ import enum
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 from urllib.parse import urlparse
 
 
@@ -102,34 +103,25 @@ def _resolve_archive_root(database_url: str) -> str:
     return str(root / "archive")
 
 
-def _sqlite_url_for_path(path_value: str) -> str:
-    path = Path(_strip_env_quotes(path_value)).expanduser()
-    if not path.is_absolute():
-        path = path.resolve()
-    return f"sqlite:///{path}"
+def _resolve_live_database_url(database_url: str) -> str:
+    """Derive the one canonical Live Store URL from ``DATABASE_URL``.
 
-
-def _resolve_live_database_url() -> str:
-    """Resolve the canonical Live Store database URL.
-
-    Explicit env vars (LONGHOUSE_LIVE_DATABASE_URL / LONGHOUSE_LIVE_DB_PATH) win.
-    When neither is set and DATABASE_URL points to a file-backed SQLite path,
-    derive a default sibling file: <archive-stem>-live.db in the same directory.
-    Non-file test databases do not receive a second store.
+    A file-backed archive ``longhouse.db`` always has a sibling
+    ``longhouse-live.db``. Read-only archive helpers derive a read-only live URL
+    as well. There is deliberately no second setting or fallback topology.
     """
-    explicit_url = _strip_env_quotes(os.getenv("LONGHOUSE_LIVE_DATABASE_URL") or "")
-    if explicit_url:
-        return explicit_url
-    explicit_path = _strip_env_quotes(os.getenv("LONGHOUSE_LIVE_DB_PATH") or "")
-    if explicit_path:
-        return _sqlite_url_for_path(explicit_path)
-    database_url = _strip_env_quotes(os.getenv("DATABASE_URL") or "")
+    database_url = _strip_env_quotes(database_url)
     if not database_url or not database_url.startswith("sqlite"):
+        return ""
+    parsed = urlparse(database_url)
+    if parsed.path in {"", ":memory:", "/:memory:"}:
+        # Anonymous in-memory databases cannot provide two durable stores: two
+        # engines would point at unrelated databases. Production Runtime Hosts
+        # are file-backed; focused split-store tests construct both explicitly.
         return ""
     archive_path = _sqlite_file_path(database_url)
     if archive_path is None:
         return ""
-    # Resolve to detect in-memory (sqlite_file_path returns None for :memory:).
     expanded = archive_path.expanduser()
     try:
         resolved = expanded.resolve()
@@ -139,6 +131,9 @@ def _resolve_live_database_url() -> str:
         return ""
     stem = resolved.stem
     live_path = resolved.parent / f"{stem}-live.db"
+    query = dict(item.split("=", 1) for item in parsed.query.split("&") if "=" in item)
+    if query.get("mode") == "ro" and query.get("uri") == "true":
+        return f"sqlite:///file:{quote(str(live_path), safe='/')}?mode=ro&uri=true"
     return f"sqlite:///{live_path}"
 
 
@@ -533,7 +528,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
     demo_mode = _truthy(os.getenv("DEMO_MODE")) or app_mode is AppMode.DEMO
 
     database_url = os.getenv("DATABASE_URL", "")
-    live_database_url = _resolve_live_database_url()
+    live_database_url = _resolve_live_database_url(database_url)
     archive_root = _resolve_archive_root(database_url)
     archive_primary_tenant_id = os.getenv("INSTANCE_ID") or os.getenv("LONGHOUSE_TENANT_ID") or "default"
 

@@ -11,7 +11,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy.engine.url import make_url
+from zerg.config import _resolve_live_database_url
+from zerg.config import _sqlite_file_path
 
 
 def _utc_now_iso() -> str:
@@ -23,24 +24,9 @@ def archive_worker_enabled() -> bool:
 
 
 def archive_worker_status_path() -> Path | None:
-    live_url = os.getenv("LONGHOUSE_LIVE_DATABASE_URL", "").strip()
-    live_path = os.getenv("LONGHOUSE_LIVE_DB_PATH", "").strip()
-    if live_path:
-        path = Path(live_path).expanduser()
-    elif live_url:
-        parsed = make_url(live_url)
-        if not parsed.drivername.startswith("sqlite") or not parsed.database or parsed.database == ":memory:":
-            return None
-        path = Path(parsed.database).expanduser()
-    else:
-        database_url = os.getenv("DATABASE_URL", "").strip()
-        if not database_url:
-            return None
-        parsed = make_url(database_url)
-        if not parsed.drivername.startswith("sqlite") or not parsed.database or parsed.database == ":memory:":
-            return None
-        archive_path = Path(parsed.database).expanduser()
-        path = archive_path.with_name(f"{archive_path.stem}-live.db")
+    path = _sqlite_file_path(_resolve_live_database_url(os.getenv("DATABASE_URL", "")))
+    if path is None:
+        return None
     return path.with_name("archive-worker-status.json")
 
 

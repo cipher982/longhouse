@@ -39,23 +39,8 @@ async def _main() -> None:
     path = str(payload["path"])
     read_only = _request_is_read_only(method, path)
     original_database_url = os.environ.get("DATABASE_URL", "")
-    if read_only and not os.environ.get("LONGHOUSE_LIVE_DATABASE_URL") and not os.environ.get("LONGHOUSE_LIVE_DB_PATH"):
-        from sqlalchemy.engine import make_url
-
-        parsed = make_url(original_database_url)
-        if parsed.drivername.startswith("sqlite") and parsed.database and parsed.database != ":memory:":
-            archive_path = Path(parsed.database).expanduser()
-            live_path = archive_path.with_name(f"{archive_path.stem}-live.db")
-            if live_path.exists():
-                os.environ["LONGHOUSE_LIVE_DATABASE_URL"] = _readonly_sqlite_url(f"sqlite:///{live_path}")
     if read_only:
         os.environ["DATABASE_URL"] = _readonly_sqlite_url(original_database_url)
-        explicit_live_path = os.environ.get("LONGHOUSE_LIVE_DB_PATH", "")
-        if explicit_live_path:
-            os.environ["LONGHOUSE_LIVE_DATABASE_URL"] = _readonly_sqlite_url(f"sqlite:///{explicit_live_path}")
-        explicit_live_url = os.environ.get("LONGHOUSE_LIVE_DATABASE_URL", "")
-        if explicit_live_url:
-            os.environ["LONGHOUSE_LIVE_DATABASE_URL"] = _readonly_sqlite_url(explicit_live_url)
 
     import httpx
 

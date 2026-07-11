@@ -127,3 +127,13 @@ def test_archive_root_resolves_beside_readonly_sqlite_uri(monkeypatch):
 
     monkeypatch.delenv("LONGHOUSE_ARCHIVE_ROOT", raising=False)
     assert _resolve_archive_root("sqlite:///file:/data/longhouse.db?mode=ro&uri=true") == "/data/archive"
+
+
+def test_live_database_is_the_archive_sibling_even_for_readonly_helpers():
+    from zerg.config import _resolve_live_database_url
+
+    assert _resolve_live_database_url("sqlite:////data/longhouse.db") == "sqlite:////data/longhouse-live.db"
+    assert (
+        _resolve_live_database_url("sqlite:///file:/data/longhouse.db?mode=ro&uri=true")
+        == "sqlite:///file:/data/longhouse-live.db?mode=ro&uri=true"
+    )
