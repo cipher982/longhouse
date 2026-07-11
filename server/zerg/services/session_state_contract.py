@@ -1,0 +1,573 @@
+"""Canonical orthogonal session-state facts and presentation.
+
+This module is the semantic seam between today's legacy SQLite rows and the
+future catalogd facts store.  It accepts already-loaded observations and
+capabilities, projects one versioned facts object, and derives presentation
+without consuming another presentation object.
+
+See ``docs/specs/runtime-display-contract.md``.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from datetime import timezone
+from typing import Any
+from typing import Literal
+
+from pydantic import BaseModel
+from pydantic import ConfigDict
+from pydantic import Field
+
+from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.session_liveness_facts import SessionLivenessFacts
+from zerg.services.session_runtime import RUN_TERMINAL_STATES
+from zerg.services.session_runtime import SessionRuntimeView
+from zerg.utils.time import normalize_utc
+
+STATE_CONTRACT_VERSION = 1
+PRESENTATION_POLICY_VERSION = 1
+
+ActivityState = Literal["thinking", "executing", "quiescent", "blocked", "stalled", "unknown"]
+RunLifecycle = Literal["starting", "running", "ended", "unknown"]
+ConnectionState = Literal["connected", "degraded", "disconnected", "unknown", "not_applicable"]
+ActionState = Literal["available", "unavailable", "unknown"]
+TranscriptConvergence = Literal["current", "lagging", "unknown"]
+SessionMode = Literal["shadow", "helm", "console", "unknown"]
+
+_STARTING_LAUNCH_STATES = {"launching", "launching_unknown", "pending", "dispatched"}
+_ENDED_RUNTIME_STATES = {"session_ended", "process_gone", *RUN_TERMINAL_STATES}
+_ACTIVITY_MAP: dict[str, ActivityState] = {
+    "thinking": "thinking",
+    "running": "executing",
+    "idle": "quiescent",
+    "needs_user": "quiescent",
+    "blocked": "blocked",
+    "stalled": "stalled",
+}
+
+
+class _FrozenModel(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+
+class SessionDispositionFacts(_FrozenModel):
+    state: Literal["open", "closed"]
+    closed_at: datetime | None = None
+    close_reason: str | None = None
+
+
+class SessionRunFacts(_FrozenModel):
+    id: str | None = None
+    lifecycle: RunLifecycle
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
+    end_reason: str | None = None
+
+
+class SessionActivityFacts(_FrozenModel):
+    state: ActivityState
+    raw_kind: str | None = None
+    tool: str | None = None
+    source: str | None = None
+    observed_at: datetime | None = None
+    valid_until: datetime | None = None
+
+
+class SessionActionAvailability(_FrozenModel):
+    state: ActionState
+    reason: str | None = None
+
+
+class SessionControlActions(_FrozenModel):
+    send_input: SessionActionAvailability
+    interrupt: SessionActionAvailability
+    terminate: SessionActionAvailability
+    reattach: SessionActionAvailability
+    resume: SessionActionAvailability
+
+
+class SessionControlFacts(_FrozenModel):
+    ownership: Literal["owned", "unowned"]
+    connection: ConnectionState
+    connection_id: int | None = None
+    control_plane: str | None = None
+    observed_at: datetime | None = None
+    valid_until: datetime | None = None
+    actions: SessionControlActions
+
+
+class SessionPendingInteractionFacts(_FrozenModel):
+    id: str
+    kind: Literal["question", "permission", "approval"]
+    opened_at: datetime | None = None
+    resolved_at: datetime | None = None
+    provider_request_id: str | None = None
+    can_respond: bool = False
+
+
+class SessionTranscriptFacts(_FrozenModel):
+    convergence: TranscriptConvergence
+    source_revision: int | None = None
+    durable_revision: int | None = None
+    render_revision: int | None = None
+    last_append_at: datetime | None = None
+    searchable: bool = False
+    live_observation: bool = False
+
+
+class SessionHostFacts(_FrozenModel):
+    state: Literal["online", "stale", "offline", "unknown"]
+    observed_at: datetime | None = None
+
+
+class SessionPresentationLabel(_FrozenModel):
+    key: str
+    label: str
+    tone: str
+    observed_at: datetime | None = None
+
+
+class SessionPresentation(_FrozenModel):
+    primary: SessionPresentationLabel | None = None
+    access: SessionPresentationLabel | None = None
+    transcript: SessionPresentationLabel | None = None
+
+
+class SessionStateFacts(_FrozenModel):
+    state_contract_version: int = Field(STATE_CONTRACT_VERSION, frozen=True)
+    presentation_policy_version: int = Field(PRESENTATION_POLICY_VERSION, frozen=True)
+    mode: SessionMode
+    disposition: SessionDispositionFacts
+    run: SessionRunFacts | None = None
+    activity: SessionActivityFacts
+    control: SessionControlFacts
+    pending_interaction: SessionPendingInteractionFacts | None = None
+    transcript: SessionTranscriptFacts
+    host: SessionHostFacts
+    presentation: SessionPresentation
+    commit_seq: int | None = None
+
+
+def _clean(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _now(value: datetime | None) -> datetime:
+    return normalize_utc(value) or datetime.now(timezone.utc)
+
+
+def _mode(*, session: Any, capabilities: KernelSessionCapabilities, execution_lifetime: str | None) -> SessionMode:
+    surface = _clean(getattr(session, "launch_surface", None))
+    if execution_lifetime == "one_shot" or surface in {"web", "ios", "api"}:
+        return "console"
+    if capabilities.live_control_available or capabilities.host_reattach_available:
+        return "helm"
+    if capabilities.observe_only or capabilities.search_only or capabilities.control_label in {"search-only", "imported"}:
+        return "shadow"
+    return "unknown"
+
+
+def _disposition(*, session: Any, runtime_view: SessionRuntimeView | None) -> SessionDispositionFacts:
+    terminal = _clean(runtime_view.terminal_state if runtime_view is not None else None)
+    if terminal == "user_closed":
+        closed_at = normalize_utc(getattr(session, "ended_at", None))
+        return SessionDispositionFacts(state="closed", closed_at=closed_at, close_reason="user_closed")
+    return SessionDispositionFacts(state="open")
+
+
+def _activity(runtime_view: SessionRuntimeView | None) -> SessionActivityFacts:
+    if runtime_view is None:
+        return SessionActivityFacts(state="unknown")
+    raw_kind = _clean(runtime_view.presence_state) or _clean(runtime_view.runtime_phase)
+    state = _ACTIVITY_MAP.get(raw_kind or "", "unknown") if runtime_view.confidence == "live" else "unknown"
+    source = _clean(runtime_view.runtime_source)
+    if source in {"fallback", "progress"}:
+        state = "unknown"
+    return SessionActivityFacts(
+        state=state,
+        raw_kind=raw_kind,
+        tool=_clean(runtime_view.active_tool or runtime_view.presence_tool),
+        source=source,
+        observed_at=normalize_utc(runtime_view.presence_updated_at or runtime_view.phase_started_at),
+        valid_until=normalize_utc(runtime_view.freshness_expires_at),
+    )
+
+
+def _run(
+    *,
+    session: Any,
+    runtime_view: SessionRuntimeView | None,
+    capabilities: KernelSessionCapabilities,
+    liveness: SessionLivenessFacts,
+    activity: SessionActivityFacts,
+    launch_state: str | None,
+) -> SessionRunFacts | None:
+    normalized_launch = _clean(launch_state)
+    if normalized_launch in _STARTING_LAUNCH_STATES and capabilities.run_id is None:
+        return SessionRunFacts(lifecycle="starting", started_at=normalize_utc(getattr(session, "started_at", None)))
+
+    terminal = _clean(runtime_view.terminal_state if runtime_view is not None else None)
+    ended_at = normalize_utc(getattr(session, "ended_at", None))
+    run_id = _clean(capabilities.run_id)
+    if terminal in _ENDED_RUNTIME_STATES or capabilities.staleness_reason == "process_ended":
+        return SessionRunFacts(
+            id=run_id,
+            lifecycle="ended",
+            started_at=normalize_utc(getattr(session, "started_at", None)),
+            ended_at=ended_at,
+            end_reason=terminal or "process_ended",
+        )
+    if run_id is None and activity.state == "unknown" and liveness.process.status != "observed":
+        return None
+    if liveness.process.status == "observed" or activity.state != "unknown" or capabilities.live_control_available:
+        lifecycle: RunLifecycle = "running"
+    else:
+        lifecycle = "unknown"
+    return SessionRunFacts(
+        id=run_id,
+        lifecycle=lifecycle,
+        started_at=normalize_utc(getattr(session, "started_at", None)),
+    )
+
+
+def _action_unavailable_reason(*, ownership: str, connection: ConnectionState, fallback: str | None) -> tuple[ActionState, str]:
+    if ownership == "unowned":
+        return "unavailable", "observe_only"
+    if connection == "unknown":
+        return "unknown", "control_freshness_unknown"
+    if connection == "degraded":
+        return "unavailable", "control_degraded"
+    if connection == "disconnected":
+        return "unavailable", "control_disconnected"
+    return "unavailable", fallback or "not_granted"
+
+
+def _operation(
+    *,
+    available: bool,
+    ownership: str,
+    connection: ConnectionState,
+    fallback: str | None,
+) -> SessionActionAvailability:
+    if available and connection in {"connected", "degraded"}:
+        return SessionActionAvailability(state="available")
+    state, reason = _action_unavailable_reason(ownership=ownership, connection=connection, fallback=fallback)
+    return SessionActionAvailability(state=state, reason=reason)
+
+
+def _control(
+    *,
+    capabilities: KernelSessionCapabilities,
+    liveness: SessionLivenessFacts,
+    now: datetime,
+) -> SessionControlFacts:
+    ownership = (
+        "owned"
+        if capabilities.live_control_available or capabilities.host_reattach_available or capabilities.control_label in {"live", "reattach"}
+        else "unowned"
+    )
+    observed_at = normalize_utc(liveness.control.last_seen_at)
+    valid_until = normalize_utc(liveness.control.expires_at)
+    expired = valid_until is not None and valid_until <= now
+    raw_connection = _clean(liveness.control.state)
+    if ownership == "unowned":
+        connection: ConnectionState = "not_applicable"
+    elif expired:
+        connection = "unknown"
+    elif raw_connection in {"online", "attached"}:
+        connection = "connected"
+    elif raw_connection == "degraded":
+        connection = "degraded"
+    elif raw_connection in {"offline", "detached", "released", "ended"}:
+        connection = "disconnected"
+    else:
+        connection = "unknown"
+
+    fallback = _clean(capabilities.staleness_reason)
+    reattach_available = bool(capabilities.host_reattach_available and not capabilities.live_control_available)
+    actions = SessionControlActions(
+        send_input=_operation(
+            available=bool(capabilities.can_send_input and capabilities.live_control_available),
+            ownership=ownership,
+            connection=connection,
+            fallback=fallback,
+        ),
+        interrupt=_operation(
+            available=bool(capabilities.can_interrupt and capabilities.live_control_available),
+            ownership=ownership,
+            connection=connection,
+            fallback=fallback,
+        ),
+        terminate=_operation(
+            available=bool(capabilities.can_terminate and capabilities.live_control_available),
+            ownership=ownership,
+            connection=connection,
+            fallback=fallback,
+        ),
+        reattach=_operation(
+            available=reattach_available,
+            ownership=ownership,
+            connection=("connected" if reattach_available else connection),
+            fallback="already_connected" if capabilities.live_control_available else fallback,
+        ),
+        resume=_operation(
+            available=bool(capabilities.can_resume and (capabilities.live_control_available or reattach_available)),
+            ownership=ownership,
+            connection=("connected" if reattach_available else connection),
+            fallback=fallback,
+        ),
+    )
+    return SessionControlFacts(
+        ownership=ownership,
+        connection=connection,
+        connection_id=capabilities.connection_id,
+        control_plane=_clean(capabilities.control_plane),
+        observed_at=observed_at,
+        valid_until=valid_until,
+        actions=actions,
+    )
+
+
+def _interaction(pause_request: dict[str, Any] | None) -> SessionPendingInteractionFacts | None:
+    if not isinstance(pause_request, dict) or _clean(pause_request.get("status")) != "pending":
+        return None
+    raw_kind = _clean(pause_request.get("kind"))
+    kind_map = {
+        "structured_question": "question",
+        "permission_prompt": "permission",
+        "plan_approval": "approval",
+    }
+    kind = kind_map.get(raw_kind or "")
+    if kind is None:
+        return None
+    interaction_id = _clean(pause_request.get("id") or pause_request.get("request_key") or pause_request.get("provider_request_id"))
+    if interaction_id is None:
+        return None
+    return SessionPendingInteractionFacts(
+        id=interaction_id,
+        kind=kind,
+        opened_at=normalize_utc(pause_request.get("occurred_at") or pause_request.get("created_at")),
+        resolved_at=normalize_utc(pause_request.get("resolved_at")),
+        provider_request_id=_clean(pause_request.get("provider_request_id")),
+        can_respond=bool(pause_request.get("can_respond")),
+    )
+
+
+def _transcript(
+    *,
+    session: Any,
+    activity: SessionActivityFacts,
+    last_activity_at: datetime | None,
+    has_visible_transcript_preview: bool,
+    has_pending_response_turn: bool,
+    user_messages: int,
+    assistant_messages: int,
+    archive_state: str | None,
+) -> SessionTranscriptFacts:
+    revision = int(getattr(session, "transcript_revision", 0) or 0)
+    normalized_archive = _clean(archive_state)
+    lagging = bool(
+        normalized_archive == "pending"
+        or (
+            activity.state == "quiescent"
+            and not has_visible_transcript_preview
+            and (has_pending_response_turn or user_messages > assistant_messages)
+        )
+    )
+    if lagging:
+        convergence: TranscriptConvergence = "lagging"
+    elif normalized_archive in {"current", "legacy_hot"}:
+        convergence = "current"
+    else:
+        convergence = "unknown"
+    return SessionTranscriptFacts(
+        convergence=convergence,
+        source_revision=None,
+        durable_revision=revision,
+        render_revision=revision,
+        last_append_at=normalize_utc(last_activity_at),
+        searchable=bool(revision > 0 or user_messages > 0 or assistant_messages > 0),
+        live_observation=bool(has_visible_transcript_preview or activity.state != "unknown"),
+    )
+
+
+def _primary(
+    *,
+    disposition: SessionDispositionFacts,
+    run: SessionRunFacts | None,
+    activity: SessionActivityFacts,
+    interaction: SessionPendingInteractionFacts | None,
+) -> SessionPresentationLabel | None:
+    if disposition.state == "closed":
+        return SessionPresentationLabel(key="closed", label="Closed", tone="closed", observed_at=disposition.closed_at)
+    if run is not None and run.lifecycle == "starting":
+        return SessionPresentationLabel(key="starting", label="Starting", tone="active", observed_at=run.started_at)
+    if interaction is not None:
+        if interaction.kind == "question":
+            return SessionPresentationLabel(
+                key="needs_answer",
+                label="Needs answer",
+                tone="blocked",
+                observed_at=interaction.opened_at,
+            )
+        return SessionPresentationLabel(
+            key="needs_approval",
+            label="Needs approval",
+            tone="blocked",
+            observed_at=interaction.opened_at,
+        )
+    if activity.state == "thinking":
+        return SessionPresentationLabel(key="thinking", label="Thinking", tone="thinking", observed_at=activity.observed_at)
+    if activity.state == "executing":
+        label = f"Using {activity.tool}" if activity.tool else "Running"
+        return SessionPresentationLabel(key="executing", label=label, tone="running", observed_at=activity.observed_at)
+    if activity.state == "stalled":
+        return SessionPresentationLabel(key="stalled", label="Stalled", tone="stalled", observed_at=activity.observed_at)
+    if activity.state == "blocked":
+        return SessionPresentationLabel(key="blocked", label="Blocked", tone="blocked", observed_at=activity.observed_at)
+    if activity.state == "quiescent":
+        return SessionPresentationLabel(key="idle", label="Idle", tone="idle", observed_at=activity.observed_at)
+    if run is not None and run.lifecycle == "ended":
+        return SessionPresentationLabel(key="ended", label="Ended", tone="closed", observed_at=run.ended_at)
+    if run is not None:
+        return SessionPresentationLabel(key="activity_unknown", label="Activity unknown", tone="inactive")
+    return None
+
+
+def _access(*, control: SessionControlFacts, transcript: SessionTranscriptFacts) -> SessionPresentationLabel | None:
+    live_actions = (control.actions.send_input, control.actions.interrupt, control.actions.terminate)
+    if control.ownership == "owned" and any(action.state == "available" for action in live_actions):
+        return SessionPresentationLabel(
+            key="live_control",
+            label="Live control",
+            tone="live",
+            observed_at=control.observed_at,
+        )
+    if control.actions.reattach.state == "available":
+        return SessionPresentationLabel(
+            key="reattach",
+            label="Reattach",
+            tone="reattach",
+            observed_at=control.observed_at,
+        )
+    if control.connection == "degraded":
+        return SessionPresentationLabel(
+            key="control_degraded",
+            label="Control degraded",
+            tone="degraded",
+            observed_at=control.observed_at,
+        )
+    if control.ownership == "owned" and control.connection == "unknown":
+        return SessionPresentationLabel(
+            key="control_unknown",
+            label="Control unknown",
+            tone="inactive",
+            observed_at=control.observed_at,
+        )
+    if control.ownership == "unowned" and transcript.live_observation:
+        return SessionPresentationLabel(
+            key="observe_only",
+            label="Observe only",
+            tone="observe",
+            observed_at=transcript.last_append_at,
+        )
+    if transcript.searchable:
+        return SessionPresentationLabel(key="search_only", label="Search only", tone="search")
+    return None
+
+
+def build_session_state_facts(
+    *,
+    session: Any,
+    runtime_view: SessionRuntimeView | None,
+    capabilities: KernelSessionCapabilities,
+    liveness: SessionLivenessFacts,
+    pause_request: dict[str, Any] | None = None,
+    launch_state: str | None = None,
+    execution_lifetime: str | None = None,
+    last_activity_at: datetime | None = None,
+    has_visible_transcript_preview: bool = False,
+    has_pending_response_turn: bool = False,
+    user_messages: int = 0,
+    assistant_messages: int = 0,
+    archive_state: str | None = None,
+    now: datetime | None = None,
+) -> SessionStateFacts:
+    """Project the target contract from legacy evidence without serving legacy copy."""
+
+    current_now = _now(now)
+    disposition = _disposition(session=session, runtime_view=runtime_view)
+    activity = _activity(runtime_view)
+    run = _run(
+        session=session,
+        runtime_view=runtime_view,
+        capabilities=capabilities,
+        liveness=liveness,
+        activity=activity,
+        launch_state=launch_state,
+    )
+    control = _control(capabilities=capabilities, liveness=liveness, now=current_now)
+    interaction = _interaction(pause_request)
+    transcript = _transcript(
+        session=session,
+        activity=activity,
+        last_activity_at=last_activity_at,
+        has_visible_transcript_preview=has_visible_transcript_preview,
+        has_pending_response_turn=has_pending_response_turn,
+        user_messages=user_messages,
+        assistant_messages=assistant_messages,
+        archive_state=archive_state,
+    )
+    primary = _primary(
+        disposition=disposition,
+        run=run,
+        activity=activity,
+        interaction=interaction,
+    )
+    access = _access(control=control, transcript=transcript)
+    transcript_label = (
+        SessionPresentationLabel(
+            key="transcript_lagging",
+            label="Transcript catching up",
+            tone="inactive",
+            observed_at=transcript.last_append_at,
+        )
+        if transcript.convergence == "lagging"
+        else None
+    )
+    host_state = _clean(liveness.host.state)
+    if host_state not in {"online", "stale", "offline"}:
+        host_state = "unknown"
+    return SessionStateFacts(
+        mode=_mode(session=session, capabilities=capabilities, execution_lifetime=execution_lifetime),
+        disposition=disposition,
+        run=run,
+        activity=activity,
+        control=control,
+        pending_interaction=interaction,
+        transcript=transcript,
+        host=SessionHostFacts(
+            state=host_state,
+            observed_at=normalize_utc(liveness.host.last_seen_at),
+        ),
+        presentation=SessionPresentation(primary=primary, access=access, transcript=transcript_label),
+    )
+
+
+__all__ = [
+    "PRESENTATION_POLICY_VERSION",
+    "STATE_CONTRACT_VERSION",
+    "SessionActionAvailability",
+    "SessionActivityFacts",
+    "SessionControlFacts",
+    "SessionDispositionFacts",
+    "SessionPendingInteractionFacts",
+    "SessionPresentation",
+    "SessionPresentationLabel",
+    "SessionRunFacts",
+    "SessionStateFacts",
+    "SessionTranscriptFacts",
+    "build_session_state_facts",
+]
