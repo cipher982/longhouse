@@ -206,8 +206,10 @@ async def test_archive_read_native_exit_degrades_one_request(monkeypatch):
 @pytest.mark.asyncio
 async def test_archive_read_proxy_reaps_child_when_request_is_cancelled(monkeypatch):
     started = asyncio.Event()
+    killed_groups = []
 
     class Child:
+        pid = 123
         returncode = None
         killed = False
         reaped = False
@@ -227,9 +229,11 @@ async def test_archive_read_proxy_reaps_child_when_request_is_cancelled(monkeypa
     child = Child()
 
     async def spawn(*_args, **_kwargs):
+        assert _kwargs["start_new_session"] is True
         return child
 
     monkeypatch.setattr("asyncio.create_subprocess_exec", spawn)
+    monkeypatch.setattr("os.killpg", lambda pid, sig: killed_groups.append((pid, sig)))
     task = asyncio.create_task(
         proxy_archive_request(_request("/agents/sessions/00000000-0000-0000-0000-000000000001"))
     )
@@ -239,7 +243,8 @@ async def test_archive_read_proxy_reaps_child_when_request_is_cancelled(monkeypa
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert child.killed is True
+    assert killed_groups == [(123, 9)]
+    assert child.killed is False
     assert child.reaped is True
 
 

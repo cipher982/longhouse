@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
 from collections.abc import Iterable
 from typing import Any
@@ -52,7 +53,13 @@ async def _stop_child(proc: asyncio.subprocess.Process) -> None:
     """Terminate and reap a helper before releasing its archive-read slot."""
     if proc.returncode is not None:
         return
-    proc.kill()
+    try:
+        if pid := getattr(proc, "pid", None):
+            os.killpg(pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except ProcessLookupError:
+        pass
     await asyncio.shield(proc.wait())
 
 
@@ -124,6 +131,7 @@ async def proxy_archive_request(request: Request) -> Response:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            start_new_session=True,
         )
         try:
             stdout, stderr = await asyncio.wait_for(
