@@ -424,7 +424,7 @@ def test_db_doctor_warns_when_live_store_is_archive_db(tmp_path):
     assert "same_as_archive_db" in live_store["warnings"]
 
 
-def test_collect_sqlite_store_stats_warning_branches(tmp_path):
+def test_collect_sqlite_store_stats_path_relationships(tmp_path):
     from zerg.services.db_diagnostics import collect_sqlite_store_stats
 
     db_path, db_url = _make_db_diagnostics_fixture(tmp_path)
@@ -435,7 +435,6 @@ def test_collect_sqlite_store_stats_warning_branches(tmp_path):
     )
     assert same_directory["status"] == "missing"
     assert same_directory["same_directory_as_archive"] is True
-    assert "same_directory_as_archive_db" in same_directory["warnings"]
 
     same_file = collect_sqlite_store_stats(db_url, archive_database_url=db_url)
     assert same_file["status"] == "ok"

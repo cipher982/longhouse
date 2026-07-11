@@ -526,8 +526,6 @@ def health_check(request: Request):
 
         live_status = live_store.get("status")
         live_warnings = live_store.get("warnings") or []
-        if "same_directory_as_archive_db" in live_warnings:
-            live_warnings = [w for w in live_warnings if w != "same_directory_as_archive_db"]
         outbox = live_store.get("live_archive_outbox") or {}
         outbox_warn = False
         outbox_reason = None

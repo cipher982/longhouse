@@ -64,7 +64,7 @@ def _strip_env_quotes(value: str) -> str:
     return value
 
 
-def _sqlite_file_path(database_url: str) -> Path | None:
+def sqlite_file_path(database_url: str) -> Path | None:
     """Return a SQLite file path for file-backed URLs, otherwise None."""
     database_url = _strip_env_quotes(database_url)
     if not database_url:
@@ -98,12 +98,12 @@ def _resolve_archive_root(database_url: str) -> str:
     explicit = _strip_env_quotes(os.getenv("LONGHOUSE_ARCHIVE_ROOT") or "")
     if explicit:
         return explicit
-    db_path = _sqlite_file_path(_strip_env_quotes(database_url))
+    db_path = sqlite_file_path(_strip_env_quotes(database_url))
     root = db_path.expanduser().parent if db_path is not None else _REPO_ROOT / "data" / "longhouse"
     return str(root / "archive")
 
 
-def _resolve_live_database_url(database_url: str) -> str:
+def resolve_live_database_url(database_url: str) -> str:
     """Derive the one canonical Live Store URL from ``DATABASE_URL``.
 
     A file-backed archive ``longhouse.db`` always has a sibling
@@ -119,7 +119,7 @@ def _resolve_live_database_url(database_url: str) -> str:
         # engines would point at unrelated databases. Production Runtime Hosts
         # are file-backed; focused split-store tests construct both explicitly.
         return ""
-    archive_path = _sqlite_file_path(database_url)
+    archive_path = sqlite_file_path(database_url)
     if archive_path is None:
         return ""
     expanded = archive_path.expanduser()
@@ -528,7 +528,7 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
     demo_mode = _truthy(os.getenv("DEMO_MODE")) or app_mode is AppMode.DEMO
 
     database_url = os.getenv("DATABASE_URL", "")
-    live_database_url = _resolve_live_database_url(database_url)
+    live_database_url = resolve_live_database_url(database_url)
     archive_root = _resolve_archive_root(database_url)
     archive_primary_tenant_id = os.getenv("INSTANCE_ID") or os.getenv("LONGHOUSE_TENANT_ID") or "default"
 

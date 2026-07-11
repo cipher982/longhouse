@@ -7,7 +7,6 @@ authority for injection; the in-memory lock is only the local provider guard.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -31,7 +30,6 @@ from zerg.models.user import User
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.live_session_inputs import claim_next_live_queued_receipt
 from zerg.services.live_session_inputs import list_recent_live_input_receipts
-from zerg.services.live_session_inputs import list_session_ids_with_queued_live_receipts
 from zerg.services.live_session_inputs import mark_live_receipt_delivered_with_projection
 from zerg.services.live_session_inputs import mark_live_receipt_failed
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
@@ -39,7 +37,6 @@ from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_inputs import ACTIVE_DELIVERY_ATTEMPT_STATUSES
 from zerg.services.session_inputs import ATTEMPT_STATUS_ACQUIRED
 from zerg.services.session_inputs import ATTEMPT_STATUS_SUBMITTED
-from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import claim_next_queued
 from zerg.services.session_inputs import expire_delivery_attempts
@@ -67,8 +64,6 @@ TRANSPORT_LEASE_SECS = 60
 TURN_LEASE_SECS = 300
 MAX_DELIVERY_ATTEMPTS = 5
 RETRY_BACKOFF_SECS = (5, 30, 120, 300)
-INPUT_QUEUE_RECOVERY_INTERVAL_SECS = 15.0
-INPUT_QUEUE_RECOVERY_BATCH_SIZE = 100
 
 
 @dataclass(frozen=True)
@@ -83,12 +78,6 @@ class QueueWakeResult:
     input_id: int | None = None
     live_input_id: str | None = None
     reason: str = "noop"
-
-
-@dataclass(frozen=True)
-class QueueRecoveryResult:
-    session_ids: tuple[UUID, ...] = ()
-    wake_results: tuple[QueueWakeResult, ...] = ()
 
 
 def _session_closed_for_input(db: Session, session_id: UUID) -> bool:
@@ -184,157 +173,6 @@ def _age_secs(started_at: datetime, *, now: datetime) -> float:
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     return max(0.0, (now - started_at).total_seconds())
-
-
-def _append_unique_session_ids(target: list[UUID], rows: list[tuple[UUID]], *, limit: int) -> None:
-    seen = set(target)
-    for row in rows:
-        session_id = row[0]
-        if session_id in seen:
-            continue
-        target.append(session_id)
-        seen.add(session_id)
-        if len(target) >= limit:
-            return
-
-
-def _append_unique_live_session_ids(target: list[UUID], rows: list[UUID], *, limit: int) -> None:
-    seen = set(target)
-    for session_id in rows:
-        if session_id in seen:
-            continue
-        target.append(session_id)
-        seen.add(session_id)
-        if len(target) >= limit:
-            return
-
-
-def find_sessions_needing_input_queue_wake(
-    db: Session,
-    *,
-    now: datetime | None = None,
-    limit: int = INPUT_QUEUE_RECOVERY_BATCH_SIZE,
-) -> list[UUID]:
-    """Return sessions whose queue state needs the shared wake policy."""
-    effective_now = now or datetime.now(timezone.utc)
-    remaining = max(1, int(limit))
-    session_ids: list[UUID] = []
-
-    queued_rows = (
-        db.query(SessionInput.session_id)
-        .filter(
-            SessionInput.status == INPUT_STATUS_QUEUED,
-            or_(SessionInput.next_attempt_at.is_(None), SessionInput.next_attempt_at <= effective_now),
-        )
-        .distinct()
-        .limit(remaining)
-        .all()
-    )
-    _append_unique_session_ids(session_ids, queued_rows, limit=remaining)
-    if len(session_ids) >= remaining:
-        return session_ids
-
-    expired_attempt_rows = (
-        db.query(SessionInputDeliveryAttempt.session_id)
-        .filter(
-            SessionInputDeliveryAttempt.status.in_((ATTEMPT_STATUS_ACQUIRED, ATTEMPT_STATUS_SUBMITTED)),
-            SessionInputDeliveryAttempt.lease_expires_at <= effective_now,
-        )
-        .distinct()
-        .limit(remaining - len(session_ids))
-        .all()
-    )
-    _append_unique_session_ids(session_ids, expired_attempt_rows, limit=remaining)
-    if len(session_ids) >= remaining:
-        return session_ids
-
-    active_attempt_input_ids = (
-        db.query(SessionInputDeliveryAttempt.session_input_id)
-        .filter(
-            SessionInputDeliveryAttempt.status.in_(ACTIVE_DELIVERY_ATTEMPT_STATUSES),
-            SessionInputDeliveryAttempt.lease_expires_at > effective_now,
-        )
-        .subquery()
-    )
-    delivering_rows = (
-        db.query(SessionInput.session_id)
-        .filter(
-            SessionInput.status == INPUT_STATUS_DELIVERING,
-            ~SessionInput.id.in_(active_attempt_input_ids),
-        )
-        .distinct()
-        .limit(remaining - len(session_ids))
-        .all()
-    )
-    _append_unique_session_ids(session_ids, delivering_rows, limit=remaining)
-    return session_ids
-
-
-async def recover_session_input_queues(
-    *,
-    db_bind,
-    reason: str = "periodic_recovery",
-    limit: int = INPUT_QUEUE_RECOVERY_BATCH_SIZE,
-) -> QueueRecoveryResult:
-    """Run one bounded recovery tick using the same wake path as live signals."""
-    SessionLocal = sessionmaker(bind=db_bind, expire_on_commit=False)
-    db = SessionLocal()
-    try:
-        selected = find_sessions_needing_input_queue_wake(db, limit=limit)
-    finally:
-        db.close()
-
-    if database_module.live_store_configured() and len(selected) < limit:
-        live_session_factory = database_module.get_live_session_factory()
-        if live_session_factory is not None:
-            try:
-                with live_session_factory() as live_db:
-                    live_session_ids = list_session_ids_with_queued_live_receipts(
-                        live_db,
-                        limit=limit - len(selected),
-                    )
-                _append_unique_live_session_ids(selected, live_session_ids, limit=max(1, int(limit)))
-            except Exception:
-                logger.warning("Input queue recovery could not scan live queued receipts", exc_info=True)
-
-    session_ids = tuple(selected)
-
-    if session_ids:
-        logger.info("Input queue recovery waking %d sessions after %s", len(session_ids), reason)
-
-    results: list[QueueWakeResult] = []
-    for session_id in session_ids:
-        try:
-            result = await wake_session_input_queue(
-                db_bind=db_bind,
-                session_id=session_id,
-                reason=reason,
-            )
-            results.append(result)
-        except Exception:
-            logger.exception("Input queue recovery wake failed for session %s after %s", session_id, reason)
-    return QueueRecoveryResult(session_ids=session_ids, wake_results=tuple(results))
-
-
-async def run_session_input_queue_recovery_loop(
-    *,
-    db_bind,
-    interval_secs: float = INPUT_QUEUE_RECOVERY_INTERVAL_SECS,
-    limit: int = INPUT_QUEUE_RECOVERY_BATCH_SIZE,
-) -> None:
-    """Periodic crash/missed-signal safety net for managed input queues."""
-    while True:
-        try:
-            await asyncio.sleep(interval_secs)
-            await recover_session_input_queues(
-                db_bind=db_bind,
-                reason="periodic_recovery",
-                limit=limit,
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Input queue recovery tick failed")
 
 
 def evaluate_session_input_queue_readiness(

@@ -27,7 +27,7 @@ from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.utils.time import normalize_utc
 
 
-def _worker_env(tmp_path, archive_url: str, live_url: str) -> dict[str, str]:
+def _worker_env(tmp_path, archive_url: str) -> dict[str, str]:
     return {
         **os.environ,
         "DATABASE_URL": archive_url,
@@ -102,7 +102,7 @@ def _ingest_job_payload() -> dict:
 
 def test_archive_worker_drains_real_heartbeat_outbox_in_child_process(tmp_path, monkeypatch):
     archive_url, live_url, archive_factory, live_factory, received_at = _seed_worker_databases(tmp_path)
-    env = _worker_env(tmp_path, archive_url, live_url)
+    env = _worker_env(tmp_path, archive_url)
 
     result = _run_worker(env)
 
@@ -124,7 +124,7 @@ def test_archive_worker_drains_real_heartbeat_outbox_in_child_process(tmp_path, 
 
 def test_archive_worker_native_style_exit_leaves_outbox_pending_and_parent_alive(tmp_path):
     archive_url, live_url, archive_factory, live_factory, _received_at = _seed_worker_databases(tmp_path)
-    env = _worker_env(tmp_path, archive_url, live_url)
+    env = _worker_env(tmp_path, archive_url)
     env["LONGHOUSE_ARCHIVE_WORKER_TEST_EXIT_BEFORE_DRAIN"] = "1"
     parent_pid = os.getpid()
 
@@ -152,7 +152,7 @@ def test_archive_worker_native_style_exit_leaves_outbox_pending_and_parent_alive
 
 def test_archive_worker_defers_while_api_writer_is_active(tmp_path, monkeypatch):
     archive_url, live_url, archive_factory, live_factory, _received_at = _seed_worker_databases(tmp_path)
-    env = _worker_env(tmp_path, archive_url, live_url)
+    env = _worker_env(tmp_path, archive_url)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -177,7 +177,7 @@ def test_archive_worker_defers_while_api_writer_is_active(tmp_path, monkeypatch)
 @pytest.mark.asyncio
 async def test_archive_worker_process_executes_durable_ingest_job(tmp_path, monkeypatch):
     archive_url, live_url, archive_factory, _live_factory, _received_at = _seed_worker_databases(tmp_path)
-    env = _worker_env(tmp_path, archive_url, live_url)
+    env = _worker_env(tmp_path, archive_url)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -200,7 +200,7 @@ async def test_archive_worker_process_executes_durable_ingest_job(tmp_path, monk
 @pytest.mark.asyncio
 async def test_archive_worker_recovers_ingest_job_after_native_exit(tmp_path, monkeypatch):
     archive_url, live_url, archive_factory, _live_factory, _received_at = _seed_worker_databases(tmp_path)
-    env = _worker_env(tmp_path, archive_url, live_url)
+    env = _worker_env(tmp_path, archive_url)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
 
@@ -296,7 +296,7 @@ def test_archive_worker_scheduler_alternates_jobs_and_outbox():
 @pytest.mark.asyncio
 async def test_supervisor_restarts_killed_worker_and_drains_next_row(tmp_path, monkeypatch):
     archive_url, live_url, archive_factory, live_factory, _received_at = _seed_worker_databases(tmp_path)
-    env = _worker_env(tmp_path, archive_url, live_url)
+    env = _worker_env(tmp_path, archive_url)
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     import zerg.services.archive_worker_supervisor as supervisor

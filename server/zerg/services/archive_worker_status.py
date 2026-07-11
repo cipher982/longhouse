@@ -11,8 +11,8 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from zerg.config import _resolve_live_database_url
-from zerg.config import _sqlite_file_path
+from zerg.config import resolve_live_database_url
+from zerg.config import sqlite_file_path
 
 
 def _utc_now_iso() -> str:
@@ -24,7 +24,7 @@ def archive_worker_enabled() -> bool:
 
 
 def archive_worker_status_path() -> Path | None:
-    path = _sqlite_file_path(_resolve_live_database_url(os.getenv("DATABASE_URL", "")))
+    path = sqlite_file_path(resolve_live_database_url(os.getenv("DATABASE_URL", "")))
     if path is None:
         return None
     return path.with_name("archive-worker-status.json")

@@ -811,8 +811,6 @@ def collect_sqlite_store_stats(
             same_directory = resolved_db_path.parent == resolved_archive_path.parent
             if same_db_path:
                 warnings.append("same_as_archive_db")
-            elif same_directory:
-                warnings.append("same_directory_as_archive_db")
 
     payload["configured"] = True
     payload["status"] = "ok" if payload.get("db_exists") else "missing"
