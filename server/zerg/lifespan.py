@@ -5,7 +5,6 @@ Extracted from main.py — keeps the app factory lean.
 
 import asyncio
 import logging
-import os
 import time
 from contextlib import asynccontextmanager
 from contextlib import contextmanager
@@ -23,15 +22,6 @@ from zerg.services.ops_events import ops_events_bridge
 
 _settings = get_settings()
 logger = logging.getLogger(__name__)
-_TRUTHY_ENV = {"1", "true", "yes", "on"}
-
-
-def _live_preview_cleanup_enabled() -> bool:
-    return os.getenv("LONGHOUSE_ENABLE_LIVE_PREVIEW_CLEANUP", "").strip().lower() in _TRUTHY_ENV
-
-
-def _session_input_queue_recovery_enabled() -> bool:
-    return os.getenv("LONGHOUSE_ENABLE_SESSION_INPUT_QUEUE_RECOVERY", "").strip().lower() in _TRUTHY_ENV
 
 
 async def _reap_stale_machine_control_operations_once() -> int:
@@ -176,34 +166,6 @@ async def lifespan(app: FastAPI):
             raise
         logger.info("Database tables initialized")
 
-        # SessionInput reconciliation: run one bounded queue recovery tick at
-        # boot so startup, periodic recovery, and missed-signal recovery share
-        # the same policy.
-        if not catalog_mode and not _settings.testing and _session_input_queue_recovery_enabled():
-            try:
-                with _timed_startup_step("session_input_reconciliation"):
-                    from zerg.database import default_engine
-                    from zerg.services.session_input_queue import recover_session_input_queues
-
-                    async def _boot_recover_session_inputs() -> None:
-                        try:
-                            result = await recover_session_input_queues(
-                                db_bind=default_engine,
-                                reason="startup_reconciliation",
-                            )
-                            if result.session_ids:
-                                logger.info(
-                                    "SessionInput startup recovery considered %d sessions",
-                                    len(result.session_ids),
-                                )
-                        except Exception:
-                            logger.exception(
-                                "SessionInput startup recovery failed (non-fatal)",
-                            )
-
-                    asyncio.create_task(_boot_recover_session_inputs())
-            except Exception as exc:
-                logger.warning(f"SessionInput reconciliation failed (non-fatal): {exc}")
         try:
             url = default_engine.url
             masked = str(url).replace(url.password or "", "***") if url.password else str(url)
@@ -305,24 +267,6 @@ async def lifespan(app: FastAPI):
                 failed.append(f"ops_events_bridge ({e})")
                 logger.exception("Failed to start ops_events_bridge")
 
-            # Managed session input queue recovery: safety net for process
-            # restarts and missed local terminal/idle wakes. This is opt-in
-            # until its DB writes use the hosted SQLite write serializer.
-            if _session_input_queue_recovery_enabled():
-                try:
-                    from zerg.database import default_engine as _default_engine_input_queue
-                    from zerg.services.session_input_queue import run_session_input_queue_recovery_loop
-
-                    asyncio.create_task(run_session_input_queue_recovery_loop(db_bind=_default_engine_input_queue))
-                    started.append("session_input_queue_recovery")
-                except Exception as e:  # noqa: BLE001
-                    failed.append(f"session_input_queue_recovery ({e})")
-                    logger.exception("Failed to start session_input_queue_recovery")
-            else:
-                logger.info(
-                    "Session input queue periodic recovery disabled; " "set LONGHOUSE_ENABLE_SESSION_INPUT_QUEUE_RECOVERY=1 to enable"
-                )
-
             # Remote launch reaper: orphan expired launch rows.
             try:
                 from zerg.database import get_session_factory as _get_sf
@@ -393,81 +337,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:  # noqa: BLE001
                 failed.append(f"attachment_cleanup ({e})")
                 logger.exception("Failed to start attachment_cleanup")
-
-            # Live-preview observation reaper: keep disabled by default. Legacy
-            # dogfood databases can contain millions of append-only preview rows,
-            # and a global startup scan can starve the runtime. Session-scoped
-            # cleanup still runs when durable transcript ingest completes.
-            if _live_preview_cleanup_enabled():
-                try:
-                    from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
-                    from zerg.services.write_serializer import get_write_serializer
-
-                    async def _live_preview_cleanup_loop() -> None:
-                        ws = get_write_serializer()
-                        skips_remaining = 0
-                        while True:
-                            try:
-                                await asyncio.sleep(60)
-                                # When the queue is under pressure, skip up to 3
-                                # consecutive ticks but force one every 4th iteration
-                                # so cleanup never stops permanently.
-                                if skips_remaining > 0:
-                                    skips_remaining -= 1
-                                    continue
-                                recent_wait = ws.stats.max_queue_wait_ms
-                                if recent_wait > 500:
-                                    skips_remaining = 3
-                                    logger.info(
-                                        "live-preview-cleanup skipping due to queue pressure (max_queue_wait=%.0fms)",
-                                        recent_wait,
-                                    )
-                                    continue
-
-                                # Pre-check: only queue a write if there are rows
-                                # to delete. Avoids holding the serializer lock at
-                                # all for no-op ticks on clean databases.
-                                try:
-                                    from sqlalchemy import text as _sa_text
-
-                                    from zerg.database import default_engine as _def_eng
-
-                                    if _def_eng is not None:
-                                        with _def_eng.connect() as _conn:
-                                            row = _conn.execute(
-                                                _sa_text(
-                                                    "SELECT 1 FROM session_observations "
-                                                    "WHERE source = 'codex_bridge_live' "
-                                                    "AND kind = 'bridge_transcript_delta' "
-                                                    "LIMIT 1"
-                                                )
-                                            ).fetchone()
-                                        if not row:
-                                            continue
-                                except Exception:
-                                    pass  # fall through to full cleanup
-
-                                await ws.execute(
-                                    lambda db: cleanup_bridge_transcript_preview_observations(
-                                        db,
-                                        batch_size=100,
-                                        max_sessions=2,
-                                    ),
-                                    label="live-preview-cleanup",
-                                    timeout_seconds=5.0,
-                                )
-                            except asyncio.CancelledError:
-                                raise
-                            except asyncio.TimeoutError:
-                                logger.warning("live preview cleanup timed out (will retry next tick)")
-                            except Exception:  # noqa: BLE001
-                                logger.exception("live preview cleanup tick failed")
-
-                    asyncio.create_task(_live_preview_cleanup_loop())
-                    started.append("live_preview_cleanup")
-                except Exception as e:  # noqa: BLE001
-                    failed.append(f"live_preview_cleanup ({e})")
-                    logger.exception("Failed to start live_preview_cleanup")
 
             # Live session summary/title enrichment. This scans session revision
             # lag directly; it is intentionally separate from the legacy ingest
