@@ -7,9 +7,11 @@
 `storage-failure-isolation.md`; the database portions of
 `archive-backlog-repair.md` and `hosted-archive-restart-control.md`
 
-**Shared contract:** `speed-of-light-shipper.md` remains canonical for the
-Machine Agent lane model. This spec applies the same lanes to Runtime Host
-storage; it does not define a second scheduler vocabulary.
+**Shared contracts:** `speed-of-light-shipper.md` remains canonical for the
+Machine Agent lane model. `runtime-display-contract.md` is canonical for the
+session/run/activity/control fact model stored by the catalog. This spec applies
+those contracts to Runtime Host storage; it does not define another scheduler
+or session-state vocabulary.
 
 ## Decision
 
@@ -200,7 +202,8 @@ Core tables:
 - `users`, `refresh_sessions`, `device_tokens`;
 - `sessions`: the single session identity and timeline-card row;
 - `session_threads`, `session_runs`, `session_connections`;
-- `runtime_state`, `control_leases`, `launch_attempts`, `input_receipts`;
+- `activity_heads`, `control_leases`, `launch_attempts`, `input_receipts`;
+- `pending_interactions` and `transcript_heads`;
 - `source_epochs`: stable provider source identity and replacement boundaries;
 - `raw_objects`: manifest keyed by unique envelope identity; this row is also
   the durable receipt and carries the catalog `commit_seq`;
@@ -217,8 +220,10 @@ Core tables:
 
 The existing `live_session_catalog`, `live_timeline_cards`, and `live_sessions`
 tables overlap heavily. The target has one denormalized `sessions` row for the
-timeline and session identity. Runtime state remains separate because it has a
-different update frequency and lifecycle.
+timeline and session identity. Bounded activity heads, control leases,
+interactions, and transcript revision heads remain separate because they have
+different authorities, clocks, and lifecycles. There is no combined runtime or
+timeline-card status row.
 
 The catalog must not contain:
 
@@ -513,6 +518,13 @@ Runtime state, launch, input, heartbeat, and control are catalog-first through
 historical evidence, the transaction advances a coalesced projector revision and
 the evidence is appended later. They never wait for archive storage.
 
+The catalog stores the sparse facts defined by `runtime-display-contract.md`,
+not labels such as `Ready`, `Idle`, or `Working`. Activity expiry yields an
+unknown projection; control leases never refresh provider activity; transcript
+convergence never becomes provider activity. Historical runtime observations
+are not required to accumulate in the catalog, and ephemeral activity/control
+may restore honestly as unknown.
+
 ### Derived work
 
 After durable acknowledgement, workers claim coalesced `projector_state` rows:
@@ -534,12 +546,14 @@ readiness.
 
 ### Timeline and session metadata
 
-Timeline, session identity, capabilities, archive state, and current runtime
-state are served through `catalogd` from `catalog.db`.
+Timeline, session identity, capabilities, archive state, and current
+activity/control facts are served through `catalogd` from `catalog.db`.
 
 There is no duplicated timeline-card table. The `sessions` row is deliberately
 denormalized for the dominant list query and joined only to bounded current
-runtime/control state.
+activity heads, control leases, interactions, and transcript heads. One
+versioned server projector produces primary and access labels for every client;
+no presentation consumes another presentation.
 
 ### Session detail and raw export
 
@@ -830,6 +844,9 @@ Gate: maximum repair no longer causes worklog, manifest, or session-detail 503s.
 - version parser-independent envelope, source identity/epoch, raw-object,
   render-object, manifest/receipt, media, and generation-qualified cursor
   contracts;
+- freeze `runtime-display-contract.md`: session/run identity, activity heads,
+  control leases/actions, pending interactions, transcript heads, reducer
+  authority, and presentation policy versions;
 - add end-to-end trace identities and the SLO dashboards/reports;
 - build the crash matrix and mixed-load harness against the current system;
 - capture a baseline from the largest tenant.
@@ -842,6 +859,9 @@ Gate: the harness reproduces current failures and produces comparable numbers.
 - move all hot catalog reads/writes and migrations behind typed RPC;
 - add `source_epochs`, `raw_objects`, media manifests, tombstones,
   `projector_state`, and monotonic `commit_seq`;
+- add the bounded session-state facts: runs/connections, activity heads,
+  control leases, pending interactions, transcript heads, launch attempts, and
+  input receipts—without a combined runtime status row;
 - project existing sealed chunk manifests into raw-object manifests in bounded
   batches with explicit legacy provenance;
 - expose catalogd-backed batch reconciliation by envelope/source epoch;

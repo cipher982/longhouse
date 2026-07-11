@@ -1,6 +1,12 @@
 # Transient Transcript Placeholder UX
 
-Status: planned
+Status: Superseded state semantics
+
+The placeholder UX problem remains valid, but the state solution below is not
+the target contract. `runtime-display-contract.md` separates transcript
+convergence from provider activity: transcript lag may drive a placeholder or
+quiet diagnostic, but it never creates `syncing_transcript` activity or a
+`Working` session label.
 
 ## Problem
 

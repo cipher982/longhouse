@@ -15,7 +15,7 @@ make these states legible without opening a row:
 | 4 | Helm / Console with a fresh attached control path | `Live control` plus a real runtime phase such as `Running Bash`, `Thinking`, or `Idle` |
 | 1 | Managed session whose host can be reattached | `Reattach`; it must not pretend to be live |
 | 1 | Shadow / observe-only session | `Observe only` with a fresh activity signal |
-| 4 | Historical imported sessions | `Search only`; these are the only rows allowed to have `No live signal` |
+| 4 | Historical imported sessions | `Search only`; they must not claim `Ready`, `Idle`, or `Working` without fresh activity evidence |
 
 The live-managed rows must include **Claude, Codex, Cursor, and OpenCode**.
 Antigravity supplies the observe-only row. Session titles, projects, machines,

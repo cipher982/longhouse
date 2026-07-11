@@ -1,7 +1,12 @@
 # Managed Idle Timeline Status
 
-Status: Proposed fix
-Last updated: 2026-07-09
+Status: Superseded incident note
+Last updated: 2026-07-11
+
+The shipped `Ready` repair documented here was a containment fix. Its target
+semantics are superseded by `runtime-display-contract.md`: provider activity
+and control availability are independent, and the durable target renders
+`Activity unknown · Live control` rather than a combined `Ready` status.
 
 ## Problem
 
