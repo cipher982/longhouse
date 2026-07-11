@@ -3,9 +3,7 @@
 **Status:** Implemented; live catalog and archive worker are the only Runtime Host topology
 **Owner:** Longhouse core
 **Created:** 2026-07-10
-**Related:** `reliability-data-plane.md`,
-`hot-cold-runtime-reliability-hardening.md`,
-`sqlite-data-plane-completion.md`
+**Related:** `archive-backlog-repair.md`, `hosted-archive-restart-control.md`
 
 ## Decision
 

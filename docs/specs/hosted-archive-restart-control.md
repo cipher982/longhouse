@@ -3,9 +3,8 @@
 **Status:** Implementation spec
 **Owner:** Longhouse core
 **Created:** 2026-07-08
-**Related:** `docs/specs/prelaunch-runtime-hardening-wins.md`,
-`docs/specs/hot-cold-ingest-isolation.md`,
-`docs/specs/hot-cold-runtime-reliability-hardening.md`
+**Related:** `docs/specs/storage-failure-isolation.md`,
+`docs/specs/archive-backlog-repair.md`
 
 ## Goal
 

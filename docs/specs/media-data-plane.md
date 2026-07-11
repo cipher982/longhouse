@@ -5,7 +5,7 @@ Last updated: 2026-06-22
 
 Related specs:
 
-- `docs/specs/reliability-data-plane.md`
+- `docs/specs/storage-failure-isolation.md`
 - `docs/specs/speed-of-light-shipper.md`
 - `docs/specs/archive-backlog-repair.md`
 
@@ -658,7 +658,7 @@ Rules:
 
 - Backfill existing archived inline data URLs into media objects where feasible.
 - This is optional, byte-budgeted, and must inherit the backup gate, restore
-  validation, and disk-floor guardrails from `reliability-data-plane.md`.
+  validation, and disk-floor guardrails from `storage-failure-isolation.md`.
 - Backfill must never block live shipping or archive repair for new data.
 
 ## Success Criteria
@@ -697,7 +697,7 @@ Reviewed through architecture review on 2026-06-22. Key findings incorporated:
 - The large bytes are primarily in raw `source_lines`, not extracted event
   previews. The spec now centers source-line redaction plus reconstructable raw
   fidelity.
-- Media must extend `reliability-data-plane.md` and
+- Media must extend `storage-failure-isolation.md` and
   `speed-of-light-shipper.md`, not introduce a third store/lane/spool model.
 - The current local spool is pointer-based; reconciliation must retire durable
   source ranges without replaying local file bytes.

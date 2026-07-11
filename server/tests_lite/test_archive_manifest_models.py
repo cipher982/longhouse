@@ -9,7 +9,6 @@ from zerg.database import Base
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import ArchiveChunk
-from zerg.models.agents import ArchiveExportCheckpoint
 from zerg.models.agents import ProjectorCheckpoint
 
 
@@ -36,17 +35,6 @@ def test_archive_manifest_and_checkpoint_models_create_and_enforce_scope(tmp_pat
         db.add(chunk)
         db.flush()
         db.add(
-            ArchiveExportCheckpoint(
-                exporter_name="legacy-source-lines",
-                tenant_id="tenant-a",
-                source_table="source_lines",
-                session_id=session_id,
-                last_rowid=123,
-                last_source_seq=1,
-                status="running",
-            )
-        )
-        db.add(
             ProjectorCheckpoint(
                 projector_name="hot-card",
                 parser_revision="parser-v1",
@@ -61,7 +49,6 @@ def test_archive_manifest_and_checkpoint_models_create_and_enforce_scope(tmp_pat
 
     with session_factory() as db:
         assert db.query(ArchiveChunk).count() == 1
-        assert db.query(ArchiveExportCheckpoint).count() == 1
         assert db.query(ProjectorCheckpoint).count() == 1
         db.add(
             ArchiveChunk(

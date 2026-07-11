@@ -516,62 +516,6 @@ class TimelineCard(AgentsBase):
     )
 
 
-class ArchiveExportCheckpoint(AgentsBase):
-    """Resumable legacy-export checkpoint for raw archive migration."""
-
-    __tablename__ = "archive_export_checkpoints"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    exporter_name = Column(String(128), nullable=False)
-    tenant_id = Column(String(255), nullable=True)
-    source_table = Column(String(64), nullable=False)
-    session_id = Column(GUID(), nullable=True, index=True)
-    last_rowid = Column(BigInteger, nullable=False, server_default=text("0"))
-    last_source_seq = Column(BigInteger, nullable=False, server_default=text("0"))
-    status = Column(String(32), nullable=False, server_default=text("'idle'"))
-    error = Column(Text, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    __table_args__ = (
-        UniqueConstraint(
-            "exporter_name",
-            "tenant_id",
-            "source_table",
-            "session_id",
-            name="uq_archive_export_checkpoint_scope",
-        ),
-        Index("ix_archive_export_checkpoints_status_updated", "status", "updated_at"),
-    )
-
-
-class ArchiveExportQuarantine(AgentsBase):
-    """Corrupt legacy raw row recorded during archive export."""
-
-    __tablename__ = "archive_export_quarantine"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    exporter_name = Column(String(128), nullable=False)
-    tenant_id = Column(String(255), nullable=True)
-    source_table = Column(String(64), nullable=False)
-    rowid = Column(BigInteger, nullable=False)
-    session_id = Column(GUID(), nullable=True, index=True)
-    error = Column(Text, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-
-    __table_args__ = (
-        UniqueConstraint(
-            "exporter_name",
-            "tenant_id",
-            "source_table",
-            "rowid",
-            name="uq_archive_export_quarantine_row",
-        ),
-        Index("ix_archive_export_quarantine_session", "session_id", "source_table"),
-    )
-
-
 class ProjectorCheckpoint(AgentsBase):
     """Per-projector checkpoint into sealed archive chunks."""
 

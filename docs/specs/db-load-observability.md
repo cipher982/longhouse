@@ -3,9 +3,7 @@
 **Status:** Approved plan, not started
 **Owner:** Longhouse core
 **Created:** 2026-07-09
-**Related:** `docs/specs/sqlite-data-plane-completion.md`,
-`docs/specs/reliability-data-plane.md`,
-`docs/specs/hot-cold-runtime-reliability-hardening.md`
+**Related:** `docs/specs/storage-failure-isolation.md`
 
 ## Executive Summary
 
@@ -86,7 +84,7 @@ One analysis pass producing the numbers the completion epic consumes:
   than one cadence interval.
 - The baseline analysis exists and ranks write lanes / resource consumers.
 - Post-reclaim, the identical capture proves the before/after delta for
-  `docs/specs/sqlite-data-plane-completion.md` step 1, and stays running as
+  the storage-failure isolation baseline, and stays running as
   permanent cheap telemetry.
 
 ## Non-Goals
