@@ -74,7 +74,7 @@ pub(crate) enum OpenCodeShipMode {
 }
 
 const OPENCODE_RECONCILIATION_SESSION_LIMIT: usize = 4;
-const OPENCODE_DURABILITY_PROOF_VERSION: &str = "head-archive-bundle-ro-v1";
+pub(crate) const OPENCODE_DURABILITY_PROOF_VERSION: &str = "head-source-bytes-ro-v1";
 const OPENCODE_RECONCILIATION_RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
@@ -4238,7 +4238,13 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        let claim_body = json!({"present": present, "missing": [], "rejected": []}).to_string();
+        let claim_body = json!({
+            "proof_version": OPENCODE_DURABILITY_PROOF_VERSION,
+            "present": present,
+            "missing": [],
+            "rejected": []
+        })
+        .to_string();
         let (url, captured, handle) =
             spawn_http_sequence_server(&[("200 OK", claim_body.as_str())]);
         let result = ship_opencode_database_with_trace(
@@ -4321,7 +4327,13 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        let claim_body = json!({"present": [], "missing": missing, "rejected": []}).to_string();
+        let claim_body = json!({
+            "proof_version": OPENCODE_DURABILITY_PROOF_VERSION,
+            "present": [],
+            "missing": missing,
+            "rejected": []
+        })
+        .to_string();
         let (url, captured, handle) =
             spawn_http_sequence_server(&[("200 OK", claim_body.as_str()), ("200 OK", "{}")]);
         let result = ship_opencode_database_with_trace(
@@ -8146,8 +8158,11 @@ mod tests {
         };
         let end_offset = prepared.new_offset;
         let source_line_body = format!(
-            r#"{{"present":[],"missing":[{{"source_path":"{}","source_offset":{},"line_hash":"{}"}}],"rejected":[]}}"#,
-            path_str, source_line.source_offset, source_line.line_hash
+            r#"{{"proof_version":"{}","present":[],"missing":[{{"source_path":"{}","source_offset":{},"line_hash":"{}"}}],"rejected":[]}}"#,
+            OPENCODE_DURABILITY_PROOF_VERSION,
+            path_str,
+            source_line.source_offset,
+            source_line.line_hash
         );
         let claim_body = format!(
             r#"{{"needed":["{}"],"present":[],"rejected":[]}}"#,

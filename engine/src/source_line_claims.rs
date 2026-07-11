@@ -33,6 +33,7 @@ struct SourceLineClaimItem<'a> {
 
 #[derive(Deserialize)]
 struct SourceLineClaimsResponse {
+    proof_version: String,
     present: Vec<SourceLineClaimResponseItem>,
     missing: Vec<SourceLineClaimResponseItem>,
     rejected: Vec<SourceLineRejectedItem>,
@@ -82,6 +83,13 @@ pub async fn claim_source_lines_present(
         .post_json_decode_with_timeout("/api/agents/source-lines/claims", body, request_timeout)
         .await
         .context("claiming source lines")?;
+    if response.proof_version != crate::shipper::OPENCODE_DURABILITY_PROOF_VERSION {
+        bail!(
+            "source-line claim proof version mismatch: expected {}, got {}",
+            crate::shipper::OPENCODE_DURABILITY_PROOF_VERSION,
+            response.proof_version
+        );
+    }
 
     if !response.rejected.is_empty() {
         let reasons = response

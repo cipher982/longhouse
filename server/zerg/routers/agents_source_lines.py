@@ -10,6 +10,8 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import status
 from pydantic import BaseModel
+from sqlalchemy import and_
+from sqlalchemy import or_
 from sqlalchemy import tuple_
 from sqlalchemy.orm import Session
 
@@ -18,15 +20,13 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
-from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.raw_json_compression import decode_raw_json
-from zerg.services.session_archive import build_session_archive_bundle
 
 router = APIRouter(prefix="/agents/source-lines", tags=["agents"])
 
 _SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
-_PROOF_VERSION = "head-archive-bundle-ro-v1"
+_PROOF_VERSION = "head-source-bytes-ro-v1"
 
 
 class SourceLineClaimItem(BaseModel):
@@ -58,6 +58,28 @@ class SourceLineClaimsResponse(BaseModel):
     present: list[SourceLineClaimResponseItem]
     missing: list[SourceLineClaimResponseItem]
     rejected: list[SourceLineRejectedItem]
+
+
+def _missing_head_source_identities(
+    db: Session,
+    session_id: UUID,
+    head_branch_id: int | None,
+) -> set[tuple[str, int, str]]:
+    """Return head rows whose exact raw bytes are absent from the monolith."""
+    query = db.query(
+        AgentSourceLine.source_path,
+        AgentSourceLine.source_offset,
+        AgentSourceLine.line_hash,
+    ).filter(AgentSourceLine.session_id == session_id)
+    if head_branch_id is not None:
+        query = query.filter(AgentSourceLine.branch_id == head_branch_id)
+    query = query.filter(
+        or_(
+            and_(AgentSourceLine.raw_json_codec == 1, AgentSourceLine.raw_json_z.is_(None)),
+            and_(AgentSourceLine.raw_json_codec != 1, AgentSourceLine.raw_json == ""),
+        )
+    )
+    return {(source_path, int(source_offset), line_hash) for source_path, source_offset, line_hash in query.all()}
 
 
 def _normalized_claim(item: SourceLineClaimItem) -> tuple[SourceLineClaimResponseItem | None, str | None]:
@@ -138,6 +160,7 @@ async def create_source_line_claims(
 
     durable: set[tuple[UUID, str, int, str]] = set()
     slim_sessions: set[UUID] = set()
+    archived_by_session: dict[UUID, dict[tuple[str, int, str], str]] = {}
     for row in rows:
         head_branch_id = head_branch_ids.get(row.session_id)
         if head_branch_id is not None and int(row.branch_id) != int(head_branch_id):
@@ -154,16 +177,23 @@ async def create_source_line_claims(
 
     for session_id in slim_sessions:
         archived = load_session_source_line_bytes(db, session_id)
+        archived_by_session[session_id] = archived
         durable.update((session_id, source_path, source_offset, line_hash) for source_path, source_offset, line_hash in archived)
 
-    # Use the exact Life Hub bundle builder as the final authority. A matching
-    # row is not durable proof when the selected bundle still cannot be built.
+    # A proof covers the complete selected head, not only the identities in this
+    # request. Check only metadata for inline rows; load archive chunks solely
+    # when a head row has already had its inline bytes reclaimed. Constructing
+    # and gzipping the full transcript here made this cheap claim endpoint a
+    # second archive export path.
     for session_id in {identity[0] for identity in durable}:
-        try:
-            bundle = build_session_archive_bundle(db, session_id, branch_mode="head")
-        except ArchiveTranscriptUnavailable:
-            bundle = None
-        if bundle is None:
+        missing_inline = _missing_head_source_identities(db, session_id, head_branch_ids.get(session_id))
+        if not missing_inline:
+            continue
+        archived = archived_by_session.get(session_id)
+        if archived is None:
+            archived = load_session_source_line_bytes(db, session_id)
+            archived_by_session[session_id] = archived
+        if not missing_inline.issubset(archived):
             durable = {identity for identity in durable if identity[0] != session_id}
 
     for item, normalized in valid:
