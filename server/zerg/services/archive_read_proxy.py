@@ -42,7 +42,18 @@ _PASSTHROUGH_HEADERS = {
     "last-modified",
     "x-limit-cap",
 }
-_ARCHIVE_READ_SLOTS = asyncio.Semaphore(4)
+# Cold reads share the same physical volume as the live catalog. One isolated
+# reader can use most of the archive disk's sequential-read bandwidth, so more
+# concurrency only starves live writes without improving useful throughput.
+_ARCHIVE_READ_SLOTS = asyncio.Semaphore(1)
+
+
+async def _stop_child(proc: asyncio.subprocess.Process) -> None:
+    """Terminate and reap a helper before releasing its archive-read slot."""
+    if proc.returncode is not None:
+        return
+    proc.kill()
+    await asyncio.shield(proc.wait())
 
 
 def normalized_api_path(request: Request) -> str:
@@ -120,8 +131,7 @@ async def proxy_archive_request(request: Request) -> Response:
                 timeout=timeout,
             )
         except TimeoutError:
-            proc.kill()
-            await proc.wait()
+            await _stop_child(proc)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={
@@ -129,6 +139,13 @@ async def proxy_archive_request(request: Request) -> Response:
                     "message": "Archive operation timed out; live control remains available.",
                 },
             ) from None
+        except asyncio.CancelledError:
+            # RequestTimeoutMiddleware and disconnected clients cancel this
+            # coroutine. Leaving the subprocess alive here both leaked a cold
+            # reader and released its semaphore slot, allowing an unbounded
+            # archive-read storm.
+            await _stop_child(proc)
+            raise
     except OSError as exc:
         logger.warning("Could not start archive request child for %s: %s", payload["path"], exc)
         raise HTTPException(

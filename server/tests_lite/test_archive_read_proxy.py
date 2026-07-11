@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -200,6 +201,46 @@ async def test_archive_read_native_exit_degrades_one_request(monkeypatch):
         await proxy_archive_request(_request("/agents/sessions/00000000-0000-0000-0000-000000000001"))
     assert exc_info.value.status_code == 503
     assert exc_info.value.detail["code"] == "archive_request_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_archive_read_proxy_reaps_child_when_request_is_cancelled(monkeypatch):
+    started = asyncio.Event()
+
+    class Child:
+        returncode = None
+        killed = False
+        reaped = False
+
+        async def communicate(self, _payload):
+            started.set()
+            await asyncio.Future()
+
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+
+        async def wait(self):
+            self.reaped = True
+            return self.returncode
+
+    child = Child()
+
+    async def spawn(*_args, **_kwargs):
+        return child
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", spawn)
+    task = asyncio.create_task(
+        proxy_archive_request(_request("/agents/sessions/00000000-0000-0000-0000-000000000001"))
+    )
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert child.killed is True
+    assert child.reaped is True
 
 
 def test_archive_read_child_serves_real_archive_route(tmp_path):
