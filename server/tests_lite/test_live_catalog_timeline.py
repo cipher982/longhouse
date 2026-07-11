@@ -10,6 +10,7 @@ import pytest
 from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
+from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
@@ -312,6 +313,67 @@ def test_live_catalog_timeline_keeps_runtime_and_control_axes_independent(tmp_pa
     assert shadow.capabilities.observe_only is True
     assert shadow.capabilities.can_tail_output is True
     assert shadow.capabilities.can_send_input is False
+
+
+def test_live_catalog_timeline_does_not_keep_stale_adopted_shell_working(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'stale-pending.db'}")
+    initialize_live_database(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    stale_at = now - timedelta(days=1)
+    session_id = uuid4()
+
+    with LiveSession() as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=str(session_id),
+                provider="codex",
+                environment="production",
+                project="zerg",
+                device_id="cinder",
+                started_at=stale_at,
+                last_activity_at=stale_at,
+                user_messages=1,
+                created_at=stale_at,
+                updated_at=stale_at,
+            )
+        )
+        db.add(
+            LiveTimelineCard(
+                session_id=str(session_id),
+                provider="codex",
+                environment="production",
+                project="zerg",
+                device_id="cinder",
+                started_at=stale_at,
+                last_activity_at=stale_at,
+                user_messages=1,
+                archive_state="pending",
+                derived_state="current",
+                parser_revision="test",
+                updated_at=stale_at,
+            )
+        )
+        db.add(
+            LiveLaunchReadiness(
+                session_id=str(session_id),
+                provider="codex",
+                device_id="cinder",
+                execution_lifetime="live_control",
+                state="adopted",
+                created_at=stale_at,
+                updated_at=stale_at,
+            )
+        )
+        db.commit()
+        response = list_live_catalog_timeline(db, params=_params())
+
+    [card] = response.sessions
+    assert card.head.runtime_display.state is None
+    assert card.head.timeline_card.status.label == "No live signal"
+    assert card.head.capabilities.control_label == "imported"
+    assert card.head.capabilities.observe_only is False
+    assert card.head.capabilities.staleness_reason == "imported_only"
 
 
 def test_live_catalog_timeline_returns_typed_archive_requirement_for_search(tmp_path):

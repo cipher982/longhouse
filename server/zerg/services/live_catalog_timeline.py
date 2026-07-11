@@ -29,6 +29,7 @@ from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
 from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import build_runtime_view
+from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_DISPLAY_WINDOW
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import build_live_launch_placeholder_response
@@ -56,33 +57,14 @@ def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
     return f"{session.provider.title()} session"
 
 
-def _fallback_readiness(session: LiveSessionCatalog, card: LiveTimelineCard) -> LiveLaunchReadinessView:
-    started_at = normalize_utc(session.started_at) or datetime.now(timezone.utc)
-    updated_at = normalize_utc(card.updated_at) or normalize_utc(card.last_activity_at) or started_at
-    return LiveLaunchReadinessView(
-        session_id=UUID(str(session.session_id)),
-        launch_state="live",
-        execution_lifetime="live_control",
-        launch_error_code=None,
-        launch_error_message=None,
-        provider=session.provider,
-        device_id=session.device_id,
-        machine_id=session.device_name or session.device_id,
-        project=session.project,
-        created_at=started_at,
-        updated_at=updated_at,
-    )
-
-
 def _pending_response_from_catalog(
     session: LiveSessionCatalog,
     card: LiveTimelineCard,
     *,
-    readiness: LiveLaunchReadinessView | None,
+    readiness: LiveLaunchReadinessView,
     runtime: LiveRuntimeState | None,
 ):
-    source_readiness = readiness or _fallback_readiness(session, card)
-    response = build_live_launch_placeholder_response(source_readiness)
+    response = build_live_launch_placeholder_response(readiness)
     title = _title(session, card)
     ended_at = normalize_utc(session.ended_at)
     last_activity_at = normalize_utc(card.last_activity_at) or normalize_utc(session.last_activity_at) or response.started_at
@@ -109,8 +91,8 @@ def _pending_response_from_catalog(
         "is_idle": bool(ended_at is None and (runtime is None or runtime.phase not in {"thinking", "running"})),
     }
     runtime_display = response.runtime_display.model_copy(update=runtime_updates)
-    launch_state = readiness.launch_state if readiness is not None else None
-    execution_lifetime = readiness.execution_lifetime if readiness is not None else None
+    launch_state = readiness.launch_state
+    execution_lifetime = readiness.execution_lifetime
     return response.model_copy(
         update={
             "provider": session.provider,
@@ -156,10 +138,19 @@ def _pending_response_from_catalog(
             "user_state": session.user_state or "active",
             "launch_state": launch_state,
             "execution_lifetime": execution_lifetime,
-            "launch_error_code": readiness.launch_error_code if readiness is not None else None,
-            "launch_error_message": readiness.launch_error_message if readiness is not None else None,
+            "launch_error_code": readiness.launch_error_code,
+            "launch_error_message": readiness.launch_error_message,
         }
     )
+
+
+def _pending_placeholder_is_current(readiness: LiveLaunchReadinessView | None, *, now: datetime) -> bool:
+    if readiness is None:
+        return False
+    if readiness.launch_state in {"launch_failed", "launch_orphaned"}:
+        return True
+    updated_at = normalize_utc(readiness.updated_at)
+    return updated_at is not None and now - updated_at <= TRANSCRIPT_SYNC_DISPLAY_WINDOW
 
 
 def _response_from_catalog(
@@ -171,7 +162,8 @@ def _response_from_catalog(
     capability_flags: KernelSessionCapabilities,
     now: datetime,
 ) -> SessionResponse:
-    if card.archive_state == "pending":
+    if card.archive_state == "pending" and _pending_placeholder_is_current(readiness, now=now):
+        assert readiness is not None
         return _pending_response_from_catalog(
             session,
             card,
@@ -372,7 +364,7 @@ def list_live_catalog_timeline(
     )
     session_id_strings = [str(card.session_id) for card, _session in rows]
     session_ids = [UUID(session_id) for session_id in session_id_strings]
-    readiness = latest_live_launch_readiness_map(db, session_ids)
+    readiness = latest_live_launch_readiness_map(db, session_ids, now=now)
     capabilities = _live_capability_map(db, session_ids=session_id_strings, now=now)
     runtime_rows = (
         db.query(LiveRuntimeState)
