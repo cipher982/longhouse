@@ -226,6 +226,36 @@ def test_no_run_means_no_primary_runtime_claim():
     assert facts.presentation.access.label == "Search only"
 
 
+def test_launch_attempt_is_separate_from_activity_and_run():
+    launching = _facts(
+        runtime=None,
+        capabilities=_capabilities(label="imported", live=False, reattach=False, search=False, run_id=None),
+        liveness=_liveness(managed=False),
+        launch_state="launching",
+        execution_lifetime="one_shot",
+    )
+    failed = _facts(
+        runtime=None,
+        capabilities=_capabilities(label="imported", live=False, reattach=False, search=False, run_id=None),
+        liveness=_liveness(managed=False),
+        launch_state="launch_failed",
+        launch_error_code="provider_unavailable",
+        launch_error_message="Provider did not start",
+        execution_lifetime="one_shot",
+    )
+
+    assert launching.mode == "console"
+    assert launching.launch is not None and launching.launch.state == "pending"
+    assert launching.run is not None and launching.run.lifecycle == "starting"
+    assert launching.activity.state == "unknown"
+    assert launching.presentation.primary is not None
+    assert launching.presentation.primary.label == "Starting"
+    assert failed.launch is not None and failed.launch.state == "failed"
+    assert failed.run is None
+    assert failed.presentation.primary is not None
+    assert failed.presentation.primary.label == "Launch failed"
+
+
 def test_shadow_fresh_activity_is_observe_only_not_managed():
     facts = _facts(
         runtime=_runtime(phase="thinking", source="claude_hook"),

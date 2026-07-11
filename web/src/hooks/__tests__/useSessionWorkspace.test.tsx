@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionWorkspace } from "../useSessionWorkspace";
+import { makeSessionStateFacts } from "../../test/sessionState";
 
 const agentSessionMocks = vi.hoisted(() => ({
   useAgentSessionWorkspace: vi.fn(),
@@ -36,6 +37,7 @@ const baseSession = {
   thread_head_session_id: "session-1",
   provider: "claude",
   project: "session-workspace-test",
+  session_state: makeSessionStateFacts(),
   runtime_display: {
     truth_tier: "none",
     signal_tier: "none",
@@ -675,6 +677,7 @@ describe("useSessionWorkspace", () => {
           ended_at: "2026-03-14T12:10:00.000Z",
           terminal_state: "session_ended",
           status: "completed",
+          session_state: makeSessionStateFacts({ closed: true }),
           runtime_display: { ...baseSession.runtime_display, lifecycle: "closed" },
         },
         thread: {

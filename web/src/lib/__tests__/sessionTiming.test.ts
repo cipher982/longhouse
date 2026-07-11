@@ -5,6 +5,7 @@ import {
   getActiveSessionTurn,
   getRuntimeElapsedLabel,
 } from "../sessionTiming";
+import { makeSessionStateFacts } from "../../test/sessionState";
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   return {
@@ -36,6 +37,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     is_writable_head: true,
     control: null,
     capabilities: null,
+    session_state: makeSessionStateFacts(),
     loop_mode: "assist",
     runtime_display: {
       truth_tier: "none",

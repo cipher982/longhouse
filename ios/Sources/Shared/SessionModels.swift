@@ -3,6 +3,44 @@ import SwiftUI
 
 let transcriptSyncState = "syncing_transcript"
 
+struct SessionStateLabel: Hashable, Codable, Sendable {
+    let key: String
+    let label: String
+    let tone: String
+    let observedAt: String?
+}
+
+struct SessionStateAction: Hashable, Codable, Sendable {
+    let state: String
+    let reason: String?
+
+    var isAvailable: Bool { state == "available" }
+}
+
+struct SessionStateFacts: Hashable, Codable, Sendable {
+    let contractVersion: Int
+    let presentationPolicyVersion: Int
+    let mode: String
+    let dispositionState: String
+    let runLifecycle: String?
+    let activityState: String
+    let activityTool: String?
+    let activityObservedAt: String?
+    let activityValidUntil: String?
+    let controlOwnership: String
+    let controlConnection: String
+    let sendInput: SessionStateAction
+    let interrupt: SessionStateAction
+    let terminate: SessionStateAction
+    let reattach: SessionStateAction
+    let resume: SessionStateAction
+    let pendingInteractionKind: String?
+    let transcriptConvergence: String
+    let primary: SessionStateLabel?
+    let access: SessionStateLabel?
+    let transcript: SessionStateLabel?
+}
+
 /// Honest summarization state — mirrors backend `summary_status` field.
 /// Tiebreaker: ready > pending > failed > unavailable.
 enum SummaryStatus: String, Codable, Sendable, Hashable {
@@ -44,6 +82,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let replyToLiveSessionAvailable: Bool?
     let runtimeDisplay: SessionRuntimeDisplay
     let timelineCard: TimelineCardPresentation?
+    let stateFacts: SessionStateFacts?
 
     init(
         id: String,
@@ -72,7 +111,8 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         hostReattachAvailable: Bool? = nil,
         replyToLiveSessionAvailable: Bool? = nil,
         runtimeDisplay: SessionRuntimeDisplay,
-        timelineCard: TimelineCardPresentation? = nil
+        timelineCard: TimelineCardPresentation? = nil,
+        stateFacts: SessionStateFacts? = nil
     ) {
         self.id = id
         self.threadId = threadId
@@ -101,19 +141,22 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.replyToLiveSessionAvailable = replyToLiveSessionAvailable
         self.runtimeDisplay = runtimeDisplay
         self.timelineCard = timelineCard
+        self.stateFacts = stateFacts
     }
 
-    var isClosed: Bool { runtimeDisplay.lifecycle == "closed" }
+    var isClosed: Bool { stateFacts?.dispositionState == "closed" }
 
-    var isBlocked: Bool { !isClosed && runtimeDisplay.state == "blocked" }
+    var isBlocked: Bool { !isClosed && stateFacts?.activityState == "blocked" }
     var isUserActive: Bool { userState == nil || userState == "active" }
     var needsAttention: Bool {
         if isClosed || !isUserActive { return false }
-        return runtimeDisplay.needsAttention
+        return stateFacts?.pendingInteractionKind != nil
     }
-    var isExecuting: Bool { !isClosed && runtimeDisplay.isExecuting }
-    var isIdle: Bool { isClosed || runtimeDisplay.isIdle }
-    var runtimeTone: String { runtimeDisplay.tone }
+    var isExecuting: Bool {
+        !isClosed && ["thinking", "executing"].contains(stateFacts?.activityState)
+    }
+    var isIdle: Bool { isClosed || stateFacts?.activityState == "quiescent" }
+    var runtimeTone: String { stateFacts?.primary?.tone ?? "inactive" }
     var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
     var timelineBranchBadgeLabel: String? {
         guard let branch = gitBranch?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty else {
@@ -138,29 +181,29 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var managementLabel: String {
-        if let label = timelineCard?.ownership.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+        if let label = stateFacts?.access?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
         }
-        return isManaged ? "Managed" : "Unmanaged"
+        return stateFacts?.controlOwnership == "owned" ? "Managed" : "Unmanaged"
     }
 
     var managementTone: String {
-        return timelineCard?.ownership.tone ?? "neutral"
+        return stateFacts?.access?.tone ?? "neutral"
     }
 
-    private var isManaged: Bool { runtimeDisplay.controlPath == "managed" }
+    private var isManaged: Bool { stateFacts?.controlOwnership == "owned" }
 
-    var displayPhaseLabel: String { runtimeDisplay.phaseLabel }
+    var displayPhaseLabel: String { stateFacts?.primary?.label ?? "" }
 
     var timelineStatusLabel: String {
-        if let label = timelineCard?.status.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+        if let label = stateFacts?.primary?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
         }
-        return "No live signal"
+        return ""
     }
 
     var timelineStatusSeenAt: String? {
-        if let seenAt = timelineCard?.status.seenAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
+        if let seenAt = stateFacts?.primary?.observedAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
             return seenAt
         }
         return nil
@@ -174,7 +217,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineStatusTone: String {
-        if let tone = timelineCard?.status.tone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
+        if let tone = stateFacts?.primary?.tone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
             return tone
         }
         return "inactive"
@@ -183,7 +226,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var shouldAnnotateTimelineStatusAsStale: Bool {
         !isClosed
             && timelineStatusTone.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "inactive"
-            && runtimeDisplay.activityRecency != "live"
+            && stateFacts?.activityState == "unknown"
     }
 
     var timelineBorderTone: String {
@@ -294,18 +337,15 @@ enum TimelineSignal {
     /// Resolve the attention signal from a session's runtime facts. The optional
     /// `suppressed` flag lets a surface force `.quiet` (e.g. the app suppresses
     /// per-row attention while a global connectivity banner owns severity).
-    /// `needs_attention` (curated) drives amber, not the raw needs_user state.
+    /// Pending interaction and provider activity are independent facts.
     static func resolve(for session: SessionSummary, suppressed: Bool = false) -> TimelineSignal {
         if session.isClosed { return .closed }
         if suppressed { return .quiet }
         if session.needsAttention { return .attention }
 
-        let tone = session.timelineStatusTone.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let live = session.runtimeDisplay.activityRecency == "live"
-        switch tone {
-        case "thinking", "running":
-            // Only animate genuinely live work; a stale "running" must not pulse.
-            return live ? .working : .quiet
+        switch session.stateFacts?.activityState {
+        case "thinking", "executing":
+            return .working
         case "blocked", "stalled":
             return .attention
         default:
@@ -693,6 +733,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     let capabilities: SessionCapabilities
     let runtimeDisplay: SessionRuntimeDisplay
     let loopMode: SessionLoopMode?
+    var stateFacts: SessionStateFacts? = nil
     var transcriptPreview: SessionTranscriptPreview? = nil
 
     var displayTitle: String {
@@ -712,7 +753,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         loopMode ?? .manual
     }
 
-    var isClosed: Bool { runtimeDisplay.lifecycle == "closed" }
+    var isClosed: Bool { stateFacts?.dispositionState == "closed" }
     var activePauseRequest: SessionPauseRequest? {
         guard !isClosed, let request = runtimeDisplay.pauseRequest, request.isPending else {
             return nil
@@ -722,27 +763,25 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var shouldShowAttentionFallback: Bool {
         guard !isClosed, activePauseRequest == nil else { return false }
-        return runtimeDisplay.needsAttention
-            || runtimeDisplay.state == "blocked"
-            || runtimeDisplay.tone == "blocked"
+        return stateFacts?.pendingInteractionKind != nil
+            || stateFacts?.activityState == "blocked"
     }
 
     var canSendLive: Bool {
         if isClosed { return false }
-        return capabilities.composerEnabled ?? (capabilities.liveControlAvailable || capabilities.replyToLiveSessionAvailable)
+        return stateFacts?.sendInput.isAvailable == true
     }
 
     /// The archive is still converging with a live/catalog session. This is a
     /// distinct transcript state: an empty projection here is not evidence that
     /// the session has never produced messages.
     var isTranscriptSyncing: Bool {
-        capabilities.stalenessReason == "archive_catching_up"
-            || runtimeDisplay.state == "syncing_transcript"
+        stateFacts?.transcriptConvergence == "lagging"
     }
 
     var canDraftBeforeSendReady: Bool {
         guard !isClosed, !canSendLive else { return false }
-        guard runtimeDisplay.controlPath == "managed" else { return false }
+        guard stateFacts?.controlOwnership == "owned" else { return false }
         let label = runtimeCapabilityLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let phase = runtimePhaseLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let disabledReason = capabilities.composerDisabledReason?
@@ -789,9 +828,9 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return !canSendLive && !capabilities.hostReattachAvailable
     }
 
-    var runtimePhaseState: String { runtimeDisplay.state ?? "idle" }
+    var runtimePhaseState: String { stateFacts?.activityState ?? "unknown" }
 
-    var runtimePhaseLabel: String { runtimeDisplay.phaseLabel }
+    var runtimePhaseLabel: String { stateFacts?.primary?.label ?? "" }
 
     var controlHealthMessage: String? {
         if let disabledReason = capabilities.composerDisabledReason?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -843,7 +882,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return placeholder
     }
 
-    var runtimeHeadline: String { runtimeDisplay.headline }
+    var runtimeHeadline: String { stateFacts?.primary?.label ?? "" }
 
     var runtimeDetail: String? {
         guard let detail = runtimeDisplay.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty else {
@@ -867,9 +906,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return message.isEmpty ? fallback : message
     }
 
-    var runtimeTone: String { runtimeDisplay.tone }
+    var runtimeTone: String { stateFacts?.primary?.tone ?? "inactive" }
 
-    var isSessionExecuting: Bool { runtimeDisplay.isExecuting }
+    var isSessionExecuting: Bool {
+        ["thinking", "executing"].contains(stateFacts?.activityState ?? "unknown")
+    }
 
     func replacingTranscriptPreview(_ transcriptPreview: SessionTranscriptPreview?) -> SessionDetail {
         SessionDetail(
@@ -893,6 +934,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             capabilities: capabilities,
             runtimeDisplay: runtimeDisplay,
             loopMode: loopMode,
+            stateFacts: stateFacts,
             transcriptPreview: transcriptPreview
         )
     }

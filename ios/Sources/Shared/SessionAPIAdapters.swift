@@ -76,6 +76,46 @@ extension APISessionCapabilitiesResponse {
     }
 }
 
+private extension APISessionActionAvailability {
+    var sessionStateAction: SessionStateAction {
+        SessionStateAction(state: state, reason: reason)
+    }
+}
+
+private extension APISessionPresentationLabel {
+    var sessionStateLabel: SessionStateLabel {
+        SessionStateLabel(key: key, label: label, tone: tone, observedAt: observedAt)
+    }
+}
+
+private extension APISessionStateFacts {
+    var sessionStateFacts: SessionStateFacts {
+        SessionStateFacts(
+            contractVersion: stateContractVersion ?? 1,
+            presentationPolicyVersion: presentationPolicyVersion ?? 1,
+            mode: mode,
+            dispositionState: disposition.state,
+            runLifecycle: run?.lifecycle,
+            activityState: activity.state,
+            activityTool: activity.tool,
+            activityObservedAt: activity.observedAt,
+            activityValidUntil: activity.validUntil,
+            controlOwnership: control.ownership,
+            controlConnection: control.connection,
+            sendInput: control.actions.sendInput.sessionStateAction,
+            interrupt: control.actions.interrupt.sessionStateAction,
+            terminate: control.actions.terminate.sessionStateAction,
+            reattach: control.actions.reattach.sessionStateAction,
+            resume: control.actions.resume.sessionStateAction,
+            pendingInteractionKind: pendingInteraction?.kind,
+            transcriptConvergence: transcript.convergence,
+            primary: presentation.primary?.sessionStateLabel,
+            access: presentation.access?.sessionStateLabel,
+            transcript: presentation.transcript?.sessionStateLabel
+        )
+    }
+}
+
 extension APISessionRuntimeDisplayResponse {
     var sessionRuntimeDisplay: SessionRuntimeDisplay {
         SessionRuntimeDisplay(
@@ -205,6 +245,7 @@ extension APISessionResponse {
             capabilities: capabilities.sessionCapabilities,
             runtimeDisplay: runtimeDisplay.sessionRuntimeDisplay,
             loopMode: loopMode.flatMap { SessionLoopMode(rawValue: $0.rawValue) },
+            stateFacts: sessionState.sessionStateFacts,
             transcriptPreview: transcriptPreview?.sessionTranscriptPreview
         )
     }
@@ -441,7 +482,8 @@ extension APITimelineSessionCardResponse {
             hostReattachAvailable: head.capabilities.hostReattachAvailable,
             replyToLiveSessionAvailable: head.capabilities.replyToLiveSessionAvailable,
             runtimeDisplay: head.runtimeDisplay.sessionRuntimeDisplay,
-            timelineCard: head.timelineCard.timelineCardPresentation
+            timelineCard: head.timelineCard.timelineCardPresentation,
+            stateFacts: head.sessionState.sessionStateFacts
         )
     }
 }

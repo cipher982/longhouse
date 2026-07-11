@@ -41,15 +41,13 @@ function closedAtMs(card: TimelineSessionCard): number {
 
 function isCardClosed(card: TimelineSessionCard): boolean {
   const session = card.head;
-  const status = session?.timeline_card?.status;
-  if (status?.tone === "closed" || status?.label === "Closed") return true;
   return isSessionClosed(session);
 }
 
 export function isOnShelf(card: TimelineSessionCard, nowMs: number): boolean {
   if (isCardClosed(card)) return false;
-  const caps = card.head?.capabilities;
-  if (caps?.live_control_available || caps?.host_reattach_available) return true;
+  const actions = card.head?.session_state.control.actions;
+  if (actions?.send_input.state === "available" || actions?.reattach.state === "available") return true;
   return (nowMs - startedAtMs(card)) < SHELF_RECENCY_MS;
 }
 

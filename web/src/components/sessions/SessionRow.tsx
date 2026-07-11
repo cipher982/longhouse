@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode, type Ref } from "react";
 import type { DraggableAttributes } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
-import { type SessionCapabilities, type TimelineSessionCard } from "../../services/api/agents";
+import { type SessionStateFacts, type TimelineSessionCard } from "../../services/api/agents";
 import { isSessionClosed, resolveTimelineSignal, timelineSignalLabel } from "../../lib/sessionRuntime";
 import {
   formatRelativeTime,
@@ -67,22 +67,22 @@ export function SessionRow({
 }: SessionRowProps) {
   const session = thread.head;
   const detailSession = thread.detail;
-  const timelineStatus = session.timeline_card.status;
+  const timelineStatus = session.session_state.presentation.primary;
   const isClosed = closed || isCardClosed(thread);
   const text = getSessionCardText(session, { titleMaxChars: 96, subheadingMaxChars: 200 });
   const branch = getBranchLabel(session.git_branch);
   const provider = session.provider;
-  const control = getRowControlPresentation(session.capabilities);
+  const control = getRowControlPresentation(session.session_state);
   const startedAtIso = thread.root?.started_at || session.started_at;
   const timeLabel = getRowTimeLabel({
-    seenAt: timelineStatus.seen_at,
-    seenAtPrefix: timelineStatus.seen_at_prefix,
+    seenAt: timelineStatus?.observed_at ?? null,
+    seenAtPrefix: timelineStatus ? "Updated" : null,
     startedAt: startedAtIso,
     relativeNowMs,
   });
 
-  const statusTone = isClosed ? "closed" : timelineStatus.tone;
-  const statusLabel = isClosed ? "closed" : timelineStatus.label;
+  const statusTone = isClosed ? "closed" : (timelineStatus?.tone ?? "inactive");
+  const statusLabel = isClosed ? "Closed" : (timelineStatus?.label ?? "");
   // 3-stop attention signal (amber=waiting / teal=working / grey=quiet), shared
   // with iOS. Drives the dot color + the a11y label so amber isn't sight-only.
   const signal = resolveTimelineSignal(session);
@@ -201,22 +201,21 @@ export function SessionRow({
   );
 }
 
-export function getRowControlPresentation(capabilities: SessionCapabilities | null | undefined): RowControlPresentation {
-  switch (capabilities?.control_label) {
-    case "live":
-      return liveControlPresentation();
-    case "reattach":
-      return reattachControlPresentation();
-    case "search-only":
-      return observeOnlyPresentation();
-    case "imported":
-      return searchOnlyPresentation();
-  }
-
-  if (capabilities?.live_control_available) return liveControlPresentation();
-  if (capabilities?.host_reattach_available) return reattachControlPresentation();
-  if (capabilities?.observe_only) return observeOnlyPresentation();
-  return searchOnlyPresentation();
+export function getRowControlPresentation(facts: SessionStateFacts): RowControlPresentation {
+  const access = facts.presentation.access;
+  if (!access) return searchOnlyPresentation();
+  const tone: RowControlTone = access.key === "live_control"
+    ? "live"
+    : access.key === "reattach"
+      ? "reattach"
+      : access.key === "observe_only"
+        ? "observe"
+        : "search";
+  return {
+    label: access.label,
+    tone,
+    title: access.label,
+  };
 }
 
 function liveControlPresentation(): RowControlPresentation {
@@ -275,8 +274,5 @@ export function getRowTimeLabel({
 }
 
 function isCardClosed(card: TimelineSessionCard): boolean {
-  const session = card.head;
-  const status = session?.timeline_card?.status;
-  if (status?.tone === "closed") return true;
-  return isSessionClosed(session);
+  return isSessionClosed(card.head);
 }

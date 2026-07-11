@@ -6,6 +6,7 @@ import type {
   SessionRuntimeDisplay,
   TimelineSessionCard,
 } from "../../services/api/agents";
+import { makeSessionStateFacts } from "../../test/sessionState";
 
 function makeRuntimeDisplay(overrides: Partial<SessionRuntimeDisplay> = {}): SessionRuntimeDisplay {
   return {
@@ -51,6 +52,7 @@ function makeSession(overrides: Partial<AgentSession> & { id: string }): AgentSe
     user_messages: 0,
     tool_calls: 0,
     terminal_state: null,
+    session_state: makeSessionStateFacts(),
     runtime_display: makeRuntimeDisplay(),
     timeline_card: null,
     capabilities: undefined,
@@ -85,6 +87,14 @@ function makeCard(args: {
     last_activity_at: args.lastActivityAt ?? null,
     project: args.repo,
     capabilities: args.capabilities,
+    session_state: makeSessionStateFacts({
+      closed: args.closed,
+      access: args.capabilities?.live_control_available
+        ? "live_control"
+        : args.capabilities?.host_reattach_available
+          ? "reattach"
+          : "search_only",
+    }),
     runtime_display: makeRuntimeDisplay(args.closed ? { lifecycle: "closed" } : {}),
   });
   return {

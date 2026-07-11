@@ -184,6 +184,111 @@ struct APISessionSharerResponse: Codable, Hashable, Sendable {
     let displayName: String?
 }
 
+struct APISessionActivityFacts: Codable, Hashable, Sendable {
+    let state: String
+    let rawKind: String?
+    let tool: String?
+    let source: String?
+    let observedAt: String?
+    let validUntil: String?
+}
+
+struct APISessionActionAvailability: Codable, Hashable, Sendable {
+    let state: String
+    let reason: String?
+}
+
+struct APISessionControlActions: Codable, Hashable, Sendable {
+    let sendInput: APISessionActionAvailability
+    let interrupt: APISessionActionAvailability
+    let terminate: APISessionActionAvailability
+    let reattach: APISessionActionAvailability
+    let resume: APISessionActionAvailability
+}
+
+struct APISessionControlFacts: Codable, Hashable, Sendable {
+    let ownership: String
+    let connection: String
+    let connectionId: Int?
+    let controlPlane: String?
+    let observedAt: String?
+    let validUntil: String?
+    let actions: APISessionControlActions
+}
+
+struct APISessionDispositionFacts: Codable, Hashable, Sendable {
+    let state: String
+    let closedAt: String?
+    let closeReason: String?
+}
+
+struct APISessionHostFacts: Codable, Hashable, Sendable {
+    let state: String
+    let observedAt: String?
+}
+
+struct APISessionLaunchFacts: Codable, Hashable, Sendable {
+    let state: String
+    let errorCode: String?
+    let errorMessage: String?
+}
+
+struct APISessionPendingInteractionFacts: Codable, Hashable, Sendable {
+    let id: String
+    let kind: String
+    let openedAt: String?
+    let resolvedAt: String?
+    let providerRequestId: String?
+    let canRespond: Bool?
+}
+
+struct APISessionPresentationLabel: Codable, Hashable, Sendable {
+    let key: String
+    let label: String
+    let tone: String
+    let observedAt: String?
+}
+
+struct APISessionPresentation: Codable, Hashable, Sendable {
+    let primary: APISessionPresentationLabel?
+    let access: APISessionPresentationLabel?
+    let transcript: APISessionPresentationLabel?
+}
+
+struct APISessionRunFacts: Codable, Hashable, Sendable {
+    let id: String?
+    let lifecycle: String
+    let startedAt: String?
+    let endedAt: String?
+    let endReason: String?
+}
+
+struct APISessionTranscriptFacts: Codable, Hashable, Sendable {
+    let convergence: String
+    let sourceRevision: Int?
+    let durableRevision: Int?
+    let renderRevision: Int?
+    let lastAppendAt: String?
+    let searchable: Bool?
+    let liveObservation: Bool?
+}
+
+struct APISessionStateFacts: Codable, Hashable, Sendable {
+    let stateContractVersion: Int?
+    let presentationPolicyVersion: Int?
+    let mode: String
+    let disposition: APISessionDispositionFacts
+    let launch: APISessionLaunchFacts?
+    let run: APISessionRunFacts?
+    let activity: APISessionActivityFacts
+    let control: APISessionControlFacts
+    let pendingInteraction: APISessionPendingInteractionFacts?
+    let transcript: APISessionTranscriptFacts
+    let host: APISessionHostFacts
+    let presentation: APISessionPresentation
+    let commitSeq: Int?
+}
+
 struct APISessionTranscriptPreviewResponse: Codable, Hashable, Sendable {
     let eventId: Int
     let text: String
@@ -268,6 +373,7 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let isSidechain: Bool?
     let control: APISessionControlResponse?
     let capabilities: APISessionCapabilitiesResponse
+    let sessionState: APISessionStateFacts
     let runtimeDisplay: APISessionRuntimeDisplayResponse
     let transcriptPreview: APISessionTranscriptPreviewResponse?
     let timelineCard: APITimelineCardPresentationResponse

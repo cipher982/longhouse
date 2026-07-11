@@ -7489,6 +7489,16 @@ export interface components {
              */
             has_real_sessions: boolean;
         };
+        /** SessionActionAvailability */
+        SessionActionAvailability: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "available" | "unavailable" | "unknown";
+            /** Reason */
+            reason?: string | null;
+        };
         /** SessionActionRequest */
         SessionActionRequest: {
             /**
@@ -7503,6 +7513,24 @@ export interface components {
             session_id: string;
             /** User State */
             user_state: string;
+        };
+        /** SessionActivityFacts */
+        SessionActivityFacts: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "thinking" | "executing" | "quiescent" | "blocked" | "stalled" | "unknown";
+            /** Raw Kind */
+            raw_kind?: string | null;
+            /** Tool */
+            tool?: string | null;
+            /** Source */
+            source?: string | null;
+            /** Observed At */
+            observed_at?: string | null;
+            /** Valid Until */
+            valid_until?: string | null;
         };
         /** SessionArchiveBundleResponse */
         SessionArchiveBundleResponse: {
@@ -7925,6 +7953,36 @@ export interface components {
              */
             adoption_mode: "managed_resume" | "adopt_unmanaged";
         };
+        /** SessionControlActions */
+        SessionControlActions: {
+            send_input: components["schemas"]["SessionActionAvailability"];
+            interrupt: components["schemas"]["SessionActionAvailability"];
+            terminate: components["schemas"]["SessionActionAvailability"];
+            reattach: components["schemas"]["SessionActionAvailability"];
+            resume: components["schemas"]["SessionActionAvailability"];
+        };
+        /** SessionControlFacts */
+        SessionControlFacts: {
+            /**
+             * Ownership
+             * @enum {string}
+             */
+            ownership: "owned" | "unowned";
+            /**
+             * Connection
+             * @enum {string}
+             */
+            connection: "connected" | "degraded" | "disconnected" | "unknown" | "not_applicable";
+            /** Connection Id */
+            connection_id?: number | null;
+            /** Control Plane */
+            control_plane?: string | null;
+            /** Observed At */
+            observed_at?: string | null;
+            /** Valid Until */
+            valid_until?: string | null;
+            actions: components["schemas"]["SessionControlActions"];
+        };
         /** SessionControlResponse */
         SessionControlResponse: {
             /**
@@ -7942,6 +8000,18 @@ export interface components {
              * @description Local reattach command for managed-local sessions
              */
             attach_command?: string | null;
+        };
+        /** SessionDispositionFacts */
+        SessionDispositionFacts: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "open" | "closed";
+            /** Closed At */
+            closed_at?: string | null;
+            /** Close Reason */
+            close_reason?: string | null;
         };
         /**
          * SessionDraftReplyRequest
@@ -7978,6 +8048,16 @@ export interface components {
          * @enum {string}
          */
         SessionExecutionHome: "unmanaged_local" | "managed_local" | "managed_hosted" | "cloud_takeover";
+        /** SessionHostFacts */
+        SessionHostFacts: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "online" | "stale" | "offline" | "unknown";
+            /** Observed At */
+            observed_at?: string | null;
+        };
         /**
          * SessionInputRequest
          * @description User input targeted at a managed session.
@@ -8043,6 +8123,18 @@ export interface components {
              * @default false
              */
             released_lock: boolean;
+        };
+        /** SessionLaunchFacts */
+        SessionLaunchFacts: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "dispatched" | "failed" | "adopted" | "abandoned";
+            /** Error Code */
+            error_code?: string | null;
+            /** Error Message */
+            error_message?: string | null;
         };
         /**
          * SessionLockInfo
@@ -8272,6 +8364,44 @@ export interface components {
              * @description Optional provider/request expiry
              */
             expires_at?: string | null;
+        };
+        /** SessionPendingInteractionFacts */
+        SessionPendingInteractionFacts: {
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "question" | "permission" | "approval";
+            /** Opened At */
+            opened_at?: string | null;
+            /** Resolved At */
+            resolved_at?: string | null;
+            /** Provider Request Id */
+            provider_request_id?: string | null;
+            /**
+             * Can Respond
+             * @default false
+             */
+            can_respond: boolean;
+        };
+        /** SessionPresentation */
+        SessionPresentation: {
+            primary?: components["schemas"]["SessionPresentationLabel"] | null;
+            access?: components["schemas"]["SessionPresentationLabel"] | null;
+            transcript?: components["schemas"]["SessionPresentationLabel"] | null;
+        };
+        /** SessionPresentationLabel */
+        SessionPresentationLabel: {
+            /** Key */
+            key: string;
+            /** Label */
+            label: string;
+            /** Tone */
+            tone: string;
+            /** Observed At */
+            observed_at?: string | null;
         };
         /**
          * SessionPreviewMessage
@@ -8675,6 +8805,8 @@ export interface components {
             control?: components["schemas"]["SessionControlResponse"] | null;
             /** @description Canonical session capability flags */
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
+            /** @description Versioned orthogonal session facts and presentation */
+            session_state: components["schemas"]["SessionStateFacts"];
             /** @description Server-derived display state for clients */
             runtime_display: components["schemas"]["SessionRuntimeDisplayResponse"];
             /** @description Latest renderable transcript preview sourced from the event ledger. */
@@ -8714,6 +8846,22 @@ export interface components {
             launch_error_message?: string | null;
             /** @description Attribution for the user whose signed share token or legacy ?shared_by=<id> link surfaced this session. Null when attribution is absent, the user is gone, or the sharer is the current viewer. */
             sharer?: components["schemas"]["SessionSharerResponse"] | null;
+        };
+        /** SessionRunFacts */
+        SessionRunFacts: {
+            /** Id */
+            id?: string | null;
+            /**
+             * Lifecycle
+             * @enum {string}
+             */
+            lifecycle: "starting" | "running" | "ended" | "unknown";
+            /** Started At */
+            started_at?: string | null;
+            /** Ended At */
+            ended_at?: string | null;
+            /** End Reason */
+            end_reason?: string | null;
         };
         /** SessionRuntimeDisplayResponse */
         SessionRuntimeDisplayResponse: {
@@ -8857,6 +9005,35 @@ export interface components {
              */
             display_name?: string | null;
         };
+        /** SessionStateFacts */
+        SessionStateFacts: {
+            /**
+             * State Contract Version
+             * @default 1
+             */
+            state_contract_version: number;
+            /**
+             * Presentation Policy Version
+             * @default 1
+             */
+            presentation_policy_version: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "shadow" | "helm" | "console" | "unknown";
+            disposition: components["schemas"]["SessionDispositionFacts"];
+            launch?: components["schemas"]["SessionLaunchFacts"] | null;
+            run?: components["schemas"]["SessionRunFacts"] | null;
+            activity: components["schemas"]["SessionActivityFacts"];
+            control: components["schemas"]["SessionControlFacts"];
+            pending_interaction?: components["schemas"]["SessionPendingInteractionFacts"] | null;
+            transcript: components["schemas"]["SessionTranscriptFacts"];
+            host: components["schemas"]["SessionHostFacts"];
+            presentation: components["schemas"]["SessionPresentation"];
+            /** Commit Seq */
+            commit_seq?: number | null;
+        };
         /**
          * SessionSummaryResponse
          * @description Response for session summaries (picker UI).
@@ -8946,6 +9123,32 @@ export interface components {
             head_session_id: string;
             /** Sessions */
             sessions: components["schemas"]["SessionResponse"][];
+        };
+        /** SessionTranscriptFacts */
+        SessionTranscriptFacts: {
+            /**
+             * Convergence
+             * @enum {string}
+             */
+            convergence: "current" | "lagging" | "unknown";
+            /** Source Revision */
+            source_revision?: number | null;
+            /** Durable Revision */
+            durable_revision?: number | null;
+            /** Render Revision */
+            render_revision?: number | null;
+            /** Last Append At */
+            last_append_at?: string | null;
+            /**
+             * Searchable
+             * @default false
+             */
+            searchable: boolean;
+            /**
+             * Live Observation
+             * @default false
+             */
+            live_observation: boolean;
         };
         /** SessionTranscriptPreviewResponse */
         SessionTranscriptPreviewResponse: {

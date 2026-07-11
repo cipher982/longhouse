@@ -10,6 +10,7 @@ import {
 } from "../sessionWorkspace";
 import type { ToolInteraction } from "../sessionWorkspace";
 import type { AgentEvent, AgentSession, AgentSessionProjectionItem, SessionCapabilities } from "../../services/api/agents";
+import { makeSessionStateFacts } from "../../test/sessionState";
 
 type TranscriptPreviewFixture = {
   cases: Array<{
@@ -79,6 +80,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     is_writable_head: true,
     control: null,
     capabilities: makeCapabilities(),
+    session_state: makeSessionStateFacts(),
     loop_mode: "assist",
     ...overrides,
   };

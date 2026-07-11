@@ -43,6 +43,7 @@ export interface AgentSession {
   display_phase?: string | null;
   active_tool?: string | null;
   confidence?: string | null;
+  session_state: SessionStateFacts;
   runtime_display: SessionRuntimeDisplay;
   timeline_card: TimelineCardPresentation;
   transcript_preview?: SessionTranscriptPreview | null;
@@ -86,6 +87,8 @@ export interface AgentSession {
    */
   sharer?: SessionSharer | null;
 }
+
+export type SessionStateFacts = components["schemas"]["SessionStateFacts"];
 
 export interface SessionSharer {
   id: number;

@@ -15,6 +15,7 @@ import type {
   TimelineSessionCard,
   TimelineSessionsListResponse,
 } from "../../services/api/agents";
+import { makeSessionStateFacts } from "../../test/sessionState";
 import type { Runner } from "../../services/api";
 import { TestRouter } from "../../test/test-utils";
 import SessionsPage from "../SessionsPage";
@@ -110,6 +111,14 @@ function makeTimelinePresentation(overrides: Partial<TimelineCardPresentation> =
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   const now = "2026-03-21T12:00:00Z";
+  const capabilities = overrides.capabilities ?? makeCapabilities();
+  const access = capabilities.live_control_available
+    ? "live_control"
+    : capabilities.host_reattach_available
+      ? "reattach"
+      : capabilities.observe_only
+        ? "observe_only"
+        : "search_only";
   return {
     id: "session-1",
     provider: "codex",
@@ -142,7 +151,8 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     branched_from_event_id: null,
     is_writable_head: true,
     control: null,
-    capabilities: makeCapabilities(),
+    capabilities,
+    session_state: makeSessionStateFacts({ access }),
     runtime_display: makeRuntimeDisplay(),
     timeline_card: makeTimelinePresentation(),
     loop_mode: "assist",

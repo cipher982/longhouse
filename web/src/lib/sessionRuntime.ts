@@ -2,6 +2,7 @@ import type {
   AgentSession,
   AgentSessionStatus,
   SessionRuntimeDisplay,
+  SessionStateFacts,
 } from "../services/api/agents";
 
 export type KnownPresenceState =
@@ -32,14 +33,14 @@ type TimelineRuntimeOverlay = {
 
 export type TimelineRuntimeSession = Pick<
   AgentSession,
-  "ended_at" | "last_activity_at" | "timeline_anchor_at" | "capabilities" | "runtime_display"
+  "ended_at" | "last_activity_at" | "timeline_anchor_at" | "capabilities" | "runtime_display" | "session_state"
 > &
   Partial<Omit<TimelineRuntimeOverlay, "runtime_display">>;
 
 export function isSessionClosed(
-  session: Pick<AgentSession, "runtime_display"> | null | undefined,
+  session: Pick<AgentSession, "session_state"> | null | undefined,
 ): boolean {
-  return session?.runtime_display?.lifecycle === "closed";
+  return session?.session_state.disposition.state === "closed";
 }
 
 /**
@@ -55,32 +56,23 @@ export function isSessionClosed(
 export type TimelineSignal = "attention" | "working" | "quiet" | "closed";
 
 export function resolveTimelineSignal(
-  session: Pick<AgentSession, "runtime_display" | "user_state">,
+  session: Pick<AgentSession, "session_state" | "user_state">,
   options: { connectivityHealthy?: boolean } = {},
 ): TimelineSignal {
   if (isSessionClosed(session)) return "closed";
   // A global connectivity banner owns severity; suppress per-row attention.
   if (options.connectivityHealthy === false) return "quiet";
 
-  const display = session.runtime_display;
-  // Curated needs_attention drives amber, NOT the noisy raw needs_user state.
-  // Gated on the user being active (parked/snoozed/archived rows don't shout),
-  // matching iOS SessionSummary.needsAttention so all surfaces stay in lockstep.
+  const facts = session.session_state;
   const userActive = session.user_state == null || session.user_state === "active";
-  if (userActive && display.needs_attention) return "attention";
-
-  if (display.state === "syncing_transcript") {
-    return display.activity_recency === "live" ? "working" : "quiet";
-  }
-
-  const tone = (display.tone ?? "").trim().toLowerCase();
-  const live = display.activity_recency === "live";
-  if (tone === "thinking" || tone === "running") {
-    // Only animate genuinely live work; a stale "running" must not pulse.
-    return live ? "working" : "quiet";
-  }
-  if (tone === "blocked" || tone === "stalled") return "attention";
+  if (userActive && facts.pending_interaction != null) return "attention";
+  if (facts.activity.state === "thinking" || facts.activity.state === "executing") return "working";
+  if (facts.activity.state === "blocked" || facts.activity.state === "stalled") return "attention";
   return "quiet";
+}
+
+export function getPrimaryPresentation(facts: SessionStateFacts) {
+  return facts.presentation.primary;
 }
 
 /** Spoken equivalent of the signal, so the dot's meaning reaches a11y. */

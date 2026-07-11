@@ -76,6 +76,25 @@ def test_session_response_model():
             "host_reattach_available": False,
             "reply_to_live_session_available": False,
         },
+        session_state={
+            "mode": "shadow",
+            "disposition": {"state": "open"},
+            "activity": {"state": "unknown"},
+            "control": {
+                "ownership": "unowned",
+                "connection": "not_applicable",
+                "actions": {
+                    "send_input": {"state": "unavailable", "reason": "observe_only"},
+                    "interrupt": {"state": "unavailable", "reason": "observe_only"},
+                    "terminate": {"state": "unavailable", "reason": "observe_only"},
+                    "reattach": {"state": "unavailable", "reason": "observe_only"},
+                    "resume": {"state": "unavailable", "reason": "observe_only"},
+                },
+            },
+            "transcript": {"convergence": "unknown"},
+            "host": {"state": "unknown"},
+            "presentation": {},
+        },
         runtime_display={
             "truth_tier": "none",
             "signal_tier": "none",

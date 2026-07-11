@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getRowControlPresentation, getRowTimeLabel } from "../SessionRow";
+import { makeSessionStateFacts } from "../../../test/sessionState";
 
 const NOW = Date.parse("2026-05-19T16:00:00Z");
 
@@ -30,11 +31,7 @@ describe("getRowTimeLabel", () => {
 describe("getRowControlPresentation", () => {
   it("shows live control when direct input is available", () => {
     expect(
-      getRowControlPresentation({
-        live_control_available: true,
-        host_reattach_available: true,
-        reply_to_live_session_available: true,
-      }),
+      getRowControlPresentation(makeSessionStateFacts({ access: "live_control" })),
     ).toMatchObject({
       label: "Live control",
       tone: "live",
@@ -43,12 +40,7 @@ describe("getRowControlPresentation", () => {
 
   it("shows reattach for managed sessions that are not live right now", () => {
     expect(
-      getRowControlPresentation({
-        live_control_available: false,
-        host_reattach_available: true,
-        reply_to_live_session_available: false,
-        control_label: "reattach",
-      }),
+      getRowControlPresentation(makeSessionStateFacts({ access: "reattach" })),
     ).toMatchObject({
       label: "Reattach",
       tone: "reattach",
@@ -57,13 +49,7 @@ describe("getRowControlPresentation", () => {
 
   it("distinguishes observe-only transcript tails from imported search-only sessions", () => {
     expect(
-      getRowControlPresentation({
-        live_control_available: false,
-        host_reattach_available: false,
-        reply_to_live_session_available: false,
-        observe_only: true,
-        control_label: "search-only",
-      }),
+      getRowControlPresentation(makeSessionStateFacts({ access: "observe_only" })),
     ).toMatchObject({
       label: "Observe only",
       tone: "observe",
@@ -72,31 +58,20 @@ describe("getRowControlPresentation", () => {
 
   it("falls back to search-only for imported or missing capability payloads", () => {
     expect(
-      getRowControlPresentation({
-        live_control_available: false,
-        host_reattach_available: false,
-        reply_to_live_session_available: false,
-        search_only: true,
-        control_label: "imported",
-      }),
+      getRowControlPresentation(makeSessionStateFacts({ access: "search_only" })),
     ).toMatchObject({
       label: "Search only",
       tone: "search",
     });
-    expect(getRowControlPresentation(null)).toMatchObject({
+    expect(getRowControlPresentation(makeSessionStateFacts({ access: null }))).toMatchObject({
       label: "Search only",
       tone: "search",
     });
   });
 
-  it("treats the server control label as canonical when legacy booleans disagree", () => {
+  it("treats the server state presentation as canonical", () => {
     expect(
-      getRowControlPresentation({
-        live_control_available: true,
-        host_reattach_available: true,
-        reply_to_live_session_available: true,
-        control_label: "reattach",
-      }),
+      getRowControlPresentation(makeSessionStateFacts({ access: "reattach" })),
     ).toMatchObject({
       label: "Reattach",
       tone: "reattach",

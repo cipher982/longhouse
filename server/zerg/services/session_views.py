@@ -13,6 +13,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from enum import Enum
+from types import SimpleNamespace
 from typing import Any
 from typing import Dict
 from typing import List
@@ -76,6 +77,8 @@ from zerg.services.session_runtime_display import TerminalReason
 from zerg.services.session_runtime_display import Tone
 from zerg.services.session_runtime_display import TruthTier
 from zerg.services.session_runtime_display import build_session_runtime_display
+from zerg.services.session_state_contract import SessionStateFacts
+from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_title import resolve_timeline_title
 from zerg.services.session_title import resolve_title_provenance
 from zerg.services.session_turns import hash_user_text
@@ -888,6 +891,7 @@ class SessionResponse(UTCBaseModel):
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (not human-initiated)")
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
+    session_state: SessionStateFacts = Field(..., description="Versioned orthogonal session facts and presentation")
     runtime_display: SessionRuntimeDisplayResponse = Field(..., description="Server-derived display state for clients")
     transcript_preview: Optional[SessionTranscriptPreviewResponse] = Field(
         None,
@@ -1684,6 +1688,23 @@ def build_session_response(
     from zerg.services.session_preferences import load_session_preferences
 
     preferences = load_session_preferences(session.id, standalone_session=session)
+    session_state = build_session_state_facts(
+        session=session,
+        runtime_view=runtime_overlay,
+        capabilities=capability_flags,
+        liveness=runtime_facts,
+        pause_request=pause_request,
+        launch_state=launch_state,
+        launch_error_code=launch_error_code,
+        launch_error_message=launch_error_message,
+        execution_lifetime=execution_lifetime,
+        last_activity_at=display_last_activity_at,
+        has_visible_transcript_preview=has_visible_transcript_preview,
+        has_pending_response_turn=has_pending_response_turn,
+        user_messages=session.user_messages or 0,
+        assistant_messages=session.assistant_messages or 0,
+        now=current_now,
+    )
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -1759,6 +1780,7 @@ def build_session_response(
             continue_targets=continue_targets,
             launch_lifecycle=archive_launch_lifecycle,
         ),
+        session_state=session_state,
         runtime_display=runtime_display,
         transcript_preview=transcript_preview_response,
         timeline_card=build_session_timeline_card_response(
@@ -1960,6 +1982,49 @@ def build_live_launch_placeholder_response(
         last_activity_at=started_at,
         now=current_now,
     )
+    placeholder_kernel_capabilities = KernelSessionCapabilities(
+        session_id=session_id,
+        thread_id=None,
+        run_id=None,
+        connection_id=None,
+        control_plane=None,
+        connection_state=None,
+        control_label="imported",
+        live_control_available=False,
+        host_reattach_available=False,
+        observe_only=False,
+        search_only=False,
+        can_send_input=False,
+        can_interrupt=False,
+        can_terminate=False,
+        can_tail_output=False,
+        can_resume=False,
+        staleness_reason="launch_pending",
+    )
+    placeholder_liveness = build_session_liveness_facts(
+        runtime_view=None,
+        capabilities=placeholder_kernel_capabilities,
+        last_activity_at=started_at,
+        now=current_now,
+    )
+    session_state = build_session_state_facts(
+        session=SimpleNamespace(
+            started_at=started_at,
+            ended_at=None,
+            launch_surface="web",
+            transcript_revision=0,
+        ),
+        runtime_view=None,
+        capabilities=placeholder_kernel_capabilities,
+        liveness=placeholder_liveness,
+        launch_state=launch_readiness.launch_state,
+        launch_error_code=launch_readiness.launch_error_code,
+        launch_error_message=launch_readiness.launch_error_message,
+        execution_lifetime=launch_readiness.execution_lifetime,
+        last_activity_at=started_at,
+        archive_state="pending",
+        now=current_now,
+    )
     return SessionResponse(
         id=session_id,
         provider=provider,
@@ -2012,6 +2077,7 @@ def build_live_launch_placeholder_response(
         is_sidechain=False,
         control=SessionControlResponse(),
         capabilities=capabilities,
+        session_state=session_state,
         runtime_display=runtime_display,
         transcript_preview=transcript_preview_response,
         timeline_card=build_session_timeline_card_response(

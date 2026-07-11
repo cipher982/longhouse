@@ -30,12 +30,14 @@ from zerg.services.session_pubsub import get_pubsub
 from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_DISPLAY_WINDOW
+from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import build_live_launch_placeholder_response
 from zerg.services.session_views import build_session_capabilities_response
 from zerg.services.session_views import build_session_runtime_display_response
 from zerg.services.session_views import build_session_timeline_card_response
+from zerg.services.session_views import derive_session_liveness_facts
 from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
@@ -63,6 +65,8 @@ def _pending_response_from_catalog(
     *,
     readiness: LiveLaunchReadinessView,
     runtime: LiveRuntimeState | None,
+    capability_flags: KernelSessionCapabilities,
+    now: datetime,
 ):
     response = build_live_launch_placeholder_response(readiness)
     title = _title(session, card)
@@ -91,6 +95,27 @@ def _pending_response_from_catalog(
         "is_idle": bool(ended_at is None and (runtime is None or runtime.phase not in {"thinking", "running"})),
     }
     runtime_display = response.runtime_display.model_copy(update=runtime_updates)
+    runtime_overlay = build_runtime_view(state=runtime, session=session, now=now) if runtime is not None else None
+    runtime_facts = derive_session_liveness_facts(
+        runtime_overlay=runtime_overlay,
+        capability_flags=capability_flags,
+        last_activity_at=last_activity_at,
+    )
+    session_state = build_session_state_facts(
+        session=session,
+        runtime_view=runtime_overlay,
+        capabilities=capability_flags,
+        liveness=runtime_facts,
+        launch_state=readiness.launch_state,
+        launch_error_code=readiness.launch_error_code,
+        launch_error_message=readiness.launch_error_message,
+        execution_lifetime=readiness.execution_lifetime,
+        last_activity_at=last_activity_at,
+        user_messages=int(card.user_messages or 0),
+        assistant_messages=int(card.assistant_messages or 0),
+        archive_state=card.archive_state,
+        now=now,
+    )
     launch_state = readiness.launch_state
     execution_lifetime = readiness.execution_lifetime
     return response.model_copy(
@@ -133,6 +158,7 @@ def _pending_response_from_catalog(
             "home_label": session.device_name or session.device_id,
             "is_writable_head": ended_at is None,
             "capabilities": capabilities,
+            "session_state": session_state,
             "runtime_display": runtime_display,
             "loop_mode": session.loop_mode or "assist",
             "user_state": session.user_state or "active",
@@ -169,6 +195,8 @@ def _response_from_catalog(
             card,
             readiness=readiness,
             runtime=runtime,
+            capability_flags=capability_flags,
+            now=now,
         )
 
     started_at = normalize_utc(session.started_at) or now
@@ -194,6 +222,26 @@ def _response_from_catalog(
         capability_flags=capability_flags,
         runtime_display=runtime_display,
         kernel_capabilities=capability_flags,
+    )
+    runtime_facts = derive_session_liveness_facts(
+        runtime_overlay=runtime_overlay,
+        capability_flags=capability_flags,
+        last_activity_at=last_activity_at,
+    )
+    session_state = build_session_state_facts(
+        session=session,
+        runtime_view=runtime_overlay,
+        capabilities=capability_flags,
+        liveness=runtime_facts,
+        launch_state=readiness.launch_state if readiness is not None else None,
+        launch_error_code=readiness.launch_error_code if readiness is not None else None,
+        launch_error_message=readiness.launch_error_message if readiness is not None else None,
+        execution_lifetime=readiness.execution_lifetime if readiness is not None else None,
+        last_activity_at=last_activity_at,
+        user_messages=int(card.user_messages or 0),
+        assistant_messages=int(card.assistant_messages or 0),
+        archive_state=card.archive_state,
+        now=now,
     )
     title = _title(session, card)
     return SessionResponse(
@@ -241,6 +289,7 @@ def _response_from_catalog(
         home_label=capability_flags.home_label,
         is_writable_head=runtime_display.lifecycle != "closed",
         capabilities=capabilities,
+        session_state=session_state,
         runtime_display=runtime_display,
         timeline_card=build_session_timeline_card_response(
             runtime_view=display_runtime_overlay,

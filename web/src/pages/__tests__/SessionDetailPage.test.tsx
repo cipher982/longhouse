@@ -14,6 +14,7 @@ import type {
   SessionRuntimeDisplay,
   AgentSessionTurn,
 } from "../../services/api/agents";
+import { makeSessionStateFacts } from "../../test/sessionState";
 import { TestRouter } from "../../test/test-utils";
 import SessionDetailPage from "../SessionDetailPage";
 
@@ -227,6 +228,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
         "zsh -lc 'exec longhouse-engine codex-bridge attach --session-id session-codex'",
     },
     capabilities: makeCapabilities(),
+    session_state: makeSessionStateFacts({ access: "live_control", activity: "executing" }),
     runtime_display: makeRuntimeDisplay(),
     timeline_card: {
       ownership: {

@@ -21,6 +21,7 @@ from pydantic import Field
 
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_liveness_facts import SessionLivenessFacts
+from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runtime import RUN_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.utils.time import normalize_utc
@@ -35,7 +36,6 @@ ActionState = Literal["available", "unavailable", "unknown"]
 TranscriptConvergence = Literal["current", "lagging", "unknown"]
 SessionMode = Literal["shadow", "helm", "console", "unknown"]
 
-_STARTING_LAUNCH_STATES = {"launching", "launching_unknown", "pending", "dispatched"}
 _ENDED_RUNTIME_STATES = {"session_ended", "process_gone", *RUN_TERMINAL_STATES}
 _ACTIVITY_MAP: dict[str, ActivityState] = {
     "thinking": "thinking",
@@ -63,6 +63,12 @@ class SessionRunFacts(_FrozenModel):
     started_at: datetime | None = None
     ended_at: datetime | None = None
     end_reason: str | None = None
+
+
+class SessionLaunchFacts(_FrozenModel):
+    state: Literal["pending", "dispatched", "failed", "adopted", "abandoned"]
+    error_code: str | None = None
+    error_message: str | None = None
 
 
 class SessionActivityFacts(_FrozenModel):
@@ -139,6 +145,7 @@ class SessionStateFacts(_FrozenModel):
     presentation_policy_version: int = Field(PRESENTATION_POLICY_VERSION, frozen=True)
     mode: SessionMode
     disposition: SessionDispositionFacts
+    launch: SessionLaunchFacts | None = None
     run: SessionRunFacts | None = None
     activity: SessionActivityFacts
     control: SessionControlFacts
@@ -195,17 +202,44 @@ def _activity(runtime_view: SessionRuntimeView | None) -> SessionActivityFacts:
     )
 
 
+def _launch(
+    *,
+    launch_state: str | None,
+    error_code: str | None,
+    error_message: str | None,
+) -> SessionLaunchFacts | None:
+    state_map = {
+        "launching": "pending",
+        "launching_unknown": "dispatched",
+        "live": "adopted",
+        "launch_failed": "failed",
+        "launch_orphaned": "abandoned",
+        "pending": "pending",
+        "dispatched": "dispatched",
+        "adopted": "adopted",
+        "failed": "failed",
+        "abandoned": "abandoned",
+    }
+    normalized = state_map.get(_clean(launch_state) or "")
+    if normalized is None:
+        return None
+    return SessionLaunchFacts(
+        state=normalized,
+        error_code=_clean(error_code),
+        error_message=_clean(error_message),
+    )
+
+
 def _run(
     *,
     session: Any,
     runtime_view: SessionRuntimeView | None,
     capabilities: KernelSessionCapabilities,
-    liveness: SessionLivenessFacts,
+    liveness: SessionLivenessFacts | None,
     activity: SessionActivityFacts,
-    launch_state: str | None,
+    launch: SessionLaunchFacts | None,
 ) -> SessionRunFacts | None:
-    normalized_launch = _clean(launch_state)
-    if normalized_launch in _STARTING_LAUNCH_STATES and capabilities.run_id is None:
+    if launch is not None and launch.state in {"pending", "dispatched"} and capabilities.run_id is None:
         return SessionRunFacts(lifecycle="starting", started_at=normalize_utc(getattr(session, "started_at", None)))
 
     terminal = _clean(runtime_view.terminal_state if runtime_view is not None else None)
@@ -276,6 +310,10 @@ def _control(
         connection: ConnectionState = "not_applicable"
     elif expired:
         connection = "unknown"
+    elif capabilities.live_control_available:
+        connection = "degraded" if _clean(capabilities.connection_state) == "degraded" else "connected"
+    elif capabilities.host_reattach_available:
+        connection = "disconnected"
     elif raw_connection in {"online", "attached"}:
         connection = "connected"
     elif raw_connection == "degraded":
@@ -396,12 +434,15 @@ def _transcript(
 def _primary(
     *,
     disposition: SessionDispositionFacts,
+    launch: SessionLaunchFacts | None,
     run: SessionRunFacts | None,
     activity: SessionActivityFacts,
     interaction: SessionPendingInteractionFacts | None,
 ) -> SessionPresentationLabel | None:
     if disposition.state == "closed":
         return SessionPresentationLabel(key="closed", label="Closed", tone="closed", observed_at=disposition.closed_at)
+    if launch is not None and launch.state in {"failed", "abandoned"}:
+        return SessionPresentationLabel(key="launch_failed", label="Launch failed", tone="blocked")
     if run is not None and run.lifecycle == "starting":
         return SessionPresentationLabel(key="starting", label="Starting", tone="active", observed_at=run.started_at)
     if interaction is not None:
@@ -483,9 +524,11 @@ def build_session_state_facts(
     session: Any,
     runtime_view: SessionRuntimeView | None,
     capabilities: KernelSessionCapabilities,
-    liveness: SessionLivenessFacts,
+    liveness: SessionLivenessFacts | None,
     pause_request: dict[str, Any] | None = None,
     launch_state: str | None = None,
+    launch_error_code: str | None = None,
+    launch_error_message: str | None = None,
     execution_lifetime: str | None = None,
     last_activity_at: datetime | None = None,
     has_visible_transcript_preview: bool = False,
@@ -498,15 +541,27 @@ def build_session_state_facts(
     """Project the target contract from legacy evidence without serving legacy copy."""
 
     current_now = _now(now)
+    if liveness is None:
+        liveness = build_session_liveness_facts(
+            runtime_view=runtime_view,
+            capabilities=capabilities,
+            last_activity_at=last_activity_at,
+            now=current_now,
+        )
     disposition = _disposition(session=session, runtime_view=runtime_view)
     activity = _activity(runtime_view)
+    launch = _launch(
+        launch_state=launch_state,
+        error_code=launch_error_code,
+        error_message=launch_error_message,
+    )
     run = _run(
         session=session,
         runtime_view=runtime_view,
         capabilities=capabilities,
         liveness=liveness,
         activity=activity,
-        launch_state=launch_state,
+        launch=launch,
     )
     control = _control(capabilities=capabilities, liveness=liveness, now=current_now)
     interaction = _interaction(pause_request)
@@ -522,6 +577,7 @@ def build_session_state_facts(
     )
     primary = _primary(
         disposition=disposition,
+        launch=launch,
         run=run,
         activity=activity,
         interaction=interaction,
@@ -543,6 +599,7 @@ def build_session_state_facts(
     return SessionStateFacts(
         mode=_mode(session=session, capabilities=capabilities, execution_lifetime=execution_lifetime),
         disposition=disposition,
+        launch=launch,
         run=run,
         activity=activity,
         control=control,
@@ -563,6 +620,7 @@ __all__ = [
     "SessionActivityFacts",
     "SessionControlFacts",
     "SessionDispositionFacts",
+    "SessionLaunchFacts",
     "SessionPendingInteractionFacts",
     "SessionPresentation",
     "SessionPresentationLabel",

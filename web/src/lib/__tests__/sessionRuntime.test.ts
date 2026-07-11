@@ -7,6 +7,7 @@ import {
   resolveTimelineSignal,
 } from "../sessionRuntime";
 import { getRuntimeDisplayCopy, getRuntimeOutcomeLabel } from "../sessionUtils";
+import { makeSessionStateFacts } from "../../test/sessionState";
 
 function makeRuntimeDisplay(
   overrides: Partial<TimelineRuntimeSession["runtime_display"]> = {},
@@ -37,12 +38,30 @@ function makeRuntimeDisplay(
 }
 
 function makeSession(overrides: Partial<TimelineRuntimeSession> = {}): TimelineRuntimeSession {
+  const display = overrides.runtime_display ?? makeRuntimeDisplay();
+  const activity = display.tone === "thinking"
+    ? "thinking"
+    : display.tone === "running"
+      ? "executing"
+      : display.tone === "blocked"
+        ? "blocked"
+        : display.tone === "stalled"
+          ? "stalled"
+          : display.tone === "idle"
+            ? "quiescent"
+            : "unknown";
   return {
     ended_at: "2026-03-21T12:00:00Z",
     last_activity_at: "2026-03-21T12:00:00Z",
     timeline_anchor_at: "2026-03-21T12:00:00Z",
     capabilities: null,
-    runtime_display: makeRuntimeDisplay(),
+    session_state: makeSessionStateFacts({
+      closed: display.lifecycle === "closed",
+      activity,
+      access: display.control_path === "managed" ? "live_control" : "search_only",
+      pendingInteraction: display.needs_attention,
+    }),
+    runtime_display: display,
     ...overrides,
   };
 }
@@ -114,14 +133,27 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.isIdle).toBe(true);
     expect(runtime.displayPhase).toBe("Closed");
     expect(runtime.tone).toBe("closed");
-    expect(isSessionClosed({ runtime_display: runtime.runtimeDisplay })).toBe(true);
+    expect(isSessionClosed({ session_state: makeSessionStateFacts({ closed: true }) })).toBe(true);
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
   });
 });
 
 describe("resolveTimelineSignal", () => {
-  const sig = (overrides: Partial<TimelineRuntimeSession["runtime_display"]>, opts = {}) =>
-    resolveTimelineSignal({ runtime_display: makeRuntimeDisplay(overrides) }, opts);
+  const sig = (overrides: Partial<TimelineRuntimeSession["runtime_display"]>, opts = {}) => {
+    const tone = overrides.tone;
+    const activity = (tone === "running" || tone === "thinking") && overrides.activity_recency === "live"
+      ? (tone === "thinking" ? "thinking" : "executing")
+      : tone === "blocked" || tone === "stalled"
+        ? tone
+        : "unknown";
+    return resolveTimelineSignal({
+      session_state: makeSessionStateFacts({
+        closed: overrides.lifecycle === "closed",
+        activity,
+        pendingInteraction: overrides.needs_attention,
+      }),
+    }, opts);
+  };
 
   it("closed wins over everything", () => {
     expect(sig({ lifecycle: "closed", needs_attention: true, tone: "running" })).toBe("closed");
@@ -136,8 +168,8 @@ describe("resolveTimelineSignal", () => {
     expect(sig({ tone: "thinking", activity_recency: "live" })).toBe("working");
   });
 
-  it("live transcript handoff is working even though the backend tone stays active", () => {
-    expect(sig({ state: "syncing_transcript", tone: "active", activity_recency: "live" })).toBe("working");
+  it("transcript convergence never fabricates working activity", () => {
+    expect(sig({ state: "syncing_transcript", tone: "active", activity_recency: "live" })).toBe("quiet");
     expect(sig({ state: "syncing_transcript", tone: "active", activity_recency: "stale" })).toBe("quiet");
   });
 
@@ -160,12 +192,12 @@ describe("resolveTimelineSignal", () => {
 
   it("does not shout amber for a parked session (matches iOS isUserActive gate)", () => {
     const parked = resolveTimelineSignal({
-      runtime_display: makeRuntimeDisplay({ needs_attention: true }),
+      session_state: makeSessionStateFacts({ pendingInteraction: true }),
       user_state: "parked",
     });
     expect(parked).toBe("quiet");
     const active = resolveTimelineSignal({
-      runtime_display: makeRuntimeDisplay({ needs_attention: true }),
+      session_state: makeSessionStateFacts({ pendingInteraction: true }),
       user_state: "active",
     });
     expect(active).toBe("attention");
