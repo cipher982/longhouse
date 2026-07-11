@@ -9520,6 +9520,11 @@ export interface components {
         };
         /** SourceLineClaimsResponse */
         SourceLineClaimsResponse: {
+            /**
+             * Proof Version
+             * @default head-source-bytes-ro-v1
+             */
+            proof_version: string;
             /** Present */
             present: components["schemas"]["SourceLineClaimResponseItem"][];
             /** Missing */
