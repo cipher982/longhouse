@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -246,6 +247,27 @@ async def test_archive_read_proxy_reaps_child_when_request_is_cancelled(monkeypa
     assert killed_groups == [(123, 9)]
     assert child.killed is False
     assert child.reaped is True
+
+
+@pytest.mark.asyncio
+async def test_archive_read_proxy_rejects_missing_machine_auth_before_spawning(monkeypatch):
+    spawned = False
+
+    async def spawn(*_args, **_kwargs):
+        nonlocal spawned
+        spawned = True
+
+    monkeypatch.setattr(
+        "zerg.services.archive_read_proxy.get_settings",
+        lambda: SimpleNamespace(auth_disabled=False, testing=False),
+    )
+    monkeypatch.setattr("asyncio.create_subprocess_exec", spawn)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await proxy_archive_request(_request("/agents/sessions/semantic", query="query=test"))
+
+    assert exc_info.value.status_code == 401
+    assert spawned is False
 
 
 def test_archive_read_child_serves_real_archive_route(tmp_path):

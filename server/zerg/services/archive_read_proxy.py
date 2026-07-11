@@ -23,6 +23,8 @@ from fastapi import Request
 from fastapi import status
 from starlette.responses import Response
 
+from zerg.config import get_settings
+
 logger = logging.getLogger(__name__)
 
 _TIMELINE_SESSION_READ = re.compile(
@@ -105,10 +107,21 @@ def should_proxy_archive_request(request: Request, *, routes: Iterable[Any] = ()
 
 
 async def proxy_archive_request(request: Request) -> Response:
+    path = normalized_api_path(request)
+    settings = get_settings()
+    if path.startswith("/agents/") and not settings.auth_disabled and not settings.testing and not request.headers.get("X-Agents-Token"):
+        # Authentication is a live-catalog concern. Reject a missing machine
+        # token before waiting for scarce cold-read capacity so archive pressure
+        # cannot change the endpoint's 401 contract.
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication - provide X-Agents-Token header",
+        )
+
     body = await request.body()
     payload = {
         "method": request.method.upper(),
-        "path": normalized_api_path(request),
+        "path": path,
         "query": request.url.query,
         "headers": dict(request.headers),
         "body_b64": base64.b64encode(body).decode("ascii"),
