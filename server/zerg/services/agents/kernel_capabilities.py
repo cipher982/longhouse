@@ -480,6 +480,30 @@ def _payload_from_rows(
     )
 
 
+def project_capabilities_from_rows(
+    *,
+    session_id,
+    thread,
+    latest_run,
+    connections: list,
+    now: datetime | None = None,
+) -> KernelSessionCapabilities:
+    """Project canonical capability truth from kernel-compatible ORM rows.
+
+    The bounded live catalog mirrors the thread/run/connection kernel using
+    separate ORM classes.  Keep the capability rules in one place while
+    allowing either store's rows to feed the same deterministic projector.
+    """
+
+    return _payload_from_rows(
+        sid=str(session_id),
+        thread=thread,
+        latest_run=latest_run,
+        connections=connections,
+        now=now or datetime.now(timezone.utc),
+    )
+
+
 def project_capabilities_bulk(db: Session, *, session_ids: list) -> dict:
     """Project capabilities for many sessions with three batched queries.
 
@@ -539,6 +563,7 @@ def project_capabilities_bulk(db: Session, *, session_ids: list) -> dict:
 
 __all__ = [
     "KernelSessionCapabilities",
+    "project_capabilities_from_rows",
     "project_session_capabilities",
     "project_capabilities_bulk",
 ]
