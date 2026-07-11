@@ -704,13 +704,13 @@ def test_archive_ingest_queue_timeout_returns_retryable_backpressure(tmp_path, m
         assert response.headers["X-Ingest-Error-Kind"] == "archive_ingest_backpressure"
         assert response.headers["X-Ingest-Admission-State"] == "writer_queue_timeout"
         assert response.headers["X-Ingest-Queue-Timeout-Label"] == "ingest-replay"
-        assert response.headers["X-Ingest-Queue-Timeout-Seconds"] == "6.0"
+        assert response.headers["X-Ingest-Queue-Timeout-Seconds"] == "15.0"
     finally:
         api_app.dependency_overrides.clear()
 
 
 def test_archive_ingest_request_budget_exhaustion_returns_retryable_backpressure(tmp_path, monkeypatch):
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS", "0.05")
+    monkeypatch.setattr("zerg.routers.agents_ingest._ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS", 0.05)
 
     class SlowSuccessfulSerializer:
         is_configured = True

@@ -127,9 +127,9 @@ _LIVE_INGEST_WRITER_QUEUE_HARD_LIMIT = 10
 _LIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 5_000.0
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
 _ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS = 16
-_ARCHIVE_INGEST_QUEUE_TIMEOUT_SECONDS = 6.0
-_ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS = 6.0
-_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS = 24.0
+_ARCHIVE_INGEST_QUEUE_TIMEOUT_SECONDS = 15.0
+_ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS = 15.0
+_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS = 60.0
 _INGEST_STAGE_HEADER_LIMIT = 8
 _UNTRACED_INGEST_MAX_EVENTS = 200
 _UNTRACED_INGEST_MAX_SOURCE_LINES = 200
@@ -151,22 +151,19 @@ def _ingest_lane_for_label(label: str) -> str:
 def _ingest_write_timeout_for_label(label: str) -> float | None:
     if label not in _ARCHIVE_INGEST_LABELS:
         return None
-    timeout = _env_float("LONGHOUSE_ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS", _ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS)
-    return timeout if timeout > 0 else None
+    return _ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS
 
 
 def _ingest_queue_timeout_for_label(label: str) -> float | None:
     if label not in _ARCHIVE_INGEST_LABELS:
         return None
-    timeout = _env_float("LONGHOUSE_ARCHIVE_INGEST_QUEUE_TIMEOUT_SECONDS", _ARCHIVE_INGEST_QUEUE_TIMEOUT_SECONDS)
-    return timeout if timeout > 0 else None
+    return _ARCHIVE_INGEST_QUEUE_TIMEOUT_SECONDS
 
 
 def _ingest_request_budget_for_label(label: str) -> float | None:
     if label not in _ARCHIVE_INGEST_LABELS:
         return None
-    budget = _env_float("LONGHOUSE_ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS", _ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS)
-    return budget if budget > 0 else None
+    return _ARCHIVE_INGEST_REQUEST_BUDGET_SECONDS
 
 
 def _cap_timeout_to_remaining(timeout: float | None, remaining_seconds: float) -> float | None:
