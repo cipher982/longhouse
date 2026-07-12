@@ -446,13 +446,14 @@ class LegacyCorpusConverter:
             # A slim source-line row may still have an event copy. The source
             # line is authoritative when present; event raw is only its bounded
             # recovery fallback after archive lookup failed.
-            events_by_key = {
-                (event.source_path, int(event.source_offset)): event
-                for event in db.query(AgentEvent)
+            events_by_key: dict[tuple[str, int], list[AgentEvent]] = defaultdict(list)
+            for event in (
+                db.query(AgentEvent)
                 .filter(AgentEvent.session_id == session_id, AgentEvent.id <= watermark.event_id)
                 .filter(AgentEvent.source_path.isnot(None), AgentEvent.source_offset.isnot(None))
                 .order_by(AgentEvent.id.asc())
-            }
+            ):
+                events_by_key[(event.source_path, int(event.source_offset))].append(event)
             records = []
             physical_keys: set[tuple[str, int, str]] = set()
             covered = 0
@@ -462,22 +463,45 @@ class LegacyCorpusConverter:
                 provenance_kind = "legacy_source_lines"
                 if value is None:
                     value = archive.get((row.source_path, int(row.source_offset), row.line_hash))
+                if value is not None:
+                    data = value.encode("utf-8")
+                    if len(data) > MAX_RECORD_BYTES or hashlib.sha256(data).hexdigest() != row.line_hash:
+                        value = None
+                matching_events = events_by_key.get((row.source_path, int(row.source_offset)), ())
                 if value is None:
-                    fallback = events_by_key.get((row.source_path, int(row.source_offset)))
-                    value = decode_raw_json(fallback) if fallback is not None else None
+                    value = next(
+                        (
+                            raw
+                            for event in matching_events
+                            if (raw := decode_raw_json(event)) is not None
+                            and len(raw.encode("utf-8")) <= MAX_RECORD_BYTES
+                            and hashlib.sha256(raw.encode("utf-8")).hexdigest() == row.line_hash
+                        ),
+                        None,
+                    )
                     provenance_kind = "legacy_fallback"
                 if value is None:
+                    value = _normalized_event_source(matching_events)
+                    provenance_kind = "legacy_normalized_event"
                     missing += 1
+                if value is None:
                     continue
                 data = value.encode("utf-8")
                 if len(data) > MAX_RECORD_BYTES:
-                    missing += 1
                     continue
                 raw_hash = hashlib.sha256(data).hexdigest()
-                if raw_hash != row.line_hash:
-                    missing += 1
-                    continue
-                covered += 1
+                if provenance_kind != "legacy_normalized_event":
+                    if raw_hash != row.line_hash:
+                        derived = _normalized_event_source(matching_events)
+                        if derived is None or len(derived.encode("utf-8")) > MAX_RECORD_BYTES:
+                            missing += 1
+                            continue
+                        data = derived.encode("utf-8")
+                        raw_hash = hashlib.sha256(data).hexdigest()
+                        provenance_kind = "legacy_normalized_event"
+                        missing += 1
+                    else:
+                        covered += 1
                 physical_key = (row.source_path, int(row.source_offset), raw_hash)
                 if physical_key not in physical_keys:
                     physical_keys.add(physical_key)
@@ -504,14 +528,19 @@ class LegacyCorpusConverter:
         missing = 0
         for event in events:
             value = decode_raw_json(event)
+            provenance_kind = "legacy_fallback"
             if value is None or len(value.encode("utf-8")) > MAX_RECORD_BYTES:
                 missing += 1
+                value = _normalized_event_source((event,))
+                provenance_kind = "legacy_normalized_event"
+            if value is None or len(value.encode("utf-8")) > MAX_RECORD_BYTES:
                 continue
             data = value.encode("utf-8")
             source_path = event.source_path or f"legacy-event:{event.id}"
             source_offset = int(event.source_offset if event.source_offset is not None else event.id)
             physical_key = (source_path, source_offset, hashlib.sha256(data).hexdigest())
-            covered += 1
+            if provenance_kind != "legacy_normalized_event":
+                covered += 1
             if physical_key not in physical_keys:
                 physical_keys.add(physical_key)
                 records.append(
@@ -520,7 +549,7 @@ class LegacyCorpusConverter:
                         source_path=source_path,
                         source_offset=source_offset,
                         branch_id=int(event.branch_id or 0),
-                        provenance_kind="legacy_fallback",
+                        provenance_kind=provenance_kind,
                         event=event,
                     )
                 )
@@ -729,17 +758,17 @@ def _raw_commit(*, session, raw_spec, sealed_raw, render_spec, sealed_render, te
         },
         "session_facts": {
             "environment": session.environment,
-            "project": session.project,
-            "cwd": session.cwd,
-            "git_repo": session.git_repo,
-            "git_branch": session.git_branch,
+            "project": _optional_text(session.project),
+            "cwd": _optional_text(session.cwd),
+            "git_repo": _optional_text(session.git_repo),
+            "git_branch": _optional_text(session.git_branch),
             "started_at": _aware(session.started_at).isoformat(),
             "last_activity_at": _aware(session.last_activity_at or session.started_at).isoformat(),
             "ended_at": _aware(session.ended_at).isoformat() if session.ended_at else None,
-            "origin_kind": session.origin_kind,
+            "origin_kind": _optional_text(session.origin_kind),
             "hidden_from_default_timeline": bool(session.hidden_from_default_timeline),
-            "launch_actor": session.launch_actor,
-            "launch_surface": session.launch_surface,
+            "launch_actor": _optional_text(session.launch_actor),
+            "launch_surface": _optional_text(session.launch_surface),
         },
         "sealed_at": datetime.now(UTC).isoformat(),
     }
@@ -747,6 +776,40 @@ def _raw_commit(*, session, raw_spec, sealed_raw, render_spec, sealed_render, te
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _optional_text(value: object) -> str | None:
+    normalized = str(value).strip() if value is not None else ""
+    return normalized or None
+
+
+def _normalized_event_source(events: tuple[AgentEvent, ...] | list[AgentEvent]) -> str | None:
+    if not events:
+        return None
+    payload = {
+        "schema": "legacy_normalized_event.v1",
+        "events": [
+            {
+                "branch_id": event.branch_id,
+                "content_text": event.content_text,
+                "event_id": event.id,
+                "role": event.role,
+                "source_offset": event.source_offset,
+                "source_path": event.source_path,
+                "thread_id": str(event.thread_id) if event.thread_id is not None else None,
+                "timestamp": _aware(event.timestamp).isoformat(),
+                "tool_call_id": event.tool_call_id,
+                "tool_input_json": event.tool_input_json,
+                "tool_name": event.tool_name,
+                "tool_output_text": event.tool_output_text,
+            }
+            for event in events
+        ],
+    }
+    try:
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    except (TypeError, ValueError):
+        return None
 
 
 def _event_tuple(event: AgentEvent, session_id: UUID, *, head_branch_id: int | None) -> tuple[object, ...]:

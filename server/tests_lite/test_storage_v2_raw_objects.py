@@ -4,6 +4,7 @@ from dataclasses import replace
 from uuid import UUID
 
 import pytest
+
 from zerg.storage_v2.raw_objects import MAX_RECORD_BYTES
 from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.storage_v2.raw_objects import RawObjectSpec
@@ -107,7 +108,10 @@ def test_record_ordinal_round_trip_and_identity_excludes_session_membership(tmp_
         records=records,
     )
     first = seal_raw_object(tmp_path / "first", spec)
-    relinked = seal_raw_object(tmp_path / "relinked", replace(spec, session_id=UUID("018f0c3a-7b2d-7f10-8a11-000000000001")))
+    relinked = seal_raw_object(
+        tmp_path / "relinked",
+        replace(spec, session_id=UUID("018f0c3a-7b2d-7f10-8a11-000000000001")),
+    )
 
     assert first.envelope_id == relinked.envelope_id
     assert first.payload_hash != relinked.payload_hash
@@ -119,3 +123,10 @@ def test_legacy_source_line_provenance_round_trips(tmp_path):
     sealed = seal_raw_object(tmp_path, spec)
     decoded = read_raw_object(tmp_path, sealed.object_path, expected_object_hash=sealed.object_hash)
     assert decoded.spec.provenance_kind == "legacy_source_lines"
+
+
+def test_legacy_normalized_event_provenance_round_trips(tmp_path):
+    spec = replace(_spec(), provenance_kind="legacy_normalized_event")
+    sealed = seal_raw_object(tmp_path, spec)
+    decoded = read_raw_object(tmp_path, sealed.object_path, expected_object_hash=sealed.object_hash)
+    assert decoded.spec.provenance_kind == "legacy_normalized_event"

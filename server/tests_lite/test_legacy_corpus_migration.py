@@ -121,6 +121,7 @@ async def test_inventory_freezes_rowid_high_watermark_and_registers_exact_counts
 @pytest.mark.asyncio
 async def test_converter_prefers_exact_source_lines_and_is_deterministic(legacy_db, tmp_path: Path):
     session = _session(provider="claude")
+    session.git_branch = " "
     raw = '{"type":"user","message":"exact bytes"}'
     with legacy_db() as db:
         db.add(session)
@@ -155,6 +156,7 @@ async def test_converter_prefers_exact_source_lines_and_is_deterministic(legacy_
     commits = [payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2"]
     assert commits[0]["provenance_kind"] == "legacy_source_lines"
     assert commits[0]["owner_id"] == "7"
+    assert commits[0]["session_facts"]["git_branch"] is None
     assert commits[0]["record_hashes"] == [hashlib.sha256(raw.encode()).hexdigest()]
     assert commits[0]["render_manifest"]["event_count"] == 1
     assert commits[0]["source_epoch"] == commits[1]["source_epoch"]
@@ -213,9 +215,49 @@ async def test_missing_legacy_raw_and_media_finish_as_explicit_coverage_gaps(leg
 
     assert result.source_covered == 0
     assert result.source_missing == 1
-    assert result.parity_matches is False
+    assert result.parity_matches is True
     assert len(result.output_proof_hash) == 64
-    assert not any(method == "storage.raw_object.commit.v2" for method, _ in catalog.calls)
+    commit = next(payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2")
+    assert commit["provenance_kind"] == "legacy_normalized_event"
+
+
+@pytest.mark.asyncio
+async def test_hash_mismatched_source_line_preserves_normalized_events_as_derived_evidence(legacy_db, tmp_path: Path):
+    session = _session(provider="claude")
+    raw = '{"type":"user","message":"corrupt hash"}'
+    with legacy_db() as db:
+        db.add(session)
+        db.flush()
+        db.add(
+            AgentSourceLine(
+                session_id=session.id,
+                source_path="session.jsonl",
+                source_offset=7,
+                branch_id=0,
+                raw_json=raw,
+                raw_json_codec=0,
+                line_hash=hashlib.sha256(b"different bytes").hexdigest(),
+            )
+        )
+        db.add(_event(session.id, raw_json=None, source_path="session.jsonl", source_offset=7))
+        db.commit()
+        watermark = freeze_high_watermark(db)
+
+    catalog = FakeCatalog()
+    converter = LegacyCorpusConverter(
+        session_factory=legacy_db,
+        catalog=catalog,
+        object_root=tmp_path / "objects-v2",
+        tenant_id="tenant-a",
+    )
+    with legacy_db() as db:
+        result = await converter.convert_session(db, session.id, watermark)
+
+    assert result.source_covered == 0
+    assert result.source_missing == 1
+    assert result.parity_matches is True
+    commit = next(payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2")
+    assert commit["provenance_kind"] == "legacy_normalized_event"
 
 
 @pytest.mark.asyncio

@@ -305,7 +305,12 @@ def _identity(spec: RawObjectSpec) -> EnvelopeIdentity:
 
 
 def _validate_spec(spec: RawObjectSpec) -> None:
-    if spec.provenance_kind not in {"native", "legacy_source_lines", "legacy_fallback"}:
+    if spec.provenance_kind not in {
+        "native",
+        "legacy_source_lines",
+        "legacy_fallback",
+        "legacy_normalized_event",
+    }:
         raise RawObjectValidationError("unsupported provenance_kind")
     if len(spec.records) > MAX_RECORDS:
         raise RawObjectValidationError("raw object exceeds 10000 records")
