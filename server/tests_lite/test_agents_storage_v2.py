@@ -6,6 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from uuid import UUID
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -19,10 +20,13 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.storage_v2.contracts import EnvelopeIdentity
+from zerg.storage_v2.contracts import RenderDetailCursor
 from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
+from zerg.storage_v2.contracts import render_detail_cursor_token
 from zerg.storage_v2.raw_objects import read_raw_object
 from zerg.storage_v2.render_objects import seal_render_object
+from zerg.storage_v2.render_objects import read_render_object
 
 
 class _AdmissionOnlyPool:
@@ -45,6 +49,10 @@ class _InlineRenderPool:
     async def seal(self, spec, *, lane):
         assert lane in {"live", "repair"}
         return seal_render_object(self.root, spec)
+
+    async def read(self, object_path, expected_object_hash, *, lane):
+        assert lane == "user"
+        return read_render_object(self.root, object_path, expected_object_hash=expected_object_hash)
 
 
 def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"hello\n") -> dict:
@@ -84,6 +92,21 @@ def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"he
                     "event_subordinal": 0,
                     "role": "user",
                     "content_text": "hello",
+                    "tool_name": None,
+                    "tool_input_json": None,
+                    "tool_output_text": None,
+                    "tool_call_id": None,
+                    "thread_id": None,
+                    "branch_kind": None,
+                    "raw_record_ordinal": 0,
+                },
+                {
+                    "event_id": "assistant-1",
+                    "order_time_us": 1_720_780_400_000_001,
+                    "source_position": 1,
+                    "event_subordinal": 0,
+                    "role": "assistant",
+                    "content_text": "world",
                     "tool_name": None,
                     "tool_input_json": None,
                     "tool_output_text": None,
@@ -174,6 +197,44 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
             )
             assert replay.status_code == 200
             assert replay.json() == receipt
+
+            detail = await client.get(f"/agents/storage/v2/sessions/{payload['session_id']}/events?limit=1")
+            assert detail.status_code == 200, detail.text
+            page = detail.json()
+            assert page["generation_id"] == payload["render"]["generation_id"]
+            assert page["events"][0]["event_id"] == "user-1"
+            assert page["events"][0]["content_text"] == "hello"
+            assert page["events"][0]["raw_locator"]["source_envelope_id"] == payload["expected_envelope_id"]
+            assert page["has_more"] is True
+            assert page["next_cursor"]
+            second = await client.get(
+                f"/agents/storage/v2/sessions/{payload['session_id']}/events",
+                params={"cursor": page["next_cursor"], "limit": 1},
+            )
+            assert second.status_code == 200, second.text
+            assert second.json()["events"][0]["event_id"] == "assistant-1"
+            assert second.json()["has_more"] is False
+
+            stale_cursor = render_detail_cursor_token(
+                RenderDetailCursor(
+                    session_id=UUID(payload["session_id"]),
+                    render_generation=uuid4(),
+                    order_time_us=1_720_780_400_000_000,
+                    machine_id="cinder",
+                    provider="codex",
+                    opaque_source_id="history.jsonl",
+                    source_epoch=UUID(payload["source_epoch"]),
+                    source_position=0,
+                    event_subordinal=0,
+                )
+            )
+            stale = await client.get(
+                f"/agents/storage/v2/sessions/{payload['session_id']}/events",
+                params={"cursor": stale_cursor},
+            )
+            assert stale.status_code == 409
+            assert stale.json()["detail"]["code"] == "stale_generation"
+            assert stale.json()["detail"]["details"]["current_generation_id"] == payload["render"]["generation_id"]
 
         manifest = await catalog.call(
             "storage.raw_object.exists.batch.v2",

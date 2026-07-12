@@ -160,19 +160,30 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
             {
                 "session_id": str(session_id),
                 "generation_id": str(generation_id),
-                "after_commit_seq": None,
+                "after_order_key": None,
                 "limit": 100,
             },
         )
         assert render["stale_generation"] is False
         assert render["generation"]["state"] == "current"
         assert render["objects"][0]["source_envelope_id"] == raw["envelope_id"]
+        exhausted = await client.call(
+            "storage.session.render_manifest.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(generation_id),
+                "after_order_key": render["objects"][0]["last_order_key"],
+                "limit": 100,
+            },
+        )
+        assert exhausted["objects"] == []
+        assert exhausted["objects_truncated"] is False
         stale = await client.call(
             "storage.session.render_manifest.v2",
             {
                 "session_id": str(session_id),
                 "generation_id": str(uuid4()),
-                "after_commit_seq": None,
+                "after_order_key": None,
                 "limit": 100,
             },
         )

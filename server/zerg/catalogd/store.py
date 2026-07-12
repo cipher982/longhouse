@@ -20,6 +20,7 @@ from sqlalchemy import func
 from sqlalchemy import insert
 from sqlalchemy import or_
 from sqlalchemy import select
+from sqlalchemy import tuple_
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
@@ -3469,6 +3470,10 @@ class CatalogStore:
                         event_count=render_manifest["event_count"],
                         first_order_key=render_manifest["first_order_key"],
                         last_order_key=render_manifest["last_order_key"],
+                        **_render_order_columns(
+                            render_manifest["first_order_key"],
+                            render_manifest["last_order_key"],
+                        ),
                         commit_seq=commit_seq,
                         created_at=commit_time,
                     )
@@ -3654,7 +3659,7 @@ class CatalogStore:
         *,
         session_id: UUID,
         generation_id: UUID | None,
-        after_commit_seq: int | None,
+        after_order_key: str | None,
         limit: int,
     ) -> dict[str, Any]:
         session_table = StorageSession.__table__
@@ -3686,14 +3691,41 @@ class CatalogStore:
                 statement = select(object_table).where(
                     object_table.c.generation_id == requested_generation,
                     object_table.c.retired_at.is_(None),
+                    object_table.c.event_count > 0,
                 )
-                if after_commit_seq is not None:
-                    statement = statement.where(object_table.c.commit_seq > after_commit_seq)
-                rows = (
-                    connection.execute(statement.order_by(object_table.c.commit_seq.asc(), object_table.c.object_id.asc()).limit(limit))
+                if after_order_key is not None:
+                    after_values = tuple(json.loads(after_order_key))
+                    statement = statement.where(
+                        tuple_(
+                            object_table.c.last_order_time_us,
+                            object_table.c.last_machine_id,
+                            object_table.c.last_provider,
+                            object_table.c.last_opaque_source_id,
+                            object_table.c.last_source_epoch,
+                            object_table.c.last_source_position,
+                            object_table.c.last_event_subordinal,
+                        )
+                        > after_values
+                    )
+                rows = list(
+                    connection.execute(
+                        statement.order_by(
+                            object_table.c.first_order_time_us.asc(),
+                            object_table.c.first_machine_id.asc(),
+                            object_table.c.first_provider.asc(),
+                            object_table.c.first_opaque_source_id.asc(),
+                            object_table.c.first_source_epoch.asc(),
+                            object_table.c.first_source_position.asc(),
+                            object_table.c.first_event_subordinal.asc(),
+                            object_table.c.object_id.asc(),
+                        ).limit(limit + 1)
+                    )
                     .mappings()
                     .all()
                 )
+            objects_truncated = len(rows) > limit
+            if objects_truncated:
+                rows = rows[:limit]
             return {
                 "found": session_row is not None and deleted is None,
                 "deleted": deleted is not None,
@@ -3702,6 +3734,7 @@ class CatalogStore:
                 "current_generation_id": current_generation,
                 "generation": _render_generation_dto(generation_row) if generation_row is not None else None,
                 "objects": [_render_object_manifest_dto(row) for row in rows],
+                "objects_truncated": objects_truncated,
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
             }
@@ -4955,6 +4988,23 @@ def _minimum_order_key(left: object, right: object) -> str | None:
 def _maximum_order_key(left: object, right: object) -> str | None:
     values = [value for value in (left, right) if value is not None]
     return max(values, key=lambda value: tuple(json.loads(str(value)))) if values else None
+
+
+def _render_order_columns(first: object, last: object) -> dict[str, object | None]:
+    values: dict[str, object | None] = {}
+    fields = (
+        "order_time_us",
+        "machine_id",
+        "provider",
+        "opaque_source_id",
+        "source_epoch",
+        "source_position",
+        "event_subordinal",
+    )
+    for prefix, raw in (("first", first), ("last", last)):
+        decoded = json.loads(str(raw)) if raw is not None else [None] * len(fields)
+        values.update({f"{prefix}_{field}": value for field, value in zip(fields, decoded, strict=True)})
+    return values
 
 
 def _storage_session_dto(row) -> dict[str, Any]:

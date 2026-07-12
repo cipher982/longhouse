@@ -190,13 +190,49 @@ class RenderObject(CatalogBase):
     event_count = Column(Integer, nullable=False)
     first_order_key = Column(Text, nullable=True)
     last_order_key = Column(Text, nullable=True)
+    first_order_time_us = Column(BigInteger, nullable=True)
+    first_machine_id = Column(String(255), nullable=True)
+    first_provider = Column(String(32), nullable=True)
+    first_opaque_source_id = Column(Text, nullable=True)
+    first_source_epoch = Column(String(36), nullable=True)
+    first_source_position = Column(BigInteger, nullable=True)
+    first_event_subordinal = Column(BigInteger, nullable=True)
+    last_order_time_us = Column(BigInteger, nullable=True)
+    last_machine_id = Column(String(255), nullable=True)
+    last_provider = Column(String(32), nullable=True)
+    last_opaque_source_id = Column(Text, nullable=True)
+    last_source_epoch = Column(String(36), nullable=True)
+    last_source_position = Column(BigInteger, nullable=True)
+    last_event_subordinal = Column(BigInteger, nullable=True)
     commit_seq = Column(BigInteger, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
     retired_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     __table_args__ = (
         UniqueConstraint("generation_id", "source_envelope_id", name="uq_render_object_generation_source"),
-        Index("ix_render_objects_generation_order", "generation_id", "first_order_key", "object_id"),
+        Index(
+            "ix_render_objects_generation_first_order",
+            "generation_id",
+            "first_order_time_us",
+            "first_machine_id",
+            "first_provider",
+            "first_opaque_source_id",
+            "first_source_epoch",
+            "first_source_position",
+            "first_event_subordinal",
+            "object_id",
+        ),
+        Index(
+            "ix_render_objects_generation_last_order",
+            "generation_id",
+            "last_order_time_us",
+            "last_machine_id",
+            "last_provider",
+            "last_opaque_source_id",
+            "last_source_epoch",
+            "last_source_position",
+            "last_event_subordinal",
+        ),
     )
 
 

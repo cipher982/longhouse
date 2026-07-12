@@ -220,6 +220,19 @@ def _safe_additive_columns(engine: Engine, metadata: MetaData) -> list[tuple[str
     return [(table_name, column_name) for table_name, column_name, _ddl in pending]
 
 
+def _create_declared_indexes(engine: Engine, metadata: MetaData) -> None:
+    """Create model-declared indexes after additive columns exist.
+
+    SQLAlchemy's ``create_all`` skips indexes when their table already exists.
+    Catalog v2 is still pre-cutover, so startup may install these bounded-table
+    indexes now rather than leaving production silently unindexed.
+    """
+
+    for table in metadata.sorted_tables:
+        for index in table.indexes:
+            index.create(bind=engine, checkfirst=True)
+
+
 def _user_version(connection) -> int:
     return int(connection.exec_driver_sql("PRAGMA user_version").scalar_one())
 
@@ -317,6 +330,9 @@ def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
     _safe_additive_columns(engine, LiveBase.metadata)
     _safe_additive_columns(engine, CatalogBase.metadata)
     _safe_additive_columns(engine, _catalog_metadata)
+    _create_declared_indexes(engine, LiveBase.metadata)
+    _create_declared_indexes(engine, CatalogBase.metadata)
+    _create_declared_indexes(engine, _catalog_metadata)
 
     if not has_meta_table:
         now = datetime.now(UTC)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import re
 import struct
@@ -15,6 +16,7 @@ _PROVIDER_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}\Z")
 _RANGE_KINDS = {"byte_offset": 1, "record_ordinal": 2}
 _CURSOR_MAGIC = b"LHC2"
 _SHA256_HEX_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+_BASE64URL_PATTERN = re.compile(r"[A-Za-z0-9_-]+\Z")
 
 
 def _canonical_utf8(value: str, *, field: str) -> bytes:
@@ -158,3 +160,68 @@ def encode_render_detail_cursor(cursor: RenderDetailCursor) -> bytes:
 
 def render_detail_cursor_token(cursor: RenderDetailCursor) -> str:
     return base64.urlsafe_b64encode(encode_render_detail_cursor(cursor)).rstrip(b"=").decode("ascii")
+
+
+def decode_render_detail_cursor_token(token: str) -> RenderDetailCursor:
+    if not isinstance(token, str) or not token or len(token) > 8_192 or not _BASE64URL_PATTERN.fullmatch(token):
+        raise ValueError("render cursor must be a bounded base64url token")
+    try:
+        padding = "=" * (-len(token) % 4)
+        encoded = base64.b64decode(token + padding, altchars=b"-_", validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("render cursor is not valid base64url") from exc
+    minimum = 4 + 4 + 16 + 16 + 8 + 2 + 2 + 4 + 16 + 8 + 4
+    if len(encoded) < minimum or encoded[:4] != _CURSOR_MAGIC:
+        raise ValueError("render cursor has an invalid header")
+    kind, version, reserved = struct.unpack_from(">BBH", encoded, 4)
+    if (kind, version, reserved) != (1, 1, 0):
+        raise ValueError("render cursor version is unsupported")
+    offset = 8
+    session_id = UUID(bytes=encoded[offset : offset + 16])
+    offset += 16
+    render_generation = UUID(bytes=encoded[offset : offset + 16])
+    offset += 16
+    (order_time_us,) = struct.unpack_from(">q", encoded, offset)
+    offset += 8
+
+    def read_text(width: int, field: str) -> str:
+        nonlocal offset
+        if offset + width > len(encoded):
+            raise ValueError("render cursor is truncated")
+        length = int.from_bytes(encoded[offset : offset + width], "big")
+        offset += width
+        if offset + length > len(encoded):
+            raise ValueError("render cursor is truncated")
+        try:
+            value = encoded[offset : offset + length].decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"render cursor {field} is not UTF-8") from exc
+        offset += length
+        if not value or unicodedata.normalize("NFC", value) != value:
+            raise ValueError(f"render cursor {field} is not canonical")
+        return value
+
+    machine_id = read_text(2, "machine_id")
+    provider = read_text(2, "provider")
+    if not _PROVIDER_PATTERN.fullmatch(provider):
+        raise ValueError("render cursor provider is not canonical")
+    opaque_source_id = read_text(4, "opaque_source_id")
+    if offset + 28 != len(encoded):
+        raise ValueError("render cursor has trailing or truncated fields")
+    source_epoch = UUID(bytes=encoded[offset : offset + 16])
+    offset += 16
+    source_position, event_subordinal = struct.unpack_from(">QI", encoded, offset)
+    cursor = RenderDetailCursor(
+        session_id=session_id,
+        render_generation=render_generation,
+        order_time_us=order_time_us,
+        machine_id=machine_id,
+        provider=provider,
+        opaque_source_id=opaque_source_id,
+        source_epoch=source_epoch,
+        source_position=source_position,
+        event_subordinal=event_subordinal,
+    )
+    if encode_render_detail_cursor(cursor) != encoded:
+        raise ValueError("render cursor is not canonical")
+    return cursor

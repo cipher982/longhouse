@@ -9,6 +9,7 @@ import pytest
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import RenderDetailCursor
+from zerg.storage_v2.contracts import decode_render_detail_cursor_token
 from zerg.storage_v2.contracts import encode_envelope_preimage
 from zerg.storage_v2.contracts import encode_render_detail_cursor
 from zerg.storage_v2.contracts import envelope_id
@@ -56,6 +57,15 @@ def test_render_detail_cursor_matches_frozen_vector():
     )
     assert encode_render_detail_cursor(cursor).hex() == vector["bytes_hex"]
     assert render_detail_cursor_token(cursor) == vector["base64url"]
+    assert decode_render_detail_cursor_token(vector["base64url"]) == cursor
+    with pytest.raises(ValueError):
+        decode_render_detail_cursor_token(vector["base64url"] + "=")
+
+
+@pytest.mark.parametrize("token", ("!", "TEhDMg", "TEhDMg==", "A" * 8_193))
+def test_render_detail_cursor_rejects_noncanonical_or_truncated_tokens(token):
+    with pytest.raises(ValueError):
+        decode_render_detail_cursor_token(token)
 
 
 def test_durable_receipt_matches_frozen_wire_example():

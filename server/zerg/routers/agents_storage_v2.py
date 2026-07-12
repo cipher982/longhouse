@@ -16,6 +16,7 @@ from uuid import UUID
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Query
 from fastapi import Request
 from fastapi import status
 
@@ -36,14 +37,18 @@ from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
+from zerg.storage_v2.contracts import RenderDetailCursor
+from zerg.storage_v2.contracts import decode_render_detail_cursor_token
 from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
+from zerg.storage_v2.contracts import render_detail_cursor_token
 from zerg.storage_v2.raw_objects import MAX_RECORD_BYTES
 from zerg.storage_v2.raw_objects import MAX_RECORDS
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawObjectValidationError
 from zerg.storage_v2.raw_objects import RawRecord
 from zerg.storage_v2.raw_objects import validate_raw_object_spec
+from zerg.storage_v2.render_objects import RenderObjectCorruptError
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectValidationError
 from zerg.storage_v2.render_objects import RenderRecord
@@ -103,6 +108,8 @@ _EXPECTED_RENDER_RECORD_FIELDS = {
     "branch_kind",
     "raw_record_ordinal",
 }
+_RENDER_MANIFEST_LIMIT = 1_000
+_RENDER_READ_BATCH = 2
 
 
 def _http_error(status_code: int, code: str, message: str, *, details: dict[str, Any] | None = None) -> HTTPException:
@@ -570,6 +577,207 @@ async def _commit_admitted_envelope(
         raise _http_error(status.HTTP_403_FORBIDDEN, "identity_mismatch", str(exc)) from exc
     except ValueError as exc:
         raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_envelope", str(exc)) from exc
+
+
+def _cursor_order_key(cursor: RenderDetailCursor) -> tuple[int, str, str, str, str, int, int]:
+    return (
+        cursor.order_time_us,
+        cursor.machine_id,
+        cursor.provider,
+        cursor.opaque_source_id,
+        str(cursor.source_epoch),
+        cursor.source_position,
+        cursor.event_subordinal,
+    )
+
+
+def _render_record_order_key(decoded, record: RenderRecord) -> tuple[int, str, str, str, str, int, int]:
+    spec = decoded.spec
+    return (
+        record.order_time_us,
+        spec.machine_id,
+        spec.provider,
+        spec.opaque_source_id,
+        str(spec.source_epoch),
+        record.source_position,
+        record.event_subordinal,
+    )
+
+
+def _manifest_first_key(manifest: dict[str, object]) -> tuple[int, str, str, str, str, int, int]:
+    raw = manifest.get("first_order_key")
+    if not isinstance(raw, str):
+        raise ValueError("render manifest is missing its first order key")
+    decoded = json.loads(raw)
+    if not isinstance(decoded, list) or len(decoded) != 7:
+        raise ValueError("render manifest first order key is invalid")
+    return tuple(decoded)  # type: ignore[return-value]
+
+
+def _render_event_wire(session_id: UUID, generation_id: UUID, decoded, record: RenderRecord) -> dict[str, object]:
+    spec = decoded.spec
+    try:
+        seconds, microseconds = divmod(record.order_time_us, 1_000_000)
+        timestamp = datetime.fromtimestamp(seconds, tz=UTC).replace(microsecond=microseconds).isoformat()
+    except (OverflowError, OSError, ValueError) as exc:
+        raise ValueError("render event timestamp is outside the supported range") from exc
+    cursor = RenderDetailCursor(
+        session_id=session_id,
+        render_generation=generation_id,
+        order_time_us=record.order_time_us,
+        machine_id=spec.machine_id,
+        provider=spec.provider,
+        opaque_source_id=spec.opaque_source_id,
+        source_epoch=spec.source_epoch,
+        source_position=record.source_position,
+        event_subordinal=record.event_subordinal,
+    )
+    return {
+        "event_id": record.event_id,
+        "cursor": render_detail_cursor_token(cursor),
+        "timestamp": timestamp,
+        "role": record.role,
+        "content_text": record.content_text,
+        "tool_name": record.tool_name,
+        "tool_input_json": record.tool_input_json,
+        "tool_output_text": record.tool_output_text,
+        "tool_call_id": record.tool_call_id,
+        "thread_id": record.thread_id,
+        "branch_kind": record.branch_kind,
+        "raw_locator": {
+            "source_envelope_id": spec.source_envelope_id,
+            "raw_record_ordinal": record.raw_record_ordinal,
+        },
+    }
+
+
+@router.get("/sessions/{session_id}/events")
+async def read_storage_v2_session_events(
+    session_id: UUID,
+    cursor: str | None = Query(None, description="Exclusive generation-qualified render cursor"),
+    limit: int = Query(100, ge=1, le=500),
+    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    after = None
+    if cursor is not None:
+        try:
+            after = decode_render_detail_cursor_token(cursor)
+        except ValueError as exc:
+            raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_cursor", str(exc)) from exc
+        if after.session_id != session_id:
+            raise _http_error(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "invalid_cursor",
+                "Render cursor belongs to a different session.",
+            )
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_unavailable",
+            "The session catalog is temporarily unavailable.",
+        )
+    after_order_key = json.dumps(_cursor_order_key(after), separators=(",", ":")) if after is not None else None
+    try:
+        manifest = await catalogd.call(
+            "storage.session.render_manifest.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(after.render_generation) if after is not None else None,
+                "after_order_key": after_order_key,
+                "limit": _RENDER_MANIFEST_LIMIT,
+            },
+        )
+    except (CatalogUnavailable, CatalogRemoteError) as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_unavailable",
+            "The session catalog is temporarily unavailable.",
+        ) from exc
+    if manifest.get("deleted") is True or manifest.get("found") is not True:
+        raise _http_error(status.HTTP_404_NOT_FOUND, "session_not_found", "Session was not found.")
+    if manifest.get("stale_generation") is True:
+        raise _http_error(
+            status.HTTP_409_CONFLICT,
+            "stale_generation",
+            "The render generation changed; restart pagination from the current generation.",
+            details={"current_generation_id": manifest.get("current_generation_id")},
+        )
+    generation = manifest.get("generation")
+    objects = manifest.get("objects")
+    if manifest.get("current_generation_id") is None:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "render_not_ready",
+            "Raw history is durable but its render generation is not ready.",
+        )
+    if not isinstance(generation, dict) or not isinstance(objects, list):
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "render_manifest_invalid",
+            "The catalog returned an invalid render manifest.",
+        )
+    try:
+        generation_id = UUID(str(generation["generation_id"]))
+        total = int(generation["event_count"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "render_manifest_invalid",
+            "The catalog returned an invalid render generation.",
+        ) from exc
+
+    workers = get_render_object_worker_pool()
+    ordered_events: list[tuple[tuple[int, str, str, str, str, int, int], dict[str, object]]] = []
+    next_object_index = 0
+    after_key = _cursor_order_key(after) if after is not None else None
+    try:
+        while next_object_index < len(objects):
+            batch_manifests = objects[next_object_index : next_object_index + _RENDER_READ_BATCH]
+            if any(not isinstance(item, dict) for item in batch_manifests):
+                raise ValueError("render object manifest is invalid")
+            decoded_batch = await asyncio.gather(
+                *(workers.read(str(item["object_path"]), str(item["object_hash"]), lane="user") for item in batch_manifests)
+            )
+            for item, decoded in zip(batch_manifests, decoded_batch, strict=True):
+                spec = decoded.spec
+                if (
+                    spec.session_id != session_id
+                    or spec.render_generation != generation_id
+                    or spec.source_envelope_id != item.get("source_envelope_id")
+                    or decoded.object_hash != item.get("object_hash")
+                ):
+                    raise ValueError("render object does not match its catalog manifest")
+                for record in spec.records:
+                    key = _render_record_order_key(decoded, record)
+                    if after_key is None or key > after_key:
+                        ordered_events.append((key, _render_event_wire(session_id, generation_id, decoded, record)))
+            next_object_index += len(batch_manifests)
+            ordered_events.sort(key=lambda item: item[0])
+            if len(ordered_events) > limit:
+                cutoff = ordered_events[limit][0]
+                if next_object_index >= len(objects) or _manifest_first_key(objects[next_object_index]) > cutoff:
+                    break
+    except (KeyError, TypeError, ValueError, RenderObjectCorruptError, RenderObjectWorkerError) as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "render_read_failed",
+            "The immutable render generation could not be verified.",
+        ) from exc
+
+    page = ordered_events[:limit]
+    has_more = len(ordered_events) > limit or next_object_index < len(objects) or manifest.get("objects_truncated") is True
+    return {
+        "v": 2,
+        "session_id": str(session_id),
+        "generation_id": str(generation_id),
+        "events": [event for _, event in page],
+        "next_cursor": page[-1][1]["cursor"] if page and has_more else None,
+        "has_more": has_more,
+        "total": total,
+    }
 
 
 @router.post("/envelopes")
