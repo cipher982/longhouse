@@ -81,6 +81,14 @@ _SAFE_RETRY_METHODS = {
     "projector.state.complete.v2",
     "projector.state.fail.v2",
     "projector.state.list_lag.v2",
+    # search.db is disposable and every mutation is exact/idempotent on its
+    # object, generation, or session identity. Reads and ping are replay-safe.
+    "search.ping.v2",
+    "search.index.object.v2",
+    "search.index.publish.v2",
+    "search.query.v2",
+    "worklog.day.v2",
+    "search.session.delete.v2",
 }
 
 # speed-of-light-database.md separates the 250 ms p95 performance target from

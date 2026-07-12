@@ -142,7 +142,8 @@ class SearchDaemon:
             return self._error(request, "catalog_unavailable", "search index is not ready", retryable=True)
         try:
             if request.method == "search.ping.v2":
-                return self._result(request, await self._run(self._store.ping))
+                ping = await self._run(self._store.ping)
+                return self._result(request, {**ping, "pid": os.getpid()})
             if request.method == "search.index.object.v2":
                 params = _index_object_params(request.params)
                 return self._result(request, await self._run(self._store.index_object, **params))
@@ -274,7 +275,12 @@ def _index_object_params(value: dict) -> dict:
             or record["role"] not in _ROLES
         ):
             raise ValueError("search record identity is invalid")
-        for field, maximum in (("content_text", 2_097_152), ("tool_name", 255), ("tool_output_text", 2_097_152), ("tool_call_id", 255)):
+        for field, maximum in (
+            ("content_text", 2_097_152),
+            ("tool_name", 255),
+            ("tool_output_text", 2_097_152),
+            ("tool_call_id", 255),
+        ):
             item = record[field]
             if item is not None and (not isinstance(item, str) or len(item.encode()) > maximum):
                 raise ValueError(f"search record {field} is invalid")

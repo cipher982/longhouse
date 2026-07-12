@@ -44,6 +44,13 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     async def stop_catalogd():
         calls.append("catalogd_stop")
 
+    async def start_searchd():
+        calls.append("searchd_start")
+        return None
+
+    async def stop_searchd():
+        calls.append("searchd_stop")
+
     class StorageWorkers:
         def __init__(self, label):
             self.label = label
@@ -83,9 +90,13 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     monkeypatch.setattr(database_module, "stop_wal_checkpoint_loop", noop_async)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.start_catalogd_supervisor", start_catalogd)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.stop_catalogd_supervisor", stop_catalogd)
+    monkeypatch.setattr("zerg.services.searchd_supervisor.start_searchd_supervisor", start_searchd)
+    monkeypatch.setattr("zerg.services.searchd_supervisor.stop_searchd_supervisor", stop_searchd)
     monkeypatch.setattr("zerg.services.raw_object_workers.get_raw_object_worker_pool", lambda: StorageWorkers("raw"))
     monkeypatch.setattr("zerg.services.raw_object_workers.close_raw_object_worker_pool", stop_raw_workers)
-    monkeypatch.setattr("zerg.services.render_object_workers.get_render_object_worker_pool", lambda: StorageWorkers("render"))
+    monkeypatch.setattr(
+        "zerg.services.render_object_workers.get_render_object_worker_pool", lambda: StorageWorkers("render")
+    )
     monkeypatch.setattr("zerg.services.render_object_workers.close_render_object_worker_pool", stop_render_workers)
     monkeypatch.setattr("zerg.services.archive_worker_supervisor.start_archive_worker_supervisor", lambda: None)
     monkeypatch.setattr("zerg.services.archive_worker_supervisor.stop_archive_worker_supervisor", noop_async)
@@ -99,7 +110,75 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
 
     app = FastAPI()
     async with lifespan_module.lifespan(app):
-        assert calls[:5] == ["catalogd_start", "raw_workers_start", "render_workers_start", "live_writer", "runner_start"]
+        assert calls[:6] == [
+            "catalogd_start",
+            "searchd_start",
+            "raw_workers_start",
+            "render_workers_start",
+            "live_writer",
+            "runner_start",
+        ]
         assert app.state.catalogd_ping["ready"] is True
+        assert app.state.searchd_ping is None
 
-    assert calls[-4:] == ["runner_stop", "raw_workers_stop", "render_workers_stop", "catalogd_stop"]
+    assert calls[-5:] == ["runner_stop", "raw_workers_stop", "render_workers_stop", "searchd_stop", "catalogd_stop"]
+
+
+@pytest.mark.asyncio
+async def test_lifespan_stops_searchd_and_catalogd_when_later_startup_fails(monkeypatch):
+    calls: list[str] = []
+
+    async def start_catalogd():
+        calls.append("catalogd_start")
+        return {"ready": True}
+
+    async def stop_catalogd():
+        calls.append("catalogd_stop")
+
+    async def start_searchd():
+        calls.append("searchd_start")
+        return {"ready": True}
+
+    async def stop_searchd():
+        calls.append("searchd_stop")
+
+    class FailingWorkers:
+        def __init__(self, label: str, *, fail: bool = False):
+            self.label = label
+            self.fail = fail
+
+        async def start(self):
+            calls.append(f"{self.label}_start")
+            if self.fail:
+                raise RuntimeError("synthetic worker startup failure")
+
+    async def stop_raw():
+        calls.append("raw_stop")
+
+    async def stop_render():
+        calls.append("render_stop")
+
+    monkeypatch.setattr(lifespan_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(lifespan_module, "configure_observability", lambda: None)
+    monkeypatch.setattr(lifespan_module._settings, "testing", False)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.start_catalogd_supervisor", start_catalogd)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.stop_catalogd_supervisor", stop_catalogd)
+    monkeypatch.setattr("zerg.services.searchd_supervisor.start_searchd_supervisor", start_searchd)
+    monkeypatch.setattr("zerg.services.searchd_supervisor.stop_searchd_supervisor", stop_searchd)
+    monkeypatch.setattr(
+        "zerg.services.raw_object_workers.get_raw_object_worker_pool",
+        lambda: FailingWorkers("raw", fail=True),
+    )
+    monkeypatch.setattr(
+        "zerg.services.render_object_workers.get_render_object_worker_pool",
+        lambda: FailingWorkers("render"),
+    )
+    monkeypatch.setattr("zerg.services.raw_object_workers.close_raw_object_worker_pool", stop_raw)
+    monkeypatch.setattr("zerg.services.render_object_workers.close_render_object_worker_pool", stop_render)
+
+    with pytest.raises(RuntimeError, match="synthetic worker startup failure"):
+        async with lifespan_module.lifespan(FastAPI()):
+            pass
+
+    assert calls[:2] == ["catalogd_start", "searchd_start"]
+    assert calls[-4:] == ["raw_stop", "render_stop", "searchd_stop", "catalogd_stop"]

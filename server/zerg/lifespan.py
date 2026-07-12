@@ -146,6 +146,16 @@ async def lifespan(app: FastAPI):
 
                 app.state.catalogd_ping = await start_catalogd_supervisor()
             logger.info("Live catalog schema is owned by catalogd")
+            with _timed_startup_step("searchd_supervisor"):
+                try:
+                    from zerg.services.searchd_supervisor import start_searchd_supervisor
+
+                    app.state.searchd_ping = await start_searchd_supervisor()
+                    if app.state.searchd_ping is None:
+                        logger.warning("searchd is degraded; hot Runtime Host readiness is unaffected")
+                except Exception:  # search is derived and never gates the launch loop
+                    app.state.searchd_ping = None
+                    logger.exception("Failed to start searchd supervisor (non-fatal)")
             with _timed_startup_step("storage_v2_workers"):
                 from zerg.services.raw_object_workers import get_raw_object_worker_pool
                 from zerg.services.render_object_workers import get_render_object_worker_pool
@@ -479,6 +489,12 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.exception("Failed to stop storage-v2 workers after startup failure")
             try:
+                from zerg.services.searchd_supervisor import stop_searchd_supervisor
+
+                await stop_searchd_supervisor()
+            except Exception:
+                logger.exception("Failed to stop searchd after startup failure")
+            try:
                 from zerg.services.catalogd_supervisor import stop_catalogd_supervisor
 
                 await stop_catalogd_supervisor()
@@ -556,6 +572,12 @@ async def lifespan(app: FastAPI):
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop storage-v2 workers")
+            try:
+                from zerg.services.searchd_supervisor import stop_searchd_supervisor
+
+                await stop_searchd_supervisor()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop searchd supervisor")
             try:
                 from zerg.services.catalogd_supervisor import stop_catalogd_supervisor
 
