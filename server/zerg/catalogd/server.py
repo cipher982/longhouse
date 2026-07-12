@@ -306,6 +306,8 @@ class CatalogDaemon:
             return await self._read_storage_session(request)
         if request.method == "storage.session.raw_manifest.v2":
             return await self._read_storage_session_raw_manifest(request)
+        if request.method == "storage.session.render_manifest.v2":
+            return await self._read_storage_session_render_manifest(request)
         if request.method == "storage.media.commit.v2":
             return await self._commit_media_object(request)
         if request.method == "storage.media.read.v2":
@@ -1517,6 +1519,34 @@ class CatalogDaemon:
         result = await self._run_store(
             self._store.read_storage_session_raw_manifest,
             session_id=session_id,
+            after_commit_seq=int(after_commit_seq) if after_commit_seq is not None else None,
+            limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_storage_session_render_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "generation_id", "after_commit_seq", "limit"}:
+            return self._error(request, "invalid_request", "storage.session.render_manifest.v2 has invalid parameters")
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+            generation_id = (
+                _canonical_uuid(request.params["generation_id"], "generation_id") if request.params["generation_id"] is not None else None
+            )
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        after_commit_seq = request.params["after_commit_seq"]
+        if after_commit_seq is not None and (
+            not isinstance(after_commit_seq, str) or not after_commit_seq.isdecimal() or int(after_commit_seq) >= 1 << 64
+        ):
+            return self._error(request, "invalid_request", "after_commit_seq must be a u64 decimal string or null")
+        limit = request.params["limit"]
+        if type(limit) is not int or not 1 <= limit <= 1_000:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.read_storage_session_render_manifest,
+            session_id=session_id,
+            generation_id=generation_id,
             after_commit_seq=int(after_commit_seq) if after_commit_seq is not None else None,
             limit=limit,
         )

@@ -155,6 +155,29 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
         assert session["session"]["current_render_generation"] == str(generation_id)
         assert session["session"]["user_messages"] == 1
         assert session["session"]["first_user_message_preview"] == "Build it"
+        render = await client.call(
+            "storage.session.render_manifest.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(generation_id),
+                "after_commit_seq": None,
+                "limit": 100,
+            },
+        )
+        assert render["stale_generation"] is False
+        assert render["generation"]["state"] == "current"
+        assert render["objects"][0]["source_envelope_id"] == raw["envelope_id"]
+        stale = await client.call(
+            "storage.session.render_manifest.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(uuid4()),
+                "after_commit_seq": None,
+                "limit": 100,
+            },
+        )
+        assert stale["stale_generation"] is True
+        assert stale["current_generation_id"] == str(generation_id)
     finally:
         await client.close()
         await daemon.close()

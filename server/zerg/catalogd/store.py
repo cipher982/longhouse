@@ -3649,6 +3649,63 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def read_storage_session_render_manifest(
+        self,
+        *,
+        session_id: UUID,
+        generation_id: UUID | None,
+        after_commit_seq: int | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        session_table = StorageSession.__table__
+        generation_table = RenderGeneration.__table__
+        object_table = RenderObject.__table__
+        tombstone = LiveSessionTombstone.__table__
+        session_key = str(session_id)
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            deleted = connection.execute(
+                select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
+            ).scalar_one_or_none()
+            session_row = connection.execute(select(session_table).where(session_table.c.session_id == session_key)).mappings().first()
+            current_generation = (
+                str(session_row["current_render_generation"])
+                if session_row is not None and session_row["current_render_generation"] is not None
+                else None
+            )
+            requested_generation = str(generation_id) if generation_id is not None else current_generation
+            stale_generation = generation_id is not None and requested_generation != current_generation
+            generation_row = None
+            rows: list[Any] = []
+            if deleted is None and requested_generation is not None and not stale_generation:
+                generation_row = (
+                    connection.execute(select(generation_table).where(generation_table.c.generation_id == requested_generation))
+                    .mappings()
+                    .first()
+                )
+                statement = select(object_table).where(
+                    object_table.c.generation_id == requested_generation,
+                    object_table.c.retired_at.is_(None),
+                )
+                if after_commit_seq is not None:
+                    statement = statement.where(object_table.c.commit_seq > after_commit_seq)
+                rows = (
+                    connection.execute(statement.order_by(object_table.c.commit_seq.asc(), object_table.c.object_id.asc()).limit(limit))
+                    .mappings()
+                    .all()
+                )
+            return {
+                "found": session_row is not None and deleted is None,
+                "deleted": deleted is not None,
+                "deletion_revision": str(deleted) if deleted is not None else None,
+                "stale_generation": stale_generation,
+                "current_generation_id": current_generation,
+                "generation": _render_generation_dto(generation_row) if generation_row is not None else None,
+                "objects": [_render_object_manifest_dto(row) for row in rows],
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
     def commit_media_object(
         self,
         *,
@@ -4937,6 +4994,45 @@ def _storage_session_dto(row) -> dict[str, Any]:
         "commit_seq": str(row["commit_seq"]),
         "created_at": _encode_datetime(row["created_at"]),
         "updated_at": _encode_datetime(row["updated_at"]),
+    }
+
+
+def _render_generation_dto(row) -> dict[str, Any]:
+    return {
+        "generation_id": str(row["generation_id"]),
+        "session_id": str(row["session_id"]),
+        "parser_revision": str(row["parser_revision"]),
+        "ordering_revision": str(row["ordering_revision"]),
+        "state": str(row["state"]),
+        "source_chain_hash": str(row["source_chain_hash"]),
+        "object_count": int(row["object_count"]),
+        "event_count": int(row["event_count"]),
+        "first_order_key": row["first_order_key"],
+        "last_order_key": row["last_order_key"],
+        "commit_seq": str(row["commit_seq"]),
+        "created_at": _encode_datetime(row["created_at"]),
+        "updated_at": _encode_datetime(row["updated_at"]),
+        "superseded_at": _encode_datetime(row["superseded_at"]),
+    }
+
+
+def _render_object_manifest_dto(row) -> dict[str, Any]:
+    return {
+        "object_id": str(row["object_id"]),
+        "generation_id": str(row["generation_id"]),
+        "session_id": str(row["session_id"]),
+        "source_envelope_id": str(row["source_envelope_id"]),
+        "object_hash": str(row["object_hash"]),
+        "payload_hash": str(row["payload_hash"]),
+        "object_path": str(row["object_path"]),
+        "uncompressed_size": int(row["uncompressed_size"]),
+        "compressed_size": int(row["compressed_size"]),
+        "event_count": int(row["event_count"]),
+        "first_order_key": row["first_order_key"],
+        "last_order_key": row["last_order_key"],
+        "commit_seq": str(row["commit_seq"]),
+        "created_at": _encode_datetime(row["created_at"]),
+        "retired_at": _encode_datetime(row["retired_at"]),
     }
 
 

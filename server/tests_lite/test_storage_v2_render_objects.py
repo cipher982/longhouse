@@ -4,6 +4,7 @@ from uuid import UUID
 
 import pytest
 
+from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.storage_v2.render_objects import RenderObjectSpec
 from zerg.storage_v2.render_objects import RenderObjectValidationError
 from zerg.storage_v2.render_objects import RenderRecord
@@ -76,3 +77,20 @@ def test_render_object_rejects_unstable_semantic_order(tmp_path):
     )
     with pytest.raises(RenderObjectValidationError, match="strictly ordered"):
         seal_render_object(tmp_path, reversed_spec)
+
+
+@pytest.mark.asyncio
+async def test_user_read_lane_decodes_in_persistent_process(tmp_path):
+    sealed = seal_render_object(tmp_path, _spec())
+    pool = RenderObjectWorkerPool(
+        tmp_path,
+        live_workers=1,
+        repair_workers=1,
+        user_read_workers=1,
+        queue_multiplier=1,
+    )
+    try:
+        decoded = await pool.read(sealed.object_path, sealed.object_hash, lane="user")
+        assert decoded.spec == _spec()
+    finally:
+        await pool.close()
