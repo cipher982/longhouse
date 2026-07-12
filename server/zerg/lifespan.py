@@ -165,6 +165,15 @@ async def lifespan(app: FastAPI):
                     get_render_object_worker_pool().start(),
                 )
             logger.info("Storage-v2 live and repair worker lanes are ready")
+            try:
+                from zerg.services.search_v2_projector import start_search_v2_projector
+
+                app.state.search_v2_projector_started = start_search_v2_projector()
+                if not app.state.search_v2_projector_started:
+                    logger.warning("Search-v2 projector is degraded; hot Runtime Host readiness is unaffected")
+            except Exception:
+                app.state.search_v2_projector_started = False
+                logger.exception("Failed to start search-v2 projector (non-fatal)")
         elif live_store_configured():
             with _timed_startup_step("initialize_live_database"):
                 initialize_live_database()
@@ -479,6 +488,12 @@ async def lifespan(app: FastAPI):
         logger.error(f"Error during startup: {e}")
         if catalog_mode and not _settings.testing:
             try:
+                from zerg.services.search_v2_projector import stop_search_v2_projector
+
+                await stop_search_v2_projector()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop search-v2 projector")
+            try:
                 from zerg.services.raw_object_workers import close_raw_object_worker_pool
                 from zerg.services.render_object_workers import close_render_object_worker_pool
 
@@ -562,6 +577,12 @@ async def lifespan(app: FastAPI):
         await topic_manager.shutdown()
 
         if catalog_mode and not _settings.testing:
+            try:
+                from zerg.services.search_v2_projector import stop_search_v2_projector
+
+                await stop_search_v2_projector()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop search-v2 projector")
             try:
                 from zerg.services.raw_object_workers import close_raw_object_worker_pool
                 from zerg.services.render_object_workers import close_render_object_worker_pool

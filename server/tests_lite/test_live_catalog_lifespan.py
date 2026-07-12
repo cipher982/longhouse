@@ -51,6 +51,13 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     async def stop_searchd():
         calls.append("searchd_stop")
 
+    def start_search_projector():
+        calls.append("search_projector_start")
+        return True
+
+    async def stop_search_projector():
+        calls.append("search_projector_stop")
+
     class StorageWorkers:
         def __init__(self, label):
             self.label = label
@@ -92,6 +99,8 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     monkeypatch.setattr("zerg.services.catalogd_supervisor.stop_catalogd_supervisor", stop_catalogd)
     monkeypatch.setattr("zerg.services.searchd_supervisor.start_searchd_supervisor", start_searchd)
     monkeypatch.setattr("zerg.services.searchd_supervisor.stop_searchd_supervisor", stop_searchd)
+    monkeypatch.setattr("zerg.services.search_v2_projector.start_search_v2_projector", start_search_projector)
+    monkeypatch.setattr("zerg.services.search_v2_projector.stop_search_v2_projector", stop_search_projector)
     monkeypatch.setattr("zerg.services.raw_object_workers.get_raw_object_worker_pool", lambda: StorageWorkers("raw"))
     monkeypatch.setattr("zerg.services.raw_object_workers.close_raw_object_worker_pool", stop_raw_workers)
     monkeypatch.setattr(
@@ -110,18 +119,26 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
 
     app = FastAPI()
     async with lifespan_module.lifespan(app):
-        assert calls[:6] == [
+        assert calls[:7] == [
             "catalogd_start",
             "searchd_start",
             "raw_workers_start",
             "render_workers_start",
+            "search_projector_start",
             "live_writer",
             "runner_start",
         ]
         assert app.state.catalogd_ping["ready"] is True
         assert app.state.searchd_ping is None
 
-    assert calls[-5:] == ["runner_stop", "raw_workers_stop", "render_workers_stop", "searchd_stop", "catalogd_stop"]
+    assert calls[-6:] == [
+        "runner_stop",
+        "search_projector_stop",
+        "raw_workers_stop",
+        "render_workers_stop",
+        "searchd_stop",
+        "catalogd_stop",
+    ]
 
 
 @pytest.mark.asyncio

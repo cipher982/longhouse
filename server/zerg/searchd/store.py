@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA_VERSION = 1
-SCHEMA_GENERATION = "searchd-v1-generation-qualified-locators"
+SCHEMA_GENERATION = "searchd-v1-atomic-projection-membership"
 _OBJECT_SET_DOMAIN = b"longhouse-search-object-set-v1\0"
 
 
@@ -80,13 +80,21 @@ def _initialize_schema(connection: sqlite3.Connection) -> None:
             object_id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
             generation_id TEXT NOT NULL,
-            desired_revision INTEGER NOT NULL,
             event_count INTEGER NOT NULL,
             projection_hash TEXT NOT NULL,
             indexed_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS ix_indexed_objects_generation
             ON indexed_objects(session_id, generation_id, object_id);
+        CREATE TABLE IF NOT EXISTS projection_membership (
+            session_id TEXT NOT NULL,
+            generation_id TEXT NOT NULL,
+            desired_revision INTEGER NOT NULL,
+            object_id TEXT NOT NULL,
+            PRIMARY KEY(session_id, generation_id, desired_revision, object_id)
+        );
+        CREATE INDEX IF NOT EXISTS ix_projection_membership_object
+            ON projection_membership(object_id);
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_key TEXT NOT NULL UNIQUE,
@@ -204,7 +212,6 @@ class SearchStore:
             session_id=session_id,
             generation_id=generation_id,
             object_id=object_id,
-            desired_revision=desired_revision,
             provider=provider,
             machine_id=machine_id,
             project=project,
@@ -225,6 +232,14 @@ class SearchStore:
                 exact = existing["projection_hash"] == projection_hash and int(existing["event_count"]) == len(records)
                 if not exact:
                     raise ValueError("indexed object identity conflicts with existing derived rows")
+                self.connection.execute(
+                    """
+                    INSERT OR IGNORE INTO projection_membership(
+                        session_id, generation_id, desired_revision, object_id
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (session_id, generation_id, desired_revision, object_id),
+                )
                 self.connection.execute("COMMIT")
                 return {"created": False, "exact_replay": True, "event_count": len(records)}
             for record in records:
@@ -276,11 +291,18 @@ class SearchStore:
             self.connection.execute(
                 """
                 INSERT INTO indexed_objects(
-                    object_id, session_id, generation_id, desired_revision,
+                    object_id, session_id, generation_id,
                     event_count, projection_hash, indexed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (object_id, session_id, generation_id, desired_revision, len(records), projection_hash, now),
+                (object_id, session_id, generation_id, len(records), projection_hash, now),
+            )
+            self.connection.execute(
+                """
+                INSERT INTO projection_membership(session_id, generation_id, desired_revision, object_id)
+                VALUES (?, ?, ?, ?)
+                """,
+                (session_id, generation_id, desired_revision, object_id),
             )
             self.connection.execute("COMMIT")
         except BaseException:
@@ -310,9 +332,11 @@ class SearchStore:
         try:
             objects = self.connection.execute(
                 """
-                SELECT object_id, event_count FROM indexed_objects
-                WHERE session_id = ? AND generation_id = ? AND desired_revision = ?
-                ORDER BY object_id ASC
+                SELECT o.object_id, o.event_count
+                FROM projection_membership m
+                JOIN indexed_objects o ON o.object_id = m.object_id
+                WHERE m.session_id = ? AND m.generation_id = ? AND m.desired_revision = ?
+                ORDER BY o.object_id ASC
                 """,
                 (session_id, generation_id, desired_revision),
             ).fetchall()
@@ -369,12 +393,29 @@ class SearchStore:
                 ),
             )
             self.connection.execute(
-                "DELETE FROM events WHERE session_id = ? AND generation_id != ?",
-                (session_id, generation_id),
+                """
+                DELETE FROM projection_membership
+                WHERE session_id = ? AND (generation_id != ? OR desired_revision != ?)
+                """,
+                (session_id, generation_id, desired_revision),
             )
             self.connection.execute(
-                "DELETE FROM indexed_objects WHERE session_id = ? AND generation_id != ?",
-                (session_id, generation_id),
+                """
+                DELETE FROM events
+                WHERE session_id = ? AND source_object_id NOT IN (
+                    SELECT object_id FROM projection_membership WHERE session_id = ?
+                )
+                """,
+                (session_id, session_id),
+            )
+            self.connection.execute(
+                """
+                DELETE FROM indexed_objects
+                WHERE session_id = ? AND object_id NOT IN (
+                    SELECT object_id FROM projection_membership WHERE session_id = ?
+                )
+                """,
+                (session_id, session_id),
             )
             self.connection.execute("COMMIT")
         except BaseException:
@@ -409,6 +450,11 @@ class SearchStore:
             FROM events_fts
             JOIN events e ON e.id = events_fts.rowid
             JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+            JOIN projection_membership m
+              ON m.session_id = e.session_id
+             AND m.generation_id = e.generation_id
+             AND m.desired_revision = s.indexed_through
+             AND m.object_id = e.source_object_id
             WHERE events_fts MATCH ? AND s.owner_id = ?
               AND (? IS NULL OR s.project = ?)
               AND (? IS NULL OR s.provider = ?)
@@ -452,6 +498,11 @@ class SearchStore:
                    s.started_at, s.indexed_through, s.generation_id
             FROM events e
             JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
+            JOIN projection_membership m
+              ON m.session_id = e.session_id
+             AND m.generation_id = e.generation_id
+             AND m.desired_revision = s.indexed_through
+             AND m.object_id = e.source_object_id
             WHERE s.owner_id = ?
               AND e.order_time_us >= ? AND e.order_time_us < ?
               AND e.role IN ('user', 'assistant')
@@ -471,6 +522,7 @@ class SearchStore:
         self.connection.execute("BEGIN IMMEDIATE")
         try:
             self.connection.execute("DELETE FROM session_index WHERE session_id = ?", (session_id,))
+            self.connection.execute("DELETE FROM projection_membership WHERE session_id = ?", (session_id,))
             self.connection.execute("DELETE FROM events WHERE session_id = ?", (session_id,))
             self.connection.execute("DELETE FROM indexed_objects WHERE session_id = ?", (session_id,))
             self.connection.execute("COMMIT")

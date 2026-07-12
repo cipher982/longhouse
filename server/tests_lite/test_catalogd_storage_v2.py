@@ -95,7 +95,7 @@ def _raw_params(
         "provenance_kind": "native",
         "render_state": "pending",
         "media_refs": [],
-        "projectors": ["render-v2", "search-v2", "worklog-v2"],
+        "projectors": ["render-v2", "search-v2"],
         "render_manifest": None,
         "session_facts": {
             "environment": "local",

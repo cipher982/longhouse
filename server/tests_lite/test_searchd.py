@@ -64,7 +64,7 @@ def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
     rebuilt = open_search_database(path)
     try:
         meta = rebuilt.execute("SELECT schema_version, schema_generation FROM search_meta").fetchone()
-        assert tuple(meta) == (1, "searchd-v1-generation-qualified-locators")
+        assert tuple(meta) == (1, "searchd-v1-atomic-projection-membership")
         assert rebuilt.execute("SELECT COUNT(*) FROM session_index").fetchone()[0] == 0
     finally:
         rebuilt.close()
@@ -154,6 +154,28 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         )
         assert [event["role"] for event in worklog["events"]] == ["user", "assistant"]
         assert worklog["truncated"] is False
+
+        replacement_id = hashlib.sha256(b"replacement-render-object").hexdigest()
+        replacement_params = {
+            **index_params,
+            "object_id": replacement_id,
+            "desired_revision": "8",
+            "records": _records("replacement projection"),
+        }
+        await client.call("search.index.object.v2", replacement_params)
+        # Staging revision 8 must not disturb the fully published revision 7.
+        assert len((await client.call("search.query.v2", _search_params("speed")))["results"]) == 1
+        assert (await client.call("search.query.v2", _search_params("replacement")))["results"] == []
+
+        replacement_publish = {
+            **base_publish,
+            "desired_revision": "8",
+            "object_set_hash": object_set_hash([replacement_id]),
+            "object_count": 1,
+        }
+        assert (await client.call("search.index.publish.v2", replacement_publish))["published"] is True
+        assert (await client.call("search.query.v2", _search_params("speed")))["results"] == []
+        assert len((await client.call("search.query.v2", _search_params("replacement")))["results"]) == 1
     finally:
         await client.close()
         await daemon.close()

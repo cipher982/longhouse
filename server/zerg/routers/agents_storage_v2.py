@@ -67,7 +67,7 @@ router = APIRouter(prefix="/agents/storage/v2", tags=["agents"])
 logger = logging.getLogger(__name__)
 
 MAX_WIRE_BODY_BYTES = 12 * 1024 * 1024
-PROJECTORS = ("render-v2", "search-v2", "worklog-v2")
+PROJECTORS = ("render-v2", "search-v2")
 _EXPECTED_ENVELOPE_FIELDS = {
     "protocol_version",
     "tenant_id",
