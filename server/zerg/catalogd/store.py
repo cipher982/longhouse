@@ -23,7 +23,10 @@ from sqlalchemy import select
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.models import MediaObject
+from zerg.catalogd.models import ProjectorState
 from zerg.catalogd.models import RawObject as LiveRawObject
+from zerg.catalogd.models import SessionMediaRef
 from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
 from zerg.catalogd.schema import catalog_meta
@@ -3324,6 +3327,562 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def raw_objects_exist_batch(self, *, envelope_ids: tuple[str, ...]) -> dict[str, Any]:
+        raw = LiveRawObject.__table__
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            rows = connection.execute(select(raw).where(raw.c.envelope_id.in_(envelope_ids))).mappings().all()
+            by_id = {str(row["envelope_id"]): row for row in rows}
+            return {
+                "objects": [
+                    {
+                        "envelope_id": envelope_id,
+                        "exists": envelope_id in by_id,
+                        "state": (
+                            "deleted"
+                            if envelope_id in by_id and by_id[envelope_id]["retired_at"] is not None
+                            else "durable"
+                            if envelope_id in by_id
+                            else "missing"
+                        ),
+                        "object_hash": str(by_id[envelope_id]["object_hash"]) if envelope_id in by_id else None,
+                        "commit_seq": str(by_id[envelope_id]["commit_seq"]) if envelope_id in by_id else None,
+                    }
+                    for envelope_id in envelope_ids
+                ],
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
+    def commit_media_object(
+        self,
+        *,
+        media_hash: str,
+        state: str,
+        mime_type: str | None,
+        byte_size: int | None,
+        object_path: str | None,
+        session_refs: tuple[dict[str, Any], ...],
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        media = MediaObject.__table__
+        refs = SessionMediaRef.__table__
+        tombstones = LiveSessionTombstone.__table__
+        raw = LiveRawObject.__table__
+        with _write_transaction(self.engine) as connection:
+            for ref in session_refs:
+                deleted = connection.execute(
+                    select(tombstones.c.deletion_revision).where(tombstones.c.session_id == str(ref["session_id"]))
+                ).scalar_one_or_none()
+                if deleted is not None:
+                    return {"session_deleted": True, "deletion_revision": str(deleted)}
+                envelope = ref["envelope_id"]
+                if envelope is not None:
+                    raw_row = (
+                        connection.execute(select(raw.c.session_id, raw.c.retired_at).where(raw.c.envelope_id == envelope))
+                        .mappings()
+                        .first()
+                    )
+                    if raw_row is None or raw_row["retired_at"] is not None or str(raw_row["session_id"]) != str(ref["session_id"]):
+                        return {"manifest_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+
+            existing = connection.execute(select(media).where(media.c.media_hash == media_hash)).mappings().first()
+            if existing is not None:
+                if existing["state"] == "deleted" and state != "deleted":
+                    return {"manifest_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                if existing["mime_type"] is not None and mime_type is not None and existing["mime_type"] != mime_type:
+                    return {"manifest_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                if existing["byte_size"] is not None and byte_size is not None and existing["byte_size"] != byte_size:
+                    return {"manifest_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                allowed = {
+                    "missing": {"missing", "present", "corrupt", "deleted"},
+                    "present": {"present", "corrupt", "deleted"},
+                    "corrupt": {"corrupt", "present", "deleted"},
+                    "deleted": {"deleted"},
+                }
+                if state not in allowed[str(existing["state"])]:
+                    return {"manifest_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                if state == "deleted":
+                    active_ref = connection.execute(
+                        select(refs.c.id).where(refs.c.media_hash == media_hash, refs.c.state == "active").limit(1)
+                    ).first()
+                    if active_ref is not None:
+                        return {"manifest_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+
+            existing_refs: dict[tuple[str, str | None, str], Any] = {}
+            if session_refs:
+                session_ids = sorted({str(ref["session_id"]) for ref in session_refs})
+                for row in connection.execute(
+                    select(refs).where(refs.c.media_hash == media_hash, refs.c.session_id.in_(session_ids))
+                ).mappings():
+                    existing_refs[(str(row["session_id"]), row["envelope_id"], str(row["ref_key"]))] = row
+
+            new_refs: list[dict[str, Any]] = []
+            for ref in session_refs:
+                key = (str(ref["session_id"]), ref["envelope_id"], str(ref["ref_key"]))
+                prior = existing_refs.get(key)
+                if prior is not None:
+                    if prior["state"] != "active" or prior["retired_at"] is not None:
+                        return {
+                            "session_deleted": True,
+                            "deletion_revision": str(prior["deletion_revision"] or 0),
+                        }
+                    continue
+                new_refs.append(
+                    {
+                        "session_id": key[0],
+                        "media_hash": media_hash,
+                        "envelope_id": key[1],
+                        "ref_key": key[2],
+                    }
+                )
+
+            object_changed = existing is None
+            if existing is not None:
+                object_changed = any(
+                    (
+                        existing["state"] != state,
+                        existing["mime_type"] is None and mime_type is not None,
+                        existing["byte_size"] is None and byte_size is not None,
+                        existing["object_path"] is None and object_path is not None,
+                    )
+                )
+            if not object_changed and not new_refs:
+                selected_refs = [existing_refs[(str(ref["session_id"]), ref["envelope_id"], ref["ref_key"])] for ref in session_refs]
+                return {
+                    "created": False,
+                    "changed": False,
+                    "exact_replay": True,
+                    "media": _media_object_dto(existing),
+                    "refs": [_media_ref_dto(row) for row in selected_refs],
+                    "commit_seq": str(existing["commit_seq"]),
+                }
+
+            commit_time = datetime.now(UTC)
+            commit_seq = _advance_commit_seq(connection, commit_time)
+            if existing is None:
+                connection.execute(
+                    insert(media).values(
+                        media_hash=media_hash,
+                        state=state,
+                        mime_type=mime_type,
+                        byte_size=byte_size,
+                        object_path=object_path,
+                        commit_seq=commit_seq,
+                        observed_at=observed_at,
+                        verified_at=observed_at if state == "present" else None,
+                        deleted_at=observed_at if state == "deleted" else None,
+                        created_at=commit_time,
+                        updated_at=commit_time,
+                    )
+                )
+            elif object_changed:
+                connection.execute(
+                    update(media)
+                    .where(media.c.media_hash == media_hash)
+                    .values(
+                        state=state,
+                        mime_type=existing["mime_type"] or mime_type,
+                        byte_size=existing["byte_size"] if existing["byte_size"] is not None else byte_size,
+                        object_path=object_path or existing["object_path"],
+                        commit_seq=commit_seq,
+                        observed_at=observed_at,
+                        verified_at=observed_at if state == "present" else existing["verified_at"],
+                        deleted_at=observed_at if state == "deleted" else None,
+                        updated_at=commit_time,
+                    )
+                )
+            if new_refs:
+                connection.execute(
+                    insert(refs),
+                    [
+                        {
+                            **ref,
+                            "state": "active",
+                            "commit_seq": commit_seq,
+                            "created_at": commit_time,
+                        }
+                        for ref in new_refs
+                    ],
+                )
+            media_row = connection.execute(select(media).where(media.c.media_hash == media_hash)).mappings().one()
+            persisted_refs = (
+                connection.execute(
+                    select(refs).where(
+                        refs.c.media_hash == media_hash,
+                        refs.c.session_id.in_(sorted({str(ref["session_id"]) for ref in session_refs})),
+                    )
+                )
+                .mappings()
+                .all()
+                if session_refs
+                else []
+            )
+            persisted_by_key = {(str(row["session_id"]), row["envelope_id"], str(row["ref_key"])): row for row in persisted_refs}
+            ref_rows = [persisted_by_key[(str(ref["session_id"]), ref["envelope_id"], str(ref["ref_key"]))] for ref in session_refs]
+            return {
+                "created": existing is None,
+                "changed": True,
+                "exact_replay": False,
+                "media": _media_object_dto(media_row),
+                "refs": [_media_ref_dto(row) for row in ref_rows],
+                "commit_seq": str(commit_seq),
+            }
+
+    def read_media_object(
+        self,
+        *,
+        media_hash: str,
+        session_id: UUID | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        media = MediaObject.__table__
+        refs = SessionMediaRef.__table__
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            row = connection.execute(select(media).where(media.c.media_hash == media_hash)).mappings().first()
+            if row is None:
+                return {
+                    "found": False,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                    "observed_at": observed_at.isoformat(),
+                }
+            statement = select(refs).where(refs.c.media_hash == media_hash)
+            if session_id is not None:
+                statement = statement.where(refs.c.session_id == str(session_id))
+            ref_rows = connection.execute(statement.order_by(refs.c.id.asc()).limit(limit)).mappings().all()
+            return {
+                "found": True,
+                "media": _media_object_dto(row),
+                "refs": [_media_ref_dto(ref) for ref in ref_rows],
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
+    def media_objects_exist_batch(self, *, media_hashes: tuple[str, ...]) -> dict[str, Any]:
+        media = MediaObject.__table__
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            rows = connection.execute(select(media).where(media.c.media_hash.in_(media_hashes))).mappings().all()
+            by_hash = {str(row["media_hash"]): row for row in rows}
+            return {
+                "objects": [
+                    {
+                        "media_hash": media_hash,
+                        "exists": media_hash in by_hash,
+                        "state": str(by_hash[media_hash]["state"]) if media_hash in by_hash else "missing",
+                        "byte_size": (
+                            int(by_hash[media_hash]["byte_size"])
+                            if media_hash in by_hash and by_hash[media_hash]["byte_size"] is not None
+                            else None
+                        ),
+                        "commit_seq": str(by_hash[media_hash]["commit_seq"]) if media_hash in by_hash else None,
+                    }
+                    for media_hash in media_hashes
+                ],
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
+    def advance_projector_state(
+        self,
+        *,
+        projector: str,
+        session_id: UUID,
+        desired_revision: int,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        table = ProjectorState.__table__
+        session_key = str(session_id)
+        with _write_transaction(self.engine) as connection:
+            row = (
+                connection.execute(select(table).where(table.c.projector == projector, table.c.session_id == session_key))
+                .mappings()
+                .first()
+            )
+            if row is not None and int(row["desired_revision"]) >= desired_revision:
+                return {
+                    "changed": False,
+                    "state": _projector_state_dto(row),
+                    "commit_seq": str(row["commit_seq"]),
+                }
+            commit_time = datetime.now(UTC)
+            commit_seq = _advance_commit_seq(connection, commit_time)
+            if row is None:
+                connection.execute(
+                    insert(table).values(
+                        projector=projector,
+                        session_id=session_key,
+                        desired_revision=desired_revision,
+                        completed_revision=0,
+                        status="idle",
+                        failure_count=0,
+                        commit_seq=commit_seq,
+                        created_at=commit_time,
+                        updated_at=commit_time,
+                    )
+                )
+            else:
+                connection.execute(
+                    update(table)
+                    .where(table.c.projector == projector, table.c.session_id == session_key)
+                    .values(desired_revision=desired_revision, commit_seq=commit_seq, updated_at=commit_time)
+                )
+            updated = (
+                connection.execute(select(table).where(table.c.projector == projector, table.c.session_id == session_key)).mappings().one()
+            )
+            return {
+                "changed": True,
+                "state": _projector_state_dto(updated),
+                "commit_seq": str(commit_seq),
+            }
+
+    def claim_projector_lag(
+        self,
+        *,
+        projector: str,
+        worker_id: str,
+        claim_token: str,
+        now: datetime,
+        lease_seconds: int,
+        limit: int,
+    ) -> dict[str, Any]:
+        table = ProjectorState.__table__
+        with _write_transaction(self.engine) as connection:
+            replay_rows = (
+                connection.execute(
+                    select(table)
+                    .where(table.c.projector == projector, table.c.claim_token == claim_token)
+                    .order_by(table.c.session_id.asc())
+                )
+                .mappings()
+                .all()
+            )
+            if replay_rows:
+                if any(row["worker_id"] != worker_id for row in replay_rows):
+                    return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                return {
+                    "claimed": [_projector_state_dto(row) for row in replay_rows],
+                    "exact_replay": True,
+                    "commit_seq": str(replay_rows[0]["commit_seq"]),
+                }
+            terminal_replay = connection.execute(
+                select(table.c.commit_seq).where(
+                    table.c.projector == projector,
+                    or_(
+                        table.c.last_completion_token == claim_token,
+                        table.c.last_failure_token == claim_token,
+                    ),
+                )
+            ).first()
+            if terminal_replay is not None:
+                return {
+                    "claimed": [],
+                    "exact_replay": True,
+                    "commit_seq": str(terminal_replay[0]),
+                }
+            eligible = (
+                connection.execute(
+                    select(table)
+                    .where(
+                        table.c.projector == projector,
+                        table.c.desired_revision > table.c.completed_revision,
+                        or_(table.c.claim_expires_at.is_(None), table.c.claim_expires_at <= now),
+                        or_(table.c.retry_at.is_(None), table.c.retry_at <= now),
+                    )
+                    .order_by(table.c.updated_at.asc(), table.c.session_id.asc())
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            if not eligible:
+                return {
+                    "claimed": [],
+                    "exact_replay": False,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            commit_time = datetime.now(UTC)
+            commit_seq = _advance_commit_seq(connection, commit_time)
+            expires_at = now + timedelta(seconds=lease_seconds)
+            for row in eligible:
+                session_key = row["session_id"]
+                connection.execute(
+                    update(table)
+                    .where(table.c.projector == projector, table.c.session_id == session_key)
+                    .values(
+                        claimed_revision=row["desired_revision"],
+                        claim_token=claim_token,
+                        worker_id=worker_id,
+                        claim_expires_at=expires_at,
+                        status="claimed",
+                        retry_at=None,
+                        commit_seq=commit_seq,
+                        updated_at=commit_time,
+                    )
+                )
+            claimed = (
+                connection.execute(
+                    select(table)
+                    .where(table.c.projector == projector, table.c.claim_token == claim_token)
+                    .order_by(table.c.session_id.asc())
+                )
+                .mappings()
+                .all()
+            )
+            return {
+                "claimed": [_projector_state_dto(row) for row in claimed],
+                "exact_replay": False,
+                "commit_seq": str(commit_seq),
+            }
+
+    def complete_projector_claim(
+        self,
+        *,
+        projector: str,
+        session_id: UUID,
+        claim_token: str,
+        completed_revision: int,
+        completed_at: datetime,
+    ) -> dict[str, Any]:
+        table = ProjectorState.__table__
+        session_key = str(session_id)
+        with _write_transaction(self.engine) as connection:
+            row = (
+                connection.execute(select(table).where(table.c.projector == projector, table.c.session_id == session_key))
+                .mappings()
+                .first()
+            )
+            if row is None:
+                return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            if row["last_completion_token"] == claim_token and int(row["completed_revision"]) >= completed_revision:
+                return {
+                    "changed": False,
+                    "exact_replay": True,
+                    "state": _projector_state_dto(row),
+                    "commit_seq": str(row["commit_seq"]),
+                }
+            if (
+                row["claim_token"] != claim_token
+                or row["claimed_revision"] is None
+                or int(row["claimed_revision"]) != completed_revision
+                or completed_revision > int(row["desired_revision"])
+            ):
+                return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            commit_time = datetime.now(UTC)
+            commit_seq = _advance_commit_seq(connection, commit_time)
+            connection.execute(
+                update(table)
+                .where(table.c.projector == projector, table.c.session_id == session_key)
+                .values(
+                    completed_revision=completed_revision,
+                    claimed_revision=None,
+                    claim_token=None,
+                    worker_id=None,
+                    claim_expires_at=None,
+                    status="idle",
+                    failure_count=0,
+                    last_error_code=None,
+                    last_error_message=None,
+                    retry_at=None,
+                    last_completion_token=claim_token,
+                    commit_seq=commit_seq,
+                    updated_at=commit_time,
+                )
+            )
+            updated = (
+                connection.execute(select(table).where(table.c.projector == projector, table.c.session_id == session_key)).mappings().one()
+            )
+            return {
+                "changed": True,
+                "exact_replay": False,
+                "state": _projector_state_dto(updated),
+                "commit_seq": str(commit_seq),
+            }
+
+    def fail_projector_claim(
+        self,
+        *,
+        projector: str,
+        session_id: UUID,
+        claim_token: str,
+        error_code: str,
+        error_message: str | None,
+        failed_at: datetime,
+        retry_at: datetime,
+    ) -> dict[str, Any]:
+        table = ProjectorState.__table__
+        session_key = str(session_id)
+        with _write_transaction(self.engine) as connection:
+            row = (
+                connection.execute(select(table).where(table.c.projector == projector, table.c.session_id == session_key))
+                .mappings()
+                .first()
+            )
+            if row is None:
+                return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            if row["last_failure_token"] == claim_token:
+                return {
+                    "changed": False,
+                    "exact_replay": True,
+                    "state": _projector_state_dto(row),
+                    "commit_seq": str(row["commit_seq"]),
+                }
+            if row["claim_token"] != claim_token or row["claimed_revision"] is None:
+                return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            commit_time = datetime.now(UTC)
+            commit_seq = _advance_commit_seq(connection, commit_time)
+            connection.execute(
+                update(table)
+                .where(table.c.projector == projector, table.c.session_id == session_key)
+                .values(
+                    claimed_revision=None,
+                    claim_token=None,
+                    worker_id=None,
+                    claim_expires_at=None,
+                    status="failed",
+                    failure_count=int(row["failure_count"] or 0) + 1,
+                    last_error_code=error_code,
+                    last_error_message=error_message,
+                    retry_at=retry_at,
+                    last_failure_token=claim_token,
+                    commit_seq=commit_seq,
+                    updated_at=commit_time,
+                )
+            )
+            updated = (
+                connection.execute(select(table).where(table.c.projector == projector, table.c.session_id == session_key)).mappings().one()
+            )
+            return {
+                "changed": True,
+                "exact_replay": False,
+                "state": _projector_state_dto(updated),
+                "commit_seq": str(commit_seq),
+            }
+
+    def list_projector_lag(
+        self,
+        *,
+        projector: str,
+        after_session_id: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        table = ProjectorState.__table__
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            statement = select(table).where(
+                table.c.projector == projector,
+                table.c.desired_revision > table.c.completed_revision,
+            )
+            if after_session_id is not None:
+                statement = statement.where(table.c.session_id > after_session_id)
+            rows = connection.execute(statement.order_by(table.c.session_id.asc()).limit(limit)).mappings().all()
+            return {
+                "states": [_projector_state_dto(row) for row in rows],
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
     def checkpoint_passive(self) -> dict[str, int]:
         """Run a non-blocking WAL checkpoint owned by catalogd."""
 
@@ -4008,6 +4567,55 @@ def _raw_object_manifest_dto(row) -> dict[str, Any]:
         "media_state": str(row["media_state"]),
         "retired_at": _encode_datetime(row["retired_at"]),
         "retirement_revision": (str(row["retirement_revision"]) if row["retirement_revision"] is not None else None),
+    }
+
+
+def _media_object_dto(row) -> dict[str, Any]:
+    return {
+        "media_hash": str(row["media_hash"]),
+        "state": str(row["state"]),
+        "mime_type": row["mime_type"],
+        "byte_size": int(row["byte_size"]) if row["byte_size"] is not None else None,
+        "object_path": row["object_path"],
+        "commit_seq": str(row["commit_seq"]),
+        "observed_at": _encode_datetime(row["observed_at"]),
+        "verified_at": _encode_datetime(row["verified_at"]),
+        "deleted_at": _encode_datetime(row["deleted_at"]),
+    }
+
+
+def _media_ref_dto(row) -> dict[str, Any]:
+    return {
+        "id": int(row["id"]),
+        "session_id": str(row["session_id"]),
+        "media_hash": str(row["media_hash"]),
+        "envelope_id": row["envelope_id"],
+        "ref_key": str(row["ref_key"]),
+        "state": str(row["state"]),
+        "commit_seq": str(row["commit_seq"]),
+        "created_at": _encode_datetime(row["created_at"]),
+        "retired_at": _encode_datetime(row["retired_at"]),
+        "deletion_revision": str(row["deletion_revision"]) if row["deletion_revision"] is not None else None,
+    }
+
+
+def _projector_state_dto(row) -> dict[str, Any]:
+    return {
+        "projector": str(row["projector"]),
+        "session_id": str(row["session_id"]),
+        "desired_revision": str(row["desired_revision"]),
+        "completed_revision": str(row["completed_revision"]),
+        "claimed_revision": str(row["claimed_revision"]) if row["claimed_revision"] is not None else None,
+        "claim_token": row["claim_token"],
+        "worker_id": row["worker_id"],
+        "claim_expires_at": _encode_datetime(row["claim_expires_at"]),
+        "status": str(row["status"]),
+        "failure_count": int(row["failure_count"]),
+        "last_error_code": row["last_error_code"],
+        "last_error_message": row["last_error_message"],
+        "retry_at": _encode_datetime(row["retry_at"]),
+        "commit_seq": str(row["commit_seq"]),
+        "updated_at": _encode_datetime(row["updated_at"]),
     }
 
 

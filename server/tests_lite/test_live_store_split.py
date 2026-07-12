@@ -21,6 +21,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 import zerg.database as database_module
 import zerg.services.session_views as session_views_module
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+from zerg.catalogd.models import CatalogBase
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
 from zerg.database import Base
@@ -121,7 +122,7 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
     assert "sessions" not in tables
     assert "agent_heartbeats" not in tables
     assert "events" not in tables
-    catalog_only = {"source_epochs", "raw_objects", "session_tombstones"}
+    catalog_only = set(CatalogBase.metadata.tables)
     assert catalog_only.isdisjoint(tables)
 
     initialize_catalog_schema(engine)

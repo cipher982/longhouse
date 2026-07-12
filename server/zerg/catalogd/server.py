@@ -300,6 +300,24 @@ class CatalogDaemon:
             return await self._commit_raw_object(request)
         if request.method == "storage.source_epoch.manifest.v2":
             return await self._read_source_epoch_manifest(request)
+        if request.method == "storage.raw_object.exists.batch.v2":
+            return await self._raw_objects_exist_batch(request)
+        if request.method == "storage.media.commit.v2":
+            return await self._commit_media_object(request)
+        if request.method == "storage.media.read.v2":
+            return await self._read_media_object(request)
+        if request.method == "storage.media.exists.batch.v2":
+            return await self._media_objects_exist_batch(request)
+        if request.method == "projector.state.advance.v2":
+            return await self._advance_projector_state(request)
+        if request.method == "projector.state.claim.v2":
+            return await self._claim_projector_lag(request)
+        if request.method == "projector.state.complete.v2":
+            return await self._complete_projector_claim(request)
+        if request.method == "projector.state.fail.v2":
+            return await self._fail_projector_claim(request)
+        if request.method == "projector.state.list_lag.v2":
+            return await self._list_projector_lag(request)
         if request.params:
             return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
         metadata = await self._run_store(read_catalog_meta, self._engine)
@@ -1450,6 +1468,175 @@ class CatalogDaemon:
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _raw_objects_exist_batch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"envelope_ids"}:
+            return self._error(request, "invalid_request", "storage.raw_object.exists.batch.v2 requires envelope_ids")
+        try:
+            envelope_ids = _validate_hash_batch(request.params["envelope_ids"], field="envelope_ids")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.raw_objects_exist_batch, envelope_ids=envelope_ids)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _commit_media_object(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"media_hash", "state", "mime_type", "byte_size", "object_path", "session_refs", "observed_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "storage.media.commit.v2 has invalid parameters")
+        params = dict(request.params)
+        try:
+            _validate_media_commit(params)
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.commit_media_object, **params)
+        if result.get("session_deleted") is True:
+            return self._error(
+                request,
+                "session_deleted",
+                "session has a durable deletion fence",
+                details={"deletion_revision": result.get("deletion_revision")},
+            )
+        if result.get("manifest_conflict") is True:
+            return self._error(request, "conflict", "media manifest conflicts with catalog state")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_media_object(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"media_hash", "session_id", "limit"}:
+            return self._error(request, "invalid_request", "storage.media.read.v2 has invalid parameters")
+        media_hash = request.params["media_hash"]
+        if not _is_hash(media_hash):
+            return self._error(request, "invalid_request", "media_hash must be lowercase SHA-256 hex")
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id") if request.params["session_id"] is not None else None
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        limit = request.params["limit"]
+        if type(limit) is not int or not 1 <= limit <= 1_000:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.read_media_object,
+            media_hash=media_hash,
+            session_id=session_id,
+            limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _media_objects_exist_batch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"media_hashes"}:
+            return self._error(request, "invalid_request", "storage.media.exists.batch.v2 requires media_hashes")
+        try:
+            media_hashes = _validate_hash_batch(request.params["media_hashes"], field="media_hashes")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.media_objects_exist_batch, media_hashes=media_hashes)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _advance_projector_state(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"projector", "session_id", "desired_revision", "observed_at"}:
+            return self._error(request, "invalid_request", "projector.state.advance.v2 has invalid parameters")
+        try:
+            params = _validate_projector_identity(request.params)
+            params["desired_revision"] = _revision(request.params["desired_revision"], "desired_revision")
+            params["observed_at"] = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.advance_projector_state, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _claim_projector_lag(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"projector", "worker_id", "claim_token", "now", "lease_seconds", "limit"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "projector.state.claim.v2 has invalid parameters")
+        params = dict(request.params)
+        try:
+            params["projector"] = _projector_name(params["projector"])
+            params["worker_id"] = _bounded_text(params["worker_id"], "worker_id", 255)
+            params["claim_token"] = str(_canonical_uuid(params["claim_token"], "claim_token"))
+            params["now"] = _parse_datetime(params["now"], "now")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if type(params["lease_seconds"]) is not int or not 1 <= params["lease_seconds"] <= 3_600:
+            return self._error(request, "invalid_request", "lease_seconds must be an integer from 1 through 3600")
+        if type(params["limit"]) is not int or not 1 <= params["limit"] <= 100:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 100")
+        assert self._store is not None
+        result = await self._run_store(self._store.claim_projector_lag, **params)
+        if result.get("claim_conflict") is True:
+            return self._error(request, "conflict", "projector claim token conflicts with catalog state")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _complete_projector_claim(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"projector", "session_id", "claim_token", "completed_revision", "completed_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "projector.state.complete.v2 has invalid parameters")
+        try:
+            params = _validate_projector_identity(request.params)
+            params["claim_token"] = str(_canonical_uuid(request.params["claim_token"], "claim_token"))
+            params["completed_revision"] = _revision(request.params["completed_revision"], "completed_revision")
+            params["completed_at"] = _parse_datetime(request.params["completed_at"], "completed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.complete_projector_claim, **params)
+        if result.get("claim_conflict") is True:
+            return self._error(request, "conflict", "projector completion does not match the active claim")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _fail_projector_claim(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "projector",
+            "session_id",
+            "claim_token",
+            "error_code",
+            "error_message",
+            "failed_at",
+            "retry_at",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "projector.state.fail.v2 has invalid parameters")
+        try:
+            params = _validate_projector_identity(request.params)
+            params["claim_token"] = str(_canonical_uuid(request.params["claim_token"], "claim_token"))
+            params["error_code"] = _bounded_text(request.params["error_code"], "error_code", 64)
+            error_message = request.params["error_message"]
+            params["error_message"] = _bounded_text(error_message, "error_message", 2_048) if error_message is not None else None
+            params["failed_at"] = _parse_datetime(request.params["failed_at"], "failed_at")
+            params["retry_at"] = _parse_datetime(request.params["retry_at"], "retry_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if params["retry_at"] < params["failed_at"]:
+            return self._error(request, "invalid_request", "retry_at must not precede failed_at")
+        assert self._store is not None
+        result = await self._run_store(self._store.fail_projector_claim, **params)
+        if result.get("claim_conflict") is True:
+            return self._error(request, "conflict", "projector failure does not match the active claim")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_projector_lag(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"projector", "after_session_id", "limit"}:
+            return self._error(request, "invalid_request", "projector.state.list_lag.v2 has invalid parameters")
+        try:
+            projector = _projector_name(request.params["projector"])
+            after = request.params["after_session_id"]
+            after_session_id = str(_canonical_uuid(after, "after_session_id")) if after is not None else None
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        limit = request.params["limit"]
+        if type(limit) is not int or not 1 <= limit <= 1_000:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.list_projector_lag,
+            projector=projector,
+            after_session_id=after_session_id,
+            limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _run_store(self, operation, *args, **kwargs):
         if self._executor is None:
             raise CatalogDaemonError("catalog executor is not ready")
@@ -1577,6 +1764,90 @@ def _validate_raw_object_commit(params: dict) -> None:
         raise ValueError("missing media must name at least one hash")
     params["missing_media_hashes"] = tuple(missing)
     params["sealed_at"] = _parse_datetime(params["sealed_at"], "sealed_at")
+
+
+def _validate_hash_batch(value: object, *, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list) or len(value) > 1_000 or any(not _is_hash(item) for item in value):
+        raise ValueError(f"{field} must contain at most 1000 lowercase SHA-256 values")
+    if len(value) != len(set(value)):
+        raise ValueError(f"{field} must not contain duplicates")
+    return tuple(value)
+
+
+def _bounded_text(value: object, field: str, maximum_bytes: int) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} must be a non-empty string")
+    if len(value.encode("utf-8")) > maximum_bytes:
+        raise ValueError(f"{field} exceeds {maximum_bytes} UTF-8 bytes")
+    return value
+
+
+def _validate_media_commit(params: dict) -> None:
+    if not _is_hash(params["media_hash"]):
+        raise ValueError("media_hash must be lowercase SHA-256 hex")
+    state = params["state"]
+    if state not in {"present", "missing", "corrupt", "deleted"}:
+        raise ValueError("media state must be present, missing, corrupt, or deleted")
+    mime_type = params["mime_type"]
+    if mime_type is not None:
+        params["mime_type"] = _bounded_text(mime_type, "mime_type", 255)
+    byte_size = params["byte_size"]
+    if byte_size is not None and (type(byte_size) is not int or not 0 <= byte_size <= 64 * 1024 * 1024):
+        raise ValueError("byte_size must be null or an integer from 0 through 67108864")
+    object_path = params["object_path"]
+    if object_path is not None:
+        object_path = _canonical_storage_text(object_path, field="object_path", maximum_bytes=2_048)
+        if Path(object_path).is_absolute() or ".." in Path(object_path).parts or params["media_hash"] not in object_path:
+            raise ValueError("object_path must be a safe content-addressed relative path")
+        params["object_path"] = object_path
+    if state == "present" and (byte_size is None or object_path is None):
+        raise ValueError("present media requires byte_size and object_path")
+    if state == "missing" and (byte_size is not None or object_path is not None):
+        raise ValueError("missing media cannot claim byte_size or object_path")
+    refs = params["session_refs"]
+    if not isinstance(refs, list) or len(refs) > 100:
+        raise ValueError("session_refs must contain at most 100 rows")
+    if state == "deleted" and refs:
+        raise ValueError("deleted media cannot add session references")
+    parsed_refs: list[dict[str, object]] = []
+    keys: set[tuple[str, str | None, str]] = set()
+    for item in refs:
+        if not isinstance(item, dict) or set(item) != {"session_id", "envelope_id", "ref_key"}:
+            raise ValueError("session ref has invalid fields")
+        session_id = _canonical_uuid(item["session_id"], "session ref session_id")
+        envelope = item["envelope_id"]
+        if envelope is not None and not _is_hash(envelope):
+            raise ValueError("session ref envelope_id must be lowercase SHA-256 hex or null")
+        ref_key = _bounded_text(item["ref_key"], "session ref ref_key", 255)
+        key = (str(session_id), envelope, ref_key)
+        if key in keys:
+            raise ValueError("session_refs must not contain duplicates")
+        keys.add(key)
+        parsed_refs.append({"session_id": session_id, "envelope_id": envelope, "ref_key": ref_key})
+    params["session_refs"] = tuple(parsed_refs)
+    params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
+
+
+_PROJECTOR_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}\Z")
+
+
+def _projector_name(value: object) -> str:
+    if not isinstance(value, str) or _PROJECTOR_RE.fullmatch(value) is None:
+        raise ValueError("projector must be canonical lowercase ASCII")
+    return value
+
+
+def _revision(value: object, field: str) -> int:
+    if type(value) is not int or not 0 <= value < 1 << 63:
+        raise ValueError(f"{field} must be a non-negative signed 64-bit integer")
+    return value
+
+
+def _validate_projector_identity(value: dict) -> dict:
+    return {
+        "projector": _projector_name(value["projector"]),
+        "session_id": _canonical_uuid(value["session_id"], "session_id"),
+    }
 
 
 _HEARTBEAT_FIELDS = {

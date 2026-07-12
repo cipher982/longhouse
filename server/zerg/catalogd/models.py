@@ -12,6 +12,7 @@ from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
+from sqlalchemy import UniqueConstraint
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import text
 
@@ -111,4 +112,79 @@ class SessionTombstone(CatalogBase):
     commit_seq = Column(BigInteger, nullable=False)
 
 
-__all__ = ["CatalogBase", "RawObject", "SessionTombstone", "SourceEpoch"]
+class MediaObject(CatalogBase):
+    """Content-addressed media manifest; never stores media bytes."""
+
+    __tablename__ = "media_objects"
+
+    media_hash = Column(String(64), primary_key=True)
+    state = Column(String(16), nullable=False, index=True)
+    mime_type = Column(String(255), nullable=True)
+    byte_size = Column(BigInteger, nullable=True)
+    object_path = Column(Text, nullable=True)
+    commit_seq = Column(BigInteger, nullable=False)
+    observed_at = Column(DateTime(timezone=True), nullable=False)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+
+
+class SessionMediaRef(CatalogBase):
+    """Stable session-to-media membership independent of transcript parsing."""
+
+    __tablename__ = "session_media_refs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    media_hash = Column(String(64), nullable=False, index=True)
+    envelope_id = Column(String(64), nullable=True, index=True)
+    ref_key = Column(String(255), nullable=False)
+    state = Column(String(16), nullable=False, server_default=text("'active'"), index=True)
+    commit_seq = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    retired_at = Column(DateTime(timezone=True), nullable=True)
+    deletion_revision = Column(BigInteger, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "media_hash", "envelope_id", "ref_key", name="uq_session_media_ref"),
+        Index("ix_session_media_refs_session_state", "session_id", "state", "id"),
+    )
+
+
+class ProjectorState(CatalogBase):
+    """One coalescing desired/completed revision row per projector/session."""
+
+    __tablename__ = "projector_state"
+
+    projector = Column(String(64), primary_key=True)
+    session_id = Column(String(36), primary_key=True)
+    desired_revision = Column(BigInteger, nullable=False, server_default=text("0"))
+    completed_revision = Column(BigInteger, nullable=False, server_default=text("0"))
+    claimed_revision = Column(BigInteger, nullable=True)
+    claim_token = Column(String(64), nullable=True, index=True)
+    worker_id = Column(String(255), nullable=True)
+    claim_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    status = Column(String(16), nullable=False, server_default=text("'idle'"), index=True)
+    failure_count = Column(Integer, nullable=False, server_default=text("0"))
+    last_error_code = Column(String(64), nullable=True)
+    last_error_message = Column(Text, nullable=True)
+    retry_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    last_completion_token = Column(String(64), nullable=True)
+    last_failure_token = Column(String(64), nullable=True)
+    commit_seq = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (Index("ix_projector_state_lag", "projector", "completed_revision", "desired_revision", "session_id"),)
+
+
+__all__ = [
+    "CatalogBase",
+    "MediaObject",
+    "ProjectorState",
+    "RawObject",
+    "SessionMediaRef",
+    "SessionTombstone",
+    "SourceEpoch",
+]

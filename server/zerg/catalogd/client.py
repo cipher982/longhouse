@@ -68,6 +68,15 @@ _SAFE_RETRY_METHODS = {
     "storage.source_epoch.open.v2",
     "storage.raw_object.commit.v2",
     "storage.source_epoch.manifest.v2",
+    "storage.raw_object.exists.batch.v2",
+    "storage.media.commit.v2",
+    "storage.media.read.v2",
+    "storage.media.exists.batch.v2",
+    "projector.state.advance.v2",
+    "projector.state.claim.v2",
+    "projector.state.complete.v2",
+    "projector.state.fail.v2",
+    "projector.state.list_lag.v2",
 }
 
 # speed-of-light-database.md separates the 250 ms p95 performance target from

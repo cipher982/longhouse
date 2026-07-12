@@ -135,6 +135,28 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         assert replay_after_drift["exact_replay"] is True
         assert replay_after_drift["receipt"] == committed["receipt"]
 
+        existence = await client.call(
+            "storage.raw_object.exists.batch.v2",
+            {"envelope_ids": [raw["envelope_id"], "f" * 64]},
+        )
+        assert existence["commit_seq"] == "2"
+        assert existence["objects"] == [
+            {
+                "envelope_id": raw["envelope_id"],
+                "exists": True,
+                "state": "durable",
+                "object_hash": raw["object_hash"],
+                "commit_seq": "2",
+            },
+            {
+                "envelope_id": "f" * 64,
+                "exists": False,
+                "state": "missing",
+                "object_hash": None,
+                "commit_seq": None,
+            },
+        ]
+
         identity_mismatch = {**raw, "envelope_id": "0" * 64}
         with pytest.raises(CatalogRemoteError) as invalid_identity:
             await client.call("storage.raw_object.commit.v2", identity_mismatch)
@@ -311,13 +333,20 @@ def test_storage_v2_tables_are_catalog_schema_owned(daemon_paths):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
-    assert {"source_epochs", "raw_objects", "session_tombstones"}.issubset(set(CatalogBase.metadata.tables))
+    assert {
+        "source_epochs",
+        "raw_objects",
+        "session_tombstones",
+        "media_objects",
+        "session_media_refs",
+        "projector_state",
+    }.issubset(set(CatalogBase.metadata.tables))
     with engine.connect() as connection:
         table_names = {
             row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")
         }
     engine.dispose()
-    assert {"source_epochs", "raw_objects", "session_tombstones"}.issubset(table_names)
+    assert set(CatalogBase.metadata.tables).issubset(table_names)
 
 
 def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):
@@ -325,9 +354,8 @@ def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
     with engine.begin() as connection:
-        connection.exec_driver_sql("DROP TABLE raw_objects")
-        connection.exec_driver_sql("DROP TABLE source_epochs")
-        connection.exec_driver_sql("DROP TABLE session_tombstones")
+        for table_name in CatalogBase.metadata.tables:
+            connection.exec_driver_sql(f'DROP TABLE "{table_name}"')
 
     metadata = initialize_catalog_schema(engine)
     with engine.connect() as connection:
@@ -337,4 +365,4 @@ def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):
     engine.dispose()
 
     assert metadata.schema_version == 1
-    assert {"source_epochs", "raw_objects", "session_tombstones"}.issubset(table_names)
+    assert set(CatalogBase.metadata.tables).issubset(table_names)
