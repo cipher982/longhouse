@@ -31,7 +31,6 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
-from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
@@ -124,6 +123,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 _catalog_db_dependency = catalog_db_dependency()
+
+
+def _no_session_preferences_db():
+    yield None
+
+
+session_preferences_db_dependency = _no_session_preferences_db if database_module.live_catalog_enabled() else get_db
 
 VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
@@ -924,7 +930,7 @@ def get_filters(
 async def set_session_action(
     session_id: UUID,
     body: SessionActionRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(session_preferences_db_dependency),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionActionResponse:
@@ -936,13 +942,19 @@ async def set_session_action(
             detail=f"Invalid action '{body.action}'. Must be one of: {', '.join(sorted(action_to_state))}",
         )
 
-    session_model = LiveSessionCatalog if database_module.live_catalog_enabled() else AgentSession
-    session_key = session_model.session_id if database_module.live_catalog_enabled() else session_model.id
-    session = db.query(session_model).filter(session_key == session_id).first()
+    new_state = action_to_state[body.action]
+    if database_module.live_catalog_enabled():
+        from zerg.services.session_preferences import update_session_preferences
+
+        preferences = await update_session_preferences(session_id, user_state=new_state)
+        if preferences is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        return SessionActionResponse(session_id=str(session_id), user_state=preferences.user_state)
+
+    assert db is not None
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-
-    new_state = action_to_state[body.action]
     session.user_state = new_state
     session.user_state_at = datetime.now(timezone.utc)
     db.commit()
@@ -954,17 +966,23 @@ async def set_session_action(
 async def set_session_loop_mode(
     session_id: UUID,
     body: SessionLoopModeRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(session_preferences_db_dependency),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionLoopModeResponse:
     """Set the explicit loop mode for a coding session."""
-    session_model = LiveSessionCatalog if database_module.live_catalog_enabled() else AgentSession
-    session_key = session_model.session_id if database_module.live_catalog_enabled() else session_model.id
-    session = db.query(session_model).filter(session_key == session_id).first()
+    if database_module.live_catalog_enabled():
+        from zerg.services.session_preferences import update_session_preferences
+
+        preferences = await update_session_preferences(session_id, loop_mode=body.loop_mode.value)
+        if preferences is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        return SessionLoopModeResponse(session_id=str(session_id), loop_mode=preferences.loop_mode)
+
+    assert db is not None
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-
     session.loop_mode = body.loop_mode.value
     db.commit()
 
@@ -975,17 +993,29 @@ async def set_session_loop_mode(
 async def set_session_notification_watch(
     session_id: UUID,
     body: SessionNotificationWatchRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(session_preferences_db_dependency),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionNotificationWatchResponse:
     """Mute or unmute session attention notifications."""
-    session_model = LiveSessionCatalog if database_module.live_catalog_enabled() else AgentSession
-    session_key = session_model.session_id if database_module.live_catalog_enabled() else session_model.id
-    session = db.query(session_model).filter(session_key == session_id).first()
+    if database_module.live_catalog_enabled():
+        from zerg.services.session_preferences import update_session_preferences
+
+        preferences = await update_session_preferences(
+            session_id,
+            notification_muted=bool(body.notification_muted),
+        )
+        if preferences is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        return SessionNotificationWatchResponse(
+            session_id=str(session_id),
+            notification_muted=preferences.notification_muted,
+        )
+
+    assert db is not None
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-
     session.notification_muted = bool(body.notification_muted)
     db.commit()
 

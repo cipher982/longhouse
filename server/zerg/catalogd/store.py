@@ -2475,6 +2475,63 @@ class CatalogStore:
                 "facts": facts,
             }
 
+    def update_session_preferences(
+        self,
+        *,
+        session_id: str,
+        user_state: str | None,
+        loop_mode: str | None,
+        notification_muted: bool | None,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Update bounded user-owned session state in one catalog transaction."""
+
+        table = LiveSessionCatalog.__table__
+        with _write_transaction(self.engine) as connection:
+            current = (
+                connection.execute(
+                    select(
+                        table.c.user_state,
+                        table.c.user_state_at,
+                        table.c.loop_mode,
+                        table.c.notification_muted,
+                    ).where(table.c.session_id == session_id)
+                )
+                .mappings()
+                .first()
+            )
+            if current is None:
+                return {
+                    "found": False,
+                    "preferences": None,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            values: dict[str, Any] = {}
+            if user_state is not None and user_state != str(current["user_state"] or "active"):
+                values["user_state"] = user_state
+                values["user_state_at"] = observed_at
+            if loop_mode is not None and loop_mode != str(current["loop_mode"] or "assist"):
+                values["loop_mode"] = loop_mode
+            if notification_muted is not None and notification_muted != bool(current["notification_muted"]):
+                values["notification_muted"] = int(notification_muted)
+            if values:
+                values["updated_at"] = observed_at
+                connection.execute(update(table).where(table.c.session_id == session_id).values(**values))
+                commit_seq = _advance_commit_seq(connection, observed_at)
+            else:
+                commit_seq = _current_commit_seq(connection)
+            return {
+                "found": True,
+                "preferences": {
+                    "user_state": user_state if user_state is not None else str(current["user_state"] or "active"),
+                    "user_state_at": _encode_datetime(observed_at if "user_state" in values else current["user_state_at"]),
+                    "loop_mode": loop_mode if loop_mode is not None else str(current["loop_mode"] or "assist"),
+                    "notification_muted": (notification_muted if notification_muted is not None else bool(current["notification_muted"])),
+                },
+                "updated": bool(values),
+                "commit_seq": str(commit_seq),
+            }
+
     def resolve_session_prefix(self, *, prefix: str) -> dict[str, Any]:
         observed_at = datetime.now(UTC)
         catalog = LiveSessionCatalog.__table__

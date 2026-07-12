@@ -60,3 +60,33 @@ def test_missing_live_row_uses_canonical_defaults_not_archive(monkeypatch, tmp_p
     assert preferences.user_state == "active"
     assert preferences.loop_mode == "assist"
     assert preferences.notification_muted is False
+
+
+def test_catalog_mode_reads_preferences_without_opening_sqlite(monkeypatch):
+    session_id = uuid4()
+    monkeypatch.setattr("zerg.database.live_store_configured", lambda: True)
+    monkeypatch.setattr("zerg.database.live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(
+        "zerg.services.catalog_read_gateway.session_snapshot",
+        lambda value: {
+            "found": True,
+            "facts": {
+                "catalog": {
+                    "session_id": value,
+                    "user_state": "snoozed",
+                    "loop_mode": "autopilot",
+                    "notification_muted": True,
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "zerg.database.get_live_session_factory",
+        lambda: (_ for _ in ()).throw(AssertionError("API process must not open live SQLite")),
+    )
+
+    preferences = load_session_preferences(session_id)
+
+    assert preferences.user_state == "snoozed"
+    assert preferences.loop_mode == "autopilot"
+    assert preferences.notification_muted is True

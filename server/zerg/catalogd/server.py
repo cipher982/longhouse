@@ -273,6 +273,8 @@ class CatalogDaemon:
             return await self._read_session(request)
         if request.method == "session.read.batch.v2":
             return await self._read_sessions(request)
+        if request.method == "session.preferences.update.v2":
+            return await self._update_session_preferences(request)
         if request.method == "session.prefix.resolve.v2":
             return await self._resolve_session_prefix(request)
         if request.method == "machine.enrollment.list.v2":
@@ -1112,6 +1114,34 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "session_ids must be unique canonical UUIDs")
         assert self._store is not None
         result = await self._run_store(self._store.read_sessions, session_ids=session_ids)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _update_session_preferences(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "user_state", "loop_mode", "notification_muted", "observed_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "session.preferences.update.v2 has invalid parameters")
+        params = dict(request.params)
+        if not _is_canonical_uuid(params["session_id"]):
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        if params["user_state"] is not None and params["user_state"] not in {
+            "active",
+            "parked",
+            "snoozed",
+            "archived",
+        }:
+            return self._error(request, "invalid_request", "user_state is not recognized")
+        if params["loop_mode"] is not None and params["loop_mode"] not in {"assist", "autopilot"}:
+            return self._error(request, "invalid_request", "loop_mode is not recognized")
+        if params["notification_muted"] is not None and type(params["notification_muted"]) is not bool:
+            return self._error(request, "invalid_request", "notification_muted must be a boolean or null")
+        if all(params[field] is None for field in ("user_state", "loop_mode", "notification_muted")):
+            return self._error(request, "invalid_request", "at least one preference must be provided")
+        try:
+            params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.update_session_preferences, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_session_prefix(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

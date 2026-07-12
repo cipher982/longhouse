@@ -56,6 +56,7 @@ _SAFE_RETRY_METHODS = {
     "session.input.recent.list.v2",
     "session.read.v2",
     "session.read.batch.v2",
+    "session.preferences.update.v2",
     "session.timeline.list.v2",
 }
 
