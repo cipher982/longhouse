@@ -50,7 +50,8 @@ struct LonghouseAPITests {
             limit: 50,
             offset: 100,
             branchMode: "head",
-            snapshotEventId: 42
+            snapshotEventId: "42",
+            cursor: "generation-qualified-cursor"
         )
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
 
@@ -60,6 +61,7 @@ struct LonghouseAPITests {
             URLQueryItem(name: "offset", value: "100"),
             URLQueryItem(name: "branch_mode", value: "head"),
             URLQueryItem(name: "snapshot_event_id", value: "42"),
+            URLQueryItem(name: "cursor", value: "generation-qualified-cursor"),
         ])
     }
 

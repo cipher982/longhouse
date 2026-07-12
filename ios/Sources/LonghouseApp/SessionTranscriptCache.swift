@@ -8,7 +8,7 @@ final class SessionTranscriptCache {
         let projectionItems: [SessionProjectionItem]?
         let loadedProjectionItemCount: Int
         let totalProjectionItemCount: Int
-        let tailSnapshotEventId: Int?
+        let tailSnapshotEventId: String?
         /// Last realtime pubsub seq seen, so a same-process nav-away/back can
         /// seed the SSE reconnect cursor instead of replaying cold.
         let lastPubsubSeq: Int?
@@ -56,7 +56,7 @@ final class SessionTranscriptCache {
         projectionItems: [SessionProjectionItem]? = nil,
         loadedProjectionItemCount: Int,
         totalProjectionItemCount: Int,
-        tailSnapshotEventId: Int?,
+        tailSnapshotEventId: String?,
         lastPubsubSeq: Int? = nil,
         workspaceRevisionFingerprint: String? = nil
     ) {

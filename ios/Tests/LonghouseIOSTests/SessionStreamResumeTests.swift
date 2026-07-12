@@ -27,7 +27,7 @@ struct SessionStreamResumeTests {
             events: workspace.events,
             loadedProjectionItemCount: workspace.events.count,
             totalProjectionItemCount: workspace.projection.total,
-            tailSnapshotEventId: 30,
+            tailSnapshotEventId: "30",
             lastPubsubSeq: 777,
             workspaceRevisionFingerprint: "sha256:cached"
         )
@@ -151,7 +151,7 @@ struct SessionStreamResumeTests {
             events: workspace.events,
             loadedProjectionItemCount: workspace.events.count,
             totalProjectionItemCount: workspace.projection.total,
-            tailSnapshotEventId: 30,
+            tailSnapshotEventId: "30",
             lastPubsubSeq: 777,
             workspaceRevisionFingerprint: "sha256:cached-gap"
         )
@@ -372,7 +372,8 @@ private actor FakeStreamResumeClient: SessionWorkspaceClient {
         limit: Int,
         offset: Int,
         branchMode: String,
-        snapshotEventId: Int?
+        snapshotEventId: String?,
+        cursor: String?
     ) async throws -> SessionMobileTailResponse {
         tailRequests += 1
         if tailFailuresRemaining > 0 {
@@ -383,7 +384,7 @@ private actor FakeStreamResumeClient: SessionWorkspaceClient {
         return SessionMobileTailResponse(
             session: workspace.session,
             projection: workspace.projection,
-            snapshotEventId: workspace.events.map(\.id).max(),
+            snapshotEventId: workspace.events.compactMap(\.legacyNumericId).max().map(String.init),
             workspaceRevision: workspace.workspaceRevision
         )
     }

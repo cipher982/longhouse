@@ -27,7 +27,7 @@ struct SessionResumeHydrationTests {
             events: workspace.events,
             loadedProjectionItemCount: workspace.events.count,
             totalProjectionItemCount: workspace.projection.total,
-            tailSnapshotEventId: workspace.events.map(\.id).max(),
+            tailSnapshotEventId: workspace.events.compactMap(\.legacyNumericId).max().map(String.init),
             lastPubsubSeq: nil
         )
         store.waitForPendingWrites()
@@ -201,14 +201,15 @@ private actor FakeResumeClient: SessionWorkspaceClient {
         limit: Int,
         offset: Int,
         branchMode: String,
-        snapshotEventId: Int?
+        snapshotEventId: String?,
+        cursor: String?
     ) async throws -> SessionMobileTailResponse {
         if shouldFailTails { throw URLError(.cannotConnectToHost) }
         let workspace = current()
         return SessionMobileTailResponse(
             session: workspace.session,
             projection: workspace.projection,
-            snapshotEventId: workspace.events.map(\.id).max()
+            snapshotEventId: workspace.events.compactMap(\.legacyNumericId).max().map(String.init)
         )
     }
 
@@ -271,7 +272,8 @@ private actor BlockingResumeClient: SessionWorkspaceClient {
         limit: Int,
         offset: Int,
         branchMode: String,
-        snapshotEventId: Int?
+        snapshotEventId: String?,
+        cursor: String?
     ) async throws -> SessionMobileTailResponse {
         tailRequested = true
         let pending = waiters
@@ -285,7 +287,7 @@ private actor BlockingResumeClient: SessionWorkspaceClient {
         return SessionMobileTailResponse(
             session: workspace.session,
             projection: workspace.projection,
-            snapshotEventId: workspace.events.map(\.id).max()
+            snapshotEventId: workspace.events.compactMap(\.legacyNumericId).max().map(String.init)
         )
     }
 

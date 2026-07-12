@@ -704,7 +704,7 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
 
     var syntheticEvent: SessionEvent {
         SessionEvent(
-            id: -abs(eventId),
+            id: "synthetic:preview:\(eventId)",
             role: "assistant",
             contentText: text,
             toolName: nil,
@@ -1033,10 +1033,43 @@ struct SessionProjectionResponse: Codable, Sendable {
     let pageOffset: Int
     let branchMode: String
     let abandonedEvents: Int
+    var generationId: String? = nil
+    var nextCursor: String? = nil
+    var hasMore: Bool? = nil
+}
+
+@propertyWrapper
+struct FlexibleStringID: Codable, Hashable, Sendable {
+    var wrappedValue: String?
+
+    init(wrappedValue: String?) {
+        self.wrappedValue = wrappedValue
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            wrappedValue = nil
+        } else if let value = try? container.decode(String.self) {
+            wrappedValue = value
+        } else if let value = try? container.decode(Int.self) {
+            wrappedValue = String(value)
+        } else {
+            throw DecodingError.typeMismatch(
+                String.self,
+                .init(codingPath: decoder.codingPath, debugDescription: "Expected string or integer identity")
+            )
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(wrappedValue)
+    }
 }
 
 struct SessionWorkspaceRevision: Codable, Hashable, Sendable {
-    let latestEventId: Int?
+    @FlexibleStringID var latestEventId: String?
     let latestSessionUpdatedAt: String?
     let latestRuntimeSignalAt: String?
     let runtimeVersionSum: Int?
@@ -1063,12 +1096,25 @@ struct SessionWorkspaceResponse: Codable, Sendable {
 struct SessionMobileTailResponse: Codable, Sendable {
     let session: SessionDetail
     let projection: SessionProjectionResponse
-    let snapshotEventId: Int?
+    @FlexibleStringID var snapshotEventId: String?
     var workspaceRevision: SessionWorkspaceRevision? = nil
 
     var events: [SessionEvent] {
         projection.items.compactMap(\.event)
     }
+}
+
+/// One immutable-render transcript page. `nextCursor` is opaque and already
+/// generation-qualified by the Runtime Host; clients must never parse or
+/// compare it.
+struct SessionEventsPage: Codable, Sendable {
+    let v: Int
+    let sessionId: String
+    let generationId: String
+    let events: [SessionEvent]
+    let nextCursor: String?
+    let hasMore: Bool
+    let total: Int
 }
 
 enum SessionInputAuthoredVia: Codable, Hashable, Sendable {
@@ -1131,7 +1177,15 @@ struct SessionEventMediaRef: Codable, Hashable, Sendable {
 }
 
 struct SessionEvent: Codable, Identifiable, Sendable {
-    let id: Int
+    /// Durable identity, not chronology. Storage-v2 IDs are opaque strings;
+    /// legacy integer IDs decode to their decimal representation.
+    let id: String
+    /// Opaque generation-qualified paging cursor supplied by storage-v2.
+    let cursor: String?
+    /// Explicit durable ordering value when the API supplies one.
+    let orderTimeUs: Int64?
+    let threadId: String?
+    let branchKind: String?
     let role: String
     let contentText: String?
     let toolName: String?
@@ -1147,7 +1201,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let mediaRefs: [SessionEventMediaRef]
 
     init(
-        id: Int,
+        id: String,
         role: String,
         contentText: String?,
         toolName: String?,
@@ -1160,9 +1214,17 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         isHeadBranch: Bool,
         inputOrigin: SessionInputOrigin?,
         eventOrigin: String? = nil,
-        mediaRefs: [SessionEventMediaRef] = []
+        mediaRefs: [SessionEventMediaRef] = [],
+        cursor: String? = nil,
+        orderTimeUs: Int64? = nil,
+        threadId: String? = nil,
+        branchKind: String? = nil
     ) {
         self.id = id
+        self.cursor = cursor
+        self.orderTimeUs = orderTimeUs
+        self.threadId = threadId
+        self.branchKind = branchKind
         self.role = role
         self.contentText = contentText
         self.toolName = toolName
@@ -1178,9 +1240,68 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         self.mediaRefs = mediaRefs
     }
 
+    /// Source-compatibility convenience while fixtures and the legacy API
+    /// still expose integer identities. Callers still observe `id` as String.
+    init(
+        id: Int,
+        role: String,
+        contentText: String?,
+        toolName: String?,
+        toolInputJSON: [String: JSONValue]?,
+        toolOutputText: String?,
+        toolCallId: String?,
+        toolCallState: ToolCallState?,
+        timestamp: String,
+        inActiveContext: Bool,
+        isHeadBranch: Bool,
+        inputOrigin: SessionInputOrigin?,
+        eventOrigin: String? = nil,
+        mediaRefs: [SessionEventMediaRef] = [],
+        cursor: String? = nil,
+        orderTimeUs: Int64? = nil,
+        threadId: String? = nil,
+        branchKind: String? = nil
+    ) {
+        self.init(
+            id: String(id),
+            role: role,
+            contentText: contentText,
+            toolName: toolName,
+            toolInputJSON: toolInputJSON,
+            toolOutputText: toolOutputText,
+            toolCallId: toolCallId,
+            toolCallState: toolCallState,
+            timestamp: timestamp,
+            inActiveContext: inActiveContext,
+            isHeadBranch: isHeadBranch,
+            inputOrigin: inputOrigin,
+            eventOrigin: eventOrigin,
+            mediaRefs: mediaRefs,
+            cursor: cursor,
+            orderTimeUs: orderTimeUs,
+            threadId: threadId,
+            branchKind: branchKind
+        )
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(Int.self, forKey: .id)
+        if let stringId = (try? container.decode(String.self, forKey: .id))
+            ?? (try? container.decode(String.self, forKey: .eventId)) {
+            id = stringId
+        } else if let integerId = (try? container.decode(Int.self, forKey: .id))
+            ?? (try? container.decode(Int.self, forKey: .eventId)) {
+            id = String(integerId)
+        } else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.id,
+                .init(codingPath: decoder.codingPath, debugDescription: "Expected id or event_id")
+            )
+        }
+        cursor = try container.decodeIfPresent(String.self, forKey: .cursor)
+        orderTimeUs = try container.decodeIfPresent(Int64.self, forKey: .orderTimeUs)
+        threadId = try container.decodeIfPresent(String.self, forKey: .threadId)
+        branchKind = try container.decodeIfPresent(String.self, forKey: .branchKind)
         role = try container.decode(String.self, forKey: .role)
         contentText = try container.decodeIfPresent(String.self, forKey: .contentText)
         toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
@@ -1189,15 +1310,44 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         toolCallId = try container.decodeIfPresent(String.self, forKey: .toolCallId)
         toolCallState = try container.decodeIfPresent(ToolCallState.self, forKey: .toolCallState)
         timestamp = try container.decode(String.self, forKey: .timestamp)
-        inActiveContext = try container.decode(Bool.self, forKey: .inActiveContext)
-        isHeadBranch = try container.decode(Bool.self, forKey: .isHeadBranch)
+        inActiveContext = try container.decodeIfPresent(Bool.self, forKey: .inActiveContext)
+            ?? (branchKind == nil || branchKind == "head")
+        isHeadBranch = try container.decodeIfPresent(Bool.self, forKey: .isHeadBranch)
+            ?? (branchKind == nil || branchKind == "head")
         inputOrigin = try container.decodeIfPresent(SessionInputOrigin.self, forKey: .inputOrigin)
         eventOrigin = try container.decodeIfPresent(String.self, forKey: .eventOrigin)
         mediaRefs = try container.decodeIfPresent([SessionEventMediaRef].self, forKey: .mediaRefs) ?? []
     }
 
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encodeIfPresent(cursor, forKey: .cursor)
+        try container.encodeIfPresent(orderTimeUs, forKey: .orderTimeUs)
+        try container.encodeIfPresent(threadId, forKey: .threadId)
+        try container.encodeIfPresent(branchKind, forKey: .branchKind)
+        try container.encode(role, forKey: .role)
+        try container.encodeIfPresent(contentText, forKey: .contentText)
+        try container.encodeIfPresent(toolName, forKey: .toolName)
+        try container.encodeIfPresent(toolInputJSON, forKey: .toolInputJSON)
+        try container.encodeIfPresent(toolOutputText, forKey: .toolOutputText)
+        try container.encodeIfPresent(toolCallId, forKey: .toolCallId)
+        try container.encodeIfPresent(toolCallState, forKey: .toolCallState)
+        try container.encode(timestamp, forKey: .timestamp)
+        try container.encode(inActiveContext, forKey: .inActiveContext)
+        try container.encode(isHeadBranch, forKey: .isHeadBranch)
+        try container.encodeIfPresent(inputOrigin, forKey: .inputOrigin)
+        try container.encodeIfPresent(eventOrigin, forKey: .eventOrigin)
+        try container.encode(mediaRefs, forKey: .mediaRefs)
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id
+        case eventId
+        case cursor
+        case orderTimeUs
+        case threadId
+        case branchKind
         case role
         case contentText
         case toolName
@@ -1211,6 +1361,30 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case inputOrigin
         case eventOrigin
         case mediaRefs
+    }
+
+    var legacyNumericId: Int? { Int(id) }
+
+    var isSynthetic: Bool {
+        id.hasPrefix("synthetic:") || (legacyNumericId.map { $0 < 0 } ?? false)
+    }
+
+    /// Compare transcript chronology without treating opaque identity or
+    /// cursor bytes as sortable. Returns nil if the server has not supplied
+    /// enough ordering information and timestamps are equal/unparseable.
+    func isOrdered(before other: SessionEvent) -> Bool? {
+        if let lhs = orderTimeUs, let rhs = other.orderTimeUs, lhs != rhs {
+            return lhs < rhs
+        }
+        if let lhs = LonghouseDateParser.parse(timestamp),
+           let rhs = LonghouseDateParser.parse(other.timestamp),
+           lhs != rhs {
+            return lhs < rhs
+        }
+        if let lhs = legacyNumericId, let rhs = other.legacyNumericId, lhs != rhs {
+            return lhs < rhs
+        }
+        return nil
     }
 
     /// Lookup a top-level key from the tool input JSON as a string.

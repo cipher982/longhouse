@@ -1608,12 +1608,13 @@ final class SessionViewModel: ObservableObject {
     private var lastWorkspaceProjectionItems: [SessionProjectionItem] = []
     private var loadedProjectionItemCount = 0
     private var totalProjectionItemCount = 0
-    private var tailSnapshotEventId: Int?
+    private var tailSnapshotEventId: String?
+    private var tailNextCursor: String?
     private var prefetchedOlderTail: SessionMobileTailResponse?
     private var prefetchedOlderOffset: Int?
-    private var prefetchedOlderSnapshotEventId: Int?
+    private var prefetchedOlderSnapshotEventId: String?
     private var prefetchInFlightOffset: Int?
-    private var prefetchInFlightSnapshotEventId: Int?
+    private var prefetchInFlightSnapshotEventId: String?
     private var prefetchInFlightToken: Int?
     private var nextPrefetchToken = 0
     private var isLoadingOlder = false
@@ -1678,6 +1679,7 @@ final class SessionViewModel: ObservableObject {
             loadedProjectionItemCount = 0
             totalProjectionItemCount = 0
             tailSnapshotEventId = nil
+            tailNextCursor = nil
             prefetchedOlderTail = nil
             prefetchedOlderOffset = nil
             prefetchedOlderSnapshotEventId = nil
@@ -2328,7 +2330,8 @@ final class SessionViewModel: ObservableObject {
                 limit: initialTailLimit,
                 offset: 0,
                 branchMode: "head",
-                snapshotEventId: nil
+                snapshotEventId: nil,
+                cursor: nil
             )
             let requestMs = Int(Date().timeIntervalSince(requestStartedAt) * 1000)
             guard activeSessionId == sessionId else { return }
@@ -2355,6 +2358,7 @@ final class SessionViewModel: ObservableObject {
                 && prefetchedOlderSnapshotEventId == tail.snapshotEventId
             self.totalProjectionItemCount = tail.projection.total
             self.tailSnapshotEventId = tail.snapshotEventId
+            self.tailNextCursor = tail.projection.nextCursor
             self.lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint
             if !keepPrefetchedOlderTail {
                 self.prefetchedOlderTail = nil
@@ -2402,7 +2406,7 @@ final class SessionViewModel: ObservableObject {
             olderEvents = lastWorkspaceEvents[..<firstFreshIndex].filter { !freshTailEventIds.contains($0.id) }
         } else {
             olderEvents = lastWorkspaceEvents.filter { event in
-                event.id < firstFreshTailEvent.id && !freshTailEventIds.contains(event.id)
+                event.isOrdered(before: firstFreshTailEvent) != false && !freshTailEventIds.contains(event.id)
             }
         }
         return olderEvents + freshTailEvents
@@ -2431,7 +2435,9 @@ final class SessionViewModel: ObservableObject {
 
         let freshEventIds = Set(freshTailItems.compactMap(\.event?.id))
         let freshActionIds = Set(freshTailItems.compactMap(\.action?.id))
-        let olderMergedEventIds = Set(mergedEvents.filter { $0.id < firstFreshEvent.id }.map(\.id))
+        let olderMergedEventIds = Set(mergedEvents.filter {
+            $0.isOrdered(before: firstFreshEvent) != false
+        }.map(\.id))
         let olderItems = lastWorkspaceProjectionItems.filter { item in
             if let event = item.event {
                 return olderMergedEventIds.contains(event.id) && !freshEventIds.contains(event.id)
@@ -2502,16 +2508,25 @@ final class SessionViewModel: ObservableObject {
             limit: olderPageLimit,
             offset: offset,
             branchMode: "head",
-            snapshotEventId: tailSnapshotEventId
+            snapshotEventId: tailSnapshotEventId,
+            cursor: tailNextCursor
         )
     }
 
     private func applyOlderTail(_ tail: SessionMobileTailResponse) {
         totalProjectionItemCount = tail.projection.total
+        tailNextCursor = tail.projection.nextCursor
         lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint ?? lastWorkspaceRevisionFingerprint
-        loadedProjectionItemCount = max(loadedProjectionItemCount, tail.projection.total - tail.projection.pageOffset)
         let existingItemIds = Set(lastWorkspaceProjectionItems.map(\.id))
         let olderProjectionItems = tail.projection.items.filter { !existingItemIds.contains($0.id) }
+        if tail.projection.generationId != nil {
+            loadedProjectionItemCount = min(
+                totalProjectionItemCount,
+                loadedProjectionItemCount + olderProjectionItems.count
+            )
+        } else {
+            loadedProjectionItemCount = max(loadedProjectionItemCount, tail.projection.total - tail.projection.pageOffset)
+        }
         if !olderProjectionItems.isEmpty {
             let existingEventIds = Set(lastWorkspaceEvents.map(\.id))
             let olderEvents = olderProjectionItems.compactMap(\.event).filter { !existingEventIds.contains($0.id) }
@@ -2543,7 +2558,7 @@ final class SessionViewModel: ObservableObject {
         )
         guard visibleEvents.count != durableEvents.count,
               let synthetic = visibleEvents.last,
-              synthetic.id < 0
+              synthetic.isSynthetic
         else {
             return baseItems
         }
@@ -2575,6 +2590,7 @@ final class SessionViewModel: ObservableObject {
         loadedProjectionItemCount = snapshot.loadedProjectionItemCount
         totalProjectionItemCount = snapshot.totalProjectionItemCount
         tailSnapshotEventId = snapshot.tailSnapshotEventId
+        tailNextCursor = nil
         lastPubsubSeq = snapshot.lastPubsubSeq
         lastWorkspaceRevisionFingerprint = snapshot.workspaceRevisionFingerprint
         prefetchedOlderTail = nil
@@ -2598,6 +2614,7 @@ final class SessionViewModel: ObservableObject {
         loadedProjectionItemCount = snapshot.loadedProjectionItemCount
         totalProjectionItemCount = snapshot.totalProjectionItemCount
         tailSnapshotEventId = snapshot.tailSnapshotEventId
+        tailNextCursor = nil
         lastPubsubSeq = snapshot.lastPubsubSeq
         lastWorkspaceRevisionFingerprint = snapshot.workspaceRevisionFingerprint
         prefetchedOlderTail = nil
@@ -2760,16 +2777,16 @@ final class SessionViewModel: ObservableObject {
         guard let latest = events.last else { return }
         let pendingTelemetry = pendingRealtimeTelemetry
         let eventForBeacon = pendingTelemetry.flatMap { pending in
-            events.last(where: { $0.id == pending.latestEventId })
+            events.last(where: { $0.legacyNumericId == pending.latestEventId })
         } ?? latest
         guard let emittedAt = LonghouseDateParser.parse(eventForBeacon.timestamp) else { return }
         let managed = detail?.stateFacts.controlOwnership == "owned"
-        let realtimeTelemetry = pendingTelemetry?.latestEventId == eventForBeacon.id
+        let realtimeTelemetry = pendingTelemetry?.latestEventId == eventForBeacon.legacyNumericId
             ? pendingTelemetry
             : nil
         if let payload = await RenderBeaconReporter.shared.payload(
             sessionId: sessionId,
-            latestEventId: String(eventForBeacon.id),
+            latestEventId: eventForBeacon.id,
             emittedAt: emittedAt,
             managed: managed,
             clockSkewMs: realtimeTelemetry?.clockSkewMs ?? 0,

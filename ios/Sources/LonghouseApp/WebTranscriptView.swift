@@ -161,7 +161,7 @@ struct WebTranscriptView: UIViewRepresentable {
 
     private nonisolated static func liveProvisionalAssistantDate(_ item: TimelineItem) -> Date? {
         guard case .assistant(let event) = item else { return nil }
-        guard event.eventOrigin == "live_provisional" || event.id < 0 else { return nil }
+        guard event.eventOrigin == "live_provisional" || event.isSynthetic else { return nil }
         return LonghouseDateParser.parse(event.timestamp) ?? .distantPast
     }
 

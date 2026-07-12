@@ -4,7 +4,7 @@ struct PassiveCall: Identifiable, Sendable {
     let call: SessionEvent
     let result: SessionEvent?
     let pairing: ToolPairing
-    var id: Int { call.id }
+    var id: String { call.id }
 }
 
 enum ToolPairing: String, Sendable {
@@ -29,7 +29,7 @@ enum TimelineItem: Identifiable, Sendable {
         case .tool(let call, _, _): return "tool:\(call.id)"
         case .orphanTool(let e): return "orphan:\(e.id)"
         case .passiveGroup(let calls):
-            let firstId = calls.first?.call.id ?? 0
+            let firstId = calls.first?.call.id ?? "missing"
             return "passive:\(firstId)"
         }
     }

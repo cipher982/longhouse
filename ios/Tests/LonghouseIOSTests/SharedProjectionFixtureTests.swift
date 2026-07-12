@@ -114,7 +114,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
                 return ExpectedRow(
                     kind: "message",
                     role: event.role,
-                    eventId: event.id,
+                    eventId: event.legacyNumericId,
                     toolName: nil,
                     callEventId: nil,
                     resultEventId: nil,
@@ -148,8 +148,8 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     role: nil,
                     eventId: nil,
                     toolName: call.toolName,
-                    callEventId: call.id,
-                    resultEventId: result?.id,
+                    callEventId: call.legacyNumericId,
+                    resultEventId: result?.legacyNumericId,
                     pairing: pairing.rawValue,
                     toolNames: nil,
                     callEventIds: nil,
@@ -165,7 +165,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     eventId: nil,
                     toolName: event.toolName,
                     callEventId: nil,
-                    resultEventId: event.id,
+                    resultEventId: event.legacyNumericId,
                     pairing: nil,
                     toolNames: nil,
                     callEventIds: nil,
@@ -184,8 +184,8 @@ final class SharedProjectionFixtureTests: XCTestCase {
                     resultEventId: nil,
                     pairing: nil,
                     toolNames: calls.map { $0.call.toolName ?? "" },
-                    callEventIds: calls.map(\.call.id),
-                    resultEventIds: calls.map { $0.result?.id },
+                    callEventIds: calls.compactMap(\.call.legacyNumericId),
+                    resultEventIds: calls.map { $0.result?.legacyNumericId },
                     pairings: calls.map { $0.pairing.rawValue },
                     actionKind: nil,
                     provider: nil
@@ -219,7 +219,7 @@ final class SharedProjectionFixtureTests: XCTestCase {
     private func orphanToolIds(_ items: [TimelineItem]) -> [Int] {
         items.compactMap { item in
             if case .orphanTool(let event) = item {
-                return event.id
+                return event.legacyNumericId
             }
             return nil
         }
@@ -234,7 +234,14 @@ final class SharedProjectionFixtureTests: XCTestCase {
                 return nil
             }
         }
-        return (events.map(\.id), events.map { $0.contentText ?? "" })
+        let compatibilityIds = events.compactMap { event -> Int? in
+            if let legacy = event.legacyNumericId { return legacy }
+            guard event.id.hasPrefix("synthetic:preview:"),
+                  let previewId = Int(event.id.dropFirst("synthetic:preview:".count))
+            else { return nil }
+            return -abs(previewId)
+        }
+        return (compatibilityIds, events.map { $0.contentText ?? "" })
     }
 
 }

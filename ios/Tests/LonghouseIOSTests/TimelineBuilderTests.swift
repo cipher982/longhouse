@@ -39,8 +39,8 @@ final class TimelineBuilderTests: XCTestCase {
         guard case .tool(let call, let result, let pairing) = items[0] else {
             return XCTFail("Expected .tool case")
         }
-        XCTAssertEqual(call.id, 1)
-        XCTAssertEqual(result?.id, 2)
+        XCTAssertEqual(call.id, "1")
+        XCTAssertEqual(result?.id, "2")
         XCTAssertEqual(pairing, .id)
     }
 
@@ -58,7 +58,7 @@ final class TimelineBuilderTests: XCTestCase {
         guard case .tool(_, let result, _) = items[1] else {
             return XCTFail("Expected .tool second")
         }
-        XCTAssertEqual(result?.id, 2)
+        XCTAssertEqual(result?.id, "2")
     }
 
     func testOrphanToolWithNoMatchingCall() {
@@ -70,7 +70,7 @@ final class TimelineBuilderTests: XCTestCase {
         guard case .orphanTool(let e) = items[0] else {
             return XCTFail("Expected orphan")
         }
-        XCTAssertEqual(e.id, 1)
+        XCTAssertEqual(e.id, "1")
     }
 
     func testPendingToolCallHasNilResult() {
@@ -95,8 +95,8 @@ final class TimelineBuilderTests: XCTestCase {
         guard case .tool(let call, let result, let pairing) = items[0] else {
             return XCTFail("Expected FIFO-paired tool")
         }
-        XCTAssertEqual(call.id, 1)
-        XCTAssertEqual(result?.id, 2)
+        XCTAssertEqual(call.id, "1")
+        XCTAssertEqual(result?.id, "2")
         XCTAssertEqual(pairing, .fifo)
     }
 
@@ -110,13 +110,13 @@ final class TimelineBuilderTests: XCTestCase {
         guard case .tool(let call, let result, let pairing) = items[0] else {
             return XCTFail("Expected pending FIFO call")
         }
-        XCTAssertEqual(call.id, 1)
+        XCTAssertEqual(call.id, "1")
         XCTAssertNil(result)
         XCTAssertEqual(pairing, .pending)
         guard case .orphanTool(let orphan) = items[1] else {
             return XCTFail("Expected mismatched tool result to stay orphaned")
         }
-        XCTAssertEqual(orphan.id, 2)
+        XCTAssertEqual(orphan.id, "2")
     }
 
     func testSystemEventsAreFiltered() {
@@ -274,8 +274,8 @@ final class TimelineBuilderTests: XCTestCase {
             return XCTFail("Expected passive group")
         }
         XCTAssertEqual(calls.count, 3)
-        XCTAssertEqual(calls.map(\.call.id), [2, 4, 6])
-        XCTAssertEqual(calls.map(\.result?.id), [3, 5, 7])
+        XCTAssertEqual(calls.map(\.call.id), ["2", "4", "6"])
+        XCTAssertEqual(calls.map(\.result?.id), ["3", "5", "7"])
     }
 
     func testActiveToolInMiddleSplitsIntoTwoGroups() {
@@ -297,11 +297,11 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(items.count, 4)
         guard case .user = items[0] else { return XCTFail("item 0") }
         guard case .passiveGroup(let first) = items[1] else { return XCTFail("item 1") }
-        XCTAssertEqual(first.map(\.call.id), [2, 4])
+        XCTAssertEqual(first.map(\.call.id), ["2", "4"])
         guard case .tool(let bashCall, _, _) = items[2] else { return XCTFail("item 2") }
         XCTAssertEqual(bashCall.toolName, "Bash")
         guard case .passiveGroup(let second) = items[3] else { return XCTFail("item 3") }
-        XCTAssertEqual(second.map(\.call.id), [8, 10])
+        XCTAssertEqual(second.map(\.call.id), ["8", "10"])
     }
 
     func testBashDoesNotCollapse() {
@@ -373,10 +373,10 @@ final class TimelineBuilderTests: XCTestCase {
         // user, passiveGroup(2,4), user, passiveGroup(7,9)
         XCTAssertEqual(items.count, 4)
         guard case .passiveGroup(let first) = items[1] else { return XCTFail("first group") }
-        XCTAssertEqual(first.map(\.call.id), [2, 4])
+        XCTAssertEqual(first.map(\.call.id), ["2", "4"])
         guard case .user = items[2] else { return XCTFail("second user") }
         guard case .passiveGroup(let second) = items[3] else { return XCTFail("second group") }
-        XCTAssertEqual(second.map(\.call.id), [7, 9])
+        XCTAssertEqual(second.map(\.call.id), ["7", "9"])
     }
 
     func testAssistantProseBetweenPassivesDoesNotCollapseAcross() {
@@ -398,7 +398,7 @@ final class TimelineBuilderTests: XCTestCase {
         }
         guard case .assistant = items[2] else { return XCTFail("assistant prose") }
         guard case .passiveGroup(let grp) = items[3] else { return XCTFail("second group") }
-        XCTAssertEqual(grp.map(\.call.id), [5, 7])
+        XCTAssertEqual(grp.map(\.call.id), ["5", "7"])
     }
 
     func testPassiveGroupStableID() {

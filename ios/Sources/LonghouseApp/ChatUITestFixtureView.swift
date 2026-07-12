@@ -318,7 +318,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             }
         }
         events = seedEvents
-        nextEventID = (seedEvents.map(\.id).max() ?? 0) + 1
+        nextEventID = (seedEvents.compactMap(\.legacyNumericId).max() ?? 0) + 1
     }
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
@@ -330,7 +330,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         limit: Int,
         offset: Int,
         branchMode: String,
-        snapshotEventId: Int?
+        snapshotEventId: String?,
+        cursor: String?
     ) async throws -> SessionMobileTailResponse {
         if let delayMs = UITestHooks.mobileTailDelayMs, delayMs > 0 {
             try? await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
@@ -341,7 +342,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             events: page.events,
             total: events.count,
             pageOffset: page.pageOffset,
-            snapshotEventId: events.map(\.id).max(),
+            snapshotEventId: events.compactMap(\.legacyNumericId).max().map(String.init),
             title: Self.titleForFixture(fixtureName)
         )
     }
@@ -453,7 +454,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
 
     private func upsertStreamingAssistantMessage(_ text: String) {
         if let eventID = streamingAssistantEventID,
-           let index = events.firstIndex(where: { $0.id == eventID }) {
+           let index = events.firstIndex(where: { $0.legacyNumericId == eventID }) {
             events[index] = Self.makeEvent(
                 id: eventID,
                 role: "assistant",
@@ -475,7 +476,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     private func emitWorkspaceChanged() {
-        let latestID = events.last?.id ?? 0
+        let latestID = events.last?.legacyNumericId ?? 0
         realtimeContinuation?.yield(.changed(SessionWorkspaceStream.WorkspaceChanged(
             session_id: sessionID,
             latest_event_id: latestID,
@@ -534,7 +535,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         events: [SessionEvent],
         total: Int,
         pageOffset: Int,
-        snapshotEventId: Int?,
+        snapshotEventId: String?,
         title: String = "Chat UI Fixture"
     ) -> SessionMobileTailResponse {
         let detail = makeDetail(sessionID: sessionID, events: events, title: title)

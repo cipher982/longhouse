@@ -103,7 +103,8 @@ protocol SessionWorkspaceClient: Sendable {
         limit: Int,
         offset: Int,
         branchMode: String,
-        snapshotEventId: Int?
+        snapshotEventId: String?,
+        cursor: String?
     ) async throws -> SessionMobileTailResponse
     func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse
     func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse
@@ -224,7 +225,8 @@ struct LonghouseAPI: Sendable {
         limit: Int = 50,
         offset: Int = 0,
         branchMode: String = "head",
-        snapshotEventId: Int? = nil
+        snapshotEventId: String? = nil,
+        cursor: String? = nil
     ) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/sessions/\(id)/mobile-tail"),
@@ -236,7 +238,10 @@ struct LonghouseAPI: Sendable {
             URLQueryItem(name: "branch_mode", value: branchMode),
         ]
         if let snapshotEventId {
-            items.append(URLQueryItem(name: "snapshot_event_id", value: String(snapshotEventId)))
+            items.append(URLQueryItem(name: "snapshot_event_id", value: snapshotEventId))
+        }
+        if let cursor {
+            items.append(URLQueryItem(name: "cursor", value: cursor))
         }
         components.queryItems = items
         return components.url!
@@ -254,7 +259,7 @@ struct LonghouseAPI: Sendable {
         guard httpResponse.statusCode == 200 else {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
-        return try JSONDecoder.snakeCase.decode(APISessionWorkspaceResponse.self, from: data).sessionWorkspaceResponse
+        return try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: data)
     }
 
     func sessionMobileTail(
@@ -262,7 +267,8 @@ struct LonghouseAPI: Sendable {
         limit: Int = 50,
         offset: Int = 0,
         branchMode: String = "head",
-        snapshotEventId: Int? = nil
+        snapshotEventId: String? = nil,
+        cursor: String? = nil
     ) async throws -> SessionMobileTailResponse {
         var request = URLRequest(
             url: Self.sessionMobileTailURL(
@@ -271,7 +277,8 @@ struct LonghouseAPI: Sendable {
                 limit: limit,
                 offset: offset,
                 branchMode: branchMode,
-                snapshotEventId: snapshotEventId
+                snapshotEventId: snapshotEventId,
+                cursor: cursor
             ),
             cachePolicy: .reloadIgnoringLocalCacheData
         )

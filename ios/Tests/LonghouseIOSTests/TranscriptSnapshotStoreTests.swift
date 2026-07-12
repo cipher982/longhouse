@@ -127,7 +127,7 @@ struct TranscriptSnapshotStoreTests {
             projectionItems: projectionItems,
             loadedProjectionItemCount: 3,
             totalProjectionItemCount: 3,
-            tailSnapshotEventId: 11,
+            tailSnapshotEventId: "11",
             lastPubsubSeq: 42,
             workspaceRevisionFingerprint: "sha256:cached"
         )
@@ -135,10 +135,10 @@ struct TranscriptSnapshotStoreTests {
 
         let loaded = store.load(serverURL: "https://example.longhouse.ai", sessionId: "session-1")
         #expect(loaded != nil)
-        #expect(loaded?.events.map(\.id) == [10, 11])
+        #expect(loaded?.events.map(\.id) == ["10", "11"])
         #expect(loaded?.projectionItems?.map(\.id) == ["action:interrupt-1", "event:10", "event:11"])
         #expect(loaded?.detail.id == "session-1")
-        #expect(loaded?.tailSnapshotEventId == 11)
+        #expect(loaded?.tailSnapshotEventId == "11")
         #expect(loaded?.lastPubsubSeq == 42)
         #expect(loaded?.workspaceRevisionFingerprint == "sha256:cached")
     }
@@ -156,7 +156,7 @@ struct TranscriptSnapshotStoreTests {
             events: [makeEvent(id: 1, content: "hi")],
             loadedProjectionItemCount: 1,
             totalProjectionItemCount: 1,
-            tailSnapshotEventId: 1,
+            tailSnapshotEventId: "1",
             lastPubsubSeq: nil
         )
         store.waitForPendingWrites()
@@ -178,7 +178,7 @@ struct TranscriptSnapshotStoreTests {
             events: [makeEvent(id: 1, content: "hi")],
             loadedProjectionItemCount: 1,
             totalProjectionItemCount: 1,
-            tailSnapshotEventId: 1,
+            tailSnapshotEventId: "1",
             lastPubsubSeq: nil,
             savedAt: Date(timeIntervalSince1970: 1_000_000)
         )
@@ -206,7 +206,7 @@ struct TranscriptSnapshotStoreTests {
             events: [makeEvent(id: 1, content: "a")],
             loadedProjectionItemCount: 1,
             totalProjectionItemCount: 1,
-            tailSnapshotEventId: 1,
+            tailSnapshotEventId: "1",
             lastPubsubSeq: nil
         )
         store.save(
@@ -216,7 +216,7 @@ struct TranscriptSnapshotStoreTests {
             events: [makeEvent(id: 2, content: "b")],
             loadedProjectionItemCount: 1,
             totalProjectionItemCount: 1,
-            tailSnapshotEventId: 2,
+            tailSnapshotEventId: "2",
             lastPubsubSeq: nil
         )
         store.waitForPendingWrites()
@@ -241,7 +241,7 @@ struct TranscriptSnapshotStoreTests {
             events: [makeEvent(id: 1, content: "hi")],
             loadedProjectionItemCount: 1,
             totalProjectionItemCount: 1,
-            tailSnapshotEventId: 1,
+            tailSnapshotEventId: "1",
             lastPubsubSeq: nil
         )
         store.waitForPendingWrites()
@@ -270,7 +270,7 @@ struct TranscriptSnapshotStoreTests {
                 events: [makeEvent(id: index, content: "msg-\(index)")],
                 loadedProjectionItemCount: 1,
                 totalProjectionItemCount: 1,
-                tailSnapshotEventId: index,
+                tailSnapshotEventId: String(index),
                 lastPubsubSeq: nil
             )
             store.waitForPendingWrites()

@@ -395,7 +395,7 @@ struct SessionModelsTests {
         #expect(workspace.projection.items[0].id == "event:10")
         #expect(workspace.projection.items[1].id == "seam:session-child:2026-05-02T20:00:00Z")
         #expect(workspace.projection.items[1].continuedFromSessionId == "session-root")
-        #expect(workspace.events.map(\.id) == [10])
+        #expect(workspace.events.map(\.id) == ["10"])
     }
 
     @Test
@@ -430,6 +430,36 @@ struct SessionModelsTests {
         }
         #expect(nested["inner_key"] == .string("kept"))
         #expect(nested["innerKey"] == nil)
+    }
+
+    @Test
+    func sessionEventIdentitySupportsStorageV2AndLegacyJSON() throws {
+        let legacy = Data(#"{"id":42,"role":"user","timestamp":"2026-07-12T00:00:00Z","in_active_context":true,"is_head_branch":true}"#.utf8)
+        let storage = Data(#"{"event_id":"evt_sha256_abc","cursor":"opaque-generation-cursor","timestamp":"2026-07-12T00:00:01Z","role":"assistant","content_text":"done","tool_name":null,"tool_input_json":null,"tool_output_text":null,"tool_call_id":null,"thread_id":"thread-1","branch_kind":"head"}"#.utf8)
+
+        let legacyEvent = try JSONDecoder.snakeCase.decodeSessionFixture(SessionEvent.self, from: legacy)
+        let storageEvent = try JSONDecoder.snakeCase.decodeSessionFixture(SessionEvent.self, from: storage)
+
+        #expect(legacyEvent.id == "42")
+        #expect(legacyEvent.legacyNumericId == 42)
+        #expect(storageEvent.id == "evt_sha256_abc")
+        #expect(storageEvent.legacyNumericId == nil)
+        #expect(storageEvent.cursor == "opaque-generation-cursor")
+        #expect(storageEvent.threadId == "thread-1")
+        #expect(storageEvent.isHeadBranch)
+        #expect(legacyEvent.isOrdered(before: storageEvent) == true)
+    }
+
+    @Test
+    func storageV2SessionEventsPageDecodesGenerationQualifiedCursor() throws {
+        let json = Data(#"{"v":2,"session_id":"session-1","generation_id":"generation-1","events":[{"event_id":"event-1","cursor":"cursor-1","timestamp":"2026-07-12T00:00:00Z","role":"user","content_text":"hello","tool_name":null,"tool_input_json":null,"tool_output_text":null,"tool_call_id":null,"thread_id":null,"branch_kind":"head"}],"next_cursor":"cursor-1","has_more":true,"total":2}"#.utf8)
+
+        let page = try JSONDecoder.snakeCase.decodeSessionFixture(SessionEventsPage.self, from: json)
+
+        #expect(page.generationId == "generation-1")
+        #expect(page.events.first?.id == "event-1")
+        #expect(page.nextCursor == "cursor-1")
+        #expect(page.hasMore)
     }
 
     @Test
@@ -584,7 +614,7 @@ struct SessionModelsTests {
 
         #expect(workspace.session.id == "workspace-session")
         #expect(workspace.thread.sessions.map(\.id) == ["workspace-session"])
-        #expect(workspace.events.map(\.id) == [44])
+        #expect(workspace.events.map(\.id) == ["44"])
         #expect(workspace.events.first?.toolInputString("file_path") == "/tmp/workspace.swift")
         #expect(workspace.workspaceRevision?.fingerprint == "sha256:workspace")
     }

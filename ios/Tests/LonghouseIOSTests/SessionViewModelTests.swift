@@ -55,7 +55,7 @@ struct SessionViewModelTests {
 
         await model.start(sessionId: "session-1", appState: appState)
 
-        #expect(model.items.map(\.id) == ["user:10", "prose:-99"])
+        #expect(model.items.map(\.id) == ["user:10", "prose:synthetic:preview:99"])
     }
 
     @Test
@@ -93,7 +93,7 @@ struct SessionViewModelTests {
         #expect(model.items.map(\.id) == ["user:1", "user:51"])
         let olderRequest = await api.tailRequest(at: 1)
         #expect(olderRequest?.offset == 50)
-        #expect(olderRequest?.snapshotEventId == 51)
+        #expect(olderRequest?.snapshotEventId == "51")
     }
 
     @Test
@@ -136,7 +136,7 @@ struct SessionViewModelTests {
             events: otherSession.events,
             loadedProjectionItemCount: otherSession.events.count,
             totalProjectionItemCount: otherSession.projection.total,
-            tailSnapshotEventId: otherSession.events.map(\.id).max()
+            tailSnapshotEventId: otherSession.events.compactMap(\.legacyNumericId).max().map(String.init)
         )
         let api = FakeSessionWorkspaceClient(workspaces: [tail, prefetchedOlder, fetchedAfterWarning])
         await api.pauseNextTailResponse(offset: 50)
@@ -166,7 +166,7 @@ struct SessionViewModelTests {
         #expect(offsets.contains(0))
         #expect(offsets.filter { $0 == 50 }.count == 2)
         #expect(await api.tailRequest(at: 2)?.offset == 50)
-        #expect(await api.tailRequest(at: 2)?.snapshotEventId == 51)
+        #expect(await api.tailRequest(at: 2)?.snapshotEventId == "51")
         #expect(model.items.map { $0.id } == ["user:2", "user:51"])
         model.stop()
     }
@@ -203,7 +203,7 @@ struct SessionViewModelTests {
             events: cached.events,
             loadedProjectionItemCount: cached.events.count,
             totalProjectionItemCount: cached.projection.total,
-            tailSnapshotEventId: cached.events.map(\.id).max()
+            tailSnapshotEventId: cached.events.compactMap(\.legacyNumericId).max().map(String.init)
         )
         let api = FakeSessionWorkspaceClient(workspaces: [fresh])
         let appState = AppState()
@@ -233,7 +233,7 @@ struct SessionViewModelTests {
             projectionItems: projectionItems,
             loadedProjectionItemCount: projectionItems.count,
             totalProjectionItemCount: projectionItems.count,
-            tailSnapshotEventId: cached.events.map(\.id).max()
+            tailSnapshotEventId: cached.events.compactMap(\.legacyNumericId).max().map(String.init)
         )
         let api = FakeSessionWorkspaceClient(workspaces: [fresh])
         await api.pauseNextTailResponse(offset: 0)
@@ -328,7 +328,7 @@ struct SessionViewModelTests {
             events: cached.events,
             loadedProjectionItemCount: cached.events.count,
             totalProjectionItemCount: cached.projection.total,
-            tailSnapshotEventId: cached.events.map(\.id).max()
+            tailSnapshotEventId: cached.events.compactMap(\.legacyNumericId).max().map(String.init)
         )
         let api = FakeSessionWorkspaceClient(workspaces: [fresh])
         await api.pauseNextTailResponse(offset: 0)
@@ -1163,7 +1163,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private var pauseResponseError: Error?
     private var pauseResponse: PauseRequestResponse?
     private var workspaceRequests: [(id: String, limit: Int, branchMode: String)] = []
-    private var tailRequests: [(id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: Int?)] = []
+    private var tailRequests: [(id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: String?, cursor: String?)] = []
     private var tailResponses = 0
     private var pausedTailResponseCounts: [Int: Int] = [:]
     private var pausedTailContinuations: [CheckedContinuation<Void, Never>] = []
@@ -1194,10 +1194,11 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         limit: Int,
         offset: Int,
         branchMode: String,
-        snapshotEventId: Int?
+        snapshotEventId: String?,
+        cursor: String?
     ) async throws -> SessionMobileTailResponse {
         workspaceRequests.append((id: id, limit: limit, branchMode: branchMode))
-        tailRequests.append((id: id, limit: limit, offset: offset, branchMode: branchMode, snapshotEventId: snapshotEventId))
+        tailRequests.append((id: id, limit: limit, offset: offset, branchMode: branchMode, snapshotEventId: snapshotEventId, cursor: cursor))
         if let pausedCount = pausedTailResponseCounts[offset], pausedCount > 0 {
             if pausedCount == 1 {
                 pausedTailResponseCounts[offset] = nil
@@ -1213,7 +1214,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         return SessionMobileTailResponse(
             session: workspace.session,
             projection: workspace.projection,
-            snapshotEventId: workspace.events.map(\.id).max()
+            snapshotEventId: workspace.events.compactMap(\.legacyNumericId).max().map(String.init)
         )
     }
 
@@ -1347,7 +1348,7 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         return workspaceRequests[index]
     }
 
-    func tailRequest(at index: Int) -> (id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: Int?)? {
+    func tailRequest(at index: Int) -> (id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: String?, cursor: String?)? {
         guard tailRequests.indices.contains(index) else { return nil }
         return tailRequests[index]
     }

@@ -29,7 +29,7 @@ struct TranscriptSnapshotStore: Sendable {
         var projectionItems: [SessionProjectionItem]?
         var loadedProjectionItemCount: Int
         var totalProjectionItemCount: Int
-        var tailSnapshotEventId: Int?
+        var tailSnapshotEventId: String?
         /// Last realtime pubsub sequence we rendered. Persisted for M2 cheap
         /// stream replay; unused (nil) in M1.
         var lastPubsubSeq: Int?
@@ -117,7 +117,7 @@ struct TranscriptSnapshotStore: Sendable {
         projectionItems: [SessionProjectionItem]? = nil,
         loadedProjectionItemCount: Int,
         totalProjectionItemCount: Int,
-        tailSnapshotEventId: Int?,
+        tailSnapshotEventId: String?,
         lastPubsubSeq: Int?,
         workspaceRevisionFingerprint: String? = nil,
         savedAt: Date = Date()

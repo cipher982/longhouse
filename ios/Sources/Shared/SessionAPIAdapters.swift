@@ -257,7 +257,7 @@ extension APISessionResponse {
 extension APIEventResponse {
     var sessionEvent: SessionEvent {
         SessionEvent(
-            id: id,
+            id: String(id),
             role: role,
             contentText: contentText,
             toolName: toolName,
@@ -362,7 +362,7 @@ extension APISessionThreadResponse {
 extension APISessionWorkspaceRevisionResponse {
     var sessionWorkspaceRevision: SessionWorkspaceRevision {
         SessionWorkspaceRevision(
-            latestEventId: latestEventId,
+            latestEventId: latestEventId.map(String.init),
             latestSessionUpdatedAt: latestSessionUpdatedAt,
             latestRuntimeSignalAt: latestRuntimeSignalAt,
             runtimeVersionSum: runtimeVersionSum,
