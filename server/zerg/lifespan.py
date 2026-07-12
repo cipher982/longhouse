@@ -146,6 +146,11 @@ async def lifespan(app: FastAPI):
 
                 app.state.catalogd_ping = await start_catalogd_supervisor()
             logger.info("Live catalog schema is owned by catalogd")
+            with _timed_startup_step("storage_v2_workers"):
+                from zerg.services.raw_object_workers import get_raw_object_worker_pool
+
+                await get_raw_object_worker_pool().start()
+            logger.info("Storage-v2 live and repair worker lanes are ready")
         elif live_store_configured():
             with _timed_startup_step("initialize_live_database"):
                 initialize_live_database()
@@ -460,6 +465,12 @@ async def lifespan(app: FastAPI):
         logger.error(f"Error during startup: {e}")
         if catalog_mode and not _settings.testing:
             try:
+                from zerg.services.raw_object_workers import close_raw_object_worker_pool
+
+                await close_raw_object_worker_pool()
+            except Exception:
+                logger.exception("Failed to stop storage-v2 workers after startup failure")
+            try:
                 from zerg.services.catalogd_supervisor import stop_catalogd_supervisor
 
                 await stop_catalogd_supervisor()
@@ -527,6 +538,12 @@ async def lifespan(app: FastAPI):
         await topic_manager.shutdown()
 
         if catalog_mode and not _settings.testing:
+            try:
+                from zerg.services.raw_object_workers import close_raw_object_worker_pool
+
+                await close_raw_object_worker_pool()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop storage-v2 workers")
             try:
                 from zerg.services.catalogd_supervisor import stop_catalogd_supervisor
 

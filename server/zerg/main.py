@@ -109,6 +109,7 @@ from zerg.routers.agents_providers import router as agents_providers_router
 from zerg.routers.agents_search import router as agents_search_router
 from zerg.routers.agents_sessions import router as agents_sessions_router
 from zerg.routers.agents_source_lines import router as agents_source_lines_router
+from zerg.routers.agents_storage_v2 import router as agents_storage_v2_router
 from zerg.routers.agents_turns import router as agents_turns_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.device_tokens import router as device_tokens_router
@@ -278,6 +279,7 @@ api_app.include_router(agents_providers_router)
 api_app.include_router(agents_search_router)
 api_app.include_router(agents_sessions_router)
 api_app.include_router(agents_source_lines_router)
+api_app.include_router(agents_storage_v2_router)
 api_app.include_router(agents_turns_router)
 api_app.include_router(agents_backfill_router)
 api_app.include_router(agents_demo_router)

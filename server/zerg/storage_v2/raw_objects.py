@@ -200,6 +200,12 @@ def encode_raw_object(spec: RawObjectSpec) -> tuple[bytes, EnvelopeIdentity, tup
     return bytes(encoded), identity, record_hash_values
 
 
+def validate_raw_object_spec(spec: RawObjectSpec) -> None:
+    """Validate a wire-derived spec without allocating its encoded object."""
+
+    _validate_spec(spec)
+
+
 def decode_raw_object(payload: bytes) -> tuple[RawObjectSpec, str]:
     view = memoryview(payload)
     prefix_size = len(MAGIC) + 8
@@ -366,4 +372,5 @@ __all__ = [
     "encode_raw_object",
     "read_raw_object",
     "seal_raw_object",
+    "validate_raw_object_spec",
 ]

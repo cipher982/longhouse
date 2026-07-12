@@ -44,6 +44,10 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     async def stop_catalogd():
         calls.append("catalogd_stop")
 
+    class RawWorkers:
+        async def start(self):
+            calls.append("raw_workers_start")
+
     class Runner:
         def start(self):
             calls.append("runner_start")
@@ -56,6 +60,9 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
 
     async def noop_async(*_args, **_kwargs):
         return None
+
+    async def stop_raw_workers():
+        calls.append("raw_workers_stop")
 
     monkeypatch.setattr(lifespan_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(lifespan_module, "live_store_configured", lambda: True)
@@ -70,6 +77,8 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     monkeypatch.setattr(database_module, "stop_wal_checkpoint_loop", noop_async)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.start_catalogd_supervisor", start_catalogd)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.stop_catalogd_supervisor", stop_catalogd)
+    monkeypatch.setattr("zerg.services.raw_object_workers.get_raw_object_worker_pool", lambda: RawWorkers())
+    monkeypatch.setattr("zerg.services.raw_object_workers.close_raw_object_worker_pool", stop_raw_workers)
     monkeypatch.setattr("zerg.services.archive_worker_supervisor.start_archive_worker_supervisor", lambda: None)
     monkeypatch.setattr("zerg.services.archive_worker_supervisor.stop_archive_worker_supervisor", noop_async)
     monkeypatch.setattr("zerg.services.live_control_catalog.run_live_catalog_input_recovery_loop", completed_loop)
@@ -82,7 +91,7 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
 
     app = FastAPI()
     async with lifespan_module.lifespan(app):
-        assert calls[:3] == ["catalogd_start", "live_writer", "runner_start"]
+        assert calls[:4] == ["catalogd_start", "raw_workers_start", "live_writer", "runner_start"]
         assert app.state.catalogd_ping["ready"] is True
 
-    assert calls[-2:] == ["runner_stop", "catalogd_stop"]
+    assert calls[-3:] == ["runner_stop", "raw_workers_stop", "catalogd_stop"]

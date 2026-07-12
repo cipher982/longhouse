@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import multiprocessing
 import os
+from collections.abc import AsyncIterator
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +59,8 @@ class RawObjectWorkerPool:
         self.repair_workers = repair_workers
         self._live_slots = asyncio.Semaphore(live_workers * queue_multiplier)
         self._repair_slots = asyncio.Semaphore(repair_workers * queue_multiplier)
+        self._live_admission_slots = asyncio.Semaphore(live_workers * queue_multiplier)
+        self._repair_admission_slots = asyncio.Semaphore(repair_workers * queue_multiplier)
         self._live_executor = self._new_executor(live_workers)
         self._repair_executor = self._new_executor(repair_workers)
         self._replace_lock = asyncio.Lock()
@@ -105,6 +109,32 @@ class RawObjectWorkerPool:
             timeout_seconds=operation_timeout_seconds,
             slots=slots,
         )
+
+    @asynccontextmanager
+    async def admission(
+        self,
+        lane: str,
+        *,
+        queue_timeout_seconds: float = 0.25,
+    ) -> AsyncIterator[None]:
+        """Reserve bounded request capacity before JSON/base64 decoding."""
+
+        if self._closed:
+            raise RawObjectWorkerError("raw worker pool is closed")
+        if lane not in {"live", "repair"}:
+            raise ValueError("raw worker lane must be live or repair")
+        if queue_timeout_seconds <= 0:
+            raise ValueError("raw worker queue deadline must be positive")
+        slots = self._live_admission_slots if lane == "live" else self._repair_admission_slots
+        try:
+            async with asyncio.timeout(queue_timeout_seconds):
+                await slots.acquire()
+        except TimeoutError as exc:
+            raise RawObjectWorkerBusy(f"raw {lane} admission queue is full") from exc
+        try:
+            yield
+        finally:
+            slots.release()
 
     async def _seal_once_with_recovery(
         self,

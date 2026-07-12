@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from zerg.services.raw_object_workers import RawObjectWorkerPool
+from zerg.services.raw_object_workers import RawObjectWorkerBusy
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawRecord
@@ -67,5 +68,19 @@ async def test_timed_out_seal_holds_capacity_until_child_finishes(tmp_path):
         with pytest.raises(RawObjectWorkerError, match="exceeded its deadline"):
             await pool.seal(spec, lane="live", operation_timeout_seconds=1e-9)
         assert pool._live_slots.locked()
+    finally:
+        await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_admission_is_bounded_and_repair_has_reserved_capacity(tmp_path):
+    pool = RawObjectWorkerPool(tmp_path, live_workers=1, repair_workers=1, queue_multiplier=1)
+    try:
+        async with pool.admission("live"):
+            with pytest.raises(RawObjectWorkerBusy, match="live admission queue is full"):
+                async with pool.admission("live", queue_timeout_seconds=1e-9):
+                    raise AssertionError("full live admission queue was entered")
+            async with pool.admission("repair", queue_timeout_seconds=0.1):
+                pass
     finally:
         await pool.close()
