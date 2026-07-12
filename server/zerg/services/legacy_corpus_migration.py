@@ -675,7 +675,7 @@ class LegacyCorpusConverter:
             source_cursor = connection.connection.cursor()
             try:
                 source_cursor.execute(
-                    "SELECT source_path, source_offset, line_hash FROM source_lines " "WHERE session_id = ? AND id <= ? ORDER BY id",
+                    "SELECT source_path, source_offset, line_hash FROM source_lines " "WHERE session_id = ? AND id <= ?",
                     (str(session_id), watermark.source_line_id),
                 )
                 while rows := source_cursor.fetchmany(STREAMING_SQL_PAGE):
