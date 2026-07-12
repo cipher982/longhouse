@@ -302,6 +302,10 @@ class CatalogDaemon:
             return await self._read_source_epoch_manifest(request)
         if request.method == "storage.raw_object.exists.batch.v2":
             return await self._raw_objects_exist_batch(request)
+        if request.method == "storage.session.read.v2":
+            return await self._read_storage_session(request)
+        if request.method == "storage.session.raw_manifest.v2":
+            return await self._read_storage_session_raw_manifest(request)
         if request.method == "storage.media.commit.v2":
             return await self._commit_media_object(request)
         if request.method == "storage.media.read.v2":
@@ -1391,6 +1395,7 @@ class CatalogDaemon:
         expected = {
             "protocol_version",
             "tenant_id",
+            "owner_id",
             "session_id",
             "machine_id",
             "provider",
@@ -1412,6 +1417,7 @@ class CatalogDaemon:
             "media_state",
             "missing_media_hashes",
             "projectors",
+            "session_facts",
             "sealed_at",
         }
         if set(request.params) != expected:
@@ -1478,6 +1484,41 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.raw_objects_exist_batch, envelope_ids=envelope_ids)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_storage_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id"}:
+            return self._error(request, "invalid_request", "storage.session.read.v2 requires session_id")
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.read_storage_session, session_id=session_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_storage_session_raw_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "after_commit_seq", "limit"}:
+            return self._error(request, "invalid_request", "storage.session.raw_manifest.v2 has invalid parameters")
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        after_commit_seq = request.params["after_commit_seq"]
+        if after_commit_seq is not None and (
+            not isinstance(after_commit_seq, str) or not after_commit_seq.isdecimal() or int(after_commit_seq) >= 1 << 64
+        ):
+            return self._error(request, "invalid_request", "after_commit_seq must be a u64 decimal string or null")
+        limit = request.params["limit"]
+        if type(limit) is not int or not 1 <= limit <= 1_000:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.read_storage_session_raw_manifest,
+            session_id=session_id,
+            after_commit_seq=int(after_commit_seq) if after_commit_seq is not None else None,
+            limit=limit,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _commit_media_object(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -1780,7 +1821,50 @@ def _validate_raw_object_commit(params: dict) -> None:
     if len(parsed_projectors) != len(set(parsed_projectors)):
         raise ValueError("projectors must not contain duplicates")
     params["projectors"] = parsed_projectors
+    owner_id = params["owner_id"]
+    if owner_id is not None:
+        params["owner_id"] = _canonical_storage_text(owner_id, field="owner_id", maximum_bytes=64)
+    params["session_facts"] = _validate_storage_session_facts(params["session_facts"])
     params["sealed_at"] = _parse_datetime(params["sealed_at"], "sealed_at")
+
+
+def _validate_storage_session_facts(value: object) -> dict:
+    expected = {
+        "environment",
+        "project",
+        "cwd",
+        "git_repo",
+        "git_branch",
+        "started_at",
+        "last_activity_at",
+        "ended_at",
+        "origin_kind",
+        "hidden_from_default_timeline",
+        "launch_actor",
+        "launch_surface",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        raise ValueError("session_facts has invalid fields")
+    result = dict(value)
+    result["environment"] = _canonical_storage_text(result["environment"], field="environment", maximum_bytes=32)
+    for field, maximum in (
+        ("project", 255),
+        ("cwd", 4_096),
+        ("git_repo", 500),
+        ("git_branch", 255),
+        ("origin_kind", 64),
+        ("launch_actor", 32),
+        ("launch_surface", 32),
+    ):
+        raw = result[field]
+        if raw is not None:
+            result[field] = _canonical_storage_text(raw, field=field, maximum_bytes=maximum)
+    for field in ("started_at", "last_activity_at"):
+        result[field] = _parse_datetime(result[field], field)
+    result["ended_at"] = _parse_datetime(result["ended_at"], "ended_at") if result["ended_at"] is not None else None
+    if type(result["hidden_from_default_timeline"]) is not bool:
+        raise ValueError("hidden_from_default_timeline must be a boolean")
+    return result
 
 
 def _validate_hash_batch(value: object, *, field: str) -> tuple[str, ...]:

@@ -70,6 +70,7 @@ def _raw_params(
     return {
         "protocol_version": 2,
         "tenant_id": "tenant-a",
+        "owner_id": "42",
         "session_id": str(session_id),
         "machine_id": "cinder",
         "provider": "codex",
@@ -91,6 +92,20 @@ def _raw_params(
         "media_state": "complete",
         "missing_media_hashes": [],
         "projectors": ["render-v2", "search-v2", "worklog-v2"],
+        "session_facts": {
+            "environment": "local",
+            "project": "longhouse",
+            "cwd": "/workspace/longhouse",
+            "git_repo": "cipher982/longhouse",
+            "git_branch": "main",
+            "started_at": sealed_at.isoformat(),
+            "last_activity_at": sealed_at.isoformat(),
+            "ended_at": None,
+            "origin_kind": "shadow",
+            "hidden_from_default_timeline": False,
+            "launch_actor": None,
+            "launch_surface": None,
+        },
         "sealed_at": sealed_at.isoformat(),
     }
 
@@ -124,6 +139,20 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         assert committed["created"] is True and committed["receipt"]["commit_seq"] == "2"
         assert replay["exact_replay"] is True and replay["receipt"] == committed["receipt"]
         assert committed["receipt"]["raw_state"] == "durable"
+
+        storage_session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert storage_session["found"] is True
+        assert storage_session["session"]["project"] == "longhouse"
+        assert storage_session["session"]["raw_state"] == "durable"
+        assert storage_session["session"]["transcript_revision"] == committed["receipt"]["commit_seq"]
+
+        session_manifest = await client.call(
+            "storage.session.raw_manifest.v2",
+            {"session_id": str(session_id), "after_commit_seq": None, "limit": 100},
+        )
+        assert session_manifest["found"] is True
+        assert session_manifest["objects"][0]["object_path"] == raw["object_path"]
+        assert session_manifest["objects"][0]["source_epoch"] == str(epoch)
 
         projector_lag = await client.call(
             "projector.state.list_lag.v2",
@@ -374,6 +403,7 @@ def test_storage_v2_tables_are_catalog_schema_owned(daemon_paths):
         "media_objects",
         "session_media_refs",
         "projector_state",
+        "sessions",
     }.issubset(set(CatalogBase.metadata.tables))
     with engine.connect() as connection:
         table_names = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}

@@ -57,10 +57,25 @@ _EXPECTED_ENVELOPE_FIELDS = {
     "range_kind",
     "range_start",
     "range_end",
+    "session",
     "records",
     "expected_envelope_id",
 }
 _EXPECTED_RECORD_FIELDS = {"source_position", "data_b64"}
+_EXPECTED_SESSION_FIELDS = {
+    "environment",
+    "project",
+    "cwd",
+    "git_repo",
+    "git_branch",
+    "started_at",
+    "last_activity_at",
+    "ended_at",
+    "origin_kind",
+    "hidden_from_default_timeline",
+    "launch_actor",
+    "launch_surface",
+}
 
 
 def _http_error(status_code: int, code: str, message: str, *, details: dict[str, Any] | None = None) -> HTTPException:
@@ -106,6 +121,38 @@ def _lower_hash(value: object, field: str) -> str:
     if not isinstance(value, str) or len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise ValueError(f"{field} must be lowercase SHA-256 hex")
     return value
+
+
+def _parse_session_facts(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != _EXPECTED_SESSION_FIELDS:
+        raise ValueError("session fields do not match protocol v2")
+    result = dict(value)
+    result["environment"] = _canonical_text(result["environment"], "session.environment", 32)
+    for field, maximum in (
+        ("project", 255),
+        ("cwd", 4_096),
+        ("git_repo", 500),
+        ("git_branch", 255),
+        ("origin_kind", 64),
+        ("launch_actor", 32),
+        ("launch_surface", 32),
+    ):
+        raw = result[field]
+        if raw is not None:
+            result[field] = _canonical_text(raw, f"session.{field}", maximum)
+    started_at = _aware_datetime(result["started_at"], "session.started_at")
+    last_activity_at = _aware_datetime(result["last_activity_at"], "session.last_activity_at")
+    ended_at = _aware_datetime(result["ended_at"], "session.ended_at") if result["ended_at"] is not None else None
+    if last_activity_at < started_at:
+        raise ValueError("session.last_activity_at cannot precede session.started_at")
+    if ended_at is not None and ended_at < started_at:
+        raise ValueError("session.ended_at cannot precede session.started_at")
+    result["started_at"] = started_at.isoformat()
+    result["last_activity_at"] = last_activity_at.isoformat()
+    result["ended_at"] = ended_at.isoformat() if ended_at is not None else None
+    if type(result["hidden_from_default_timeline"]) is not bool:
+        raise ValueError("session.hidden_from_default_timeline must be a boolean")
+    return result
 
 
 async def _read_bounded_json(request: Request) -> dict[str, Any]:
@@ -177,6 +224,7 @@ def _parse_envelope(
     if type(range_start) is not int or type(range_end) is not int:
         raise ValueError("source range must use integers")
     expected_envelope = _lower_hash(payload["expected_envelope_id"], "expected_envelope_id")
+    session_facts = _parse_session_facts(payload["session"])
 
     wire_records = payload["records"]
     if not isinstance(wire_records, list) or len(wire_records) > MAX_RECORDS:
@@ -232,6 +280,7 @@ def _parse_envelope(
         "predecessor_source_epoch": predecessor,
         "opened_at": opened_at,
         "expected_envelope_id": expected_envelope,
+        "session_facts": session_facts,
     }
 
 
@@ -347,11 +396,13 @@ async def _commit_admitted_envelope(
         sealed = await workers.seal(spec, lane=parsed["lane"])
         if sealed.envelope_id != parsed["expected_envelope_id"]:
             raise RawObjectWorkerError("sealed raw object identity changed after admission")
+        owner_value = getattr(auth_token, "owner_id", None)
         committed = await catalogd.call(
             "storage.raw_object.commit.v2",
             {
                 "protocol_version": 2,
                 "tenant_id": tenant_id,
+                "owner_id": str(owner_value) if owner_value is not None else None,
                 "session_id": str(spec.session_id),
                 "machine_id": machine_id,
                 "provider": spec.provider,
@@ -373,6 +424,7 @@ async def _commit_admitted_envelope(
                 "media_state": "complete",
                 "missing_media_hashes": [],
                 "projectors": list(PROJECTORS),
+                "session_facts": parsed["session_facts"],
                 "sealed_at": datetime.now(UTC).isoformat(),
             },
             timeout_seconds=2.0,

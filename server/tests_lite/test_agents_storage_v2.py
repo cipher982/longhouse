@@ -48,6 +48,20 @@ def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"he
         "range_kind": "byte_offset",
         "range_start": 0,
         "range_end": len(data),
+        "session": {
+            "environment": "local",
+            "project": "longhouse",
+            "cwd": "/workspace/longhouse",
+            "git_repo": "cipher982/longhouse",
+            "git_branch": "main",
+            "started_at": "2026-07-12T11:00:00+00:00",
+            "last_activity_at": "2026-07-12T12:00:00+00:00",
+            "ended_at": None,
+            "origin_kind": "shadow",
+            "hidden_from_default_timeline": False,
+            "launch_actor": None,
+            "launch_surface": None,
+        },
         "records": [{"source_position": 0, "data_b64": base64.b64encode(data).decode("ascii")}],
         "expected_envelope_id": envelope_id(identity),
     }
@@ -116,6 +130,12 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
             "storage.raw_object.exists.batch.v2",
             {"envelope_ids": [payload["expected_envelope_id"]]},
         )
+        session = await catalog.call(
+            "storage.session.read.v2",
+            {"session_id": payload["session_id"]},
+        )
+        assert session["session"]["owner_id"] == "1"
+        assert session["session"]["project"] == "longhouse"
         raw = manifest["objects"][0]
         decoded = read_raw_object(
             object_root,

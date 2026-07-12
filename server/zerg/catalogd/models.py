@@ -19,6 +19,53 @@ from sqlalchemy.sql import text
 CatalogBase = declarative_base()
 
 
+class StorageSession(CatalogBase):
+    """One denormalized session row for timeline and storage convergence."""
+
+    __tablename__ = "sessions"
+
+    session_id = Column(String(36), primary_key=True)
+    tenant_id = Column(String(255), nullable=False, index=True)
+    owner_id = Column(String(64), nullable=True, index=True)
+    provider = Column(String(32), nullable=False, index=True)
+    environment = Column(String(32), nullable=False, server_default=text("'local'"), index=True)
+    machine_id = Column(String(255), nullable=False, index=True)
+    project = Column(String(255), nullable=True, index=True)
+    cwd = Column(Text, nullable=True)
+    git_repo = Column(String(500), nullable=True)
+    git_branch = Column(String(255), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    last_activity_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    user_messages = Column(Integer, nullable=False, server_default=text("0"))
+    assistant_messages = Column(Integer, nullable=False, server_default=text("0"))
+    tool_calls = Column(Integer, nullable=False, server_default=text("0"))
+    summary_title = Column(String(255), nullable=True)
+    first_user_message_preview = Column(Text, nullable=True)
+    last_visible_text_preview = Column(Text, nullable=True)
+    transcript_revision = Column(BigInteger, nullable=False, server_default=text("0"))
+    current_render_generation = Column(String(36), nullable=True, index=True)
+    raw_state = Column(String(16), nullable=False, server_default=text("'pending'"), index=True)
+    render_state = Column(String(16), nullable=False, server_default=text("'pending'"), index=True)
+    media_state = Column(String(16), nullable=False, server_default=text("'complete'"), index=True)
+    missing_media_hashes_json = Column(Text, nullable=False, server_default=text("'[]'"))
+    user_state = Column(String(20), nullable=False, server_default=text("'active'"), index=True)
+    loop_mode = Column(String(32), nullable=False, server_default=text("'assist'"))
+    notification_muted = Column(Integer, nullable=False, server_default=text("0"))
+    origin_kind = Column(String(64), nullable=True, index=True)
+    hidden_from_default_timeline = Column(Integer, nullable=False, server_default=text("0"))
+    launch_actor = Column(String(32), nullable=True, index=True)
+    launch_surface = Column(String(32), nullable=True, index=True)
+    commit_seq = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_sessions_timeline", "user_state", "last_activity_at", "started_at", "session_id"),
+        Index("ix_sessions_project_provider", "project", "provider", "last_activity_at"),
+    )
+
+
 class SourceEpoch(CatalogBase):
     """Stable provider-source namespace for immutable storage-v2 ranges."""
 
@@ -187,4 +234,5 @@ __all__ = [
     "SessionMediaRef",
     "SessionTombstone",
     "SourceEpoch",
+    "StorageSession",
 ]

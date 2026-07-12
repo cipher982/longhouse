@@ -29,6 +29,7 @@ from zerg.catalogd.models import RawObject as LiveRawObject
 from zerg.catalogd.models import SessionMediaRef
 from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
+from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import catalog_meta
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
@@ -3129,6 +3130,7 @@ class CatalogStore:
         *,
         protocol_version: int,
         tenant_id: str,
+        owner_id: str | None,
         session_id: UUID,
         machine_id: str,
         provider: str,
@@ -3150,6 +3152,7 @@ class CatalogStore:
         media_state: str,
         missing_media_hashes: tuple[str, ...],
         projectors: tuple[str, ...],
+        session_facts: dict[str, Any],
         sealed_at: datetime,
     ) -> dict[str, Any]:
         del protocol_version  # validated as v2 by the RPC boundary
@@ -3170,6 +3173,7 @@ class CatalogStore:
         epoch = LiveSourceEpoch.__table__
         raw = LiveRawObject.__table__
         tombstone = LiveSessionTombstone.__table__
+        storage_session = StorageSession.__table__
         session_key = str(session_id)
         epoch_key = str(source_epoch)
         record_hashes_hash = hashlib.sha256(b"".join(record_hashes)).hexdigest()
@@ -3241,6 +3245,18 @@ class CatalogStore:
                     "receipt": _raw_object_receipt(existing),
                 }
 
+            existing_session = (
+                connection.execute(select(storage_session).where(storage_session.c.session_id == session_key)).mappings().first()
+            )
+            if existing_session is not None and any(
+                (
+                    existing_session["tenant_id"] != tenant_id,
+                    existing_session["provider"] != provider,
+                    existing_session["machine_id"] != machine_id,
+                )
+            ):
+                return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+
             epoch_row = connection.execute(select(epoch).where(epoch.c.source_epoch == epoch_key)).mappings().first()
             if epoch_row is None:
                 return {"source_epoch_missing": True, "commit_seq": str(_current_commit_seq(connection))}
@@ -3300,6 +3316,62 @@ class CatalogStore:
                     updated_at=commit_time,
                 )
             )
+            session_values = {
+                "owner_id": owner_id,
+                "environment": session_facts["environment"],
+                "project": session_facts["project"],
+                "cwd": session_facts["cwd"],
+                "git_repo": session_facts["git_repo"],
+                "git_branch": session_facts["git_branch"],
+                "ended_at": session_facts["ended_at"],
+                "origin_kind": session_facts["origin_kind"],
+                "hidden_from_default_timeline": int(session_facts["hidden_from_default_timeline"]),
+                "launch_actor": session_facts["launch_actor"],
+                "launch_surface": session_facts["launch_surface"],
+                "raw_state": "durable",
+                "render_state": render_state,
+                "media_state": media_state,
+                "missing_media_hashes_json": missing_json,
+                "transcript_revision": commit_seq,
+                "commit_seq": commit_seq,
+                "updated_at": commit_time,
+            }
+            if existing_session is None:
+                connection.execute(
+                    insert(storage_session).values(
+                        session_id=session_key,
+                        tenant_id=tenant_id,
+                        provider=provider,
+                        machine_id=machine_id,
+                        started_at=session_facts["started_at"],
+                        last_activity_at=session_facts["last_activity_at"],
+                        created_at=commit_time,
+                        **session_values,
+                    )
+                )
+            else:
+                for optional_field in (
+                    "owner_id",
+                    "project",
+                    "cwd",
+                    "git_repo",
+                    "git_branch",
+                    "ended_at",
+                    "origin_kind",
+                    "launch_actor",
+                    "launch_surface",
+                ):
+                    if session_values[optional_field] is None:
+                        del session_values[optional_field]
+                session_values["started_at"] = min(
+                    _as_aware_utc(existing_session["started_at"]) or session_facts["started_at"],
+                    session_facts["started_at"],
+                )
+                session_values["last_activity_at"] = max(
+                    _as_aware_utc(existing_session["last_activity_at"]) or session_facts["last_activity_at"],
+                    session_facts["last_activity_at"],
+                )
+                connection.execute(update(storage_session).where(storage_session.c.session_id == session_key).values(**session_values))
             projector_table = ProjectorState.__table__
             for projector in projectors:
                 projector_row = (
@@ -3405,6 +3477,60 @@ class CatalogStore:
                     }
                     for envelope_id in envelope_ids
                 ],
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
+    def read_storage_session(self, *, session_id: UUID) -> dict[str, Any]:
+        table = StorageSession.__table__
+        tombstone = LiveSessionTombstone.__table__
+        session_key = str(session_id)
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            deleted = connection.execute(
+                select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
+            ).scalar_one_or_none()
+            row = connection.execute(select(table).where(table.c.session_id == session_key)).mappings().first()
+            return {
+                "found": row is not None and deleted is None,
+                "deleted": deleted is not None,
+                "deletion_revision": str(deleted) if deleted is not None else None,
+                "session": _storage_session_dto(row) if row is not None and deleted is None else None,
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
+    def read_storage_session_raw_manifest(
+        self,
+        *,
+        session_id: UUID,
+        after_commit_seq: int | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        session_table = StorageSession.__table__
+        raw = LiveRawObject.__table__
+        tombstone = LiveSessionTombstone.__table__
+        session_key = str(session_id)
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            deleted = connection.execute(
+                select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
+            ).scalar_one_or_none()
+            session_row = connection.execute(select(session_table).where(session_table.c.session_id == session_key)).mappings().first()
+            statement = select(raw).where(raw.c.session_id == session_key, raw.c.retired_at.is_(None))
+            if after_commit_seq is not None:
+                statement = statement.where(raw.c.commit_seq > after_commit_seq)
+            rows = (
+                connection.execute(statement.order_by(raw.c.commit_seq.asc(), raw.c.envelope_id.asc()).limit(limit)).mappings().all()
+                if deleted is None
+                else []
+            )
+            return {
+                "found": session_row is not None and deleted is None,
+                "deleted": deleted is not None,
+                "deletion_revision": str(deleted) if deleted is not None else None,
+                "session": _storage_session_dto(session_row) if session_row is not None and deleted is None else None,
+                "objects": [_raw_object_manifest_dto(row) for row in rows],
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
             }
@@ -4626,16 +4752,67 @@ def _raw_object_receipt(row) -> dict[str, object]:
 def _raw_object_manifest_dto(row) -> dict[str, Any]:
     return {
         "envelope_id": str(row["envelope_id"]),
+        "tenant_id": str(row["tenant_id"]),
         "session_id": str(row["session_id"]),
+        "machine_id": str(row["machine_id"]),
+        "provider": str(row["provider"]),
+        "opaque_source_id": str(row["opaque_source_id"]),
+        "source_epoch": str(row["source_epoch"]),
+        "range_kind": str(row["range_kind"]),
         "range_start": str(int(row["range_start"])),
         "range_end": str(int(row["range_end"])),
         "record_count": int(row["record_count"]),
         "object_hash": str(row["object_hash"]),
+        "payload_hash": str(row["payload_hash"]),
+        "object_path": str(row["object_path"]),
+        "uncompressed_size": int(row["uncompressed_size"]),
+        "compressed_size": int(row["compressed_size"]),
+        "provenance_kind": str(row["provenance_kind"]),
         "commit_seq": str(row["commit_seq"]),
         "render_state": str(row["render_state"]),
         "media_state": str(row["media_state"]),
         "retired_at": _encode_datetime(row["retired_at"]),
         "retirement_revision": (str(row["retirement_revision"]) if row["retirement_revision"] is not None else None),
+    }
+
+
+def _storage_session_dto(row) -> dict[str, Any]:
+    return {
+        "session_id": str(row["session_id"]),
+        "tenant_id": str(row["tenant_id"]),
+        "owner_id": row["owner_id"],
+        "provider": str(row["provider"]),
+        "environment": str(row["environment"]),
+        "machine_id": str(row["machine_id"]),
+        "project": row["project"],
+        "cwd": row["cwd"],
+        "git_repo": row["git_repo"],
+        "git_branch": row["git_branch"],
+        "started_at": _encode_datetime(row["started_at"]),
+        "last_activity_at": _encode_datetime(row["last_activity_at"]),
+        "ended_at": _encode_datetime(row["ended_at"]),
+        "user_messages": int(row["user_messages"]),
+        "assistant_messages": int(row["assistant_messages"]),
+        "tool_calls": int(row["tool_calls"]),
+        "summary_title": row["summary_title"],
+        "first_user_message_preview": row["first_user_message_preview"],
+        "last_visible_text_preview": row["last_visible_text_preview"],
+        "transcript_revision": str(row["transcript_revision"]),
+        "current_render_generation": row["current_render_generation"],
+        "raw_state": str(row["raw_state"]),
+        "render_state": str(row["render_state"]),
+        "media_state": str(row["media_state"]),
+        "missing_media_hashes": list(json.loads(str(row["missing_media_hashes_json"] or "[]"))),
+        "user_state": str(row["user_state"]),
+        "loop_mode": str(row["loop_mode"]),
+        "notification_muted": bool(row["notification_muted"]),
+        "origin_kind": row["origin_kind"],
+        "hidden_from_default_timeline": bool(row["hidden_from_default_timeline"]),
+        "launch_actor": row["launch_actor"],
+        "launch_surface": row["launch_surface"],
+        "commit_seq": str(row["commit_seq"]),
+        "created_at": _encode_datetime(row["created_at"]),
+        "updated_at": _encode_datetime(row["updated_at"]),
     }
 
 
