@@ -462,7 +462,7 @@ async def lifespan(app: FastAPI):
             try:
                 from zerg.database import start_wal_checkpoint_loop
 
-                await start_wal_checkpoint_loop(include_archive=not catalog_mode)
+                await start_wal_checkpoint_loop()
                 logger.info("WAL checkpoint loop started")
             except Exception as e:
                 logger.warning("Startup: WAL checkpoint loop failed (non-fatal): %s", e)

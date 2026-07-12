@@ -485,7 +485,7 @@ def _ensure_default_engines_from_env() -> Engine | None:
     return default_engine
 
 
-def configure_write_serializer(*, observe_api_activity: bool = True) -> None:
+def configure_write_serializer() -> None:
     """Configure the archive WriteSerializer with the dedicated write engine.
 
     Call once at startup (from lifespan) after database_url is set.
@@ -496,11 +496,6 @@ def configure_write_serializer(*, observe_api_activity: bool = True) -> None:
     ws = get_write_serializer()
     if not ws.is_configured:
         ws.configure_resolver(_resolve_write_session_factory)
-    if observe_api_activity:
-        from zerg.services.archive_api_writer_status import write_archive_api_writer_status
-
-        ws.set_activity_observer(write_archive_api_writer_status)
-        write_archive_api_writer_status({"active": False, "label": None, "job_id": None})
 
 
 def configure_live_write_serializer() -> None:
@@ -1027,19 +1022,28 @@ def _migrate_session_disposition_and_run_facts(engine: Engine) -> None:
                                 SELECT COALESCE(srs.terminal_at, srs.last_runtime_signal_at)
                                 FROM session_runtime_state srs
                                 WHERE srs.run_id = session_runs.id
-                                  AND srs.terminal_state IN ('session_ended', 'process_gone', 'run_completed', 'run_failed', 'run_cancelled')
+                                  AND srs.terminal_state IN (
+                                      'session_ended', 'process_gone', 'run_completed',
+                                      'run_failed', 'run_cancelled'
+                                  )
                                 ORDER BY srs.terminal_at DESC LIMIT 1
                             )),
                             exit_status = COALESCE(exit_status, (
                                 SELECT srs.terminal_state FROM session_runtime_state srs
                                 WHERE srs.run_id = session_runs.id
-                                  AND srs.terminal_state IN ('session_ended', 'process_gone', 'run_completed', 'run_failed', 'run_cancelled')
+                                  AND srs.terminal_state IN (
+                                      'session_ended', 'process_gone', 'run_completed',
+                                      'run_failed', 'run_cancelled'
+                                  )
                                 ORDER BY srs.terminal_at DESC LIMIT 1
                             ))
                         WHERE EXISTS (
                             SELECT 1 FROM session_runtime_state srs
                             WHERE srs.run_id = session_runs.id
-                              AND srs.terminal_state IN ('session_ended', 'process_gone', 'run_completed', 'run_failed', 'run_cancelled')
+                              AND srs.terminal_state IN (
+                                  'session_ended', 'process_gone', 'run_completed',
+                                  'run_failed', 'run_cancelled'
+                              )
                         )
                         """
                     )
@@ -1269,9 +1273,11 @@ def _migrate_agents_columns(engine: Engine) -> None:
             # Multi-column indexes the model layer doesn't declare on these columns.
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_execution_home ON sessions(execution_home)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_source_runner_id ON sessions(source_runner_id)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_thread_head ON sessions(thread_root_session_id, is_writable_head)"))
             conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started ON sessions(continued_from_session_id, started_at)")
+                text("CREATE INDEX IF NOT EXISTS ix_sessions_thread_head " "ON sessions(thread_root_session_id, is_writable_head)")
+            )
+            conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started " "ON sessions(continued_from_session_id, started_at)")
             )
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_last_activity_at ON sessions(last_activity_at)"))
     except Exception:
@@ -1463,10 +1469,10 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("UPDATE agent_heartbeats SET ship_server_errors_1h = 0 WHERE ship_server_errors_1h IS NULL"))
             if columns and "ship_payload_rejections_1h" not in columns:
                 conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_payload_rejections_1h INTEGER DEFAULT 0"))
-                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_rejections_1h = 0 WHERE ship_payload_rejections_1h IS NULL"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_rejections_1h = 0 " "WHERE ship_payload_rejections_1h IS NULL"))
             if columns and "ship_payload_too_large_1h" not in columns:
                 conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_payload_too_large_1h INTEGER DEFAULT 0"))
-                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_too_large_1h = 0 WHERE ship_payload_too_large_1h IS NULL"))
+                conn.execute(text("UPDATE agent_heartbeats SET ship_payload_too_large_1h = 0 " "WHERE ship_payload_too_large_1h IS NULL"))
             if columns and "ship_retryable_client_errors_1h" not in columns:
                 conn.execute(text("ALTER TABLE agent_heartbeats ADD COLUMN ship_retryable_client_errors_1h INTEGER DEFAULT 0"))
                 conn.execute(
@@ -1605,7 +1611,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.commit()
     except Exception:
         logger.error(
-            "session_inputs queue migration FAILED — client_request_id dedupe or queue-attempt recovery may be incomplete",
+            "session_inputs queue migration FAILED — client_request_id dedupe or " "queue-attempt recovery may be incomplete",
             exc_info=True,
         )
         try:
@@ -1667,7 +1673,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 if "source_event_id" not in columns:
                     conn.execute(text("ALTER TABLE session_messages ADD COLUMN source_event_id INTEGER"))
                 if "delivery_status" not in columns:
-                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivery_status VARCHAR(32) NOT NULL DEFAULT 'queued'"))
+                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivery_status " "VARCHAR(32) NOT NULL DEFAULT 'queued'"))
                 if "delivery_attempts" not in columns:
                     conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0"))
                 if "last_error" not in columns:
@@ -2075,7 +2081,9 @@ def _migrate_agents_columns(engine: Engine) -> None:
                         UPDATE runners
                         SET availability_policy = CASE
                             WHEN COALESCE(TRIM(availability_policy), '') != '' THEN availability_policy
-                            WHEN json_extract(runner_metadata, '$.availability_policy') IN ('always_on', 'on_demand', 'ephemeral')
+                            WHEN json_extract(runner_metadata, '$.availability_policy') IN (
+                                'always_on', 'on_demand', 'ephemeral'
+                            )
                                 THEN json_extract(runner_metadata, '$.availability_policy')
                             WHEN name LIKE 'lh-vm-canary-%' THEN 'ephemeral'
                             WHEN json_extract(runner_metadata, '$.install_mode') = 'desktop' THEN 'on_demand'
@@ -2385,8 +2393,13 @@ def _ensure_agents_fts(engine: Engine) -> None:
                 conn.exec_driver_sql(
                     """
                     CREATE TRIGGER IF NOT EXISTS events_ad AFTER DELETE ON events BEGIN
-                      INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
-                      VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
+                      INSERT INTO events_fts(
+                        events_fts, rowid, content_text, tool_output_text,
+                        tool_name, role, session_id
+                      ) VALUES(
+                        'delete', old.id, old.content_text, old.tool_output_text,
+                        old.tool_name, old.role, old.session_id
+                      );
                     END
                     """
                 )
@@ -2394,8 +2407,13 @@ def _ensure_agents_fts(engine: Engine) -> None:
                 conn.exec_driver_sql(
                     """
                     CREATE TRIGGER IF NOT EXISTS events_au AFTER UPDATE ON events BEGIN
-                      INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
-                      VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
+                      INSERT INTO events_fts(
+                        events_fts, rowid, content_text, tool_output_text,
+                        tool_name, role, session_id
+                      ) VALUES(
+                        'delete', old.id, old.content_text, old.tool_output_text,
+                        old.tool_name, old.role, old.session_id
+                      );
                       INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
                       VALUES (new.id, new.content_text, new.tool_output_text, new.tool_name, new.role, new.session_id);
                     END
@@ -2418,7 +2436,6 @@ _wal_checkpoint_metrics: dict[str, dict[str, Any]] = {}
 _sqlite_optimize_last_run_at: dict[str, float] = {}
 
 WAL_CHECKPOINT_INTERVAL = int(os.getenv("SQLITE_WAL_CHECKPOINT_INTERVAL", "60"))
-WAL_TRUNCATE_BYTES = int(os.getenv("SQLITE_WAL_TRUNCATE_BYTES", str(512 * 1024 * 1024)))
 LIVE_WAL_TRUNCATE_BYTES = int(os.getenv("LONGHOUSE_LIVE_WAL_TRUNCATE_BYTES", str(64 * 1024 * 1024)))
 SQLITE_PRAGMA_OPTIMIZE_INTERVAL_SECONDS = int(os.getenv("SQLITE_PRAGMA_OPTIMIZE_INTERVAL_SECONDS", "600"))
 
@@ -2592,17 +2609,7 @@ def _run_wal_checkpoint(engine: Engine | None, *, label: str, truncate_bytes: in
         return _record_wal_checkpoint_result(payload)
 
 
-def run_archive_wal_checkpoint_once() -> dict[str, Any]:
-    """Run the archive worker's bounded checkpoint maintenance unit."""
-
-    return _run_wal_checkpoint(
-        default_engine,
-        label="archive",
-        truncate_bytes=WAL_TRUNCATE_BYTES,
-    )
-
-
-async def start_wal_checkpoint_loop(*, include_archive: bool = True) -> None:
+async def start_wal_checkpoint_loop() -> None:
     """Start periodic PASSIVE WAL checkpoints.
 
     PASSIVE never blocks readers or writers — it checkpoints whatever pages
@@ -2615,8 +2622,6 @@ async def start_wal_checkpoint_loop(*, include_archive: bool = True) -> None:
 
     def _do_checkpoint():
         """Run checkpoint in a thread — never block the event loop."""
-        if include_archive:
-            _run_wal_checkpoint(default_engine, label="archive", truncate_bytes=WAL_TRUNCATE_BYTES)
         _run_wal_checkpoint(live_engine, label="live", truncate_bytes=LIVE_WAL_TRUNCATE_BYTES)
 
     async def _loop():

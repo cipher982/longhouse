@@ -146,7 +146,7 @@ def test_catalogd_import_graph_excludes_web_and_archive_runtime():
     command = """
 import sys
 import zerg.catalogd.server
-for forbidden in ("zerg.database", "fastapi", "zerg.services.archive_worker"):
+for forbidden in ("zerg.database", "fastapi"):
     assert forbidden not in sys.modules, (forbidden, sorted(k for k in sys.modules if k.startswith(forbidden)))
 assert not any(name.startswith("zerg.routers") for name in sys.modules)
 """

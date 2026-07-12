@@ -1076,11 +1076,9 @@ async def ingest_session(
                         transcript_preview=transcript_preview,
                     )
 
-            from zerg.services.archive_ingest_job import archive_ingest_worker_enabled
             from zerg.services.write_serializer import get_write_serializer
 
             ws = get_write_serializer()
-            use_archive_ingest_worker = archive_ingest_worker_enabled()
             ingest_chunk = _ingest_chunk_for_label(write_label)
 
             def _do_ingest(
@@ -1160,9 +1158,6 @@ async def ingest_session(
                 )
                 write_results: list[IngestResult] = []
                 archive_primary_states: list[str] = []
-                worker_job_wait_ms = 0.0
-                worker_exec_ms = 0.0
-                request_session_closed = False
                 for batch_index, ingest_batch in enumerate(ingest_batches):
                     batch_write_timeout_seconds = write_timeout_seconds
                     batch_queue_timeout_seconds = queue_timeout_seconds
@@ -1191,62 +1186,7 @@ async def ingest_session(
                         await asyncio.sleep(0)
                         await _check_ingest_writer_pressure(write_label, response)
 
-                    if use_archive_ingest_worker:
-                        from zerg.services.archive_worker_jobs import ArchiveWorkerJobError
-                        from zerg.services.archive_worker_jobs import ArchiveWorkerJobTimeout
-                        from zerg.services.archive_worker_jobs import submit_archive_worker_job
-
-                        if not request_session_closed:
-                            db.close()
-                            request_session_closed = True
-                        worker_timeout_seconds = (
-                            sum(timeout for timeout in (batch_queue_timeout_seconds, batch_write_timeout_seconds) if timeout is not None)
-                            or 30.0
-                        )
-                        if request_budget_seconds is not None:
-                            worker_timeout_seconds = min(
-                                worker_timeout_seconds,
-                                max(0.1, request_budget_seconds - (time.monotonic() - request_budget_started)),
-                            )
-                        try:
-                            worker_result = await submit_archive_worker_job(
-                                "session_ingest.v1",
-                                {
-                                    "data": ingest_batch.model_dump(mode="json"),
-                                    "write_label": write_label,
-                                    "batch_index": batch_index,
-                                    "ship_trace": ship_trace,
-                                    "timing": {
-                                        "handler_entered_at_ms": handler_entered_at_ms,
-                                        "decode_finished_at_ms": decode_finished_at_ms,
-                                        "validate_finished_at_ms": validate_finished_at_ms,
-                                    },
-                                },
-                                timeout_seconds=worker_timeout_seconds,
-                            )
-                        except (ArchiveWorkerJobTimeout, ArchiveWorkerJobError):
-                            logger.warning(
-                                "Archive worker ingest failed for session %s batch=%s",
-                                data.id,
-                                batch_index + 1,
-                                exc_info=True,
-                            )
-                            response.headers["X-Ingest-Archive-Worker"] = "unavailable"
-                            request_status_label = "live_backpressure" if write_label == "ingest-live" else "archive_backpressure"
-                            if write_label == "ingest-live":
-                                _raise_live_ingest_backpressure(
-                                    response,
-                                    admission_state="archive_worker_unavailable",
-                                )
-                            _raise_archive_ingest_backpressure(
-                                response,
-                                admission_state="archive_worker_unavailable",
-                            )
-                        batch_result = IngestResult.model_validate(worker_result["result"])
-                        batch_archive_primary_state = str(worker_result.get("archive_primary_state") or "disabled")
-                        worker_job_wait_ms += float(worker_result.get("job_wait_ms") or 0.0)
-                        worker_exec_ms += float(worker_result.get("worker_exec_ms") or 0.0)
-                    else:
+                    if not live_catalog_enabled():
                         archive_primary_prepared = None
                         archive_primary_state = "prepared"
                         archive_primary_records_written = 0
@@ -1314,12 +1254,7 @@ async def ingest_session(
                 from zerg.services.write_serializer import last_write_timing
 
                 timing = last_write_timing()
-                if use_archive_ingest_worker:
-                    response.headers["X-Ingest-Queue-Wait-Ms"] = f"{max(0.0, worker_job_wait_ms - worker_exec_ms):.1f}"
-                    response.headers["X-Ingest-Exec-Ms"] = f"{worker_exec_ms:.1f}"
-                    response.headers["X-Ingest-Label"] = write_label
-                    response.headers["X-Ingest-Archive-Worker"] = "completed"
-                elif timing is not None:
+                if timing is not None:
                     response.headers["X-Ingest-Queue-Wait-Ms"] = f"{timing.queue_wait_ms:.1f}"
                     response.headers["X-Ingest-Exec-Ms"] = f"{timing.exec_ms:.1f}"
                     if timing.label:

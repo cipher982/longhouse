@@ -2,7 +2,6 @@ from zerg.database import _checkpoint_counts
 from zerg.database import _run_wal_checkpoint
 from zerg.database import make_engine
 from zerg.database import make_live_engine
-from zerg.database import run_archive_wal_checkpoint_once
 
 
 def _pragma_scalar(conn, name: str):
@@ -81,24 +80,6 @@ def test_wal_checkpoint_helper_accepts_live_engine(tmp_path):
     assert payload["label"] == "live"
     assert payload["skipped"] is False
     assert {"busy", "log_frames", "checkpointed_frames", "remaining_frames"} <= set(payload)
-
-
-def test_archive_worker_checkpoint_seam_uses_archive_engine(tmp_path, monkeypatch):
-    db_path = tmp_path / "archive.db"
-    engine = make_engine(f"sqlite:///{db_path}")
-    with engine.begin() as conn:
-        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY)")
-        conn.exec_driver_sql("INSERT INTO writes DEFAULT VALUES")
-
-    import zerg.database as database_mod
-
-    monkeypatch.setattr(database_mod, "default_engine", engine)
-    monkeypatch.setattr(database_mod, "WAL_TRUNCATE_BYTES", 0)
-
-    payload = run_archive_wal_checkpoint_once()
-
-    assert payload["label"] == "archive"
-    assert payload["skipped"] is False
 
 
 def test_get_live_wal_bytes_returns_int_or_none(tmp_path, monkeypatch):

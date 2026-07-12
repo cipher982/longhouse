@@ -246,40 +246,6 @@ def test_readyz_reports_archive_degraded_for_stale_active_writer_with_queued_wor
     assert response["write_serializer"]["archive_degraded"] is True
 
 
-def test_readyz_stays_hot_ready_when_archive_worker_is_degraded(tmp_path, monkeypatch):
-    engine = make_engine(f"sqlite:///{tmp_path}/readyz_archive_worker_degraded.db")
-    with engine.begin() as conn:
-        conn.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
-
-    class QuietWriter:
-        is_configured = True
-
-        def get_metrics(self):
-            return {
-                "queue_depth": 0,
-                "writer_active": False,
-                "active_label": None,
-                "active_age_ms": 0.0,
-            }
-
-    import zerg.database as database_module
-
-    monkeypatch.setattr(database_module, "default_engine", engine)
-    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: QuietWriter())
-    monkeypatch.setattr("zerg.services.write_serializer.get_live_write_serializer", lambda: QuietWriter())
-    monkeypatch.setattr(
-        health_router,
-        "_archive_worker_check",
-        lambda: {"enabled": True, "status": "degraded", "reason": "status_stale"},
-    )
-
-    response = health_router.readyz_check()
-
-    assert response["status"] == "ready_with_archive_degraded"
-    assert response["reason"] == "archive_worker_degraded"
-    assert response["archive_worker"]["reason"] == "status_stale"
-
-
 def test_readyz_requires_catalogd_in_live_catalog_production(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
@@ -352,7 +318,6 @@ def test_readyz_does_not_require_catalogd_for_archive_route_process(tmp_path, mo
     )
     monkeypatch.setattr(health_router, "_write_serializer_stall_check", lambda: (False, {}))
     monkeypatch.setattr(health_router, "_live_write_serializer_check", lambda: (False, {}))
-    monkeypatch.setattr(health_router, "_archive_worker_check", lambda: {"enabled": False})
     monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
 
     response = health_router.readyz_check()

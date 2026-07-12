@@ -77,12 +77,6 @@ def _live_write_serializer_check() -> tuple[bool, dict]:
     return _serializer_metrics_check("get_live_write_serializer")
 
 
-def _archive_worker_check() -> dict:
-    from zerg.services.archive_worker_status import read_archive_worker_status
-
-    return read_archive_worker_status()
-
-
 def _archive_wal_pressure_payload(wal_bytes: int | None) -> dict[str, object]:
     from zerg.services.archive_pressure import evaluate_archive_wal_pressure
 
@@ -376,13 +370,6 @@ def readyz_check():
             "reason": "archive_write_serializer_stalled",
             "write_serializer": _archive_degraded_metrics(writer_metrics),
         }
-    archive_worker = {"enabled": False, "status": "retired"} if catalog_mode else _archive_worker_check()
-    if archive_worker.get("enabled") and archive_worker.get("status") != "running":
-        return {
-            "status": "ready_with_archive_degraded",
-            "reason": "archive_worker_degraded",
-            "archive_worker": archive_worker,
-        }
     if writer_stale:
         return JSONResponse(
             status_code=503,
@@ -444,12 +431,6 @@ def health_check(request: Request):
         health_status["build"] = {"error": "missing", "detail": str(exc)}
 
     checks = {}
-
-    archive_worker = {"enabled": False, "status": "retired"} if catalog_mode else _archive_worker_check()
-    checks["archive_worker"] = archive_worker
-    if archive_worker.get("enabled") and archive_worker.get("status") != "running":
-        health_status["status"] = "degraded"
-        health_status["message"] = "Archive worker is degraded; live lane may remain available"
 
     # 0. Single-tenant violation check
     single_tenant_violation = getattr(_health_app_ref, "single_tenant_violation", None)
@@ -534,7 +515,7 @@ def health_check(request: Request):
         if catalog_mode:
             checks["database"] = {"status": "pass", "connection": "catalogd"}
         else:
-            health_engine = (get_live_engine() if archive_worker.get("enabled") and live_store_configured() else None) or default_engine
+            health_engine = (get_live_engine() if live_store_configured() else None) or default_engine
             with health_engine.connect() as conn:
                 result = conn.execute(text("SELECT 1"))
                 row = result.fetchone()
@@ -650,8 +631,6 @@ def health_check(request: Request):
 
         if catalog_mode:
             checks["fts5"] = {"status": "skip", "reason": "searchd_owned"}
-        elif archive_worker.get("enabled"):
-            checks["fts5"] = {"status": "skip", "reason": "owned_by_archive_worker"}
         elif default_engine is not None and default_engine.dialect.name == "sqlite":
             with default_engine.connect() as conn:
                 fts_row = conn.execute(text(EVENTS_FTS_EXISTS_SQL)).fetchone()
@@ -726,8 +705,6 @@ def health_check(request: Request):
     # background and should be visible separately from raw ingest health.
     if catalog_mode:
         checks["session_projection_lag"] = {"status": "skip", "reason": "storage_v2_projectors"}
-    elif archive_worker.get("enabled"):
-        checks["session_projection_lag"] = {"status": "skip", "reason": "owned_by_archive_worker"}
     else:
         try:
             checks["session_projection_lag"] = _session_projection_lag_check()
@@ -738,8 +715,6 @@ def health_check(request: Request):
     # they should be visible, but must not be mistaken for raw shipping health.
     if catalog_mode:
         checks["session_enrichment_lag"] = {"status": "skip", "reason": "storage_v2_projectors"}
-    elif archive_worker.get("enabled"):
-        checks["session_enrichment_lag"] = {"status": "skip", "reason": "owned_by_archive_worker"}
     else:
         try:
             checks["session_enrichment_lag"] = _session_enrichment_lag_check()

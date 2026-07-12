@@ -198,8 +198,6 @@ async def test_api_readiness_survives_catalogd_kill_and_recovers(supervisor_path
     )
     monkeypatch.setattr(health_router, "_write_serializer_stall_check", lambda: (False, {}))
     monkeypatch.setattr(health_router, "_live_write_serializer_check", lambda: (False, {}))
-    monkeypatch.setattr(health_router, "_archive_worker_check", lambda: {"enabled": False})
-
     app = FastAPI()
     app.get("/readyz")(health_router.readyz_check)
     client = TestClient(app)
