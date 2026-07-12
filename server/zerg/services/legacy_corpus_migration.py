@@ -59,6 +59,7 @@ INVENTORY_BATCH = 500
 STREAMING_SOURCE_THRESHOLD = 10_000
 STREAMING_EVENT_PAGE = 50
 STREAMING_MATCH_PAGE = 250
+STREAMING_SQL_PAGE = 1_000
 STREAMING_EVENT_LAYOUT_REVISION = "bounded-events-v2"
 
 
@@ -658,15 +659,23 @@ class LegacyCorpusConverter:
         )
         connection.exec_driver_sql("PRAGMA temp.cache_size=-32768")
         connection.exec_driver_sql("DELETE FROM migration_source_counts")
-        connection.execute(
-            text(
-                "INSERT INTO migration_source_counts(source_path, source_offset, line_hash, row_count, consumed) "
-                "SELECT source_path, source_offset, line_hash, 1, 0 FROM source_lines "
-                "WHERE session_id = :session_id AND id <= :high AND true "
-                "ON CONFLICT(source_path, source_offset, line_hash) DO UPDATE SET row_count = row_count + 1"
-            ),
-            {"session_id": str(session_id), "high": watermark.source_line_id},
-        )
+        source_cursor = connection.connection.cursor()
+        try:
+            source_cursor.execute(
+                "SELECT source_path, source_offset, line_hash FROM source_lines " "WHERE session_id = ? AND id <= ? ORDER BY id",
+                (str(session_id), watermark.source_line_id),
+            )
+            while rows := source_cursor.fetchmany(STREAMING_SQL_PAGE):
+                connection.exec_driver_sql(
+                    "INSERT INTO migration_source_counts"
+                    "(source_path, source_offset, line_hash, row_count, consumed) VALUES (?, ?, ?, 1, 0) "
+                    "ON CONFLICT(source_path, source_offset, line_hash) DO UPDATE SET row_count = row_count + 1",
+                    rows,
+                )
+                del rows
+                _return_free_heap_to_os()
+        finally:
+            source_cursor.close()
         connection.exec_driver_sql(
             "CREATE TEMP TABLE IF NOT EXISTS migration_archive_page ("
             "source_path TEXT NOT NULL, source_offset INTEGER NOT NULL, line_hash TEXT NOT NULL, "
