@@ -46,6 +46,7 @@ from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
 from zerg.storage_v2.contracts import raw_export_cursor_token
 from zerg.storage_v2.contracts import render_detail_cursor_token
+from zerg.storage_v2.cutover import STORAGE_V2_CUTOVER
 from zerg.storage_v2.media_objects import MAX_MEDIA_BYTES
 from zerg.storage_v2.media_objects import MediaObjectCorruptError
 from zerg.storage_v2.media_objects import MediaObjectSpec
@@ -691,7 +692,7 @@ async def storage_v2_capabilities(
         raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_machine", str(exc)) from exc
     return {
         "protocol_version": 2,
-        "cutover": False,
+        "cutover": STORAGE_V2_CUTOVER,
         "tenant_id": settings.archive_primary_tenant_id,
         "machine_id": machine_id,
         "ingest_path": "/api/agents/storage/v2/envelopes",

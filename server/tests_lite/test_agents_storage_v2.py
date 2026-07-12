@@ -170,7 +170,7 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
             capabilities = await client.get("/agents/storage/v2/capabilities")
             assert capabilities.status_code == 200
-            assert capabilities.json()["cutover"] is False
+            assert capabilities.json()["cutover"] is True
             assert capabilities.json()["tenant_id"] == tenant_id
             assert capabilities.json()["machine_id"] == "cinder"
 
