@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -25,8 +26,8 @@ from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
 from zerg.storage_v2.contracts import render_detail_cursor_token
 from zerg.storage_v2.raw_objects import read_raw_object
-from zerg.storage_v2.render_objects import seal_render_object
 from zerg.storage_v2.render_objects import read_render_object
+from zerg.storage_v2.render_objects import seal_render_object
 
 
 class _AdmissionOnlyPool:
@@ -114,9 +115,10 @@ def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"he
                     "thread_id": None,
                     "branch_kind": None,
                     "raw_record_ordinal": 0,
-                }
+                },
             ],
         },
+        "media": [],
         "session": {
             "environment": "local",
             "project": "longhouse",
@@ -265,6 +267,125 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
             expected_object_hash=raw["object_hash"],
         )
         assert decoded.envelope_id == payload["expected_envelope_id"]
+    finally:
+        await workers.close()
+        await catalog.close()
+        await daemon.close()
+        tempdir.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_media_must_be_durable_before_complete_receipt(monkeypatch):
+    tempdir = TemporaryDirectory(prefix="lh2-media-", dir="/tmp")
+    root = Path(tempdir.name)
+    daemon = CatalogDaemon(database_path=root / "catalog.db", socket_path=root / "catalogd.sock")
+    await daemon.start()
+    catalog = CatalogClient(root / "catalogd.sock")
+    workers = RawObjectWorkerPool(root / "objects", live_workers=1, repair_workers=1, queue_multiplier=1)
+    render_workers = _InlineRenderPool(root / "objects")
+    await workers.start()
+    monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)
+
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    tenant_id = get_settings().archive_primary_tenant_id
+    payload = _payload(
+        tenant_id=tenant_id,
+        machine_id="cinder",
+        epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abc"),
+        data=b"media-ref\n",
+    )
+    media_bytes = b"\x89PNG\r\n\x1a\nexact-media"
+    media_hash = hashlib.sha256(media_bytes).hexdigest()
+    payload["media"] = [
+        {
+            "sha256": media_hash,
+            "source_position": 0,
+            "ref_key": f"inline_data_url:0:{'a' * 64}:0",
+            "availability": "available",
+        }
+    ]
+
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            premature = await client.post(
+                "/agents/storage/v2/envelopes",
+                json=payload,
+                headers={"X-Longhouse-Storage-Lane": "live"},
+            )
+            assert premature.status_code == 409, premature.text
+            assert premature.json()["detail"]["code"] == "media_unavailable"
+
+            claim = await client.post(
+                "/agents/storage/v2/media/claims",
+                json={"items": [{"sha256": media_hash, "mime_type": "image/png", "byte_size": len(media_bytes)}]},
+            )
+            assert claim.status_code == 200
+            assert claim.json() == {"needed": [media_hash], "present": [], "rejected": []}
+
+            bad_upload = await client.put(
+                f"/agents/storage/v2/media/{media_hash}",
+                content=b"wrong",
+                headers={"Content-Type": "image/png", "X-Longhouse-Storage-Lane": "live"},
+            )
+            assert bad_upload.status_code == 422
+
+            upload = await client.put(
+                f"/agents/storage/v2/media/{media_hash}",
+                content=media_bytes,
+                headers={"Content-Type": "image/png", "X-Longhouse-Storage-Lane": "live"},
+            )
+            assert upload.status_code == 200, upload.text
+            assert upload.json()["sha256"] == media_hash
+
+            alias_claim = await client.post(
+                "/agents/storage/v2/media/claims",
+                json={
+                    "items": [
+                        {
+                            "sha256": media_hash,
+                            "mime_type": "application/octet-stream",
+                            "byte_size": len(media_bytes),
+                        }
+                    ]
+                },
+            )
+            assert alias_claim.json() == {"needed": [], "present": [media_hash], "rejected": []}
+
+            committed = await client.post(
+                "/agents/storage/v2/envelopes",
+                json=payload,
+                headers={"X-Longhouse-Storage-Lane": "live"},
+            )
+            assert committed.status_code == 200, committed.text
+            receipt = committed.json()
+            assert receipt["media_state"] == "complete"
+            assert receipt["missing_media_hashes"] == []
+
+            replay = await client.post(
+                "/agents/storage/v2/envelopes",
+                json=payload,
+                headers={"X-Longhouse-Storage-Lane": "live"},
+            )
+            assert replay.json() == receipt
+
+            head = await client.head(f"/agents/storage/v2/media/{media_hash}")
+            assert head.status_code == 200
+            assert head.headers["content-length"] == str(len(media_bytes))
+            fetched = await client.get(f"/agents/storage/v2/media/{media_hash}/blob")
+            assert fetched.status_code == 200
+            assert fetched.content == media_bytes
+
+            manifest = await catalog.call(
+                "storage.media.read.v2",
+                {"media_hash": media_hash, "session_id": payload["session_id"], "limit": 10},
+            )
+            assert manifest["media"]["state"] == "present"
+            assert manifest["refs"][0]["envelope_id"] == payload["expected_envelope_id"]
     finally:
         await workers.close()
         await catalog.close()

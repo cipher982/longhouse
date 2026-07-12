@@ -7,6 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.models import MediaObject
@@ -40,7 +41,9 @@ def _media_params(
         "mime_type": "image/png" if present else None,
         "byte_size": 123 if present else None,
         "object_path": f"media/{media_hash[:2]}/{media_hash}.bin" if present else None,
-        "session_refs": ([{"session_id": session_id, "envelope_id": None, "ref_key": "inline:0"}] if session_id is not None else []),
+        "session_refs": (
+            [{"session_id": session_id, "envelope_id": None, "ref_key": "inline:0"}] if session_id is not None else []
+        ),
         "observed_at": observed_at.isoformat(),
     }
 
@@ -77,6 +80,11 @@ async def test_media_manifest_is_content_addressed_idempotent_and_restart_durabl
         assert completed["commit_seq"] == "2"
         assert completed["media"]["state"] == "present"
         assert len(completed["refs"]) == 1
+
+        mime_alias = {**present, "mime_type": "application/octet-stream"}
+        alias_replay = await client.call("storage.media.commit.v2", mime_alias)
+        assert alias_replay["exact_replay"] is True
+        assert alias_replay["media"]["mime_type"] == "image/png"
 
         moved_path = {**present, "object_path": f"compacted/{media_hash}.bin"}
         moved_replay = await client.call("storage.media.commit.v2", moved_path)

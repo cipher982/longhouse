@@ -32,6 +32,7 @@ ERROR_CODES = frozenset(
         "schema_incompatible",
         "internal",
         "source_epoch_conflict",
+        "media_unavailable",
         "session_deleted",
         "stale_generation",
         "invalid_cursor",

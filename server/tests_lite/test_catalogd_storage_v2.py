@@ -9,6 +9,7 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
+
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.models import CatalogBase
@@ -93,8 +94,7 @@ def _raw_params(
         "compressed_size": max(1, sum(len(record) for record in records) // 2),
         "provenance_kind": "native",
         "render_state": "pending",
-        "media_state": "complete",
-        "missing_media_hashes": [],
+        "media_refs": [],
         "projectors": ["render-v2", "search-v2", "worklog-v2"],
         "render_manifest": None,
         "session_facts": {
@@ -215,6 +215,55 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
 
 
 @pytest.mark.asyncio
+async def test_raw_receipt_derives_explicit_missing_media_and_records_envelope_ref(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    media_hash = "d" * 64
+    raw = _raw_params(
+        epoch=UUID("018f0c3a-7b2d-7f10-8a11-523456789abc"),
+        session_id=session_id,
+        start=0,
+        end=6,
+        records=(b"hello\n",),
+        sealed_at=now,
+    )
+    raw["media_refs"] = [
+        {
+            "media_hash": media_hash,
+            "source_position": 0,
+            "ref_key": "external-reference:0",
+            "availability": "missing",
+        }
+    ]
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        committed = await client.call("storage.raw_object.commit.v2", raw)
+        assert committed["receipt"]["media_state"] == "missing"
+        assert committed["receipt"]["missing_media_hashes"] == [media_hash]
+        replay = await client.call("storage.raw_object.commit.v2", raw)
+        assert replay["exact_replay"] is True
+        assert replay["receipt"] == committed["receipt"]
+
+        manifest = await client.call(
+            "storage.media.read.v2",
+            {"media_hash": media_hash, "session_id": str(session_id), "limit": 10},
+        )
+        assert manifest["media"]["state"] == "missing"
+        assert manifest["refs"][0]["envelope_id"] == raw["envelope_id"]
+
+        drift = {**raw, "media_refs": []}
+        with pytest.raises(CatalogRemoteError) as conflict:
+            await client.call("storage.raw_object.commit.v2", drift)
+        assert conflict.value.code == "source_epoch_conflict"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
@@ -291,7 +340,6 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
             **raw,
             "object_path": f"compacted/{raw['object_hash']}.zst",
             "render_state": "failed",
-            "media_state": "pending",
         }
         replay_after_drift = await client.call("storage.raw_object.commit.v2", derived_drift)
         assert replay_after_drift["exact_replay"] is True
@@ -535,7 +583,9 @@ def test_storage_v2_tables_are_catalog_schema_owned(daemon_paths):
         "sessions",
     }.issubset(set(CatalogBase.metadata.tables))
     with engine.connect() as connection:
-        table_names = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
+        table_names = {
+            row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")
+        }
     engine.dispose()
     assert set(CatalogBase.metadata.tables).issubset(table_names)
 
@@ -550,7 +600,9 @@ def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):
 
     metadata = initialize_catalog_schema(engine)
     with engine.connect() as connection:
-        table_names = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
+        table_names = {
+            row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")
+        }
     engine.dispose()
 
     assert metadata.schema_version == 1

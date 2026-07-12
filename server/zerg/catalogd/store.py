@@ -3155,8 +3155,7 @@ class CatalogStore:
         compressed_size: int,
         provenance_kind: str,
         render_state: str,
-        media_state: str,
-        missing_media_hashes: tuple[str, ...],
+        media_refs: tuple[dict[str, Any], ...],
         projectors: tuple[str, ...],
         render_manifest: dict[str, Any] | None,
         session_facts: dict[str, Any],
@@ -3183,13 +3182,16 @@ class CatalogStore:
         storage_session = StorageSession.__table__
         render_generation = RenderGeneration.__table__
         render_object = RenderObject.__table__
+        media_object = MediaObject.__table__
+        session_media_ref = SessionMediaRef.__table__
         session_key = str(session_id)
         epoch_key = str(source_epoch)
         record_hashes_hash = hashlib.sha256(b"".join(record_hashes)).hexdigest()
-        missing_json = json.dumps(list(missing_media_hashes), separators=(",", ":"))
+        canonical_media_refs = json.dumps(list(media_refs), sort_keys=True, separators=(",", ":"))
+        media_refs_hash = hashlib.sha256(canonical_media_refs.encode()).hexdigest()
         range_start_key = _u64_key(range_start)
         range_end_key = _u64_key(range_end)
-        immutable = {
+        immutable_base = {
             "tenant_id": tenant_id,
             "session_id": session_key,
             "machine_id": machine_id,
@@ -3208,9 +3210,7 @@ class CatalogStore:
             "uncompressed_size": uncompressed_size,
             "compressed_size": compressed_size,
             "provenance_kind": provenance_kind,
-            "render_state": render_state,
-            "media_state": media_state,
-            "missing_media_hashes_json": missing_json,
+            "media_refs_hash": media_refs_hash,
             "sealed_at": sealed_at,
         }
         # Envelope identity deliberately excludes session membership, clocks,
@@ -3218,7 +3218,7 @@ class CatalogStore:
         # codec upgrade must return the original durable receipt instead of
         # inventing a conflicting second representation.
         replay_identity = {
-            key: immutable[key]
+            key: immutable_base[key]
             for key in (
                 "tenant_id",
                 "machine_id",
@@ -3230,6 +3230,7 @@ class CatalogStore:
                 "range_end",
                 "record_count",
                 "record_hashes_hash",
+                "media_refs_hash",
             )
         }
         with _write_transaction(self.engine) as connection:
@@ -3253,6 +3254,48 @@ class CatalogStore:
                     "exact_replay": True,
                     "receipt": _raw_object_receipt(existing),
                 }
+
+            referenced_hashes = sorted({str(ref["media_hash"]) for ref in media_refs})
+            media_rows = (
+                connection.execute(select(media_object).where(media_object.c.media_hash.in_(referenced_hashes))).mappings().all()
+                if referenced_hashes
+                else []
+            )
+            media_by_hash = {str(row["media_hash"]): row for row in media_rows}
+            unavailable = sorted(
+                {
+                    str(ref["media_hash"])
+                    for ref in media_refs
+                    if ref["availability"] == "available"
+                    and (str(ref["media_hash"]) not in media_by_hash or str(media_by_hash[str(ref["media_hash"])]["state"]) != "present")
+                }
+            )
+            if unavailable:
+                return {
+                    "media_unavailable": True,
+                    "media_hashes": unavailable,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            missing_media_hashes = tuple(
+                sorted(
+                    {
+                        str(ref["media_hash"])
+                        for ref in media_refs
+                        if ref["availability"] == "missing"
+                        and (
+                            str(ref["media_hash"]) not in media_by_hash or str(media_by_hash[str(ref["media_hash"])]["state"]) != "present"
+                        )
+                    }
+                )
+            )
+            media_state = "missing" if missing_media_hashes else "complete"
+            missing_json = json.dumps(list(missing_media_hashes), separators=(",", ":"))
+            immutable = {
+                **immutable_base,
+                "render_state": render_state,
+                "media_state": media_state,
+                "missing_media_hashes_json": missing_json,
+            }
 
             existing_session = (
                 connection.execute(select(storage_session).where(storage_session.c.session_id == session_key)).mappings().first()
@@ -3412,6 +3455,43 @@ class CatalogStore:
                     created_at=commit_time,
                 )
             )
+            missing_object_hashes = sorted(media_hash for media_hash in missing_media_hashes if media_hash not in media_by_hash)
+            if missing_object_hashes:
+                connection.execute(
+                    insert(media_object),
+                    [
+                        {
+                            "media_hash": media_hash,
+                            "state": "missing",
+                            "mime_type": None,
+                            "byte_size": None,
+                            "object_path": None,
+                            "commit_seq": commit_seq,
+                            "observed_at": commit_time,
+                            "verified_at": None,
+                            "deleted_at": None,
+                            "created_at": commit_time,
+                            "updated_at": commit_time,
+                        }
+                        for media_hash in missing_object_hashes
+                    ],
+                )
+            if media_refs:
+                connection.execute(
+                    insert(session_media_ref),
+                    [
+                        {
+                            "session_id": session_key,
+                            "media_hash": ref["media_hash"],
+                            "envelope_id": envelope_id,
+                            "ref_key": ref["ref_key"],
+                            "state": "active",
+                            "commit_seq": commit_seq,
+                            "created_at": commit_time,
+                        }
+                        for ref in media_refs
+                    ],
+                )
             if not epoch_is_new:
                 connection.execute(
                     update(epoch)
@@ -3456,6 +3536,11 @@ class CatalogStore:
                     )
                 )
             else:
+                if existing_session["media_state"] == "missing":
+                    previous_missing = json.loads(existing_session["missing_media_hashes_json"] or "[]")
+                    combined_missing = sorted(set(previous_missing) | set(missing_media_hashes))[:1_000]
+                    session_values["media_state"] = "missing"
+                    session_values["missing_media_hashes_json"] = json.dumps(combined_missing, separators=(",", ":"))
                 for optional_field in (
                     "owner_id",
                     "project",
@@ -3940,8 +4025,6 @@ class CatalogStore:
             if existing is not None:
                 if existing["state"] == "deleted" and state != "deleted":
                     return {"manifest_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
-                if existing["mime_type"] is not None and mime_type is not None and existing["mime_type"] != mime_type:
-                    return {"manifest_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 if existing["byte_size"] is not None and byte_size is not None and existing["byte_size"] != byte_size:
                     return {"manifest_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 allowed = {
@@ -4124,6 +4207,14 @@ class CatalogStore:
                         "byte_size": (
                             int(by_hash[media_hash]["byte_size"])
                             if media_hash in by_hash and by_hash[media_hash]["byte_size"] is not None
+                            else None
+                        ),
+                        "mime_type": str(by_hash[media_hash]["mime_type"])
+                        if media_hash in by_hash and by_hash[media_hash]["mime_type"]
+                        else None,
+                        "object_path": (
+                            str(by_hash[media_hash]["object_path"])
+                            if media_hash in by_hash and by_hash[media_hash]["object_path"]
                             else None
                         ),
                         "commit_seq": str(by_hash[media_hash]["commit_seq"]) if media_hash in by_hash else None,

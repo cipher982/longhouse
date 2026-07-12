@@ -17,6 +17,10 @@ pub struct StorageV2Capabilities {
     pub max_wire_body_bytes: u64,
     pub max_raw_record_bytes: u64,
     pub max_records: u64,
+    pub media_claim_path: String,
+    pub media_upload_path_template: String,
+    pub max_media_bytes: u64,
+    pub max_media_claims: u64,
     pub range_kinds: Vec<String>,
     pub lanes: Vec<String>,
     pub lane_header: String,
@@ -25,7 +29,10 @@ pub struct StorageV2Capabilities {
 impl StorageV2Capabilities {
     pub fn validate(&self, expected_machine_id: &str) -> Result<()> {
         if self.protocol_version != 2 {
-            bail!("Runtime Host returned unsupported storage protocol {}", self.protocol_version);
+            bail!(
+                "Runtime Host returned unsupported storage protocol {}",
+                self.protocol_version
+            );
         }
         if self.tenant_id.is_empty() || self.machine_id != expected_machine_id {
             bail!("Runtime Host storage identity does not match this Machine Agent");
@@ -37,6 +44,12 @@ impl StorageV2Capabilities {
             || self.max_raw_record_bytes > 4 * 1024 * 1024
             || self.max_records == 0
             || self.max_records > 10_000
+            || self.media_claim_path != "/api/agents/storage/v2/media/claims"
+            || self.media_upload_path_template != "/api/agents/storage/v2/media/{sha256}"
+            || self.max_media_bytes == 0
+            || self.max_media_bytes > 32 * 1024 * 1024
+            || self.max_media_claims == 0
+            || self.max_media_claims > 512
             || self.range_kinds != ["byte_offset", "record_ordinal"]
             || self.lanes != ["live", "repair"]
         {
@@ -50,6 +63,14 @@ impl StorageV2Capabilities {
 pub struct StorageV2Record {
     pub source_position: u64,
     pub data_b64: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct StorageV2MediaRef {
+    pub sha256: String,
+    pub source_position: u64,
+    pub ref_key: String,
+    pub availability: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -108,6 +129,7 @@ pub struct StorageV2Envelope {
     pub range_start: u64,
     pub range_end: u64,
     pub render: Option<StorageV2Render>,
+    pub media: Vec<StorageV2MediaRef>,
     pub session: StorageV2SessionFacts,
     pub records: Vec<StorageV2Record>,
     pub expected_envelope_id: String,
@@ -134,12 +156,21 @@ impl StorageV2Receipt {
             || self.commit_seq.parse::<u64>().is_err()
             || self.raw_state != "durable"
             || !matches!(self.render_state.as_str(), "ready" | "pending" | "failed")
-            || !matches!(self.media_state.as_str(), "complete" | "pending" | "missing")
+            || !matches!(
+                self.media_state.as_str(),
+                "complete" | "pending" | "missing"
+            )
         {
             bail!("Runtime Host returned an invalid storage-v2 durable receipt");
         }
-        if self.missing_media_hashes.windows(2).any(|pair| pair[0] >= pair[1])
-            || self.missing_media_hashes.iter().any(|value| !is_lower_sha256(value))
+        if self
+            .missing_media_hashes
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+            || self
+                .missing_media_hashes
+                .iter()
+                .any(|value| !is_lower_sha256(value))
             || (self.media_state == "complete" && !self.missing_media_hashes.is_empty())
             || (self.media_state == "missing" && self.missing_media_hashes.is_empty())
         {
@@ -171,6 +202,10 @@ mod tests {
             max_wire_body_bytes: 6 * 1024 * 1024,
             max_raw_record_bytes: 4 * 1024 * 1024,
             max_records: 10_000,
+            media_claim_path: "/api/agents/storage/v2/media/claims".to_string(),
+            media_upload_path_template: "/api/agents/storage/v2/media/{sha256}".to_string(),
+            max_media_bytes: 32 * 1024 * 1024,
+            max_media_claims: 512,
             range_kinds: vec!["byte_offset".to_string(), "record_ordinal".to_string()],
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: STORAGE_V2_LANE_HEADER.to_string(),

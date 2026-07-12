@@ -12,11 +12,15 @@ use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::pipeline::parser::{self, ParseResult, ParsedEvent, Role, SessionMetadata};
 use crate::opencode_db;
+use crate::pipeline::parser::{
+    self, ParseResult, ParsedEvent, ParsedMediaObject, Role, SessionMetadata,
+};
 use crate::raw_records::{read_next_raw_batch, RawRecordBatch, RawSourceFraming};
 use crate::shipping::client::ShipperClient;
-use crate::shipping::storage_v2::{StorageV2Capabilities, StorageV2Envelope, StorageV2Record};
+use crate::shipping::storage_v2::{
+    StorageV2Capabilities, StorageV2Envelope, StorageV2MediaRef, StorageV2Record,
+};
 use crate::shipping::storage_v2::{StorageV2Render, StorageV2RenderRecord, StorageV2SessionFacts};
 use crate::state::file_state::FileState;
 use crate::state::source_epoch::{self, SourceChangeHint, SourceEpochResolution, SourceLane};
@@ -34,6 +38,7 @@ pub(crate) struct PreparedStorageV2Envelope {
     pub event_count: usize,
     pub raw_bytes: u64,
     pub has_more: bool,
+    pub media_objects: Vec<ParsedMediaObject>,
 }
 
 pub(crate) struct StorageV2ShipOutcome {
@@ -78,16 +83,25 @@ pub(crate) fn prepare_next_envelope(
         return Ok(None);
     };
     let parse_result = parser::parse_session_file(path, position)?;
-    if framing == RawSourceFraming::LfDelimited && raw_batch.range_end > parse_result.last_good_offset {
-        raw_batch.records.retain(|record| record.range_end <= parse_result.last_good_offset);
+    if framing == RawSourceFraming::LfDelimited
+        && raw_batch.range_end > parse_result.last_good_offset
+    {
+        raw_batch
+            .records
+            .retain(|record| record.range_end <= parse_result.last_good_offset);
         let Some(last) = raw_batch.records.last() else {
             return Ok(None);
         };
         raw_batch.range_end = last.range_end;
     }
     let session_id = resolve_session_id(provider, &parse_result, session_id_override);
-    let session_uuid = Uuid::parse_str(&session_id).context("storage-v2 session id is not a UUID")?;
-    let raw_bytes: Vec<Vec<u8>> = raw_batch.records.iter().map(|record| record.bytes.clone()).collect();
+    let session_uuid =
+        Uuid::parse_str(&session_id).context("storage-v2 session id is not a UUID")?;
+    let raw_bytes: Vec<Vec<u8>> = raw_batch
+        .records
+        .iter()
+        .map(|record| record.bytes.clone())
+        .collect();
     let identity = EnvelopeIdentity {
         tenant_id: capabilities.tenant_id.clone(),
         machine_id: capabilities.machine_id.clone(),
@@ -101,9 +115,18 @@ pub(crate) fn prepare_next_envelope(
     };
     let expected_envelope_id = hex_hash(storage_v2_contract::envelope_id(&identity)?);
     let render_records = render_records_for_batch(&parse_result, &raw_batch)?;
-    let render_generation = render_generation_id(session_uuid, resolution.source_epoch);
+    let render_generation = render_generation_id(session_uuid);
     let session = session_facts(&parse_result.metadata, &render_records, &resolution)?;
     let source_len = std::fs::metadata(path)?.len();
+    let media_objects = parse_result
+        .media_objects
+        .iter()
+        .filter(|media| {
+            media.source_offset >= raw_batch.range_start
+                && media.source_offset < raw_batch.range_end
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     Ok(Some(PreparedStorageV2Envelope {
         envelope: StorageV2Envelope {
             protocol_version: 2,
@@ -124,6 +147,7 @@ pub(crate) fn prepare_next_envelope(
                 ordering_revision: ORDERING_REVISION.to_string(),
                 records: render_records,
             }),
+            media: storage_v2_media_refs(&media_objects),
             session,
             records: raw_batch
                 .records
@@ -141,10 +165,14 @@ pub(crate) fn prepare_next_envelope(
         event_count: parse_result
             .events
             .iter()
-            .filter(|event| event.source_offset >= raw_batch.range_start && event.source_offset < raw_batch.range_end)
+            .filter(|event| {
+                event.source_offset >= raw_batch.range_start
+                    && event.source_offset < raw_batch.range_end
+            })
             .count(),
         raw_bytes: raw_batch.range_end - raw_batch.range_start,
         has_more: raw_batch.range_end < source_len,
+        media_objects,
     }))
 }
 
@@ -158,15 +186,19 @@ pub(crate) async fn ship_next_envelope(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let Some(prepared) = prepare_next_envelope(
-        conn,
-        capabilities,
-        path,
-        provider,
-        session_id_override,
-    )? else {
+    let Some(prepared) =
+        prepare_next_envelope(conn, capabilities, path, provider, session_id_override)?
+    else {
         return Ok(None);
     };
+    crate::media_upload::ensure_storage_v2_media_uploaded(
+        client,
+        capabilities,
+        &prepared.media_objects,
+        lane,
+        Some(request_timeout),
+    )
+    .await?;
     client
         .ship_storage_v2_envelope(
             &capabilities.ingest_path,
@@ -201,7 +233,8 @@ pub(crate) fn prepare_next_opencode_envelope(
 
     for (candidate_index, candidate) in candidates.iter().enumerate() {
         let snapshot = opencode_db::opencode_raw_snapshot(db_path, &candidate.provider_session_id)?;
-        let logical_len = u64::try_from(snapshot.records.len()).context("OpenCode snapshot has too many records")?;
+        let logical_len = u64::try_from(snapshot.records.len())
+            .context("OpenCode snapshot has too many records")?;
         let opaque_source_id = opaque_source_id(&format!(
             "{path_text}\0opencode-session\0{}",
             candidate.provider_session_id
@@ -217,7 +250,8 @@ pub(crate) fn prepare_next_opencode_envelope(
             Some(&snapshot.source_revision),
             SourceChangeHint::None,
         )?;
-        let range_start = source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
+        let range_start =
+            source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
         if range_start >= logical_len {
             continue;
         }
@@ -227,12 +261,13 @@ pub(crate) fn prepare_next_opencode_envelope(
             capabilities.max_records,
             capabilities.max_raw_record_bytes,
         )?;
-        let parse_result = opencode_db::parse_opencode_session(db_path, &candidate.provider_session_id)?;
-        let session_id = opencode_db::managed_longhouse_session_id_for_opencode(
-            &candidate.provider_session_id,
-        )
-        .unwrap_or_else(|| parse_result.metadata.session_id.clone());
-        let session_uuid = Uuid::parse_str(&session_id).context("storage-v2 OpenCode session id is not a UUID")?;
+        let parse_result =
+            opencode_db::parse_opencode_session(db_path, &candidate.provider_session_id)?;
+        let session_id =
+            opencode_db::managed_longhouse_session_id_for_opencode(&candidate.provider_session_id)
+                .unwrap_or_else(|| parse_result.metadata.session_id.clone());
+        let session_uuid =
+            Uuid::parse_str(&session_id).context("storage-v2 OpenCode session id is not a UUID")?;
         let start = usize::try_from(range_start).context("OpenCode range start exceeds usize")?;
         let end = usize::try_from(range_end).context("OpenCode range end exceeds usize")?;
         let selected = &snapshot.records[start..end];
@@ -255,8 +290,14 @@ pub(crate) fn prepare_next_opencode_envelope(
             range_end,
         )?;
         let event_count = render_records.len();
-        let render_generation = render_generation_id(session_uuid, resolution.source_epoch);
+        let render_generation = render_generation_id(session_uuid);
         let session = session_facts(&parse_result.metadata, &render_records, &resolution)?;
+        let media_objects = opencode_media_objects_for_range(
+            &parse_result,
+            snapshot.part_record_start,
+            range_start,
+            range_end,
+        )?;
         return Ok(Some(PreparedStorageV2Envelope {
             envelope: StorageV2Envelope {
                 protocol_version: 2,
@@ -266,7 +307,9 @@ pub(crate) fn prepare_next_opencode_envelope(
                 provider: "opencode".to_string(),
                 opaque_source_id,
                 source_epoch: resolution.source_epoch.to_string(),
-                predecessor_source_epoch: resolution.predecessor_epoch.map(|value| value.to_string()),
+                predecessor_source_epoch: resolution
+                    .predecessor_epoch
+                    .map(|value| value.to_string()),
                 epoch_opened_at: resolution.opened_at,
                 range_kind: "record_ordinal".to_string(),
                 range_start,
@@ -277,6 +320,7 @@ pub(crate) fn prepare_next_opencode_envelope(
                     ordering_revision: ORDERING_REVISION.to_string(),
                     records: render_records,
                 }),
+                media: storage_v2_media_refs(&media_objects),
                 session,
                 records: selected
                     .iter()
@@ -294,6 +338,7 @@ pub(crate) fn prepare_next_opencode_envelope(
             event_count,
             raw_bytes,
             has_more: range_end < logical_len || candidate_index + 1 < candidates.len(),
+            media_objects,
         }));
     }
     Ok(None)
@@ -310,6 +355,14 @@ pub(crate) async fn ship_next_opencode_envelope(
     let Some(prepared) = prepare_next_opencode_envelope(conn, capabilities, db_path)? else {
         return Ok(None);
     };
+    crate::media_upload::ensure_storage_v2_media_uploaded(
+        client,
+        capabilities,
+        &prepared.media_objects,
+        lane,
+        Some(request_timeout),
+    )
+    .await?;
     client
         .ship_storage_v2_envelope(
             &capabilities.ingest_path,
@@ -330,6 +383,49 @@ pub(crate) async fn ship_next_opencode_envelope(
         events_shipped: prepared.event_count,
         has_more: prepared.has_more,
     }))
+}
+
+fn storage_v2_media_refs(media_objects: &[ParsedMediaObject]) -> Vec<StorageV2MediaRef> {
+    media_objects
+        .iter()
+        .enumerate()
+        .map(|(index, media)| StorageV2MediaRef {
+            sha256: media.sha256.clone(),
+            source_position: media.source_offset,
+            ref_key: format!(
+                "inline_data_url:{}:{}:{index}",
+                media.source_offset, media.original_line_sha256
+            ),
+            availability: "available".to_string(),
+        })
+        .collect()
+}
+
+fn opencode_media_objects_for_range(
+    parse_result: &ParseResult,
+    part_record_start: u64,
+    range_start: u64,
+    range_end: u64,
+) -> Result<Vec<ParsedMediaObject>> {
+    let source_ordinals: HashMap<u64, u64> = parse_result
+        .source_lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| (line.source_offset, part_record_start + index as u64))
+        .collect();
+    let mut result = Vec::new();
+    for media in &parse_result.media_objects {
+        let ordinal = source_ordinals
+            .get(&media.source_offset)
+            .copied()
+            .context("OpenCode media is not covered by a raw part record")?;
+        if ordinal >= range_start && ordinal < range_end {
+            let mut mapped = media.clone();
+            mapped.source_offset = ordinal;
+            result.push(mapped);
+        }
+    }
+    Ok(result)
 }
 
 fn bounded_record_ordinal_end(
@@ -356,22 +452,28 @@ fn bounded_record_ordinal_end(
     if end == start {
         anyhow::bail!("storage-v2 record-ordinal batch made no progress");
     }
-    Ok((u64::try_from(end).context("record-ordinal end exceeds u64")?, bytes))
+    Ok((
+        u64::try_from(end).context("record-ordinal end exceeds u64")?,
+        bytes,
+    ))
 }
 
-fn render_records_for_batch(parse_result: &ParseResult, batch: &RawRecordBatch) -> Result<Vec<StorageV2RenderRecord>> {
+fn render_records_for_batch(
+    parse_result: &ParseResult,
+    batch: &RawRecordBatch,
+) -> Result<Vec<StorageV2RenderRecord>> {
     let mut subordinals: HashMap<u64, u32> = HashMap::new();
     let mut records = Vec::new();
-    for event in parse_result
-        .events
-        .iter()
-        .filter(|event| event.source_offset >= batch.range_start && event.source_offset < batch.range_end)
-    {
+    for event in parse_result.events.iter().filter(|event| {
+        event.source_offset >= batch.range_start && event.source_offset < batch.range_end
+    }) {
         let subordinal = subordinals.entry(event.source_offset).or_default();
         let raw_record_ordinal = batch
             .records
             .iter()
-            .position(|record| event.source_offset >= record.range_start && event.source_offset < record.range_end)
+            .position(|record| {
+                event.source_offset >= record.range_start && event.source_offset < record.range_end
+            })
             .context("parsed event is not covered by its raw record")?;
         records.push(render_record(
             event,
@@ -504,7 +606,10 @@ fn session_facts(
         .or(metadata.ended_at)
         .unwrap_or(started_at);
     Ok(StorageV2SessionFacts {
-        environment: metadata.environment.clone().unwrap_or_else(|| "local".to_string()),
+        environment: metadata
+            .environment
+            .clone()
+            .unwrap_or_else(|| "local".to_string()),
         project: metadata.project.clone(),
         cwd: metadata.cwd.clone(),
         git_repo: metadata.git_repo.clone(),
@@ -523,13 +628,18 @@ fn record_time(record: &StorageV2RenderRecord) -> Option<DateTime<Utc>> {
     DateTime::from_timestamp_micros(record.order_time_us)
 }
 
-fn resolve_session_id(provider: &str, parse_result: &ParseResult, override_id: Option<&str>) -> String {
+fn resolve_session_id(
+    provider: &str,
+    parse_result: &ParseResult,
+    override_id: Option<&str>,
+) -> String {
     let parsed = parse_result.metadata.session_id.clone();
     let Some(override_id) = override_id else {
         return parsed;
     };
     if provider.eq_ignore_ascii_case("codex")
-        && (parse_result.metadata.forked_from_session_id.is_some() || parse_result.metadata.is_sidechain)
+        && (parse_result.metadata.forked_from_session_id.is_some()
+            || parse_result.metadata.is_sidechain)
         && override_id != parsed
     {
         parsed
@@ -538,22 +648,24 @@ fn resolve_session_id(provider: &str, parse_result: &ParseResult, override_id: O
     }
 }
 
-fn render_generation_id(session_id: Uuid, source_epoch: Uuid) -> Uuid {
+fn render_generation_id(session_id: Uuid) -> Uuid {
     Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
-        format!(
-            "longhouse-render-v2\0{session_id}\0{source_epoch}\0{PARSER_REVISION}\0{ORDERING_REVISION}"
-        )
-        .as_bytes(),
+        format!("longhouse-render-v2\0{session_id}\0{PARSER_REVISION}\0{ORDERING_REVISION}")
+            .as_bytes(),
     )
 }
 
 fn opaque_source_id(path: &str) -> String {
-    format!("path-sha256:{}", hex_hash(Sha256::digest(path.as_bytes()).into()))
+    format!(
+        "path-sha256:{}",
+        hex_hash(Sha256::digest(path.as_bytes()).into())
+    )
 }
 
 fn hash_file(path: &Path) -> Result<String> {
-    let bytes = std::fs::read(path).with_context(|| format!("reading source revision: {}", path.display()))?;
+    let bytes = std::fs::read(path)
+        .with_context(|| format!("reading source revision: {}", path.display()))?;
     Ok(hex_hash(Sha256::digest(bytes).into()))
 }
 
@@ -564,10 +676,16 @@ fn hex_hash(hash: [u8; 32]) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::{Arc, Mutex};
 
     use rusqlite::params;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     use super::*;
+    use crate::config::ShipperConfig;
+    use crate::pipeline::compressor::CompressionAlgo;
+    use crate::shipping::client::ShipperClient;
     use crate::state::db::open_db;
 
     fn capabilities() -> StorageV2Capabilities {
@@ -580,6 +698,10 @@ mod tests {
             max_wire_body_bytes: 12 * 1024 * 1024,
             max_raw_record_bytes: 4 * 1024 * 1024,
             max_records: 10_000,
+            media_claim_path: "/api/agents/storage/v2/media/claims".to_string(),
+            media_upload_path_template: "/api/agents/storage/v2/media/{sha256}".to_string(),
+            max_media_bytes: 32 * 1024 * 1024,
+            max_media_claims: 512,
             range_kinds: vec!["byte_offset".to_string(), "record_ordinal".to_string()],
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: "X-Longhouse-Storage-Lane".to_string(),
@@ -589,7 +711,9 @@ mod tests {
     #[test]
     fn prepares_exact_raw_bytes_and_versioned_render_without_advancing_cursor() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
         let bytes = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
         fs::write(&path, bytes).unwrap();
         let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
@@ -598,12 +722,186 @@ mod tests {
             .unwrap();
         assert_eq!(prepared.range_start, 0);
         assert_eq!(prepared.range_end, bytes.len() as u64);
-        assert_eq!(prepared.envelope.records[0].data_b64, BASE64_STANDARD.encode(bytes));
+        assert_eq!(
+            prepared.envelope.records[0].data_b64,
+            BASE64_STANDARD.encode(bytes)
+        );
         assert_eq!(prepared.envelope.render.as_ref().unwrap().records.len(), 1);
         assert_eq!(
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn media_is_declared_without_changing_exact_provider_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("019c638d-0000-0000-0000-000000000012.jsonl");
+        let bytes = br#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}}
+"#;
+        fs::write(&path, bytes).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "codex", None)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            prepared.envelope.records[0].data_b64,
+            BASE64_STANDARD.encode(bytes)
+        );
+        assert_eq!(prepared.media_objects.len(), 1);
+        assert_eq!(prepared.media_objects[0].bytes, vec![0, 0, 0]);
+        assert_eq!(prepared.envelope.media.len(), 1);
+        assert_eq!(
+            prepared.envelope.media[0].sha256,
+            prepared.media_objects[0].sha256
+        );
+        assert_eq!(prepared.envelope.media[0].availability, "available");
+        assert_eq!(prepared.envelope.media[0].source_position, 0);
+    }
+
+    #[tokio::test]
+    async fn media_upload_precedes_envelope_and_failed_upload_keeps_cursor_for_exact_retry() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let requests = Arc::new(Mutex::new(Vec::<String>::new()));
+        let server_requests = requests.clone();
+        let server = tokio::spawn(async move {
+            for request_index in 0..5 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                let header_end = loop {
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    assert!(read > 0);
+                    bytes.extend_from_slice(&buffer[..read]);
+                    if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n")
+                    {
+                        break offset + 4;
+                    }
+                };
+                let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                let request_line = headers.lines().next().unwrap().to_string();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                while bytes.len() - header_end < content_length {
+                    let read = socket.read(&mut buffer).await.unwrap();
+                    assert!(read > 0);
+                    bytes.extend_from_slice(&buffer[..read]);
+                }
+                server_requests.lock().unwrap().push(request_line.clone());
+                let (status, body) = match request_index {
+                    0 | 2 => {
+                        let claim: serde_json::Value =
+                            serde_json::from_slice(&bytes[header_end..]).unwrap();
+                        let hash = claim["items"][0]["sha256"].as_str().unwrap();
+                        (
+                            "200 OK",
+                            serde_json::json!({"needed":[hash],"present":[],"rejected":[]})
+                                .to_string(),
+                        )
+                    }
+                    1 => ("503 Service Unavailable", "{}".to_string()),
+                    3 => ("200 OK", "{}".to_string()),
+                    4 => {
+                        let envelope: serde_json::Value =
+                            serde_json::from_slice(&bytes[header_end..]).unwrap();
+                        let envelope_id = envelope["expected_envelope_id"].as_str().unwrap();
+                        (
+                            "200 OK",
+                            serde_json::json!({
+                                "v":2,
+                                "envelope_id":envelope_id,
+                                "object_hash":"b".repeat(64),
+                                "commit_seq":"9",
+                                "raw_state":"durable",
+                                "render_state":"ready",
+                                "media_state":"complete",
+                                "missing_media_hashes":[]
+                            })
+                            .to_string(),
+                        )
+                    }
+                    _ => unreachable!(),
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("019c638d-0000-0000-0000-000000000013.jsonl");
+        let line = concat!(
+            r#"{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,AAAA"}]}}"#,
+            "\n"
+        );
+        fs::write(&path, line).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let config = ShipperConfig {
+            api_url: format!("http://{address}"),
+            timeout_seconds: 5,
+            ..ShipperConfig::default()
+        };
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+
+        let first = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "codex",
+            None,
+            "live",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(first.is_err());
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "codex", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            0
+        );
+
+        let second = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "codex",
+            None,
+            "live",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(second.events_shipped, 1);
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            prepared.range_end
+        );
+        server.await.unwrap();
+        let observed = requests.lock().unwrap().clone();
+        assert!(observed[0].starts_with("POST /api/agents/storage/v2/media/claims "));
+        assert!(observed[1].starts_with("PUT /api/agents/storage/v2/media/"));
+        assert!(observed[2].starts_with("POST /api/agents/storage/v2/media/claims "));
+        assert!(observed[3].starts_with("PUT /api/agents/storage/v2/media/"));
+        assert!(observed[4].starts_with("POST /api/agents/storage/v2/envelopes "));
     }
 
     fn create_opencode_db(path: &Path) {
@@ -642,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    fn opencode_uses_record_ordinals_and_rotates_generation_on_database_revision() {
+    fn opencode_uses_record_ordinals_and_keeps_one_parser_generation_across_source_revisions() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("opencode.db");
         create_opencode_db(&db_path);
@@ -687,7 +985,7 @@ mod tests {
             second.envelope.predecessor_source_epoch.as_deref(),
             Some(first_epoch.as_str())
         );
-        assert_ne!(
+        assert_eq!(
             second.envelope.render.as_ref().unwrap().generation_id,
             first_render.generation_id
         );

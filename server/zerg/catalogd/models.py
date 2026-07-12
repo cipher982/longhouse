@@ -134,6 +134,7 @@ class RawObject(CatalogBase):
     uncompressed_size = Column(BigInteger, nullable=False)
     compressed_size = Column(BigInteger, nullable=False)
     provenance_kind = Column(String(32), nullable=False, server_default=text("'native'"))
+    media_refs_hash = Column(String(64), nullable=True)
     render_state = Column(String(16), nullable=False, server_default=text("'pending'"))
     media_state = Column(String(16), nullable=False, server_default=text("'complete'"))
     missing_media_hashes_json = Column(Text, nullable=False, server_default=text("'[]'"))

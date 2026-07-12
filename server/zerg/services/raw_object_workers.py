@@ -13,6 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from zerg.config import get_settings
+from zerg.storage_v2.media_objects import DecodedMediaObject
+from zerg.storage_v2.media_objects import MediaObjectSpec
+from zerg.storage_v2.media_objects import SealedMediaObject
+from zerg.storage_v2.media_objects import read_media_object
+from zerg.storage_v2.media_objects import seal_media_object
 from zerg.storage_v2.raw_objects import DecodedRawObject
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import SealedRawObject
@@ -41,6 +46,14 @@ def _seal_in_worker(root: str, spec: RawObjectSpec) -> SealedRawObject:
 
 def _read_in_worker(root: str, object_path: str, expected_object_hash: str) -> DecodedRawObject:
     return read_raw_object(Path(root), object_path, expected_object_hash=expected_object_hash)
+
+
+def _seal_media_in_worker(root: str, spec: MediaObjectSpec) -> SealedMediaObject:
+    return seal_media_object(Path(root), spec)
+
+
+def _read_media_in_worker(root: str, object_path: str, expected_media_hash: str) -> DecodedMediaObject:
+    return read_media_object(Path(root), object_path, expected_media_hash=expected_media_hash)
 
 
 def _worker_ping() -> int:
@@ -120,6 +133,58 @@ class RawObjectWorkerPool:
             timeout_seconds=operation_timeout_seconds,
             slots=slots,
         )
+
+    async def seal_media(
+        self,
+        spec: MediaObjectSpec,
+        *,
+        lane: str,
+        queue_timeout_seconds: float = 0.25,
+        operation_timeout_seconds: float = 15.0,
+    ) -> SealedMediaObject:
+        """Seal media through the same bounded live/repair storage lanes."""
+
+        if self._closed:
+            raise RawObjectWorkerError("storage worker pool is closed")
+        if lane not in {"live", "repair"}:
+            raise ValueError("media worker lane must be live or repair")
+        if queue_timeout_seconds <= 0 or operation_timeout_seconds <= 0:
+            raise ValueError("media worker deadlines must be positive")
+        slots = self._live_slots if lane == "live" else self._repair_slots
+        try:
+            async with asyncio.timeout(queue_timeout_seconds):
+                await slots.acquire()
+        except TimeoutError as exc:
+            raise RawObjectWorkerBusy(f"media {lane} worker queue is full") from exc
+        release_slot = True
+        try:
+            for attempt in range(2):
+                executor = self._live_executor if lane == "live" else self._repair_executor
+                try:
+                    future = asyncio.get_running_loop().run_in_executor(
+                        executor,
+                        _seal_media_in_worker,
+                        str(self.root),
+                        spec,
+                    )
+                    async with asyncio.timeout(operation_timeout_seconds):
+                        return await asyncio.shield(future)
+                except BrokenProcessPool:
+                    if attempt:
+                        raise RawObjectWorkerError(f"media {lane} worker pool crashed twice")
+                    await self._replace_executor(lane, executor)
+                except TimeoutError as exc:
+                    release_slot = False
+                    self._drain_slot_when_done(future, slots)
+                    raise RawObjectWorkerError(f"media {lane} object seal exceeded its deadline") from exc
+                except asyncio.CancelledError:
+                    release_slot = False
+                    self._drain_slot_when_done(future, slots)
+                    raise
+            raise AssertionError("unreachable")
+        finally:
+            if release_slot:
+                slots.release()
 
     @asynccontextmanager
     async def admission(
@@ -224,6 +289,54 @@ class RawObjectWorkerPool:
                     release_slot = False
                     self._drain_slot_when_done(future, self._user_read_slots)
                     raise RawObjectWorkerError("raw user read exceeded its deadline") from exc
+                except asyncio.CancelledError:
+                    release_slot = False
+                    self._drain_slot_when_done(future, self._user_read_slots)
+                    raise
+            raise AssertionError("unreachable")
+        finally:
+            if release_slot:
+                self._user_read_slots.release()
+
+    async def read_media(
+        self,
+        object_path: str,
+        expected_media_hash: str,
+        *,
+        queue_timeout_seconds: float = 0.25,
+        operation_timeout_seconds: float = 3.0,
+    ) -> DecodedMediaObject:
+        """Read and hash-verify media on the reserved user-read lane."""
+
+        if self._closed:
+            raise RawObjectWorkerError("storage worker pool is closed")
+        try:
+            async with asyncio.timeout(queue_timeout_seconds):
+                await self._user_read_slots.acquire()
+        except TimeoutError as exc:
+            raise RawObjectWorkerBusy("media user read queue is full") from exc
+        release_slot = True
+        try:
+            for attempt in range(2):
+                executor = self._user_read_executor
+                try:
+                    future = asyncio.get_running_loop().run_in_executor(
+                        executor,
+                        _read_media_in_worker,
+                        str(self.root),
+                        object_path,
+                        expected_media_hash,
+                    )
+                    async with asyncio.timeout(operation_timeout_seconds):
+                        return await asyncio.shield(future)
+                except BrokenProcessPool:
+                    if attempt:
+                        raise RawObjectWorkerError("media user reader pool crashed twice")
+                    await self._replace_executor("user", executor)
+                except TimeoutError as exc:
+                    release_slot = False
+                    self._drain_slot_when_done(future, self._user_read_slots)
+                    raise RawObjectWorkerError("media user read exceeded its deadline") from exc
                 except asyncio.CancelledError:
                     release_slot = False
                     self._drain_slot_when_done(future, self._user_read_slots)

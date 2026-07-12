@@ -1420,8 +1420,7 @@ class CatalogDaemon:
             "compressed_size",
             "provenance_kind",
             "render_state",
-            "media_state",
-            "missing_media_hashes",
+            "media_refs",
             "projectors",
             "render_manifest",
             "session_facts",
@@ -1457,6 +1456,13 @@ class CatalogDaemon:
                 request,
                 "source_epoch_conflict",
                 "source range overlaps or conflicts with the registered epoch",
+            )
+        if result.get("media_unavailable") is True:
+            return self._error(
+                request,
+                "media_unavailable",
+                "available media bytes must be durable before their transcript envelope",
+                details={"media_hashes": result.get("media_hashes", [])},
             )
         return CatalogRpcResponse(id=request.id, result=result)
 
@@ -1907,21 +1913,36 @@ def _validate_raw_object_commit(params: dict) -> None:
         raise ValueError("provenance_kind is invalid")
     if params["render_state"] not in {"ready", "pending", "failed"}:
         raise ValueError("render_state is invalid")
-    if params["media_state"] not in {"complete", "pending", "missing"}:
-        raise ValueError("media_state is invalid")
-    missing = params["missing_media_hashes"]
-    if (
-        not isinstance(missing, list)
-        or len(missing) > 1_000
-        or missing != sorted(set(missing))
-        or any(not _is_hash(value) for value in missing)
-    ):
-        raise ValueError("missing_media_hashes must be sorted unique lowercase SHA-256 values")
-    if params["media_state"] == "complete" and missing:
-        raise ValueError("complete media cannot have missing hashes")
-    if params["media_state"] == "missing" and not missing:
-        raise ValueError("missing media must name at least one hash")
-    params["missing_media_hashes"] = tuple(missing)
+    media_refs = params["media_refs"]
+    if not isinstance(media_refs, list) or len(media_refs) > 1_000:
+        raise ValueError("media_refs must contain at most 1000 references")
+    parsed_media_refs: list[dict[str, object]] = []
+    ref_keys: set[tuple[str, int, str]] = set()
+    for item in media_refs:
+        if not isinstance(item, dict) or set(item) != {"media_hash", "source_position", "ref_key", "availability"}:
+            raise ValueError("media_refs contains an invalid reference")
+        if not _is_hash(item["media_hash"]):
+            raise ValueError("media ref hash must be lowercase SHA-256 hex")
+        source_position = item["source_position"]
+        if type(source_position) is not int or not params["range_start"] <= source_position < params["range_end"]:
+            raise ValueError("media ref source_position is outside the envelope")
+        ref_key = _bounded_text(item["ref_key"], "media ref_key", 255)
+        availability = item["availability"]
+        if availability not in {"available", "missing"}:
+            raise ValueError("media ref availability must be available or missing")
+        key = (item["media_hash"], source_position, ref_key)
+        if key in ref_keys:
+            raise ValueError("media_refs must not contain duplicates")
+        ref_keys.add(key)
+        parsed_media_refs.append(
+            {
+                "media_hash": item["media_hash"],
+                "source_position": source_position,
+                "ref_key": ref_key,
+                "availability": availability,
+            }
+        )
+    params["media_refs"] = tuple(parsed_media_refs)
     projectors = params["projectors"]
     if not isinstance(projectors, list) or len(projectors) > 16:
         raise ValueError("projectors must contain at most 16 names")

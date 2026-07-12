@@ -18,6 +18,7 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
 from fastapi import Request
+from fastapi import Response
 from fastapi import status
 
 from zerg.catalogd.client import CatalogRemoteError
@@ -45,6 +46,10 @@ from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
 from zerg.storage_v2.contracts import raw_export_cursor_token
 from zerg.storage_v2.contracts import render_detail_cursor_token
+from zerg.storage_v2.media_objects import MAX_MEDIA_BYTES
+from zerg.storage_v2.media_objects import MediaObjectCorruptError
+from zerg.storage_v2.media_objects import MediaObjectSpec
+from zerg.storage_v2.media_objects import MediaObjectValidationError
 from zerg.storage_v2.raw_objects import MAX_RECORD_BYTES
 from zerg.storage_v2.raw_objects import MAX_RECORDS
 from zerg.storage_v2.raw_objects import RawObjectCorruptError
@@ -77,11 +82,13 @@ _EXPECTED_ENVELOPE_FIELDS = {
     "range_start",
     "range_end",
     "render",
+    "media",
     "session",
     "records",
     "expected_envelope_id",
 }
 _EXPECTED_RECORD_FIELDS = {"source_position", "data_b64"}
+_EXPECTED_MEDIA_REF_FIELDS = {"sha256", "source_position", "ref_key", "availability"}
 _EXPECTED_SESSION_FIELDS = {
     "environment",
     "project",
@@ -114,6 +121,8 @@ _EXPECTED_RENDER_RECORD_FIELDS = {
 }
 _RENDER_MANIFEST_LIMIT = 1_000
 _RENDER_READ_BATCH = 2
+_MAX_MEDIA_REFS = 1_000
+_MAX_MEDIA_CLAIMS = 512
 
 
 def _http_error(status_code: int, code: str, message: str, *, details: dict[str, Any] | None = None) -> HTTPException:
@@ -232,6 +241,71 @@ async def _read_bounded_json(request: Request) -> dict[str, Any]:
     return decoded
 
 
+async def _read_bounded_bytes(request: Request, *, maximum: int) -> bytes:
+    content_encoding = request.headers.get("content-encoding", "identity").strip().lower()
+    if content_encoding not in {"", "identity"}:
+        raise _http_error(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            "unsupported_content_encoding",
+            "Storage v2 media accepts identity encoding only.",
+        )
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            size = int(declared)
+        except ValueError as exc:
+            raise _http_error(status.HTTP_400_BAD_REQUEST, "invalid_content_length", "Content-Length is invalid.") from exc
+        if not 0 < size <= maximum:
+            raise _http_error(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                "media_object_too_large",
+                f"Storage-v2 media object must contain 1 through {maximum} bytes.",
+            )
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > maximum:
+            raise _http_error(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                "media_object_too_large",
+                f"Storage-v2 media object exceeds {maximum} bytes.",
+            )
+        body.extend(chunk)
+    if not body:
+        raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "empty_media_object", "Media object cannot be empty.")
+    return bytes(body)
+
+
+def _parse_media_refs(value: object, *, range_start: int, range_end: int) -> list[dict[str, object]]:
+    if not isinstance(value, list) or len(value) > _MAX_MEDIA_REFS:
+        raise ValueError(f"media must contain at most {_MAX_MEDIA_REFS} references")
+    refs: list[dict[str, object]] = []
+    seen: set[tuple[str, int, str]] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != _EXPECTED_MEDIA_REF_FIELDS:
+            raise ValueError("each media reference has invalid fields")
+        media_hash = _lower_hash(item["sha256"], "media.sha256")
+        position = item["source_position"]
+        if type(position) is not int or not range_start <= position < range_end:
+            raise ValueError("media.source_position is outside the raw envelope")
+        ref_key = _canonical_text(item["ref_key"], "media.ref_key", 255)
+        availability = item["availability"]
+        if availability not in {"available", "missing"}:
+            raise ValueError("media.availability must be available or missing")
+        key = (media_hash, position, ref_key)
+        if key in seen:
+            raise ValueError("media references must not contain duplicates")
+        seen.add(key)
+        refs.append(
+            {
+                "media_hash": media_hash,
+                "source_position": position,
+                "ref_key": ref_key,
+                "availability": availability,
+            }
+        )
+    return refs
+
+
 def _parse_render_spec(
     value: object,
     *,
@@ -307,6 +381,7 @@ def _parse_envelope(
         raise ValueError("source range must use integers")
     expected_envelope = _lower_hash(payload["expected_envelope_id"], "expected_envelope_id")
     session_facts = _parse_session_facts(payload["session"])
+    media_refs = _parse_media_refs(payload["media"], range_start=range_start, range_end=range_end)
 
     wire_records = payload["records"]
     if not isinstance(wire_records, list) or len(wire_records) > MAX_RECORDS:
@@ -365,6 +440,7 @@ def _parse_envelope(
         "expected_envelope_id": expected_envelope,
         "session_facts": session_facts,
         "render_spec": render_spec,
+        "media_refs": media_refs,
     }
 
 
@@ -399,9 +475,207 @@ def _raise_catalog_error(exc: CatalogRemoteError) -> None:
     status_code = {
         "invalid_request": status.HTTP_422_UNPROCESSABLE_ENTITY,
         "source_epoch_conflict": status.HTTP_409_CONFLICT,
+        "media_unavailable": status.HTTP_409_CONFLICT,
         "session_deleted": status.HTTP_410_GONE,
     }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
     raise _http_error(status_code, exc.code, str(exc), details=exc.details) from exc
+
+
+def _media_content_type(request: Request) -> str:
+    value = (request.headers.get("content-type") or "application/octet-stream").split(";", 1)[0].strip().lower()
+    return _canonical_text(value, "Content-Type", 255)
+
+
+@router.post("/media/claims")
+async def claim_storage_v2_media(
+    request: Request,
+    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    """Return the exact media hashes that still need verified immutable bytes."""
+
+    payload = await _read_bounded_json(request)
+    if set(payload) != {"items"} or not isinstance(payload["items"], list):
+        raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_media_claim", "Media claim fields are invalid.")
+    items = payload["items"]
+    if len(items) > _MAX_MEDIA_CLAIMS:
+        raise _http_error(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "invalid_media_claim",
+            f"Media claims contain more than {_MAX_MEDIA_CLAIMS} objects.",
+        )
+    metadata: dict[str, tuple[str, int]] = {}
+    rejected: list[dict[str, str]] = []
+    for item in items:
+        try:
+            if not isinstance(item, dict) or set(item) != {"sha256", "mime_type", "byte_size"}:
+                raise ValueError("invalid_fields")
+            media_hash = _lower_hash(item["sha256"], "sha256")
+            mime_type = _canonical_text(item["mime_type"], "mime_type", 255)
+            byte_size = item["byte_size"]
+            if type(byte_size) is not int or not 0 < byte_size <= MAX_MEDIA_BYTES:
+                raise ValueError("unsupported_byte_size")
+            prior = metadata.get(media_hash)
+            if prior is not None and prior != (mime_type, byte_size):
+                raise ValueError("conflicting_metadata")
+            metadata[media_hash] = (mime_type, byte_size)
+        except ValueError as exc:
+            raw_hash = item.get("sha256", "") if isinstance(item, dict) else ""
+            rejected.append({"sha256": str(raw_hash), "reason": str(exc)})
+    if rejected:
+        return {"needed": [], "present": [], "rejected": rejected}
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "catalog_unavailable", "Storage-v2 catalog is unavailable.")
+    hashes = sorted(metadata)
+    try:
+        result = await catalogd.call("storage.media.exists.batch.v2", {"media_hashes": hashes})
+    except CatalogRemoteError as exc:
+        _raise_catalog_error(exc)
+    except CatalogUnavailable as exc:
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "catalog_unavailable", "Storage-v2 catalog is unavailable.") from exc
+    rows = result.get("objects")
+    if not isinstance(rows, list) or len(rows) != len(hashes):
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "catalog_unavailable", "Media manifest result is invalid.")
+    needed: list[str] = []
+    present: list[str] = []
+    for media_hash, row in zip(hashes, rows, strict=True):
+        if not isinstance(row, dict) or row.get("media_hash") != media_hash:
+            raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "catalog_unavailable", "Media manifest result is invalid.")
+        state_value = row.get("state")
+        if state_value == "present" and row.get("byte_size") == metadata[media_hash][1]:
+            present.append(media_hash)
+        elif state_value == "deleted":
+            rejected.append({"sha256": media_hash, "reason": "deleted"})
+        else:
+            needed.append(media_hash)
+    return {"needed": needed, "present": present, "rejected": rejected}
+
+
+@router.put("/media/{media_hash}")
+async def put_storage_v2_media(
+    media_hash: str,
+    request: Request,
+    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    """Hash-verify, fsync, rename, then publish one immutable media manifest."""
+
+    try:
+        canonical_hash = _lower_hash(media_hash, "media_hash")
+        mime_type = _media_content_type(request)
+    except ValueError as exc:
+        raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_media_object", str(exc)) from exc
+    lane = request.headers.get("X-Longhouse-Storage-Lane", "").strip().lower()
+    if lane not in {"live", "repair"}:
+        raise _http_error(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "invalid_lane",
+            "X-Longhouse-Storage-Lane must be live or repair.",
+        )
+    workers = get_raw_object_worker_pool()
+    try:
+        async with workers.admission(lane):
+            data = await _read_bounded_bytes(request, maximum=MAX_MEDIA_BYTES)
+            sealed = await workers.seal_media(
+                MediaObjectSpec(media_hash=canonical_hash, mime_type=mime_type, data=data),
+                lane=lane,
+            )
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise CatalogUnavailable("catalogd is not supervised")
+        result = await catalogd.call(
+            "storage.media.commit.v2",
+            {
+                "media_hash": sealed.media_hash,
+                "state": "present",
+                "mime_type": sealed.mime_type,
+                "byte_size": sealed.byte_size,
+                "object_path": sealed.object_path,
+                "session_refs": [],
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+            timeout_seconds=2.0,
+        )
+    except CatalogRemoteError as exc:
+        _raise_catalog_error(exc)
+    except CatalogUnavailable as exc:
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "catalog_unavailable", "Storage-v2 catalog is unavailable.") from exc
+    except RawObjectWorkerBusy as exc:
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "storage_lane_busy", "Media storage lane is full.") from exc
+    except (RawObjectWorkerError, MediaObjectCorruptError) as exc:
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "storage_worker_unavailable", "Media seal failed.") from exc
+    except MediaObjectValidationError as exc:
+        raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_media_object", str(exc)) from exc
+    media = result.get("media")
+    if not isinstance(media, dict) or media.get("state") != "present" or media.get("media_hash") != canonical_hash:
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "catalog_unavailable", "Media manifest commit is invalid.")
+    return {
+        "v": 2,
+        "sha256": canonical_hash,
+        "mime_type": media["mime_type"],
+        "byte_size": media["byte_size"],
+        "created": result.get("created") is True,
+        "commit_seq": result.get("commit_seq"),
+    }
+
+
+async def _storage_v2_media_manifest(media_hash: str) -> tuple[str, dict[str, object]]:
+    try:
+        canonical_hash = _lower_hash(media_hash, "media_hash")
+    except ValueError as exc:
+        raise _http_error(status.HTTP_404_NOT_FOUND, "media_not_found", "Media object was not found.") from exc
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "catalog_unavailable", "Storage-v2 catalog is unavailable.")
+    try:
+        result = await catalogd.call(
+            "storage.media.read.v2",
+            {"media_hash": canonical_hash, "session_id": None, "limit": 1},
+        )
+        media = result.get("media")
+        if result.get("found") is not True or not isinstance(media, dict) or media.get("state") != "present":
+            raise _http_error(status.HTTP_404_NOT_FOUND, "media_not_found", "Media object was not found.")
+    except CatalogRemoteError as exc:
+        _raise_catalog_error(exc)
+    except CatalogUnavailable as exc:
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "catalog_unavailable", "Storage-v2 catalog is unavailable.") from exc
+    return canonical_hash, media
+
+
+@router.get("/media/{media_hash}/blob")
+async def get_storage_v2_media(
+    media_hash: str,
+    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> Response:
+    canonical_hash, media = await _storage_v2_media_manifest(media_hash)
+    try:
+        decoded = await get_raw_object_worker_pool().read_media(str(media["object_path"]), canonical_hash)
+    except RawObjectWorkerBusy as exc:
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "storage_lane_busy", "Media read lane is full.") from exc
+    except (KeyError, RawObjectWorkerError, MediaObjectCorruptError, MediaObjectValidationError) as exc:
+        raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "media_read_failed", "Media object failed verification.") from exc
+    data = decoded.data
+    return Response(
+        content=data,
+        media_type=str(media["mime_type"]),
+        headers={"Content-Length": str(len(data)), "X-Media-Sha256": canonical_hash},
+    )
+
+
+@router.head("/media/{media_hash}")
+async def head_storage_v2_media(
+    media_hash: str,
+    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> Response:
+    canonical_hash, media = await _storage_v2_media_manifest(media_hash)
+    return Response(
+        status_code=status.HTTP_200_OK,
+        media_type=str(media["mime_type"]),
+        headers={"Content-Length": str(media["byte_size"]), "X-Media-Sha256": canonical_hash},
+    )
 
 
 @router.get("/capabilities")
@@ -425,6 +699,10 @@ async def storage_v2_capabilities(
         "max_wire_body_bytes": MAX_WIRE_BODY_BYTES,
         "max_raw_record_bytes": MAX_RECORD_BYTES,
         "max_records": MAX_RECORDS,
+        "media_claim_path": "/api/agents/storage/v2/media/claims",
+        "media_upload_path_template": "/api/agents/storage/v2/media/{sha256}",
+        "max_media_bytes": MAX_MEDIA_BYTES,
+        "max_media_claims": _MAX_MEDIA_CLAIMS,
         "range_kinds": ["byte_offset", "record_ordinal"],
         "lanes": ["live", "repair"],
         "lane_header": "X-Longhouse-Storage-Lane",
@@ -534,8 +812,7 @@ async def _commit_admitted_envelope(
                 "compressed_size": sealed.compressed_size,
                 "provenance_kind": spec.provenance_kind,
                 "render_state": "ready" if render_manifest is not None else "pending",
-                "media_state": "complete",
-                "missing_media_hashes": [],
+                "media_refs": parsed["media_refs"],
                 "projectors": [projector for projector in PROJECTORS if render_manifest is None or projector != "render-v2"],
                 "render_manifest": render_manifest,
                 "session_facts": parsed["session_facts"],
