@@ -23,6 +23,7 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.server import CatalogDaemonError
+from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveDeviceToken
 
 
@@ -123,6 +124,164 @@ async def test_device_auth_rejects_malformed_params_without_touching_store(daemo
                 {"token_hash": "NOT-A-HASH"},
             )
         assert exc_info.value.code == "invalid_request"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_device_list_is_owner_scoped_ordered_and_snapshot_versioned(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveDeviceToken.__table__.insert(),
+            [
+                {
+                    "id": "older-live",
+                    "owner_id": 7,
+                    "device_id": "cinder",
+                    "token_hash": "a" * 64,
+                    "created_at": now - timedelta(days=2),
+                    "revoked_at": None,
+                },
+                {
+                    "id": "newer-revoked",
+                    "owner_id": 7,
+                    "device_id": "clifford",
+                    "token_hash": "b" * 64,
+                    "created_at": now - timedelta(days=1),
+                    "revoked_at": now,
+                },
+                {
+                    "id": "other-owner",
+                    "owner_id": 8,
+                    "device_id": "private",
+                    "token_hash": "c" * 64,
+                    "created_at": now,
+                    "revoked_at": None,
+                },
+            ],
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        active = await client.call("auth.device.list.v2", {"owner_id": 7, "include_revoked": False})
+        all_tokens = await client.call("auth.device.list.v2", {"owner_id": 7, "include_revoked": True})
+
+        assert active["commit_seq"] == "0"
+        assert active["total"] == 1
+        assert [token["id"] for token in active["tokens"]] == ["older-live"]
+        assert active["tokens"][0]["is_valid"] is True
+        assert all_tokens["commit_seq"] == "0"
+        assert all_tokens["total"] == 2
+        assert [token["id"] for token in all_tokens["tokens"]] == ["newer-revoked", "older-live"]
+        assert all_tokens["tokens"][0]["is_valid"] is False
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+def test_device_list_holds_real_sqlite_snapshot_across_commit_seq_and_rows(daemon_paths, monkeypatch):
+    from zerg.catalogd import store as store_module
+
+    database_path, _socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    original_current_commit_seq = store_module._current_commit_seq
+    inserted = False
+
+    def read_seq_then_commit_other_writer(connection):
+        nonlocal inserted
+        value = original_current_commit_seq(connection)
+        if not inserted:
+            inserted = True
+            writer = create_catalog_engine(database_path)
+            try:
+                with writer.begin() as writer_connection:
+                    writer_connection.execute(
+                        LiveDeviceToken.__table__.insert().values(
+                            id="concurrent-token",
+                            owner_id=7,
+                            device_id="clifford",
+                            token_hash="d" * 64,
+                            created_at=datetime.now(UTC),
+                        )
+                    )
+            finally:
+                writer.dispose()
+        return value
+
+    monkeypatch.setattr(store_module, "_current_commit_seq", read_seq_then_commit_other_writer)
+    try:
+        result = CatalogStore(engine).list_devices(owner_id=7, include_revoked=True)
+    finally:
+        engine.dispose()
+
+    assert inserted is True
+    assert result == {
+        "commit_seq": "0",
+        "tokens": [],
+        "total": 0,
+        "limit_exceeded": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_device_create_is_atomic_idempotent_and_visible_to_auth(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    token_id = "00000000-0000-4000-8000-000000000001"
+    params = {
+        "owner_id": 7,
+        "token_id": token_id,
+        "device_id": "cinder",
+        "token_hash": "a" * 64,
+    }
+    try:
+        first = await client.call("auth.device.create.v2", params)
+        replay = await client.call("auth.device.create.v2", params)
+        auth = await client.call("auth.device.validate.v2", {"token_hash": "a" * 64})
+        listed = await client.call("auth.device.list.v2", {"owner_id": 7, "include_revoked": False})
+
+        assert first["created"] is True
+        assert first["commit_seq"] == "1"
+        assert replay == {**first, "created": False, "exact_replay": True}
+        assert auth["valid"] is True
+        assert auth["commit_seq"] == "1"
+        assert [token["id"] for token in listed["tokens"]] == [token_id]
+        assert listed["commit_seq"] == "1"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_device_create_rejects_token_id_collision(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    token_id = "00000000-0000-4000-8000-000000000001"
+    try:
+        await client.call(
+            "auth.device.create.v2",
+            {"owner_id": 7, "token_id": token_id, "device_id": "cinder", "token_hash": "a" * 64},
+        )
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call(
+                "auth.device.create.v2",
+                {"owner_id": 7, "token_id": token_id, "device_id": "other", "token_hash": "b" * 64},
+            )
+        assert exc_info.value.code == "conflict"
+        assert (await client.call("ping.v2"))["commit_seq"] == "1"
     finally:
         await client.close()
         await daemon.close()

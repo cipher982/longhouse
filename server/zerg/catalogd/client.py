@@ -20,7 +20,15 @@ from zerg.catalogd.protocol import encode_frame
 from zerg.catalogd.protocol import read_frame
 from zerg.catalogd.protocol import write_frame
 
-_SAFE_RETRY_METHODS = {"ping.v2", "schema.v2"}
+_SAFE_RETRY_METHODS = {
+    # create is an idempotent mutation keyed by caller-supplied token_id. It is
+    # safe to replay the exact request after a response is lost.
+    "auth.device.create.v2",
+    "auth.device.list.v2",
+    "auth.device.validate.v2",
+    "ping.v2",
+    "schema.v2",
+}
 
 
 class CatalogUnavailable(RuntimeError):

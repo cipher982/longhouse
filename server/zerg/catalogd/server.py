@@ -8,6 +8,7 @@ import logging
 import os
 import stat
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from pathlib import Path
@@ -196,6 +197,10 @@ class CatalogDaemon:
             return self._error(request, "catalog_unavailable", "catalog is not ready", retryable=True)
         if request.method == "auth.device.validate.v2":
             return await self._authenticate_device(request)
+        if request.method == "auth.device.create.v2":
+            return await self._create_device(request)
+        if request.method == "auth.device.list.v2":
+            return await self._list_devices(request)
         if request.method == "auth.device.revoke.v2":
             return await self._revoke_device(request)
         if request.params:
@@ -263,6 +268,67 @@ class CatalogDaemon:
             owner_id=owner_id,
             token_id=token_id,
         )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _create_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        required = {"owner_id", "token_id", "device_id", "token_hash"}
+        if set(request.params) != required:
+            return self._error(
+                request,
+                "invalid_request",
+                "auth.device.create.v2 requires owner_id, token_id, device_id, and token_hash",
+            )
+        owner_id = request.params["owner_id"]
+        token_id = request.params["token_id"]
+        device_id = request.params["device_id"]
+        token_hash = request.params["token_hash"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        try:
+            parsed_token_id = uuid.UUID(token_id) if isinstance(token_id, str) else None
+        except ValueError:
+            parsed_token_id = None
+        if parsed_token_id is None or str(parsed_token_id) != token_id:
+            return self._error(request, "invalid_request", "token_id must be a canonical UUID")
+        if not isinstance(device_id, str) or not device_id or len(device_id) > 255:
+            return self._error(request, "invalid_request", "device_id must contain 1 to 255 characters")
+        if not isinstance(token_hash, str) or len(token_hash) != 64 or any(character not in "0123456789abcdef" for character in token_hash):
+            return self._error(request, "invalid_request", "token_hash must be 64 lowercase hexadecimal characters")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.create_device,
+            owner_id=owner_id,
+            token_id=token_id,
+            device_id=device_id,
+            token_hash=token_hash,
+        )
+        if result.get("exact_replay") is False and result.get("token_id") == token_id and result.get("created") is False:
+            return self._error(request, "conflict", "token_id already exists with different attributes")
+        if result.get("limit_exceeded") is True:
+            return self._error(request, "resource_exhausted", "device token limit reached")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_devices(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "include_revoked"}:
+            return self._error(
+                request,
+                "invalid_request",
+                "auth.device.list.v2 requires owner_id and include_revoked",
+            )
+        owner_id = request.params["owner_id"]
+        include_revoked = request.params["include_revoked"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if type(include_revoked) is not bool:
+            return self._error(request, "invalid_request", "include_revoked must be a boolean")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.list_devices,
+            owner_id=owner_id,
+            include_revoked=include_revoked,
+        )
+        if result.get("limit_exceeded") is True:
+            return self._error(request, "resource_exhausted", "device token list exceeds the catalog bound")
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _run_store(self, operation, *args, **kwargs):
