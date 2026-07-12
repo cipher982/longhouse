@@ -252,6 +252,85 @@ def test_create_device_token_routes_write_through_serializer(tmp_path):
     cleanup()
 
 
+def test_production_create_routes_mutation_through_catalogd(tmp_path):
+    _factory, cleanup = _setup_app(tmp_path)
+    observed: dict = {}
+    now = datetime.now(UTC)
+
+    class _CatalogClient:
+        async def call(self, method, params, *, timeout_seconds):
+            observed.update(method=method, params=params, timeout_seconds=timeout_seconds)
+            return {
+                "created": True,
+                "exact_replay": False,
+                "limit_exceeded": False,
+                "token_id": params["token_id"],
+                "device_id": params["device_id"],
+                "created_at": now.isoformat(),
+                "commit_seq": "12",
+            }
+
+    with (
+        patch("zerg.routers.device_tokens.live_store_configured", return_value=True),
+        patch("zerg.routers.device_tokens.get_settings", return_value=SimpleNamespace(testing=False)),
+        patch("zerg.services.catalogd_supervisor.get_catalogd_client", return_value=_CatalogClient()),
+        patch("zerg.routers.device_tokens.get_write_serializer", side_effect=AssertionError("must not mutate in API")),
+    ):
+        client = TestClient(api_app)
+        response = client.post("/devices/tokens", json={"device_id": "cinder"})
+
+    assert response.status_code == 201, response.text
+    assert response.json()["device_id"] == "cinder"
+    assert response.json()["token"].startswith("zdt_")
+    assert observed["method"] == "auth.device.create.v2"
+    assert observed["params"]["owner_id"] == 1
+    assert observed["params"]["device_id"] == "cinder"
+    assert observed["params"]["token_hash"] == hash_token(response.json()["token"])
+    assert observed["timeout_seconds"] == 1.0
+    cleanup()
+
+
+def test_production_list_routes_read_through_catalogd(tmp_path):
+    _factory, cleanup = _setup_app(tmp_path)
+    now = datetime.now(UTC)
+    observed: dict = {}
+
+    class _CatalogClient:
+        async def call(self, method, params):
+            observed.update(method=method, params=params)
+            return {
+                "commit_seq": "10",
+                "tokens": [
+                    {
+                        "id": "00000000-0000-4000-8000-000000000001",
+                        "device_id": "cinder",
+                        "created_at": now.isoformat(),
+                        "last_used_at": None,
+                        "revoked_at": None,
+                        "is_valid": True,
+                    }
+                ],
+                "total": 1,
+            }
+
+    with (
+        patch("zerg.routers.device_tokens.live_store_configured", return_value=True),
+        patch("zerg.routers.device_tokens.get_settings", return_value=SimpleNamespace(testing=False)),
+        patch("zerg.services.catalogd_supervisor.get_catalogd_client", return_value=_CatalogClient()),
+    ):
+        client = TestClient(api_app)
+        response = client.get("/devices/tokens")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 1
+    assert response.json()["tokens"][0]["device_id"] == "cinder"
+    assert observed == {
+        "method": "auth.device.list.v2",
+        "params": {"owner_id": 1, "include_revoked": False},
+    }
+    cleanup()
+
+
 def test_revoke_device_token_routes_write_through_serializer(tmp_path):
     factory, cleanup = _setup_app(tmp_path)
     serializer_labels: list[str] = []

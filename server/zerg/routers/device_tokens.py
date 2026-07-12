@@ -15,6 +15,7 @@ from typing import List
 from typing import Literal
 from typing import Optional
 from uuid import UUID
+from uuid import uuid4
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -173,6 +174,75 @@ async def create_device_token(
     plain_token = generate_device_token()
     token_hash = hash_token(plain_token)
 
+    if live_store_configured() and not get_settings().testing:
+        from zerg.catalogd.client import CatalogRemoteError
+        from zerg.catalogd.client import CatalogUnavailable
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        token_id = str(uuid4())
+        client = get_catalogd_client()
+        if client is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+            )
+        try:
+            result = await client.call(
+                "auth.device.create.v2",
+                {
+                    "owner_id": int(current_user.id),
+                    "token_id": token_id,
+                    "device_id": request.device_id,
+                    "token_hash": token_hash,
+                },
+                timeout_seconds=1.0,
+            )
+        except CatalogUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+            ) from exc
+        except CatalogRemoteError as exc:
+            logger.warning("Catalog device-token create failed code=%s retryable=%s", exc.code, exc.retryable)
+            if exc.code == "resource_exhausted":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": "device_token_limit_reached", "message": "Device token limit reached."},
+                ) from exc
+            if exc.retryable:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+                ) from exc
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"code": "catalog_operation_failed", "message": "Catalog mutation failed."},
+            ) from exc
+        if not (result.get("created") is True or result.get("exact_replay") is True) or result.get("token_id") != token_id:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"code": "catalog_protocol_error", "message": "Catalog returned an invalid create result."},
+            )
+        try:
+            created_at = datetime.fromisoformat(result["created_at"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"code": "catalog_protocol_error", "message": "Catalog returned an invalid creation time."},
+            ) from exc
+        logger.info(
+            "Created device token for user %s device %s at catalog commit %s",
+            current_user.id,
+            request.device_id,
+            result.get("commit_seq"),
+        )
+        return CreateTokenResponse(
+            id=token_id,
+            device_id=request.device_id,
+            token=plain_token,
+            created_at=created_at,
+        )
+
     ws = get_write_serializer()
 
     def _create_token(wdb: Session) -> tuple[str, str, datetime]:
@@ -204,7 +274,7 @@ async def create_device_token(
 
 
 @router.get("/tokens", response_model=TokenListResponse)
-def list_device_tokens(
+async def list_device_tokens(
     include_revoked: bool = False,
     db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
@@ -214,12 +284,63 @@ def list_device_tokens(
     By default, only shows valid (non-revoked) tokens.
     Use include_revoked=true to see revoked tokens as well.
     """
+    if live_store_configured() and not get_settings().testing:
+        from zerg.catalogd.client import CatalogRemoteError
+        from zerg.catalogd.client import CatalogUnavailable
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        client = get_catalogd_client()
+        if client is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "catalog_unavailable", "message": "Catalog read is temporarily unavailable."},
+            )
+        try:
+            result = await client.call(
+                "auth.device.list.v2",
+                {
+                    "owner_id": int(current_user.id),
+                    "include_revoked": include_revoked,
+                },
+            )
+        except CatalogUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "catalog_unavailable", "message": "Catalog read is temporarily unavailable."},
+            ) from exc
+        except CatalogRemoteError as exc:
+            logger.warning("Catalog device-token list failed code=%s retryable=%s", exc.code, exc.retryable)
+            if exc.code == "resource_exhausted":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"code": "device_token_limit_exceeded", "message": "Device token list exceeds its bound."},
+                ) from exc
+            if exc.retryable:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"code": "catalog_unavailable", "message": "Catalog read is temporarily unavailable."},
+                ) from exc
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"code": "catalog_operation_failed", "message": "Catalog read failed."},
+            ) from exc
+        token_payloads = result.get("tokens")
+        if not isinstance(token_payloads, list):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"code": "catalog_protocol_error", "message": "Catalog returned an invalid token list."},
+            )
+        return TokenListResponse(
+            tokens=[TokenResponse.model_validate(payload) for payload in token_payloads],
+            total=len(token_payloads),
+        )
+
     query = db.query(DeviceToken).filter(DeviceToken.owner_id == current_user.id)
 
     if not include_revoked:
         query = query.filter(DeviceToken.revoked_at.is_(None))
 
-    query = query.order_by(DeviceToken.created_at.desc())
+    query = query.order_by(DeviceToken.created_at.desc(), DeviceToken.id)
     tokens = query.all()
 
     return TokenListResponse(
