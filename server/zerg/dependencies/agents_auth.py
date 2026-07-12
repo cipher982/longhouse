@@ -187,6 +187,14 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedLocalHookToken
     settings = get_settings()
     if settings.auth_disabled:
         request.state.agents_rate_key = "auth-disabled"
+        # Local/dev mode does not require a token, but a configured Machine
+        # Agent still sends its device token. Preserve that owner binding so
+        # storage-v2 writes and reads share the same single-tenant identity.
+        provided_token = request.headers.get("X-Agents-Token")
+        if provided_token and provided_token.startswith("zdt_"):
+            device_token = _validate_device_token_for_request(provided_token)
+            if device_token is not None:
+                return device_token
         return None
 
     provided_token = request.headers.get("X-Agents-Token")

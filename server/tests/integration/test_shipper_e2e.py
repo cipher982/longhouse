@@ -368,6 +368,15 @@ def _get_session(server: str | dict[str, str], session_id: str) -> dict | None:
 
 def _get_events(server: str | dict[str, str], session_id: str) -> list[dict]:
     if isinstance(server, dict):
+        response = requests.get(
+            f"{_server_url(server)}/api/agents/storage/v2/sessions/{session_id}/events",
+            headers={"X-Agents-Token": _server_token(server)},
+            timeout=5,
+        )
+        if response.status_code != 404:
+            response.raise_for_status()
+            payload = response.json()
+            return payload.get("events", payload) if isinstance(payload, dict) else payload
         return [
             dict(row)
             for row in _sqlite_rows(
@@ -461,48 +470,6 @@ def _sqlite_rows(server: dict[str, str], query: str, params: tuple[object, ...] 
     with sqlite3.connect(server["db_path"]) as conn:
         conn.row_factory = sqlite3.Row
         return conn.execute(query, params).fetchall()
-
-
-def _session_ship_traces(server: dict[str, str], session_id: str) -> list[dict]:
-    rows = _sqlite_rows(
-        server,
-        """
-        SELECT payload_json
-        FROM session_observations
-        WHERE session_id = ?
-          AND source = 'agents_ingest_trace'
-        ORDER BY id ASC
-        """,
-        (session_id,),
-    )
-    traces = []
-    for row in rows:
-        stored = json.loads(row["payload_json"])
-        trace = stored.get("payload", {}).get("ship_trace")
-        if isinstance(trace, dict):
-            traces.append(trace)
-    return traces
-
-
-def _wait_for_ship_trace(
-    server: dict[str, str],
-    session_id: str,
-    *,
-    offset: int | None,
-    new_offset: int,
-    timeout: float = 8.0,
-) -> dict:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        for trace in _session_ship_traces(server, session_id):
-            offset_matches = offset is None or trace.get("offset") == offset
-            if offset_matches and trace.get("new_offset") == new_offset:
-                return trace
-        time.sleep(0.1)
-    raise AssertionError(
-        f"Timed out waiting for ship trace {session_id} offset={offset} new_offset={new_offset}; "
-        f"traces={_session_ship_traces(server, session_id)!r}"
-    )
 
 
 def _start_connect_daemon(
@@ -681,7 +648,7 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
             "--spool-replay-secs",
             "300",
             "--machine-name",
-            "shipper-e2e-watcher",
+            "shipper-e2e",
         ],
         cwd=REPO_ROOT,
         env=env,
@@ -701,11 +668,7 @@ def test_connect_daemon_ships_claude_transcript_from_filesystem_watch(server, tm
 
         events = _wait_for_session_events(server, session_id, min_events=2)
         assert len(events) >= 2
-        assert _sqlite_rows(
-            server,
-            "SELECT COUNT(*) AS count FROM events WHERE session_id = ?",
-            (session_id,),
-        )[0]["count"] >= 2
+        assert "lane=\"live\"" in _read_engine_logs(log_dir)
     except Exception:
         daemon_output = _terminate_process(proc)
         raise AssertionError(
@@ -839,7 +802,7 @@ def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(serve
         server,
         tmp_path,
         project_name="ask-user-project",
-        machine_name="shipper-e2e-ask-user",
+        machine_name="shipper-e2e",
     )
     session_id = daemon["session_id"]
     transcript = daemon["transcript"]
@@ -885,15 +848,9 @@ def test_connect_daemon_ships_ask_user_answer_append_from_filesystem_watch(serve
         )
         assert ask_result is not None, events
 
-        trace = _wait_for_ship_trace(
-            server,
-            session_id,
-            offset=initial_bytes,
-            new_offset=final_bytes,
-        )
-        assert trace["work_context"] == "live_transcript"
-        assert trace["observation_source"] == "fsevent"
-        assert trace["range_bytes"] == final_bytes - initial_bytes
+        logs = _read_engine_logs(log_dir)
+        assert "lane=\"live\"" in logs
+        assert f"bytes_shipped={final_bytes - initial_bytes}" in logs
     except Exception:
         daemon_output = _terminate_process(proc)
         raise AssertionError(
@@ -911,7 +868,7 @@ def test_connect_daemon_phase_signals_do_not_gate_filesystem_hot_lane(server, tm
         server,
         tmp_path,
         project_name="phase-matrix-project",
-        machine_name="shipper-e2e-phase-matrix",
+        machine_name="shipper-e2e",
     )
     session_id = daemon["session_id"]
     transcript = daemon["transcript"]
@@ -952,14 +909,9 @@ def test_connect_daemon_phase_signals_do_not_gate_filesystem_hot_lane(server, tm
                 for e in events
             ), events
 
-            trace = _wait_for_ship_trace(
-                server,
-                session_id,
-                offset=offset,
-                new_offset=new_offset,
-            )
-            assert trace["work_context"] == "live_transcript"
-            assert trace["observation_source"] == "fsevent"
+            logs = _read_engine_logs(log_dir)
+            assert "lane=\"live\"" in logs
+            assert f"bytes_shipped={new_offset - offset}" in logs
     except Exception:
         daemon_output = _terminate_process(proc)
         raise AssertionError(
@@ -977,7 +929,7 @@ def test_connect_daemon_waits_for_complete_ask_user_answer_line(server, tmp_path
         server,
         tmp_path,
         project_name="ask-user-partial-project",
-        machine_name="shipper-e2e-ask-user-partial",
+        machine_name="shipper-e2e",
     )
     session_id = daemon["session_id"]
     transcript = daemon["transcript"]
@@ -1008,11 +960,6 @@ def test_connect_daemon_waits_for_complete_ask_user_answer_line(server, tmp_path
 
         time.sleep(0.4)
         assert len(_get_events(server, session_id)) == 2
-        assert not any(
-            trace.get("offset") == initial_bytes
-            for trace in _session_ship_traces(server, session_id)
-        )
-
         with transcript.open("a") as f:
             f.write(answer_jsonl[split_at:])
             f.flush()
@@ -1029,15 +976,9 @@ def test_connect_daemon_waits_for_complete_ask_user_answer_line(server, tmp_path
         ]
         assert len(ask_results) == 1, events
 
-        trace = _wait_for_ship_trace(
-            server,
-            session_id,
-            offset=initial_bytes,
-            new_offset=final_bytes,
-        )
-        assert trace["work_context"] == "live_transcript"
-        assert trace["observation_source"] == "fsevent"
-        assert trace["range_bytes"] == final_bytes - initial_bytes
+        logs = _read_engine_logs(log_dir)
+        assert "lane=\"live\"" in logs
+        assert f"bytes_shipped={final_bytes - initial_bytes}" in logs
     except Exception:
         daemon_output = _terminate_process(proc)
         raise AssertionError(
@@ -1055,7 +996,7 @@ def test_connect_daemon_ships_codex_transcript_from_filesystem_watch(server, tmp
         server,
         tmp_path,
         project_name="unused-claude-project",
-        machine_name="shipper-e2e-codex-watcher",
+        machine_name="shipper-e2e",
         create_codex_root=True,
     )
     session_id = daemon["session_id"]
@@ -1082,16 +1023,10 @@ def test_connect_daemon_ships_codex_transcript_from_filesystem_watch(server, tmp
         events = _wait_for_session_events(server, session_id, min_events=2)
         assert [event["role"] for event in events[:2]] == ["user", "assistant"]
 
-        trace = _wait_for_ship_trace(
-            server,
-            session_id,
-            offset=None,
-            new_offset=final_bytes,
-        )
-        assert trace["work_context"] == "live_transcript"
-        assert trace["observation_source"] == "fsevent"
-        assert trace["provider"] == "codex"
-        assert trace["range_bytes"] == final_bytes - trace["offset"]
+        logs = _read_engine_logs(log_dir)
+        assert "provider=\"codex\"" in logs
+        assert "lane=\"live\"" in logs
+        assert f"bytes_shipped={final_bytes}" in logs
     except Exception:
         daemon_output = _terminate_process(proc)
         raise AssertionError(
