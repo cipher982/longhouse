@@ -307,6 +307,29 @@ class LegacyCorpusConverter:
         )
         sources, source_covered, source_missing = self._load_sources(db, session_id, watermark, events)
         event_groups = _events_by_source(events)
+        source_keys = {(record.source_path, record.source_offset) for record in sources}
+        synthetic_path = f"legacy-unmatched-events:{session_id}"
+        for event in events:
+            event_key = (
+                (event.source_path, int(event.source_offset)) if event.source_path is not None and event.source_offset is not None else None
+            )
+            if event_key is not None and event_key in source_keys:
+                continue
+            normalized = _normalized_event_source((event,))
+            if normalized is None or len(normalized.encode("utf-8")) > MAX_RECORD_BYTES:
+                raise ValueError(f"legacy event {event.id} cannot be preserved as bounded derived evidence")
+            synthetic_key = (synthetic_path, int(event.id))
+            sources.append(
+                _SourceRecord(
+                    data=normalized.encode("utf-8"),
+                    source_path=synthetic_path,
+                    source_offset=int(event.id),
+                    branch_id=int(event.branch_id or 0),
+                    provenance_kind="legacy_normalized_event",
+                    event=event,
+                )
+            )
+            event_groups[synthetic_key] = [event]
         batches = _source_batches(sources, event_groups)
         if not batches and not events and source_missing == 0:
             batches = [_SourceBatch("empty", "legacy_source_lines", 0, ())]
@@ -325,7 +348,7 @@ class LegacyCorpusConverter:
         rendered_records: list[RenderRecord] = []
         owner_id = await self._active_owner_id() if batches else None
 
-        for batch_index, batch in enumerate(batches):
+        for batch in batches:
             source_path = batch.source_path
             opaque_id = _opaque_source_id(session_id, source_path, batch.provenance_kind)
             source_epoch = _legacy_source_epoch(session_id, source_path, batch.provenance_kind, watermark)
@@ -345,31 +368,14 @@ class LegacyCorpusConverter:
             )
             sealed_raw = await asyncio.to_thread(seal_raw_object, self.object_root, raw_spec)
             render_records: list[RenderRecord] = []
-            batch_position: dict[tuple[str, int], int] = {}
             for index, item in enumerate(batch.records):
                 position = batch.range_start + index
-                batch_position.setdefault((item.source_path, item.source_offset), position)
                 for event in event_groups.get((item.source_path, item.source_offset), ()):
                     if event.id in consumed_event_ids:
                         continue
                     rendered = _render_record(event, position, index, session_id, head_branch_id=head_branch_id)
                     render_records.append(rendered)
                     consumed_event_ids.add(int(event.id))
-            if batch_index == len(batches) - 1:
-                if batch.records:
-                    fallback_position = batch.range_start
-                    for event in events:
-                        if event.id not in consumed_event_ids:
-                            render_records.append(
-                                _render_record(
-                                    event,
-                                    fallback_position,
-                                    0,
-                                    session_id,
-                                    head_branch_id=head_branch_id,
-                                )
-                            )
-                            consumed_event_ids.add(int(event.id))
             render_records.sort(key=_render_order_key)
             render_spec = RenderObjectSpec(
                 session_id=session_id,

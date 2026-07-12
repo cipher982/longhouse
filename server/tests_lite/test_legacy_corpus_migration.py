@@ -101,6 +101,50 @@ def test_source_batches_bound_dense_render_payloads():
 
 
 @pytest.mark.asyncio
+async def test_unmatched_events_are_preserved_in_bounded_synthetic_batches(legacy_db, tmp_path: Path):
+    session = _session()
+    raw = '{"type":"user","message":"matched"}'
+    with legacy_db() as db:
+        db.add(session)
+        db.flush()
+        db.add(
+            AgentSourceLine(
+                session_id=session.id,
+                source_path="session.jsonl",
+                source_offset=0,
+                branch_id=0,
+                raw_json=raw,
+                raw_json_codec=0,
+                line_hash=hashlib.sha256(raw.encode()).hexdigest(),
+            )
+        )
+        db.add(_event(session.id, raw_json=raw, source_path="session.jsonl", source_offset=0))
+        for index in range(3):
+            event = _event(session.id, raw_json=None, source_path="unmatched.jsonl", source_offset=index)
+            event.content_text = str(index) + "x" * 1_500_000
+            event.event_hash = hashlib.sha256(f"unmatched-{index}".encode()).hexdigest()
+            db.add(event)
+        db.commit()
+        watermark = freeze_high_watermark(db)
+
+    catalog = FakeCatalog()
+    converter = LegacyCorpusConverter(
+        session_factory=legacy_db,
+        catalog=catalog,
+        object_root=tmp_path / "objects-v2",
+        tenant_id="tenant-a",
+    )
+    with legacy_db() as db:
+        result = await converter.convert_session(db, session.id, watermark)
+
+    commits = [payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2"]
+    synthetic = [payload for payload in commits if payload["provenance_kind"] == "legacy_normalized_event"]
+    assert len(synthetic) == 3
+    assert all(payload["render_manifest"]["event_count"] == 1 for payload in synthetic)
+    assert result.parity_matches is True
+
+
+@pytest.mark.asyncio
 async def test_inventory_freezes_rowid_high_watermark_and_registers_exact_counts(legacy_db):
     first = _session()
     with legacy_db() as db:
