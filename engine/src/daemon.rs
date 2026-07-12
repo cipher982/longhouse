@@ -40,6 +40,7 @@ use crate::pipeline::compressor::CompressionAlgo;
 use crate::scheduler::{AdaptiveLimiter, ObservationTrace, PathJob, PathScheduler, WorkPriority};
 use crate::shipper;
 use crate::shipping::client::ShipperClient;
+use crate::shipping::storage_v2::StorageV2Capabilities;
 use crate::shipping_stats::RecentShipStatsTracker;
 use crate::state::db::open_db;
 use crate::state::db_pool::ConnectionPool;
@@ -214,6 +215,7 @@ struct PathTaskContext {
     /// Reusable shipper-DB connections. Schema bootstrap has already run
     /// during `run()`; per-job code uses leases instead of `open_db`.
     db_pool: ConnectionPool,
+    storage_v2: Option<std::sync::Arc<StorageV2Capabilities>>,
 }
 
 struct PathTaskResult {
@@ -478,7 +480,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 3. Create HTTP client
     let client = ShipperClient::with_compression(&config.shipper_config, config.algo)?;
     tracing::info!("Shipping to: {}", client.ingest_url());
-    match client
+    let storage_v2 = match client
         .storage_v2_capabilities(
             &config.shipper_config.machine_name,
             Some(Duration::from_secs(5)),
@@ -486,21 +488,24 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         .await?
     {
         Some(capabilities) if capabilities.cutover => {
-            anyhow::bail!(
-                "Runtime Host requires storage-v2 transcript shipping for tenant {}, but this engine build has not enabled its write path",
-                capabilities.tenant_id
+            tracing::info!(
+                tenant_id = %capabilities.tenant_id,
+                "Runtime Host requires storage-v2 transcript shipping"
             );
+            Some(std::sync::Arc::new(capabilities))
         }
         Some(capabilities) => {
             tracing::info!(
                 tenant_id = %capabilities.tenant_id,
                 "Runtime Host accepts storage-v2 but has not enabled cutover"
             );
+            None
         }
         None => {
             tracing::info!("Runtime Host does not advertise storage-v2; using the legacy ingest protocol");
+            None
         }
-    }
+    };
 
     // 4. Discover providers
     let providers = discovery::get_providers();
@@ -551,6 +556,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         flight_recorder: flight_recorder.clone(),
         limiter: std::sync::Arc::clone(&adaptive_limiter),
         db_pool: db_pool.clone(),
+        storage_v2,
     };
 
     // 6. Start file watcher before catch-up work so live changes queue immediately.
@@ -2878,7 +2884,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         processing_elapsed: Duration::ZERO,
     };
 
-    let conn = match task_context.db_pool.get() {
+    let mut conn = match task_context.db_pool.get() {
         Ok(conn) => conn,
         Err(e) => {
             if task_context.tracker.record_error() {
@@ -2964,6 +2970,70 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         } else if ready_spool_remaining {
             result.rerun_priority = Some(WorkPriority::Retry);
         }
+    }
+
+    if let Some(capabilities) = task_context.storage_v2.as_deref() {
+        if is_opencode_database_job(&result.job) {
+            if task_context.tracker.record_error() {
+                tracing::error!(
+                    path = %result.job.path.display(),
+                    "Storage-v2 cutover does not yet support OpenCode SQLite record-ordinal sources"
+                );
+            }
+            result.local_retry_after = Some(local_retry_delay(result.job.priority));
+            return finish_path_task(result, task_started);
+        }
+        let lane = if result.job.priority == WorkPriority::Live {
+            "live"
+        } else {
+            "repair"
+        };
+        let timeout = if lane == "live" {
+            Duration::from_secs(20)
+        } else {
+            Duration::from_secs(75)
+        };
+        match crate::storage_v2_shipper::ship_next_envelope(
+            &mut conn,
+            &task_context.client,
+            capabilities,
+            &result.job.path,
+            result.job.provider,
+            result.job.observation.session_id.as_deref(),
+            lane,
+            timeout,
+        )
+        .await
+        {
+            Ok(Some(outcome)) => {
+                result.events_shipped = outcome.events_shipped;
+                if outcome.has_more {
+                    result.rerun_priority = Some(result.job.priority);
+                }
+                tracing::info!(
+                    path = %result.job.path.display(),
+                    provider = result.job.provider,
+                    lane,
+                    bytes_shipped = outcome.bytes_shipped,
+                    events_shipped = outcome.events_shipped,
+                    "Shipped storage-v2 source envelope"
+                );
+            }
+            Ok(None) => {}
+            Err(error) => {
+                if task_context.tracker.record_error() {
+                    tracing::warn!(
+                        path = %result.job.path.display(),
+                        provider = result.job.provider,
+                        lane,
+                        error = %error,
+                        "Storage-v2 ship failed; durable cursor remains unchanged"
+                    );
+                }
+                result.local_retry_after = Some(local_retry_delay(result.job.priority));
+            }
+        }
+        return finish_path_task(result, task_started);
     }
 
     if is_opencode_database_job(&result.job) {

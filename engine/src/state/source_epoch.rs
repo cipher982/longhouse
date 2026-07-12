@@ -18,15 +18,13 @@ use super::file_identity::identity_from_metadata;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SourceLane {
-    Live,
-    Archive,
+    Durable,
 }
 
 impl SourceLane {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Live => "live",
-            Self::Archive => "archive",
+            Self::Durable => "durable",
         }
     }
 }
@@ -239,6 +237,11 @@ pub fn observe_source(
         }
     };
 
+    let initial_position = if resolved.created && resolved.start_reason != EpochStartReason::Initial {
+        0
+    } else {
+        position.min(source_len)
+    };
     tx.execute(
         "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
          VALUES (?1, ?2, ?3, ?4)
@@ -246,7 +249,7 @@ pub fn observe_source(
         params![
             resolved.source_epoch.to_string(),
             lane.as_str(),
-            position.min(source_len),
+            initial_position,
             now
         ],
     )?;
@@ -408,7 +411,7 @@ mod tests {
             "claude",
             "history.jsonl",
             &source,
-            SourceLane::Archive,
+            SourceLane::Durable,
             4,
             Some("provider-revision-1"),
             SourceChangeHint::None,
@@ -419,15 +422,14 @@ mod tests {
             "claude",
             "history.jsonl",
             &source,
-            SourceLane::Live,
+            SourceLane::Durable,
             8,
             Some("provider-revision-1"),
             SourceChangeHint::None,
         )
         .unwrap();
         assert_eq!(archive.source_epoch, live.source_epoch);
-        assert_eq!(lane_position(&conn, archive.source_epoch, SourceLane::Archive).unwrap(), 4);
-        assert_eq!(lane_position(&conn, archive.source_epoch, SourceLane::Live).unwrap(), 8);
+        assert_eq!(lane_position(&conn, archive.source_epoch, SourceLane::Durable).unwrap(), 4);
         assert!(!archive.opened_at.is_empty());
         drop(conn);
 
@@ -437,7 +439,7 @@ mod tests {
             "claude",
             "history.jsonl",
             &source,
-            SourceLane::Archive,
+            SourceLane::Durable,
             2,
             Some("provider-revision-1"),
             SourceChangeHint::None,
@@ -446,16 +448,16 @@ mod tests {
         assert_eq!(archive.source_epoch, after_restart.source_epoch);
         assert!(!after_restart.created);
         assert_eq!(after_restart.opened_at, archive.opened_at);
-        assert_eq!(lane_position(&reopened, archive.source_epoch, SourceLane::Archive).unwrap(), 4);
+        assert_eq!(lane_position(&reopened, archive.source_epoch, SourceLane::Durable).unwrap(), 4);
         acknowledge_position(
             &mut reopened,
             archive.source_epoch,
-            SourceLane::Archive,
+            SourceLane::Durable,
             4,
             8,
         )
         .unwrap();
-        assert_eq!(lane_position(&reopened, archive.source_epoch, SourceLane::Archive).unwrap(), 8);
+        assert_eq!(lane_position(&reopened, archive.source_epoch, SourceLane::Durable).unwrap(), 8);
     }
 
     #[test]
@@ -471,7 +473,7 @@ mod tests {
             "codex",
             "/stable/history.jsonl",
             &source,
-            SourceLane::Archive,
+            SourceLane::Durable,
             8,
             Some("revision-1"),
             SourceChangeHint::None,
@@ -485,7 +487,7 @@ mod tests {
             "codex",
             "/stable/history.jsonl",
             &source,
-            SourceLane::Archive,
+            SourceLane::Durable,
             0,
             Some("revision-2"),
             SourceChangeHint::None,
@@ -505,7 +507,7 @@ mod tests {
             "codex",
             "/stable/history.jsonl",
             &source,
-            SourceLane::Archive,
+            SourceLane::Durable,
             8,
             Some("revision-2"),
             SourceChangeHint::None,
@@ -521,7 +523,7 @@ mod tests {
             "codex",
             "/stable/history.jsonl",
             &source,
-            SourceLane::Live,
+            SourceLane::Durable,
             8,
             Some("revision-2"),
             SourceChangeHint::None,
@@ -532,7 +534,7 @@ mod tests {
             "codex",
             "/stable/history.jsonl",
             &source,
-            SourceLane::Live,
+            SourceLane::Durable,
             2,
             Some("revision-2"),
             SourceChangeHint::None,
@@ -546,7 +548,7 @@ mod tests {
             "codex",
             "/stable/history.jsonl",
             &source,
-            SourceLane::Live,
+            SourceLane::Durable,
             2,
             Some("revision-2"),
             SourceChangeHint::Rewind,
@@ -561,7 +563,7 @@ mod tests {
             "codex",
             "/stable/history.jsonl",
             &source,
-            SourceLane::Archive,
+            SourceLane::Durable,
             0,
             Some("revision-3"),
             SourceChangeHint::None,
@@ -578,7 +580,7 @@ mod tests {
             "codex",
             "/stable/history.jsonl",
             &source,
-            SourceLane::Archive,
+            SourceLane::Durable,
             0,
             Some("revision-3"),
             SourceChangeHint::Rewrite,

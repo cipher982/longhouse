@@ -78,12 +78,22 @@ impl PooledConnection {
     pub fn as_conn(&self) -> &Connection {
         self.conn.as_ref().expect("connection already returned")
     }
+
+    pub fn as_conn_mut(&mut self) -> &mut Connection {
+        self.conn.as_mut().expect("connection already returned")
+    }
 }
 
 impl std::ops::Deref for PooledConnection {
     type Target = Connection;
     fn deref(&self) -> &Connection {
         self.as_conn()
+    }
+}
+
+impl std::ops::DerefMut for PooledConnection {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.as_conn_mut()
     }
 }
 

@@ -396,7 +396,6 @@ impl ShipperClient {
         Ok(Some(capabilities))
     }
 
-    #[allow(dead_code)] // Activated atomically with the server's storage-v2 cutover flag.
     pub async fn ship_storage_v2_envelope(
         &self,
         ingest_path: &str,

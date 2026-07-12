@@ -1,7 +1,5 @@
 //! Typed Machine Agent wire contracts for storage-v2 negotiation and receipts.
 
-#![allow(dead_code)] // Write types are activated only after render cutover is complete.
-
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 
@@ -71,6 +69,31 @@ pub struct StorageV2SessionFacts {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct StorageV2RenderRecord {
+    pub event_id: String,
+    pub order_time_us: i64,
+    pub source_position: u64,
+    pub event_subordinal: u32,
+    pub role: String,
+    pub content_text: Option<String>,
+    pub tool_name: Option<String>,
+    pub tool_input_json: Option<serde_json::Value>,
+    pub tool_output_text: Option<String>,
+    pub tool_call_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub branch_kind: Option<String>,
+    pub raw_record_ordinal: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct StorageV2Render {
+    pub generation_id: String,
+    pub parser_revision: String,
+    pub ordering_revision: String,
+    pub records: Vec<StorageV2RenderRecord>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct StorageV2Envelope {
     pub protocol_version: u8,
     pub tenant_id: String,
@@ -84,6 +107,7 @@ pub struct StorageV2Envelope {
     pub range_kind: String,
     pub range_start: u64,
     pub range_end: u64,
+    pub render: Option<StorageV2Render>,
     pub session: StorageV2SessionFacts,
     pub records: Vec<StorageV2Record>,
     pub expected_envelope_id: String,

@@ -70,6 +70,16 @@ pub(crate) fn read_next_raw_batch(
     framing: RawSourceFraming,
     start_offset: u64,
 ) -> Result<Option<RawRecordBatch>, RawRecordError> {
+    read_next_raw_batch_bounded(path, framing, start_offset, MAX_RAW_BATCH_BYTES)
+}
+
+pub(crate) fn read_next_raw_batch_bounded(
+    path: &Path,
+    framing: RawSourceFraming,
+    start_offset: u64,
+    maximum_bytes: usize,
+) -> Result<Option<RawRecordBatch>, RawRecordError> {
+    let maximum_bytes = maximum_bytes.clamp(1, MAX_RAW_BATCH_BYTES);
     let file = File::open(path).map_err(|source| RawRecordError::Open {
         path: path.to_path_buf(),
         source,
@@ -88,7 +98,7 @@ pub(crate) fn read_next_raw_batch(
         });
     }
     match framing {
-        RawSourceFraming::LfDelimited => read_next_lf_batch(path, file, start_offset, length),
+        RawSourceFraming::LfDelimited => read_next_lf_batch(path, file, start_offset, length, maximum_bytes),
         RawSourceFraming::WholeDocument => read_whole_document(path, file, start_offset, length),
     }
 }
@@ -98,6 +108,7 @@ fn read_next_lf_batch(
     mut file: File,
     start_offset: u64,
     source_len: u64,
+    maximum_bytes: usize,
 ) -> Result<Option<RawRecordBatch>, RawRecordError> {
     ensure_lf_boundary(path, &mut file, start_offset)?;
     file.seek(SeekFrom::Start(start_offset))
@@ -108,7 +119,7 @@ fn read_next_lf_batch(
     let mut position = start_offset;
 
     while records.len() < MAX_RAW_BATCH_RECORDS {
-        let remaining = MAX_RAW_BATCH_BYTES - batch_bytes;
+        let remaining = maximum_bytes - batch_bytes;
         let mut bytes = Vec::new();
         let mut bounded = (&mut reader).take(remaining as u64);
         let read = bounded
@@ -123,7 +134,7 @@ fn read_next_lf_batch(
             if records.is_empty() {
                 return Err(RawRecordError::RecordTooLarge {
                     start: position,
-                    maximum: MAX_RAW_BATCH_BYTES,
+                    maximum: maximum_bytes,
                 });
             }
             break;
@@ -137,7 +148,7 @@ fn read_next_lf_batch(
             bytes,
         });
         batch_bytes += read;
-        if batch_bytes == MAX_RAW_BATCH_BYTES {
+        if batch_bytes == maximum_bytes {
             break;
         }
     }

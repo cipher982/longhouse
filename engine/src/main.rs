@@ -45,6 +45,7 @@ mod shipping_stats;
 mod source_line_claims;
 mod state;
 mod storage_v2_contract;
+mod storage_v2_shipper;
 mod text;
 mod unmanaged_bindings;
 mod watcher;
