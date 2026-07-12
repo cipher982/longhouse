@@ -1411,6 +1411,7 @@ class CatalogDaemon:
             "render_state",
             "media_state",
             "missing_media_hashes",
+            "projectors",
             "sealed_at",
         }
         if set(request.params) != expected:
@@ -1772,6 +1773,13 @@ def _validate_raw_object_commit(params: dict) -> None:
     if params["media_state"] == "missing" and not missing:
         raise ValueError("missing media must name at least one hash")
     params["missing_media_hashes"] = tuple(missing)
+    projectors = params["projectors"]
+    if not isinstance(projectors, list) or len(projectors) > 16:
+        raise ValueError("projectors must contain at most 16 names")
+    parsed_projectors = tuple(_projector_name(value) for value in projectors)
+    if len(parsed_projectors) != len(set(parsed_projectors)):
+        raise ValueError("projectors must not contain duplicates")
+    params["projectors"] = parsed_projectors
     params["sealed_at"] = _parse_datetime(params["sealed_at"], "sealed_at")
 
 

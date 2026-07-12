@@ -90,6 +90,7 @@ def _raw_params(
         "render_state": "pending",
         "media_state": "complete",
         "missing_media_hashes": [],
+        "projectors": ["render-v2", "search-v2", "worklog-v2"],
         "sealed_at": sealed_at.isoformat(),
     }
 
@@ -124,6 +125,13 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         assert replay["exact_replay"] is True and replay["receipt"] == committed["receipt"]
         assert committed["receipt"]["raw_state"] == "durable"
 
+        projector_lag = await client.call(
+            "projector.state.list_lag.v2",
+            {"projector": "render-v2", "after_session_id": None, "limit": 100},
+        )
+        assert projector_lag["states"][0]["session_id"] == str(session_id)
+        assert projector_lag["states"][0]["desired_revision"] == committed["receipt"]["commit_seq"]
+
         derived_drift = {
             **raw,
             "object_path": f"compacted/{raw['object_hash']}.zst",
@@ -152,6 +160,13 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         assert replay_after_representation_drift["exact_replay"] is True
         assert replay_after_representation_drift["receipt"] == committed["receipt"]
 
+        exists = await client.call(
+            "storage.raw_object.exists.batch.v2",
+            {"envelope_ids": [raw["envelope_id"], "1" * 64]},
+        )
+        assert exists["objects"][0]["receipt"] == committed["receipt"]
+        assert exists["objects"][1]["receipt"] is None
+
         existence = await client.call(
             "storage.raw_object.exists.batch.v2",
             {"envelope_ids": [raw["envelope_id"], "f" * 64]},
@@ -164,6 +179,7 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
                 "state": "durable",
                 "object_hash": raw["object_hash"],
                 "commit_seq": "2",
+                "receipt": committed["receipt"],
             },
             {
                 "envelope_id": "f" * 64,
@@ -171,6 +187,7 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
                 "state": "missing",
                 "object_hash": None,
                 "commit_seq": None,
+                "receipt": None,
             },
         ]
 

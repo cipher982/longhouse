@@ -3149,6 +3149,7 @@ class CatalogStore:
         render_state: str,
         media_state: str,
         missing_media_hashes: tuple[str, ...],
+        projectors: tuple[str, ...],
         sealed_at: datetime,
     ) -> dict[str, Any]:
         del protocol_version  # validated as v2 by the RPC boundary
@@ -3299,6 +3300,45 @@ class CatalogStore:
                     updated_at=commit_time,
                 )
             )
+            projector_table = ProjectorState.__table__
+            for projector in projectors:
+                projector_row = (
+                    connection.execute(
+                        select(projector_table).where(
+                            projector_table.c.projector == projector,
+                            projector_table.c.session_id == session_key,
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if projector_row is None:
+                    connection.execute(
+                        insert(projector_table).values(
+                            projector=projector,
+                            session_id=session_key,
+                            desired_revision=commit_seq,
+                            completed_revision=0,
+                            status="idle",
+                            failure_count=0,
+                            commit_seq=commit_seq,
+                            created_at=commit_time,
+                            updated_at=commit_time,
+                        )
+                    )
+                elif int(projector_row["desired_revision"]) < commit_seq:
+                    connection.execute(
+                        update(projector_table)
+                        .where(
+                            projector_table.c.projector == projector,
+                            projector_table.c.session_id == session_key,
+                        )
+                        .values(
+                            desired_revision=commit_seq,
+                            commit_seq=commit_seq,
+                            updated_at=commit_time,
+                        )
+                    )
             row = connection.execute(select(raw).where(raw.c.envelope_id == envelope_id)).mappings().one()
             return {
                 "created": True,
@@ -3361,6 +3401,7 @@ class CatalogStore:
                         ),
                         "object_hash": str(by_id[envelope_id]["object_hash"]) if envelope_id in by_id else None,
                         "commit_seq": str(by_id[envelope_id]["commit_seq"]) if envelope_id in by_id else None,
+                        "receipt": _raw_object_receipt(by_id[envelope_id]) if envelope_id in by_id else None,
                     }
                     for envelope_id in envelope_ids
                 ],
