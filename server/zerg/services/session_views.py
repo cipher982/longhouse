@@ -1216,7 +1216,7 @@ class EventMediaRefResponse(UTCBaseModel):
 class EventResponse(UTCBaseModel):
     """Response for a single event."""
 
-    id: int = Field(..., description="Event ID")
+    id: int | str = Field(..., description="Stable legacy or storage-v2 event ID")
     role: str = Field(..., description="Message role")
     content_text: Optional[str] = Field(None, description="Message content")
     raw_content_text: Optional[str] = Field(
@@ -1276,6 +1276,9 @@ class EventsListResponse(BaseModel):
     total: int
     branch_mode: str = Field("head", description="Branch projection mode: head|all")
     abandoned_events: int = Field(0, description="Events excluded from head projection due to rewind branches")
+    generation_id: Optional[str] = Field(None, description="Storage-v2 render generation for cursor validation")
+    next_cursor: Optional[str] = Field(None, description="Exclusive cursor for the next storage-v2 page")
+    has_more: bool = Field(False, description="Whether another storage-v2 page is available")
 
 
 class SessionTurnTimingResponse(UTCBaseModel):
@@ -1366,6 +1369,9 @@ class SessionProjectionResponse(BaseModel):
     page_offset: int = Field(0, description="Offset of the first item in this page within the full projection")
     branch_mode: str = Field("head", description="Branch projection mode: head|all")
     abandoned_events: int = Field(0, description="Events excluded from head projection due to rewind branches")
+    generation_id: Optional[str] = Field(None, description="Storage-v2 render generation for cursor validation")
+    next_cursor: Optional[str] = Field(None, description="Exclusive cursor for the next storage-v2 page")
+    has_more: bool = Field(False, description="Whether another storage-v2 page is available")
 
 
 class SessionWorkspaceRevisionResponse(BaseModel):

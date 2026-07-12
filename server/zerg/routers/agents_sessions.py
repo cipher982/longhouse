@@ -162,6 +162,7 @@ def _session_detail_db():
 
 
 session_detail_db_dependency = get_db if _catalog_db_dependency is get_db else _session_detail_db
+machine_session_read_db_dependency = get_db if get_settings().testing else _session_detail_db
 
 
 def _live_launch_placeholder_for_owner(
@@ -724,11 +725,11 @@ def get_session_graph(
 
 
 @router.get("/sessions/{session_id}/tail")
-def session_tail(
+async def session_tail(
     session_id: UUID,
     limit: int = Query(30, ge=1, le=100, description="Number of recent events to return"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    db: Session | None = Depends(machine_session_read_db_dependency),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict:
     """Return the last N events from a session for cross-session reading.
@@ -737,6 +738,40 @@ def session_tail(
     chronological order (oldest first). The reading agent interprets the
     raw log — no summary layer in between.
     """
+    if database_module.live_catalog_enabled():
+        owner_id = getattr(_auth, "owner_id", None)
+        if owner_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Storage-v2 reads require an owner-scoped token",
+            )
+        workspace = await build_storage_v2_workspace(
+            session_id=session_id,
+            owner_id=int(owner_id),
+            branch_mode="head",
+            limit=limit,
+            anchor="tail",
+        )
+        if workspace is None:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        projection = workspace["projection"]
+        events = [
+            {
+                "id": event["id"],
+                "role": event["role"],
+                "content": str(event.get("content_text") or event.get("tool_output_text") or "")[:4000],
+                "tool_name": event.get("tool_name"),
+                "timestamp": event["timestamp"],
+            }
+            for item in projection["items"]
+            if item.get("kind") == "event"
+            and isinstance((event := item.get("event")), dict)
+            and event.get("role") in {"user", "assistant", "tool"}
+            and (event.get("content_text") is not None or event.get("tool_output_text") is not None)
+        ]
+        return {"session_id": str(session_id), "events": events, "total": len(events)}
+
+    assert db is not None
     try:
         events = load_session_tail(db, session_id=session_id, limit=limit)
     except ValueError as exc:
@@ -1195,15 +1230,33 @@ def get_session(
 
 
 @router.get("/sessions/{session_id}/thread", response_model=SessionThreadResponse)
-def get_session_thread(
+async def get_session_thread(
     session_id: UUID,
     response: Response,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(machine_session_read_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
     owner_id: int | None = Depends(_no_viewer_owner_id),
 ) -> SessionThreadResponse:
     """Get all concrete continuations in a logical thread."""
+    if database_module.live_catalog_enabled():
+        effective_owner_id = owner_id if owner_id is not None else getattr(_auth, "owner_id", None)
+        if effective_owner_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Storage-v2 reads require an owner-scoped token",
+            )
+        workspace = await build_storage_v2_workspace(
+            session_id=session_id,
+            owner_id=int(effective_owner_id),
+            branch_mode="head",
+            limit=1,
+        )
+        if workspace is None:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        return workspace["thread"]
+
+    assert db is not None
     store = AgentsStore(db)
     timing = ServerTimingRecorder()
 
@@ -1269,7 +1322,7 @@ def get_session_thread(
 
 
 @router.get("/sessions/{session_id}/events", response_model=EventsListResponse)
-def get_session_events(
+async def get_session_events(
     session_id: UUID,
     thread_id: Optional[UUID] = Query(
         None,
@@ -1283,11 +1336,55 @@ def get_session_events(
     anchor: str = Query("start", description="Page anchor: start|tail"),
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next page"),
+    db: Session | None = Depends(machine_session_read_db_dependency),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> EventsListResponse:
     """Get events for a session."""
+    if database_module.live_catalog_enabled():
+        if offset:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Storage-v2 event pagination uses cursor instead of offset",
+            )
+        owner_id = getattr(_auth, "owner_id", None)
+        if owner_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Storage-v2 reads require an owner-scoped token",
+            )
+        workspace = await build_storage_v2_workspace(
+            session_id=session_id,
+            owner_id=int(owner_id),
+            branch_mode=branch_mode,
+            limit=limit,
+            cursor=cursor,
+            anchor=anchor,
+        )
+        if workspace is None:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        projection = workspace["projection"]
+        role_filter = {value.strip() for value in roles.split(",") if value.strip()} if roles else None
+        events = [item["event"] for item in projection["items"] if item.get("kind") == "event" and item.get("event")]
+        if role_filter is not None:
+            events = [event for event in events if event.get("role") in role_filter]
+        if tool_name is not None:
+            events = [event for event in events if event.get("tool_name") == tool_name]
+        if query is not None:
+            needle = query.casefold()
+            events = [event for event in events if needle in str(event.get("content_text") or "").casefold()]
+        return EventsListResponse(
+            events=events,
+            total=int(projection["total"]),
+            branch_mode=branch_mode,
+            abandoned_events=int(projection["abandoned_events"]),
+            generation_id=projection.get("generation_id"),
+            next_cursor=projection.get("next_cursor"),
+            has_more=projection.get("has_more") is True,
+        )
+
+    assert db is not None
     store = AgentsStore(db)
 
     session = store.get_session(session_id)
@@ -1382,7 +1479,7 @@ def get_session_events(
 
 
 @router.get("/sessions/{session_id}/projection", response_model=SessionProjectionResponse)
-def get_session_projection(
+async def get_session_projection(
     session_id: UUID,
     response: Response,
     thread_id: Optional[UUID] = Query(
@@ -1393,11 +1490,37 @@ def get_session_projection(
     anchor: str = Query("start", description="Page anchor: start|tail"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next page"),
+    db: Session | None = Depends(machine_session_read_db_dependency),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionProjectionResponse:
     """Get the stitched lineage-path projection for a focused session."""
+    if database_module.live_catalog_enabled():
+        if offset:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Storage-v2 projection pagination uses cursor instead of offset",
+            )
+        owner_id = getattr(_auth, "owner_id", None)
+        if owner_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Storage-v2 reads require an owner-scoped token",
+            )
+        workspace = await build_storage_v2_workspace(
+            session_id=session_id,
+            owner_id=int(owner_id),
+            branch_mode=branch_mode,
+            limit=limit,
+            cursor=cursor,
+            anchor=anchor,
+        )
+        if workspace is None:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        return workspace["projection"]
+
+    assert db is not None
     store = AgentsStore(db)
     timing = ServerTimingRecorder()
 

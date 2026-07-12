@@ -76,11 +76,14 @@ async def build_storage_v2_workspace(
     branch_mode: str,
     limit: int,
     cursor: str | None = None,
+    anchor: str = "tail",
 ) -> dict[str, object] | None:
     """Return a storage-v2 workspace, or ``None`` for a legacy-only session."""
 
     if branch_mode not in {"head", "all"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="branch_mode must be one of: head, all")
+    if anchor not in {"start", "tail"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="anchor must be one of: start, tail")
     catalogd = get_catalogd_client()
     if catalogd is None:
         if get_settings().testing:
@@ -103,7 +106,7 @@ async def build_storage_v2_workspace(
         session_id=session_id,
         owner_id=str(owner_id),
         cursor=cursor,
-        anchor="tail",
+        anchor=anchor,
         limit=limit,
     )
     events = page.get("events")
@@ -137,7 +140,7 @@ async def build_storage_v2_workspace(
         "path_session_ids": [str(session_id)],
         "items": items,
         "total": int(page.get("total") or 0),
-        "page_offset": max(0, int(page.get("total") or 0) - len(items)) if cursor is None else 0,
+        "page_offset": (max(0, int(page.get("total") or 0) - len(items)) if anchor == "tail" and cursor is None else 0),
         "branch_mode": branch_mode,
         "abandoned_events": 0,
         "generation_id": page.get("generation_id"),

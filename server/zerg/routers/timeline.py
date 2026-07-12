@@ -855,7 +855,7 @@ def get_timeline_session(
 
 
 @router.get("/sessions/{session_id}/thread", response_model=SessionThreadResponse)
-def get_timeline_session_thread(
+async def get_timeline_session_thread(
     session_id: UUID,
     response: Response,
     db: Session | None = Depends(_sessions_router.session_detail_db_dependency),
@@ -872,7 +872,7 @@ def get_timeline_session_thread(
             sessions=[session],
         )
     assert db is not None
-    return _sessions_router.get_session_thread(
+    return await _sessions_router.get_session_thread(
         session_id=session_id,
         response=response,
         db=db,
@@ -1016,20 +1016,22 @@ async def get_timeline_session_events(
 
         def build_legacy_events():
             with legacy_session_factory() as db:
-                return _sessions_router.get_session_events(
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    roles=roles,
-                    tool_name=tool_name,
-                    query=query,
-                    context_mode=context_mode,
-                    branch_mode=branch_mode,
-                    anchor=anchor,
-                    limit=limit,
-                    offset=offset,
-                    db=db,
-                    _auth=None,
-                    _single=None,
+                return asyncio.run(
+                    _sessions_router.get_session_events(
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        roles=roles,
+                        tool_name=tool_name,
+                        query=query,
+                        context_mode=context_mode,
+                        branch_mode=branch_mode,
+                        anchor=anchor,
+                        limit=limit,
+                        offset=offset,
+                        db=db,
+                        _auth=None,
+                        _single=None,
+                    )
                 )
 
         return await asyncio.to_thread(build_legacy_events)
@@ -1083,17 +1085,19 @@ async def get_timeline_session_projection(
 
         def build_legacy_projection():
             with legacy_session_factory() as db:
-                return _sessions_router.get_session_projection(
-                    session_id=session_id,
-                    thread_id=thread_id,
-                    branch_mode=branch_mode,
-                    anchor=anchor,
-                    limit=limit,
-                    offset=offset,
-                    response=response,
-                    db=db,
-                    _auth=None,
-                    _single=None,
+                return asyncio.run(
+                    _sessions_router.get_session_projection(
+                        session_id=session_id,
+                        thread_id=thread_id,
+                        branch_mode=branch_mode,
+                        anchor=anchor,
+                        limit=limit,
+                        offset=offset,
+                        response=response,
+                        db=db,
+                        _auth=None,
+                        _single=None,
+                    )
                 )
 
         return await asyncio.to_thread(build_legacy_projection)
