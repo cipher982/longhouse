@@ -46,6 +46,7 @@ from zerg.storage_v2.render_objects import seal_render_object
 
 PARSER_REVISION = "legacy-normalized-v1"
 ORDERING_REVISION = "semantic-order-v2"
+MIGRATION_LAYOUT_REVISION = "bounded-v2"
 INVENTORY_BATCH = 500
 
 
@@ -274,7 +275,12 @@ class LegacyCorpusConverter:
                 for row in claimed:
                     try:
                         with self.session_factory() as db:
-                            result = await self.convert_session(db, UUID(str(row["session_id"])), watermark)
+                            result = await self.convert_session(
+                                db,
+                                UUID(str(row["session_id"])),
+                                watermark,
+                                replace_existing_epochs=int(row["attempts"]) > 1,
+                            )
                         await self._complete(run_id, claim_token, result)
                     except Exception as exc:
                         failed_at = datetime.now(UTC)
@@ -300,6 +306,8 @@ class LegacyCorpusConverter:
         db: Session,
         session_id: UUID,
         watermark: LegacyHighWatermark,
+        *,
+        replace_existing_epochs: bool = False,
     ) -> MigrationResult:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         events = (
@@ -366,12 +374,34 @@ class LegacyCorpusConverter:
         consumed_event_ids: set[int] = set()
         rendered_records: list[RenderRecord] = []
         render_failures: list[str] = []
+        epoch_plans: dict[tuple[str, str], tuple[UUID, UUID | None]] = {}
         owner_id = await self._active_owner_id() if batches else None
 
         for batch in batches:
             source_path = batch.source_path
             opaque_id = _opaque_source_id(session_id, source_path, batch.provenance_kind)
-            source_epoch = _legacy_source_epoch(session_id, source_path, batch.provenance_kind, watermark)
+            epoch_key = (source_path, batch.provenance_kind)
+            if epoch_key not in epoch_plans:
+                original_epoch = _legacy_source_epoch(session_id, source_path, batch.provenance_kind, watermark)
+                source_epoch, predecessor_source_epoch = original_epoch, None
+                if replace_existing_epochs:
+                    manifest = await self.catalog.call(
+                        "storage.source_epoch.manifest.v2",
+                        {"source_epoch": str(original_epoch), "after_position": None, "limit": 1},
+                        timeout_seconds=5.0,
+                    )
+                    if manifest.get("found") is True:
+                        source_epoch = _stable_uuid(
+                            "source-replacement",
+                            MIGRATION_LAYOUT_REVISION,
+                            str(session_id),
+                            source_path,
+                            batch.provenance_kind,
+                            watermark.encode(),
+                        )
+                        predecessor_source_epoch = original_epoch
+                epoch_plans[epoch_key] = source_epoch, predecessor_source_epoch
+            source_epoch, predecessor_source_epoch = epoch_plans[epoch_key]
             raw_records = _raw_records(batch)
             raw_spec = RawObjectSpec(
                 tenant_id=self.tenant_id,
@@ -426,6 +456,7 @@ class LegacyCorpusConverter:
                     sealed_render=sealed_render,
                     tenant_id=self.tenant_id,
                     owner_id=owner_id,
+                    predecessor_source_epoch=predecessor_source_epoch,
                 ),
                 timeout_seconds=10.0,
             )
@@ -791,7 +822,17 @@ def _render_record(
     )
 
 
-def _raw_commit(*, session, raw_spec, sealed_raw, render_spec, sealed_render, tenant_id: str, owner_id: str) -> dict[str, Any]:  # noqa: E501
+def _raw_commit(
+    *,
+    session,
+    raw_spec,
+    sealed_raw,
+    render_spec,
+    sealed_render,
+    tenant_id: str,
+    owner_id: str,
+    predecessor_source_epoch: UUID | None,
+) -> dict[str, Any]:
     render_manifest = None
     if sealed_render is not None:
         render_manifest = {
@@ -822,7 +863,7 @@ def _raw_commit(*, session, raw_spec, sealed_raw, render_spec, sealed_render, te
         "provider": raw_spec.provider,
         "opaque_source_id": raw_spec.opaque_source_id,
         "source_epoch": str(raw_spec.source_epoch),
-        "predecessor_source_epoch": None,
+        "predecessor_source_epoch": str(predecessor_source_epoch) if predecessor_source_epoch is not None else None,
         "epoch_opened_at": _aware(session.started_at).isoformat(),
         "range_kind": raw_spec.range_kind,
         "range_start": raw_spec.range_start,

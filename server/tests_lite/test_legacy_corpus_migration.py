@@ -28,8 +28,9 @@ from zerg.storage_v2.raw_objects import read_raw_object
 
 
 class FakeCatalog:
-    def __init__(self) -> None:
+    def __init__(self, *, source_epoch_found: bool = False) -> None:
         self.calls: list[tuple[str, dict]] = []
+        self.source_epoch_found = source_epoch_found
 
     async def call(self, method, params=None, *, timeout_seconds=None):
         payload = dict(params or {})
@@ -44,6 +45,8 @@ class FakeCatalog:
             }
         if method == "auth.owner.get.v2":
             return {"found": True, "owner_id": 7}
+        if method == "storage.source_epoch.manifest.v2":
+            return {"found": self.source_epoch_found}
         return {"ok": True}
 
 
@@ -319,6 +322,44 @@ async def test_converter_prefers_exact_source_lines_and_is_deterministic(legacy_
     assert commits[0]["envelope_id"] == commits[1]["envelope_id"]
     assert first.output_proof_hash == second.output_proof_hash
     assert first.parity_proof_hash == second.parity_proof_hash
+
+
+@pytest.mark.asyncio
+async def test_retry_replaces_partial_source_epoch_when_batch_layout_changed(legacy_db, tmp_path: Path):
+    session = _session()
+    raw = '{"type":"user","message":"retry"}'
+    with legacy_db() as db:
+        db.add(session)
+        db.flush()
+        db.add(
+            AgentSourceLine(
+                session_id=session.id,
+                source_path="retry.jsonl",
+                source_offset=0,
+                branch_id=0,
+                raw_json=raw,
+                raw_json_codec=0,
+                line_hash=hashlib.sha256(raw.encode()).hexdigest(),
+            )
+        )
+        db.add(_event(session.id, raw_json=raw, source_path="retry.jsonl", source_offset=0))
+        db.commit()
+        watermark = freeze_high_watermark(db)
+
+    catalog = FakeCatalog(source_epoch_found=True)
+    converter = LegacyCorpusConverter(
+        session_factory=legacy_db,
+        catalog=catalog,
+        object_root=tmp_path / "objects-v2",
+        tenant_id="tenant-a",
+    )
+    with legacy_db() as db:
+        await converter.convert_session(db, session.id, watermark, replace_existing_epochs=True)
+
+    commit = next(payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2")
+    manifest = next(payload for method, payload in catalog.calls if method == "storage.source_epoch.manifest.v2")
+    assert commit["predecessor_source_epoch"] == manifest["source_epoch"]
+    assert commit["source_epoch"] != manifest["source_epoch"]
 
 
 @pytest.mark.asyncio
