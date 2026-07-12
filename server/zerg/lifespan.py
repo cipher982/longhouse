@@ -139,7 +139,7 @@ async def lifespan(app: FastAPI):
             with _timed_startup_step("initialize_database"):
                 initialize_database()
         else:
-            logger.info("Live catalog mode: cold database initialization is owned by archive worker")
+            logger.info("Storage-v2 mode: retired cold database is not initialized or mounted")
         if catalog_mode and not _settings.testing:
             with _timed_startup_step("catalogd_supervisor"):
                 from zerg.services.catalogd_supervisor import start_catalogd_supervisor
@@ -190,7 +190,7 @@ async def lifespan(app: FastAPI):
         try:
             from zerg.database import default_engine
 
-            if not _settings.testing and default_engine is not None and default_engine.dialect.name == "sqlite":
+            if not catalog_mode and not _settings.testing and default_engine is not None and default_engine.dialect.name == "sqlite":
                 logger.info(
                     "SQLite mode: single-writer serializer active. "
                     "See VISION.md (Architecture Constraints / SQLite-only core) for details."
@@ -198,14 +198,15 @@ async def lifespan(app: FastAPI):
         except Exception as _e:
             logger.error(str(_e))
             raise
-        logger.info("Database tables initialized")
+        logger.info("Catalog services initialized" if catalog_mode else "Database tables initialized")
 
-        try:
-            url = default_engine.url
-            masked = str(url).replace(url.password or "", "***") if url.password else str(url)
-            logger.info("Database bound to: %s", masked)
-        except Exception:
-            pass
+        if not catalog_mode:
+            try:
+                url = default_engine.url
+                masked = str(url).replace(url.password or "", "***") if url.password else str(url)
+                logger.info("Database bound to: %s", masked)
+            except Exception:
+                pass
 
         if not catalog_mode:
             with _timed_startup_step("fts5_readiness_check"):
@@ -273,13 +274,6 @@ async def lifespan(app: FastAPI):
         get_shared_runner().start()
 
         if catalog_mode and not _settings.testing:
-            try:
-                from zerg.services.archive_worker_supervisor import start_archive_worker_supervisor
-
-                start_archive_worker_supervisor()
-                logger.info("Live catalog mode: archive worker supervisor started; cold API loops remain disabled")
-            except Exception:
-                logger.exception("Failed to start archive worker supervisor")
             try:
                 from zerg.services.live_control_catalog import run_live_catalog_input_recovery_loop
 
@@ -406,15 +400,6 @@ async def lifespan(app: FastAPI):
 
             # Periodic runtime maintenance (runner-health reconcile, etc.)
             if not _settings.testing:
-                try:
-                    from zerg.services.archive_worker_supervisor import start_archive_worker_supervisor
-
-                    start_archive_worker_supervisor()
-                    started.append("archive_worker_supervisor")
-                except Exception as e:  # noqa: BLE001
-                    failed.append(f"archive_worker_supervisor ({e})")
-                    logger.exception("Failed to start archive worker supervisor")
-
                 try:
                     from zerg.services.maintenance import start_maintenance_loop
 
@@ -546,13 +531,6 @@ async def lifespan(app: FastAPI):
                 await stop_maintenance_loop()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop maintenance loop")
-
-            try:
-                from zerg.services.archive_worker_supervisor import stop_archive_worker_supervisor
-
-                await stop_archive_worker_supervisor()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop archive worker supervisor")
 
             try:
                 from zerg.services.retrieval_index_jobs import stop_recall_index_worker

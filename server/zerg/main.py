@@ -152,23 +152,6 @@ app = FastAPI(redirect_slashes=True, lifespan=lifespan)
 api_app = FastAPI(redirect_slashes=True)
 
 
-@api_app.middleware("http")
-async def isolate_archive_routes(request, call_next):
-    """Keep cold SQLite operations outside the hot Runtime Host process."""
-
-    from fastapi.responses import JSONResponse
-
-    from zerg.database import live_catalog_enabled
-    from zerg.services.archive_read_proxy import proxy_archive_request
-    from zerg.services.archive_read_proxy import should_proxy_archive_request
-
-    if live_catalog_enabled() and should_proxy_archive_request(request, routes=api_app.routes):
-        try:
-            return await proxy_archive_request(request)
-        except HTTPException as exc:
-            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
-    return await call_next(request)
-
 # Set health app reference for readyz/health endpoints that need app.state
 set_health_app_ref(app)
 

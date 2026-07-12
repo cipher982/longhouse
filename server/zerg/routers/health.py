@@ -215,12 +215,24 @@ def health_db(request: Request):
     status so this isn't a public schema-disclosure surface.
     """
     from zerg.database import default_engine
-    from zerg.database import get_live_engine
     from zerg.database import live_catalog_enabled
 
     trusted = _request_is_trusted(request)
     catalog_mode = live_catalog_enabled()
-    health_engine = get_live_engine() if catalog_mode else default_engine
+    if catalog_mode:
+        try:
+            from zerg.catalogd.client import call_catalogd_sync
+            from zerg.services.catalogd_supervisor import catalogd_paths
+
+            _database_path, catalog_socket = catalogd_paths()
+            ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=0.05)
+            if ping.get("ready") is not True:
+                raise RuntimeError("catalog not ready")
+            return {"status": "ready", "catalog": ping} if trusted else {"status": "ready"}
+        except Exception:
+            return JSONResponse(status_code=503, content={"status": "error", "detail": "Catalog connection failed"})
+
+    health_engine = default_engine
     required_tables = (
         ["users", "live_session_catalog", "live_timeline_cards", "live_runtime_state"]
         if catalog_mode
@@ -345,7 +357,8 @@ def readyz_check():
                 content={"status": "unhealthy", "reason": "database unavailable"},
             )
 
-    writer_stale, writer_metrics = _write_serializer_stall_check()
+    catalog_mode = live_catalog_enabled()
+    writer_stale, writer_metrics = (False, {"status": "retired"}) if catalog_mode else _write_serializer_stall_check()
     archive_degraded = writer_stale and _writer_stall_is_archive_degraded(writer_metrics)
     live_writer_stale, live_writer_metrics = _live_write_serializer_check()
     if live_writer_stale:
@@ -363,7 +376,7 @@ def readyz_check():
             "reason": "archive_write_serializer_stalled",
             "write_serializer": _archive_degraded_metrics(writer_metrics),
         }
-    archive_worker = _archive_worker_check()
+    archive_worker = {"enabled": False, "status": "retired"} if catalog_mode else _archive_worker_check()
     if archive_worker.get("enabled") and archive_worker.get("status") != "running":
         return {
             "status": "ready_with_archive_degraded",
@@ -383,7 +396,7 @@ def readyz_check():
     try:
         from zerg.database import get_wal_bytes
 
-        archive_wal = _archive_wal_pressure_payload(get_wal_bytes())
+        archive_wal = _archive_wal_pressure_payload(None if catalog_mode else get_wal_bytes())
         if archive_wal.get("shed"):
             return {
                 "status": "ready_with_archive_degraded",
@@ -432,7 +445,7 @@ def health_check(request: Request):
 
     checks = {}
 
-    archive_worker = _archive_worker_check()
+    archive_worker = {"enabled": False, "status": "retired"} if catalog_mode else _archive_worker_check()
     checks["archive_worker"] = archive_worker
     if archive_worker.get("enabled") and archive_worker.get("status") != "running":
         health_status["status"] = "degraded"
@@ -518,24 +531,24 @@ def health_check(request: Request):
         from zerg.database import get_live_engine
         from zerg.database import live_store_configured
 
-        health_engine = (
-            get_live_engine() if (catalog_mode or archive_worker.get("enabled")) and live_store_configured() else None
-        ) or default_engine
-        with health_engine.connect() as conn:
-            result = conn.execute(text("SELECT 1"))
-            row = result.fetchone()
-            db_check = {
-                "status": "pass" if row and row[0] == 1 else "fail",
-                "connection": "ok",
-            }
-            # The DB URL exposes the on-disk path / host; operator-only.
-            if trusted:
-                db_check["url"] = (
-                    str(health_engine.url).replace(health_engine.url.password or "", "***")
-                    if health_engine.url.password
-                    else str(health_engine.url)
-                )
-            checks["database"] = db_check
+        if catalog_mode:
+            checks["database"] = {"status": "pass", "connection": "catalogd"}
+        else:
+            health_engine = (get_live_engine() if archive_worker.get("enabled") and live_store_configured() else None) or default_engine
+            with health_engine.connect() as conn:
+                result = conn.execute(text("SELECT 1"))
+                row = result.fetchone()
+                db_check = {
+                    "status": "pass" if row and row[0] == 1 else "fail",
+                    "connection": "ok",
+                }
+                if trusted:
+                    db_check["url"] = (
+                        str(health_engine.url).replace(health_engine.url.password or "", "***")
+                        if health_engine.url.password
+                        else str(health_engine.url)
+                    )
+                checks["database"] = db_check
     except Exception as e:
         checks["database"] = {"status": "fail", "error": str(e)}
         health_status["status"] = "unhealthy"
@@ -635,7 +648,9 @@ def health_check(request: Request):
     try:
         from zerg.database import default_engine
 
-        if archive_worker.get("enabled") or catalog_mode:
+        if catalog_mode:
+            checks["fts5"] = {"status": "skip", "reason": "searchd_owned"}
+        elif archive_worker.get("enabled"):
             checks["fts5"] = {"status": "skip", "reason": "owned_by_archive_worker"}
         elif default_engine is not None and default_engine.dialect.name == "sqlite":
             with default_engine.connect() as conn:
@@ -688,7 +703,7 @@ def health_check(request: Request):
     checks["migration"] = migration_status
 
     # 7. Write serializer metrics
-    writer_stale, writer_metrics = _write_serializer_stall_check()
+    writer_stale, writer_metrics = (False, {"status": "retired"}) if catalog_mode else _write_serializer_stall_check()
     archive_degraded = writer_stale and _writer_stall_is_archive_degraded(writer_metrics)
     checks["write_serializer"] = _archive_degraded_metrics(writer_metrics) if archive_degraded else writer_metrics
     if archive_degraded:
@@ -709,7 +724,9 @@ def health_check(request: Request):
     # 8. Projection catch-up lag. Archive ingest may skip expensive derived
     # projections on the hot path; this should normally drain quickly in the
     # background and should be visible separately from raw ingest health.
-    if archive_worker.get("enabled") or catalog_mode:
+    if catalog_mode:
+        checks["session_projection_lag"] = {"status": "skip", "reason": "storage_v2_projectors"}
+    elif archive_worker.get("enabled"):
         checks["session_projection_lag"] = {"status": "skip", "reason": "owned_by_archive_worker"}
     else:
         try:
@@ -719,7 +736,9 @@ def health_check(request: Request):
 
     # 9. Enrichment lag. Embeddings/search enrichment run after durable ingest;
     # they should be visible, but must not be mistaken for raw shipping health.
-    if archive_worker.get("enabled") or catalog_mode:
+    if catalog_mode:
+        checks["session_enrichment_lag"] = {"status": "skip", "reason": "storage_v2_projectors"}
+    elif archive_worker.get("enabled"):
         checks["session_enrichment_lag"] = {"status": "skip", "reason": "owned_by_archive_worker"}
     else:
         try:

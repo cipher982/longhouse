@@ -17,12 +17,12 @@ from sqlalchemy import text as sa_text
 
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
-from zerg.services.write_serializer import execute_post_write
 from zerg.services.write_serializer import InterruptedWriteError
+from zerg.services.write_serializer import WriteQueueTimeoutError
+from zerg.services.write_serializer import WriteSerializer
+from zerg.services.write_serializer import execute_post_write
 from zerg.services.write_serializer import post_write_fallback_db
 from zerg.services.write_serializer import request_session_released_by_serializer
-from zerg.services.write_serializer import WriteSerializer
-from zerg.services.write_serializer import WriteQueueTimeoutError
 
 
 @pytest.mark.asyncio
@@ -594,8 +594,8 @@ async def test_execute_after_closing_request_session_keeps_fallback_for_testing(
     assert request_rows == ["request-write"]
 
 
-def test_full_app_ingest_succeeds_in_subprocess_without_testing_flag(tmp_path):
-    """Regression: full-app ingest must work on the production-style writer path."""
+def test_full_app_requires_storage_v2_in_subprocess_without_testing_flag(tmp_path):
+    """Production-style Runtime Hosts must reject the retired v1 ingest path."""
 
     db_path = tmp_path / "full-app-ingest.db"
     server_dir = Path(__file__).resolve().parents[1]
@@ -631,12 +631,12 @@ def test_full_app_ingest_succeeds_in_subprocess_without_testing_flag(tmp_path):
         with TestClient(app) as client:
             ingest = client.post("/api/agents/ingest", content=json.dumps(payload))
             print("ingest", ingest.status_code, ingest.text)
-            if ingest.status_code != 200:
+            if ingest.status_code != 426 or ingest.json().get("detail", {}).get("code") != "storage_v2_required":
                 raise SystemExit(1)
 
-            session = client.get(f"/api/agents/sessions/{session_id}")
-            print("session", session.status_code, session.text)
-            if session.status_code != 200:
+            capabilities = client.get("/api/agents/storage/v2/capabilities?machine_id=test-machine")
+            print("capabilities", capabilities.status_code, capabilities.text)
+            if capabilities.status_code != 200 or capabilities.json().get("cutover") is not True:
                 raise SystemExit(2)
         """
     )

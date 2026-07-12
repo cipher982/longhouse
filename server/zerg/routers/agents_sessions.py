@@ -25,6 +25,7 @@ import zerg.database as database_module
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
+from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.database import get_live_session_factory
@@ -119,6 +120,7 @@ from zerg.services.startup_context import STARTUP_CONTEXT_MAX_DAYS_BACK
 from zerg.services.startup_context import STARTUP_CONTEXT_MAX_LIMIT
 from zerg.services.startup_context import load_startup_context_items
 from zerg.services.startup_context import render_startup_context
+from zerg.services.storage_v2_export import build_storage_v2_raw_export
 from zerg.services.storage_v2_workspace import build_storage_v2_workspace
 from zerg.services.worklog_day_export import WorklogDayExportResponse
 from zerg.services.worklog_day_export import WorklogV2Error
@@ -187,7 +189,7 @@ async def export_worklog_day(
     date: date_type = Query(..., description="Digest day in the supplied timezone, YYYY-MM-DD"),
     timezone_name: str = Query("America/New_York", alias="timezone", description="IANA timezone for day boundaries"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
-    db: Session | None = Depends(_session_detail_db),
+    db: Session | None = Depends(session_detail_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> WorklogDayExportResponse:
@@ -255,7 +257,10 @@ def _active_live_session_candidates(*, limit: int, days_back: int, now: datetime
         from zerg.services.catalog_read_gateway import active_session_ids
 
         result = active_session_ids(
-            limit=min(_ACTIVE_LIVE_SESSION_CANDIDATE_MAX, max(limit, limit * _ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER)),
+            limit=min(
+                _ACTIVE_LIVE_SESSION_CANDIDATE_MAX,
+                max(limit, limit * _ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER),
+            ),
             days_back=days_back,
             observed_at=now.isoformat(),
         )
@@ -1536,6 +1541,12 @@ async def get_session_workspace(
     timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "no-store"
     owner_value = getattr(_auth, "owner_id", None)
+    if owner_value is None and not get_settings().testing:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Storage-v2 reads require an owner-scoped token",
+        )
+    storage_workspace = None
     if owner_value is not None:
         storage_workspace = await build_storage_v2_workspace(
             session_id=session_id,
@@ -1544,36 +1555,48 @@ async def get_session_workspace(
             limit=limit,
             cursor=cursor,
         )
-        if storage_workspace is not None:
-            timing.apply(response)
-            return storage_workspace
+    if storage_workspace is None and not get_settings().testing:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
+    if storage_workspace is None:
 
-    def build_legacy_workspace() -> SessionWorkspaceResponse:
-        with legacy_session_factory() as db:
-            owner_id = _resolve_agents_owner_id(db, _auth if isinstance(_auth, DeviceToken) else None)
-            return build_session_workspace(
-                db=db,
-                session_id=session_id,
-                branch_mode=branch_mode,
-                limit=limit,
-                timing=timing,
-                owner_id=owner_id,
-            )
+        def build_legacy_workspace() -> SessionWorkspaceResponse:
+            with legacy_session_factory() as db:
+                owner_id = _resolve_agents_owner_id(db, _auth if isinstance(_auth, DeviceToken) else None)
+                return build_session_workspace(
+                    db=db,
+                    session_id=session_id,
+                    branch_mode=branch_mode,
+                    limit=limit,
+                    timing=timing,
+                    owner_id=owner_id,
+                )
 
-    result = await asyncio.to_thread(build_legacy_workspace)
+        result = await asyncio.to_thread(build_legacy_workspace)
+        timing.apply(response)
+        return result
     timing.apply(response)
-    return result
+    return storage_workspace
 
 
 @router.get("/sessions/{session_id}/export")
-def export_session(
+async def export_session(
     session_id: UUID,
     branch_mode: str = Query("head", description="Branch projection mode for export: head|all"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    db: Session | None = Depends(session_detail_db_dependency),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> Response:
     """Export session as JSONL for Claude Code --resume."""
+    if database_module.live_catalog_enabled():
+        owner_id = getattr(_auth, "owner_id", None)
+        if owner_id is None:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner identity is required")
+        return await build_storage_v2_raw_export(
+            session_id=session_id,
+            owner_id=int(owner_id),
+            branch_mode=branch_mode,
+        )
+    assert db is not None
     store = AgentsStore(db)
     if branch_mode not in {"head", "all"}:
         raise HTTPException(

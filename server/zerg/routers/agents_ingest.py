@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
+from zerg.database import live_catalog_enabled
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import agents_ingest_decode_seconds
@@ -49,6 +50,18 @@ _catalog_db_dependency = catalog_db_dependency()
 router = APIRouter(prefix="/agents", tags=["agents"])
 SHIP_TRACE_HEADER = "X-Longhouse-Ship-Trace"
 _TRUTHY_ENV = {"1", "true", "yes", "on"}
+
+
+def _legacy_ingest_db_dependency():
+    """Avoid opening SQLite when the production storage-v2 cutover rejects v1."""
+
+    if live_catalog_enabled():
+        yield None
+        return
+    yield from _catalog_db_dependency()
+
+
+ingest_db_dependency = _catalog_db_dependency if get_settings().testing else _legacy_ingest_db_dependency
 
 
 def _unix_ms() -> int:
@@ -189,7 +202,11 @@ def _copy_session_ingest(
     return data.copy(update=update)
 
 
-def _archive_ingest_batches(data: SessionIngest, *, max_items: int = _ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS) -> list[SessionIngest]:
+def _archive_ingest_batches(
+    data: SessionIngest,
+    *,
+    max_items: int = _ARCHIVE_INGEST_SUB_BATCH_MAX_ITEMS,
+) -> list[SessionIngest]:
     """Split ingest into serializer-sized cooperative units."""
     max_items = max(1, max_items)
     events = list(data.events)
@@ -855,7 +872,7 @@ def _decompress_bounded_zstd(body: bytes) -> bytes:
 async def ingest_session(
     request: Request,
     response: Response,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(ingest_db_dependency),
     auth_token: DeviceToken | ManagedLocalHookToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> IngestResponse:
@@ -871,6 +888,14 @@ async def ingest_session(
     - Accepts gzip-compressed payloads (Content-Encoding: gzip)
     - Triggers async background summary/embedding/turn-loop work after successful ingest
     """
+    if live_catalog_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_426_UPGRADE_REQUIRED,
+            detail={
+                "code": "storage_v2_required",
+                "message": "This Runtime Host accepts transcript ingest only through storage-v2.",
+            },
+        )
     tracer = get_tracer(__name__)
     if isinstance(auth_token, ManagedLocalHookToken):
         auth_kind_label = "managed_local_hook"
@@ -1154,8 +1179,14 @@ async def ingest_session(
                                 admission_state="request_budget_exhausted",
                                 retry_after_seconds=_ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
                             )
-                        batch_write_timeout_seconds = _cap_timeout_to_remaining(write_timeout_seconds, remaining_seconds)
-                        batch_queue_timeout_seconds = _cap_timeout_to_remaining(queue_timeout_seconds, remaining_seconds)
+                        batch_write_timeout_seconds = _cap_timeout_to_remaining(
+                            write_timeout_seconds,
+                            remaining_seconds,
+                        )
+                        batch_queue_timeout_seconds = _cap_timeout_to_remaining(
+                            queue_timeout_seconds,
+                            remaining_seconds,
+                        )
                     if batch_index > 0 and write_label in _COOPERATIVE_INGEST_LABELS:
                         await asyncio.sleep(0)
                         await _check_ingest_writer_pressure(write_label, response)
