@@ -438,17 +438,20 @@ export function useSessionWorkspace(
     !!headThreadSession &&
     currentThreadSession.id === headThreadSession.id;
 
-  const hasHighlightEvent = useMemo(() => {
-    if (highlightEventId == null) return true;
-    return events.some((event) => event.id === highlightEventId);
+  const resolvedHighlightEventId = useMemo(() => {
+    if (highlightEventId == null) return null;
+    return events.find((event) => String(event.id) === String(highlightEventId))?.id ?? null;
   }, [highlightEventId, events]);
+  const hasHighlightEvent = highlightEventId == null || resolvedHighlightEventId != null;
 
   const highlightSelectionKey = useMemo(() => {
     if (highlightEventId == null || !hasHighlightEvent) {
       return null;
     }
-    return model.eventIdToSelectionKey.get(highlightEventId) ?? null;
-  }, [highlightEventId, hasHighlightEvent, model.eventIdToSelectionKey]);
+    return resolvedHighlightEventId == null
+      ? null
+      : model.eventIdToSelectionKey.get(resolvedHighlightEventId) ?? null;
+  }, [highlightEventId, hasHighlightEvent, resolvedHighlightEventId, model.eventIdToSelectionKey]);
 
   const visibleManualSelectedKey = useMemo(() => {
     if (model.items.length === 0 || manualSelectedKey == null) {
@@ -474,7 +477,7 @@ export function useSessionWorkspace(
     if (!hasHighlightEvent) return;
     if (highlightedEventRef.current === highlightEventId) return;
 
-    const rowId = model.eventIdToRowId.get(highlightEventId);
+    const rowId = resolvedHighlightEventId == null ? null : model.eventIdToRowId.get(resolvedHighlightEventId);
 
     let frameId: number | null = null;
 
@@ -497,7 +500,7 @@ export function useSessionWorkspace(
         window.cancelAnimationFrame(frameId);
       }
     };
-  }, [highlightEventId, hasHighlightEvent, model.eventIdToRowId]);
+  }, [highlightEventId, hasHighlightEvent, resolvedHighlightEventId, model.eventIdToRowId]);
 
   useEffect(() => {
     if (highlightEventId != null) return;
