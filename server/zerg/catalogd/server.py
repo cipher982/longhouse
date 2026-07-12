@@ -1417,6 +1417,7 @@ class CatalogDaemon:
             "media_state",
             "missing_media_hashes",
             "projectors",
+            "render_manifest",
             "session_facts",
             "sealed_at",
         }
@@ -1821,6 +1822,7 @@ def _validate_raw_object_commit(params: dict) -> None:
     if len(parsed_projectors) != len(set(parsed_projectors)):
         raise ValueError("projectors must not contain duplicates")
     params["projectors"] = parsed_projectors
+    params["render_manifest"] = _validate_render_manifest(params["render_manifest"], render_state=params["render_state"])
     owner_id = params["owner_id"]
     if owner_id is not None:
         params["owner_id"] = _canonical_storage_text(owner_id, field="owner_id", maximum_bytes=64)
@@ -1865,6 +1867,90 @@ def _validate_storage_session_facts(value: object) -> dict:
     if type(result["hidden_from_default_timeline"]) is not bool:
         raise ValueError("hidden_from_default_timeline must be a boolean")
     return result
+
+
+def _validate_render_manifest(value: object, *, render_state: str) -> dict | None:
+    if value is None:
+        if render_state == "ready":
+            raise ValueError("ready render_state requires render_manifest")
+        return None
+    if render_state != "ready" or not isinstance(value, dict):
+        raise ValueError("render_manifest is allowed only for ready render_state")
+    expected = {
+        "generation_id",
+        "parser_revision",
+        "ordering_revision",
+        "object_id",
+        "object_hash",
+        "payload_hash",
+        "object_path",
+        "uncompressed_size",
+        "compressed_size",
+        "event_count",
+        "first_order_key",
+        "last_order_key",
+        "user_messages",
+        "assistant_messages",
+        "tool_calls",
+        "first_user_message_preview",
+        "last_visible_text_preview",
+    }
+    if set(value) != expected:
+        raise ValueError("render_manifest has invalid fields")
+    result = dict(value)
+    result["generation_id"] = _canonical_uuid(result["generation_id"], "generation_id")
+    for field in ("parser_revision", "ordering_revision"):
+        result[field] = _canonical_storage_text(result[field], field=field, maximum_bytes=128)
+    for field in ("object_id", "object_hash", "payload_hash"):
+        if not _is_hash(result[field]):
+            raise ValueError(f"render_manifest.{field} must be lowercase SHA-256 hex")
+    if result["object_id"] != result["object_hash"]:
+        raise ValueError("render_manifest object_id must equal object_hash")
+    path = _canonical_storage_text(result["object_path"], field="render object_path", maximum_bytes=2_048)
+    if Path(path).is_absolute() or ".." in Path(path).parts or result["object_hash"] not in path:
+        raise ValueError("render object_path must be safe and content-addressed")
+    for field, maximum in (
+        ("uncompressed_size", 4 * 1024 * 1024),
+        ("compressed_size", 8 * 1024 * 1024),
+        ("event_count", 10_000),
+        ("user_messages", 10_000),
+        ("assistant_messages", 10_000),
+        ("tool_calls", 10_000),
+    ):
+        if type(result[field]) is not int or not 0 <= result[field] <= maximum:
+            raise ValueError(f"render_manifest.{field} exceeds its bound")
+    for field, maximum in (
+        ("first_order_key", 4_096),
+        ("last_order_key", 4_096),
+        ("first_user_message_preview", 2_000),
+        ("last_visible_text_preview", 2_000),
+    ):
+        raw = result[field]
+        if raw is not None:
+            result[field] = _canonical_storage_text(raw, field=f"render_manifest.{field}", maximum_bytes=maximum)
+            if field in {"first_order_key", "last_order_key"}:
+                _validate_render_order_key(result[field], field)
+    if result["event_count"] == 0 and (result["first_order_key"] is not None or result["last_order_key"] is not None):
+        raise ValueError("empty render object cannot have order keys")
+    if result["event_count"] > 0 and (result["first_order_key"] is None or result["last_order_key"] is None):
+        raise ValueError("non-empty render object requires order keys")
+    return result
+
+
+def _validate_render_order_key(value: str, field: str) -> None:
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"render_manifest.{field} is invalid JSON") from exc
+    if (
+        not isinstance(decoded, list)
+        or len(decoded) != 7
+        or type(decoded[0]) is not int
+        or any(not isinstance(item, str) for item in decoded[1:5])
+        or type(decoded[5]) is not int
+        or type(decoded[6]) is not int
+    ):
+        raise ValueError(f"render_manifest.{field} has invalid semantic order shape")
 
 
 def _validate_hash_batch(value: object, *, field: str) -> tuple[str, ...]:

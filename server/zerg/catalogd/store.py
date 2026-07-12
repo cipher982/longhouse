@@ -26,6 +26,8 @@ from sqlalchemy.orm import Session
 from zerg.catalogd.models import MediaObject
 from zerg.catalogd.models import ProjectorState
 from zerg.catalogd.models import RawObject as LiveRawObject
+from zerg.catalogd.models import RenderGeneration
+from zerg.catalogd.models import RenderObject
 from zerg.catalogd.models import SessionMediaRef
 from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
@@ -3152,6 +3154,7 @@ class CatalogStore:
         media_state: str,
         missing_media_hashes: tuple[str, ...],
         projectors: tuple[str, ...],
+        render_manifest: dict[str, Any] | None,
         session_facts: dict[str, Any],
         sealed_at: datetime,
     ) -> dict[str, Any]:
@@ -3174,6 +3177,8 @@ class CatalogStore:
         raw = LiveRawObject.__table__
         tombstone = LiveSessionTombstone.__table__
         storage_session = StorageSession.__table__
+        render_generation = RenderGeneration.__table__
+        render_object = RenderObject.__table__
         session_key = str(session_id)
         epoch_key = str(source_epoch)
         record_hashes_hash = hashlib.sha256(b"".join(record_hashes)).hexdigest()
@@ -3256,6 +3261,38 @@ class CatalogStore:
                 )
             ):
                 return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+
+            existing_generation = None
+            if render_manifest is not None:
+                generation_key = str(render_manifest["generation_id"])
+                existing_generation = (
+                    connection.execute(select(render_generation).where(render_generation.c.generation_id == generation_key))
+                    .mappings()
+                    .first()
+                )
+                if existing_generation is not None and any(
+                    (
+                        existing_generation["session_id"] != session_key,
+                        existing_generation["parser_revision"] != render_manifest["parser_revision"],
+                        existing_generation["ordering_revision"] != render_manifest["ordering_revision"],
+                        existing_generation["state"] == "failed",
+                    )
+                ):
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                existing_render = (
+                    connection.execute(
+                        select(render_object).where(
+                            or_(
+                                render_object.c.object_id == render_manifest["object_id"],
+                                (render_object.c.generation_id == generation_key) & (render_object.c.source_envelope_id == envelope_id),
+                            )
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if existing_render is not None:
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
 
             epoch_row = connection.execute(select(epoch).where(epoch.c.source_epoch == epoch_key)).mappings().first()
             if epoch_row is None:
@@ -3372,6 +3409,83 @@ class CatalogStore:
                     session_facts["last_activity_at"],
                 )
                 connection.execute(update(storage_session).where(storage_session.c.session_id == session_key).values(**session_values))
+            if render_manifest is not None:
+                generation_key = str(render_manifest["generation_id"])
+                if existing_generation is None:
+                    connection.execute(
+                        insert(render_generation).values(
+                            generation_id=generation_key,
+                            session_id=session_key,
+                            parser_revision=render_manifest["parser_revision"],
+                            ordering_revision=render_manifest["ordering_revision"],
+                            state="current",
+                            source_chain_hash=hashlib.sha256(bytes.fromhex(envelope_id)).hexdigest(),
+                            object_count=1,
+                            event_count=render_manifest["event_count"],
+                            first_order_key=render_manifest["first_order_key"],
+                            last_order_key=render_manifest["last_order_key"],
+                            commit_seq=commit_seq,
+                            created_at=commit_time,
+                            updated_at=commit_time,
+                        )
+                    )
+                else:
+                    connection.execute(
+                        update(render_generation)
+                        .where(render_generation.c.generation_id == generation_key)
+                        .values(
+                            state="current",
+                            source_chain_hash=hashlib.sha256(
+                                bytes.fromhex(str(existing_generation["source_chain_hash"])) + bytes.fromhex(envelope_id)
+                            ).hexdigest(),
+                            object_count=int(existing_generation["object_count"]) + 1,
+                            event_count=int(existing_generation["event_count"]) + render_manifest["event_count"],
+                            first_order_key=_minimum_order_key(existing_generation["first_order_key"], render_manifest["first_order_key"]),
+                            last_order_key=_maximum_order_key(existing_generation["last_order_key"], render_manifest["last_order_key"]),
+                            commit_seq=commit_seq,
+                            updated_at=commit_time,
+                        )
+                    )
+                connection.execute(
+                    update(render_generation)
+                    .where(
+                        render_generation.c.session_id == session_key,
+                        render_generation.c.generation_id != generation_key,
+                        render_generation.c.state == "current",
+                    )
+                    .values(state="superseded", superseded_at=commit_time, commit_seq=commit_seq, updated_at=commit_time)
+                )
+                connection.execute(
+                    insert(render_object).values(
+                        object_id=render_manifest["object_id"],
+                        generation_id=generation_key,
+                        session_id=session_key,
+                        source_envelope_id=envelope_id,
+                        object_hash=render_manifest["object_hash"],
+                        payload_hash=render_manifest["payload_hash"],
+                        object_path=render_manifest["object_path"],
+                        uncompressed_size=render_manifest["uncompressed_size"],
+                        compressed_size=render_manifest["compressed_size"],
+                        event_count=render_manifest["event_count"],
+                        first_order_key=render_manifest["first_order_key"],
+                        last_order_key=render_manifest["last_order_key"],
+                        commit_seq=commit_seq,
+                        created_at=commit_time,
+                    )
+                )
+                projection_values: dict[str, Any] = {
+                    "current_render_generation": generation_key,
+                    "render_state": "ready",
+                    "user_messages": int((existing_session or {}).get("user_messages") or 0) + render_manifest["user_messages"],
+                    "assistant_messages": int((existing_session or {}).get("assistant_messages") or 0)
+                    + render_manifest["assistant_messages"],
+                    "tool_calls": int((existing_session or {}).get("tool_calls") or 0) + render_manifest["tool_calls"],
+                }
+                if not (existing_session or {}).get("first_user_message_preview") and render_manifest["first_user_message_preview"]:
+                    projection_values["first_user_message_preview"] = render_manifest["first_user_message_preview"]
+                if render_manifest["last_visible_text_preview"]:
+                    projection_values["last_visible_text_preview"] = render_manifest["last_visible_text_preview"]
+                connection.execute(update(storage_session).where(storage_session.c.session_id == session_key).values(**projection_values))
             projector_table = ProjectorState.__table__
             for projector in projectors:
                 projector_row = (
@@ -4774,6 +4888,16 @@ def _raw_object_manifest_dto(row) -> dict[str, Any]:
         "retired_at": _encode_datetime(row["retired_at"]),
         "retirement_revision": (str(row["retirement_revision"]) if row["retirement_revision"] is not None else None),
     }
+
+
+def _minimum_order_key(left: object, right: object) -> str | None:
+    values = [value for value in (left, right) if value is not None]
+    return min(values, key=lambda value: tuple(json.loads(str(value)))) if values else None
+
+
+def _maximum_order_key(left: object, right: object) -> str | None:
+    values = [value for value in (left, right) if value is not None]
+    return max(values, key=lambda value: tuple(json.loads(str(value)))) if values else None
 
 
 def _storage_session_dto(row) -> dict[str, Any]:

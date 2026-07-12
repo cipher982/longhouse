@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from contextlib import asynccontextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -21,6 +22,29 @@ from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
 from zerg.storage_v2.raw_objects import read_raw_object
+from zerg.storage_v2.render_objects import seal_render_object
+
+
+class _AdmissionOnlyPool:
+    @asynccontextmanager
+    async def admission(self, _lane):
+        yield
+
+    async def seal(self, *_args, **_kwargs):
+        raise AssertionError("rejected request reached storage worker")
+
+
+class _InlineRenderPool:
+    def __init__(self, root):
+        self.root = root
+
+    @asynccontextmanager
+    async def admission(self, _lane):
+        yield
+
+    async def seal(self, spec, *, lane):
+        assert lane in {"live", "repair"}
+        return seal_render_object(self.root, spec)
 
 
 def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"hello\n") -> dict:
@@ -48,6 +72,28 @@ def _payload(*, tenant_id: str, machine_id: str, epoch: UUID, data: bytes = b"he
         "range_kind": "byte_offset",
         "range_start": 0,
         "range_end": len(data),
+        "render": {
+            "generation_id": "018f0c3a-7b2d-7f10-8a11-423456789abc",
+            "parser_revision": "engine-parser-v2",
+            "ordering_revision": "semantic-order-v2",
+            "records": [
+                {
+                    "event_id": "user-1",
+                    "order_time_us": 1_720_780_400_000_000,
+                    "source_position": 0,
+                    "event_subordinal": 0,
+                    "role": "user",
+                    "content_text": "hello",
+                    "tool_name": None,
+                    "tool_input_json": None,
+                    "tool_output_text": None,
+                    "tool_call_id": None,
+                    "thread_id": None,
+                    "branch_kind": None,
+                    "raw_record_ordinal": 0,
+                }
+            ],
+        },
         "session": {
             "environment": "local",
             "project": "longhouse",
@@ -78,9 +124,11 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
     await daemon.start()
     catalog = CatalogClient(socket_path)
     workers = RawObjectWorkerPool(object_root, live_workers=1, repair_workers=1, queue_multiplier=1)
+    render_workers = _InlineRenderPool(object_root)
     await workers.start()
     monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: catalog)
     monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", lambda: workers)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", lambda: render_workers)
 
     app = FastAPI()
     app.include_router(storage_router.router)
@@ -114,7 +162,7 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
                 "object_hash": receipt["object_hash"],
                 "commit_seq": "2",
                 "raw_state": "durable",
-                "render_state": "pending",
+                "render_state": "ready",
                 "media_state": "complete",
                 "missing_media_hashes": [],
             }
@@ -137,6 +185,7 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
         )
         assert session["session"]["owner_id"] == "1"
         assert session["session"]["project"] == "longhouse"
+        assert session["session"]["current_render_generation"] == payload["render"]["generation_id"]
         raw = manifest["objects"][0]
         decoded = read_raw_object(
             object_root,
@@ -158,6 +207,8 @@ async def test_storage_v2_rejects_identity_mismatch_before_catalog_work(monkeypa
             raise AssertionError("identity mismatch reached catalogd")
 
     monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: ForbiddenCatalog())
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", _AdmissionOnlyPool)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", _AdmissionOnlyPool)
     app = FastAPI()
     app.include_router(storage_router.router)
     app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
@@ -184,6 +235,8 @@ async def test_storage_v2_rejects_oversized_body_before_catalog_work(monkeypatch
             raise AssertionError("oversized request reached catalogd")
 
     monkeypatch.setattr(storage_router, "get_catalogd_client", lambda: ForbiddenCatalog())
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", _AdmissionOnlyPool)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", _AdmissionOnlyPool)
     app = FastAPI()
     app.include_router(storage_router.router)
     app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)

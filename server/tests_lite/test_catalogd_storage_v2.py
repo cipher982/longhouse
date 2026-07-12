@@ -92,6 +92,7 @@ def _raw_params(
         "media_state": "complete",
         "missing_media_hashes": [],
         "projectors": ["render-v2", "search-v2", "worklog-v2"],
+        "render_manifest": None,
         "session_facts": {
             "environment": "local",
             "project": "longhouse",
@@ -108,6 +109,55 @@ def _raw_params(
         },
         "sealed_at": sealed_at.isoformat(),
     }
+
+
+def _render_manifest(generation_id: UUID) -> dict:
+    object_hash = hashlib.sha256(b"render-object").hexdigest()
+    first_key = '[1700000000000000,"cinder","codex","history.jsonl","018f0c3a-7b2d-7f10-8a11-123456789abc",0,0]'
+    return {
+        "generation_id": str(generation_id),
+        "parser_revision": "engine-parser-v2",
+        "ordering_revision": "semantic-order-v2",
+        "object_id": object_hash,
+        "object_hash": object_hash,
+        "payload_hash": hashlib.sha256(b"render-payload").hexdigest(),
+        "object_path": f"render/v2/{object_hash[:2]}/{object_hash}.zst",
+        "uncompressed_size": 100,
+        "compressed_size": 80,
+        "event_count": 1,
+        "first_order_key": first_key,
+        "last_order_key": first_key,
+        "user_messages": 1,
+        "assistant_messages": 0,
+        "tool_calls": 0,
+        "first_user_message_preview": "Build it",
+        "last_visible_text_preview": "Build it",
+    }
+
+
+@pytest.mark.asyncio
+async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call("storage.source_epoch.open.v2", _epoch_params(epoch=epoch, opened_at=now))
+        raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
+        raw.update(render_state="ready", render_manifest=_render_manifest(generation_id))
+        committed = await client.call("storage.raw_object.commit.v2", raw)
+        assert committed["receipt"]["render_state"] == "ready"
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["current_render_generation"] == str(generation_id)
+        assert session["session"]["user_messages"] == 1
+        assert session["session"]["first_user_message_preview"] == "Build it"
+    finally:
+        await client.close()
+        await daemon.close()
 
 
 @pytest.mark.asyncio
@@ -164,7 +214,7 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         derived_drift = {
             **raw,
             "object_path": f"compacted/{raw['object_hash']}.zst",
-            "render_state": "ready",
+            "render_state": "failed",
             "media_state": "pending",
         }
         replay_after_drift = await client.call("storage.raw_object.commit.v2", derived_drift)
@@ -399,6 +449,8 @@ def test_storage_v2_tables_are_catalog_schema_owned(daemon_paths):
     assert {
         "source_epochs",
         "raw_objects",
+        "render_generations",
+        "render_objects",
         "session_tombstones",
         "media_objects",
         "session_media_refs",

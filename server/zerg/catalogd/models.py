@@ -147,6 +147,59 @@ class RawObject(CatalogBase):
     )
 
 
+class RenderGeneration(CatalogBase):
+    """Parser/order-qualified generation selected atomically per session."""
+
+    __tablename__ = "render_generations"
+
+    generation_id = Column(String(36), primary_key=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    parser_revision = Column(String(128), nullable=False)
+    ordering_revision = Column(String(128), nullable=False)
+    state = Column(String(16), nullable=False, index=True)
+    source_chain_hash = Column(String(64), nullable=False)
+    object_count = Column(Integer, nullable=False, server_default=text("0"))
+    event_count = Column(BigInteger, nullable=False, server_default=text("0"))
+    first_order_key = Column(Text, nullable=True)
+    last_order_key = Column(Text, nullable=True)
+    commit_seq = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    superseded_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "parser_revision", "ordering_revision", name="uq_render_generation_revision"),
+        Index("ix_render_generations_session_state", "session_id", "state", "updated_at"),
+    )
+
+
+class RenderObject(CatalogBase):
+    """Manifest for one immutable bounded render object."""
+
+    __tablename__ = "render_objects"
+
+    object_id = Column(String(64), primary_key=True)
+    generation_id = Column(String(36), nullable=False, index=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    source_envelope_id = Column(String(64), nullable=False, index=True)
+    object_hash = Column(String(64), nullable=False, index=True)
+    payload_hash = Column(String(64), nullable=False)
+    object_path = Column(Text, nullable=False)
+    uncompressed_size = Column(BigInteger, nullable=False)
+    compressed_size = Column(BigInteger, nullable=False)
+    event_count = Column(Integer, nullable=False)
+    first_order_key = Column(Text, nullable=True)
+    last_order_key = Column(Text, nullable=True)
+    commit_seq = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    retired_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("generation_id", "source_envelope_id", name="uq_render_object_generation_source"),
+        Index("ix_render_objects_generation_order", "generation_id", "first_order_key", "object_id"),
+    )
+
+
 class SessionTombstone(CatalogBase):
     """Deletion fence checked by every storage-v2 manifest commit."""
 
@@ -231,6 +284,8 @@ __all__ = [
     "MediaObject",
     "ProjectorState",
     "RawObject",
+    "RenderGeneration",
+    "RenderObject",
     "SessionMediaRef",
     "SessionTombstone",
     "SourceEpoch",

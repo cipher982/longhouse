@@ -6,6 +6,7 @@ import asyncio
 import base64
 import binascii
 import json
+import logging
 import unicodedata
 from datetime import UTC
 from datetime import datetime
@@ -29,6 +30,10 @@ from zerg.services.raw_object_workers import RawObjectWorkerBusy
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.raw_object_workers import RawObjectWorkerPool
 from zerg.services.raw_object_workers import get_raw_object_worker_pool
+from zerg.services.render_object_workers import RenderObjectWorkerBusy
+from zerg.services.render_object_workers import RenderObjectWorkerError
+from zerg.services.render_object_workers import RenderObjectWorkerPool
+from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id
@@ -39,10 +44,15 @@ from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawObjectValidationError
 from zerg.storage_v2.raw_objects import RawRecord
 from zerg.storage_v2.raw_objects import validate_raw_object_spec
+from zerg.storage_v2.render_objects import RenderObjectSpec
+from zerg.storage_v2.render_objects import RenderObjectValidationError
+from zerg.storage_v2.render_objects import RenderRecord
+from zerg.storage_v2.render_objects import validate_render_object_spec
 
 router = APIRouter(prefix="/agents/storage/v2", tags=["agents"])
+logger = logging.getLogger(__name__)
 
-MAX_WIRE_BODY_BYTES = 6 * 1024 * 1024
+MAX_WIRE_BODY_BYTES = 12 * 1024 * 1024
 PROJECTORS = ("render-v2", "search-v2", "worklog-v2")
 _EXPECTED_ENVELOPE_FIELDS = {
     "protocol_version",
@@ -57,6 +67,7 @@ _EXPECTED_ENVELOPE_FIELDS = {
     "range_kind",
     "range_start",
     "range_end",
+    "render",
     "session",
     "records",
     "expected_envelope_id",
@@ -75,6 +86,22 @@ _EXPECTED_SESSION_FIELDS = {
     "hidden_from_default_timeline",
     "launch_actor",
     "launch_surface",
+}
+_EXPECTED_RENDER_FIELDS = {"generation_id", "parser_revision", "ordering_revision", "records"}
+_EXPECTED_RENDER_RECORD_FIELDS = {
+    "event_id",
+    "order_time_us",
+    "source_position",
+    "event_subordinal",
+    "role",
+    "content_text",
+    "tool_name",
+    "tool_input_json",
+    "tool_output_text",
+    "tool_call_id",
+    "thread_id",
+    "branch_kind",
+    "raw_record_ordinal",
 }
 
 
@@ -194,6 +221,50 @@ async def _read_bounded_json(request: Request) -> dict[str, Any]:
     return decoded
 
 
+def _parse_render_spec(
+    value: object,
+    *,
+    raw_spec: RawObjectSpec,
+    source_envelope_id: str,
+) -> RenderObjectSpec | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != _EXPECTED_RENDER_FIELDS:
+        raise ValueError("render fields do not match protocol v2")
+    generation_id = _canonical_uuid(value["generation_id"], "render.generation_id")
+    parser_revision = _canonical_text(value["parser_revision"], "render.parser_revision", 128)
+    ordering_revision = _canonical_text(value["ordering_revision"], "render.ordering_revision", 128)
+    wire_records = value["records"]
+    if not isinstance(wire_records, list) or len(wire_records) > MAX_RECORDS:
+        raise ValueError(f"render.records must contain at most {MAX_RECORDS} items")
+    records: list[RenderRecord] = []
+    for item in wire_records:
+        if not isinstance(item, dict) or set(item) != _EXPECTED_RENDER_RECORD_FIELDS:
+            raise ValueError("each render record has invalid fields")
+        for field in ("order_time_us", "source_position", "event_subordinal", "raw_record_ordinal"):
+            if type(item[field]) is not int:
+                raise ValueError(f"render record {field} must be an integer")
+        if not raw_spec.range_start <= item["source_position"] < raw_spec.range_end:
+            raise ValueError("render record source_position is outside the raw envelope")
+        if not 0 <= item["raw_record_ordinal"] < len(raw_spec.records):
+            raise ValueError("render record raw_record_ordinal is outside the raw envelope")
+        records.append(RenderRecord(**item))
+    spec = RenderObjectSpec(
+        session_id=raw_spec.session_id,
+        render_generation=generation_id,
+        parser_revision=parser_revision,
+        ordering_revision=ordering_revision,
+        machine_id=raw_spec.machine_id,
+        provider=raw_spec.provider,
+        opaque_source_id=raw_spec.opaque_source_id,
+        source_epoch=raw_spec.source_epoch,
+        source_envelope_id=source_envelope_id,
+        records=tuple(records),
+    )
+    validate_render_object_spec(spec)
+    return spec
+
+
 def _parse_envelope(
     payload: dict[str, Any],
     *,
@@ -275,12 +346,14 @@ def _parse_envelope(
     )
     if envelope_id(identity) != expected_envelope:
         raise ValueError("expected_envelope_id does not match the exact source bytes")
+    render_spec = _parse_render_spec(payload["render"], raw_spec=spec, source_envelope_id=expected_envelope)
     return spec, {
         "lane": lane,
         "predecessor_source_epoch": predecessor,
         "opened_at": opened_at,
         "expected_envelope_id": expected_envelope,
         "session_facts": session_facts,
+        "render_spec": render_spec,
     }
 
 
@@ -352,7 +425,8 @@ async def _commit_admitted_envelope(
     auth_token: DeviceToken | object | None,
     *,
     lane: str,
-    workers: RawObjectWorkerPool,
+    raw_workers: RawObjectWorkerPool,
+    render_workers: RenderObjectWorkerPool,
 ) -> dict[str, object]:
     settings = get_settings()
     tenant_id = _canonical_text(settings.archive_primary_tenant_id, "tenant_id", 255)
@@ -394,9 +468,47 @@ async def _commit_admitted_envelope(
                 "opened_at": parsed["opened_at"].isoformat(),
             },
         )
-        sealed = await workers.seal(spec, lane=parsed["lane"])
+        raw_task = asyncio.create_task(raw_workers.seal(spec, lane=parsed["lane"]))
+        render_spec = parsed["render_spec"]
+        render_task = asyncio.create_task(render_workers.seal(render_spec, lane=parsed["lane"])) if render_spec is not None else None
+        try:
+            sealed = await raw_task
+        except BaseException:
+            if render_task is not None:
+                await asyncio.gather(render_task, return_exceptions=True)
+            raise
         if sealed.envelope_id != parsed["expected_envelope_id"]:
             raise RawObjectWorkerError("sealed raw object identity changed after admission")
+        sealed_render = None
+        if render_task is not None:
+            try:
+                sealed_render = await render_task
+            except (RenderObjectWorkerBusy, RenderObjectWorkerError, RenderObjectValidationError) as exc:
+                logger.warning(
+                    "Render object deferred after raw seal",
+                    extra={"envelope_id": sealed.envelope_id, "lane": lane, "error": str(exc)},
+                )
+        render_manifest = None
+        if sealed_render is not None and render_spec is not None:
+            render_manifest = {
+                "generation_id": str(render_spec.render_generation),
+                "parser_revision": render_spec.parser_revision,
+                "ordering_revision": render_spec.ordering_revision,
+                "object_id": sealed_render.object_id,
+                "object_hash": sealed_render.object_hash,
+                "payload_hash": sealed_render.payload_hash,
+                "object_path": sealed_render.object_path,
+                "uncompressed_size": sealed_render.uncompressed_size,
+                "compressed_size": sealed_render.compressed_size,
+                "event_count": sealed_render.event_count,
+                "first_order_key": sealed_render.first_order_key,
+                "last_order_key": sealed_render.last_order_key,
+                "user_messages": sealed_render.user_messages,
+                "assistant_messages": sealed_render.assistant_messages,
+                "tool_calls": sealed_render.tool_calls,
+                "first_user_message_preview": sealed_render.first_user_message_preview,
+                "last_visible_text_preview": sealed_render.last_visible_text_preview,
+            }
         owner_value = getattr(auth_token, "owner_id", None)
         committed = await catalogd.call(
             "storage.raw_object.commit.v2",
@@ -421,10 +533,11 @@ async def _commit_admitted_envelope(
                 "uncompressed_size": sealed.uncompressed_size,
                 "compressed_size": sealed.compressed_size,
                 "provenance_kind": spec.provenance_kind,
-                "render_state": "pending",
+                "render_state": "ready" if render_manifest is not None else "pending",
                 "media_state": "complete",
                 "missing_media_hashes": [],
-                "projectors": list(PROJECTORS),
+                "projectors": [projector for projector in PROJECTORS if render_manifest is None or projector != "render-v2"],
+                "render_manifest": render_manifest,
                 "session_facts": parsed["session_facts"],
                 "sealed_at": datetime.now(UTC).isoformat(),
             },
@@ -472,11 +585,18 @@ async def commit_storage_v2_envelope(
             "invalid_lane",
             "X-Longhouse-Storage-Lane must be live or repair.",
         )
-    workers = get_raw_object_worker_pool()
+    raw_workers = get_raw_object_worker_pool()
+    render_workers = get_render_object_worker_pool()
     try:
-        async with workers.admission(lane):
-            return await _commit_admitted_envelope(request, auth_token, lane=lane, workers=workers)
-    except RawObjectWorkerBusy as exc:
+        async with raw_workers.admission(lane), render_workers.admission(lane):
+            return await _commit_admitted_envelope(
+                request,
+                auth_token,
+                lane=lane,
+                raw_workers=raw_workers,
+                render_workers=render_workers,
+            )
+    except (RawObjectWorkerBusy, RenderObjectWorkerBusy) as exc:
         raise _http_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "storage_lane_busy",

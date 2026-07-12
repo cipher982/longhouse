@@ -44,9 +44,12 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     async def stop_catalogd():
         calls.append("catalogd_stop")
 
-    class RawWorkers:
+    class StorageWorkers:
+        def __init__(self, label):
+            self.label = label
+
         async def start(self):
-            calls.append("raw_workers_start")
+            calls.append(f"{self.label}_workers_start")
 
     class Runner:
         def start(self):
@@ -64,6 +67,9 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     async def stop_raw_workers():
         calls.append("raw_workers_stop")
 
+    async def stop_render_workers():
+        calls.append("render_workers_stop")
+
     monkeypatch.setattr(lifespan_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(lifespan_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(lifespan_module, "initialize_live_database", forbidden_direct_schema_init)
@@ -77,8 +83,10 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
     monkeypatch.setattr(database_module, "stop_wal_checkpoint_loop", noop_async)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.start_catalogd_supervisor", start_catalogd)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.stop_catalogd_supervisor", stop_catalogd)
-    monkeypatch.setattr("zerg.services.raw_object_workers.get_raw_object_worker_pool", lambda: RawWorkers())
+    monkeypatch.setattr("zerg.services.raw_object_workers.get_raw_object_worker_pool", lambda: StorageWorkers("raw"))
     monkeypatch.setattr("zerg.services.raw_object_workers.close_raw_object_worker_pool", stop_raw_workers)
+    monkeypatch.setattr("zerg.services.render_object_workers.get_render_object_worker_pool", lambda: StorageWorkers("render"))
+    monkeypatch.setattr("zerg.services.render_object_workers.close_render_object_worker_pool", stop_render_workers)
     monkeypatch.setattr("zerg.services.archive_worker_supervisor.start_archive_worker_supervisor", lambda: None)
     monkeypatch.setattr("zerg.services.archive_worker_supervisor.stop_archive_worker_supervisor", noop_async)
     monkeypatch.setattr("zerg.services.live_control_catalog.run_live_catalog_input_recovery_loop", completed_loop)
@@ -91,7 +99,7 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
 
     app = FastAPI()
     async with lifespan_module.lifespan(app):
-        assert calls[:4] == ["catalogd_start", "raw_workers_start", "live_writer", "runner_start"]
+        assert calls[:5] == ["catalogd_start", "raw_workers_start", "render_workers_start", "live_writer", "runner_start"]
         assert app.state.catalogd_ping["ready"] is True
 
-    assert calls[-3:] == ["runner_stop", "raw_workers_stop", "catalogd_stop"]
+    assert calls[-4:] == ["runner_stop", "raw_workers_stop", "render_workers_stop", "catalogd_stop"]

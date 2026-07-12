@@ -148,8 +148,12 @@ async def lifespan(app: FastAPI):
             logger.info("Live catalog schema is owned by catalogd")
             with _timed_startup_step("storage_v2_workers"):
                 from zerg.services.raw_object_workers import get_raw_object_worker_pool
+                from zerg.services.render_object_workers import get_render_object_worker_pool
 
-                await get_raw_object_worker_pool().start()
+                await asyncio.gather(
+                    get_raw_object_worker_pool().start(),
+                    get_render_object_worker_pool().start(),
+                )
             logger.info("Storage-v2 live and repair worker lanes are ready")
         elif live_store_configured():
             with _timed_startup_step("initialize_live_database"):
@@ -466,8 +470,12 @@ async def lifespan(app: FastAPI):
         if catalog_mode and not _settings.testing:
             try:
                 from zerg.services.raw_object_workers import close_raw_object_worker_pool
+                from zerg.services.render_object_workers import close_render_object_worker_pool
 
-                await close_raw_object_worker_pool()
+                await asyncio.gather(
+                    close_raw_object_worker_pool(),
+                    close_render_object_worker_pool(),
+                )
             except Exception:
                 logger.exception("Failed to stop storage-v2 workers after startup failure")
             try:
@@ -540,8 +548,12 @@ async def lifespan(app: FastAPI):
         if catalog_mode and not _settings.testing:
             try:
                 from zerg.services.raw_object_workers import close_raw_object_worker_pool
+                from zerg.services.render_object_workers import close_render_object_worker_pool
 
-                await close_raw_object_worker_pool()
+                await asyncio.gather(
+                    close_raw_object_worker_pool(),
+                    close_render_object_worker_pool(),
+                )
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop storage-v2 workers")
             try:
