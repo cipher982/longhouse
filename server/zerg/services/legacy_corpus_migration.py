@@ -762,6 +762,7 @@ class LegacyCorpusConverter:
                     )
                 source_plans[source_path] = (epoch, predecessor, next_ordinal)
             del records, archive_by_key, keys, matched, matched_records, groups
+            _return_free_heap_to_os()
         connection.exec_driver_sql("DROP TABLE migration_archive_page")
         connection.exec_driver_sql("DROP TABLE migration_source_counts")
         return covered
