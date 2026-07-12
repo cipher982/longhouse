@@ -51,6 +51,7 @@ def _raw_params(
     end: int,
     records: tuple[bytes, ...],
     sealed_at: datetime,
+    predecessor: UUID | None = None,
 ) -> dict:
     record_hashes = tuple(hashlib.sha256(record).digest() for record in records)
     identity = EnvelopeIdentity(
@@ -76,6 +77,8 @@ def _raw_params(
         "provider": "codex",
         "opaque_source_id": "history.jsonl",
         "source_epoch": str(epoch),
+        "predecessor_source_epoch": str(predecessor) if predecessor is not None else None,
+        "epoch_opened_at": sealed_at.isoformat(),
         "range_kind": "byte_offset",
         "range_start": start,
         "range_end": end,
@@ -146,7 +149,6 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
     await daemon.start()
     client = CatalogClient(socket_path)
     try:
-        await client.call("storage.source_epoch.open.v2", _epoch_params(epoch=epoch, opened_at=now))
         raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
         raw.update(render_state="ready", render_manifest=_render_manifest(generation_id))
         committed = await client.call("storage.raw_object.commit.v2", raw)
@@ -385,6 +387,7 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         high_start = (1 << 64) - 2
         high_raw = _raw_params(
             epoch=next_epoch,
+            predecessor=epoch,
             session_id=session_id,
             start=high_start,
             end=high_start + 1,

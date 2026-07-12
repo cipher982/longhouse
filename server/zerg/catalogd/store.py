@@ -3140,6 +3140,8 @@ class CatalogStore:
         provider: str,
         opaque_source_id: str,
         source_epoch: UUID,
+        predecessor_source_epoch: UUID | None,
+        epoch_opened_at: datetime,
         range_kind: str,
         range_start: int,
         range_end: int,
@@ -3296,21 +3298,53 @@ class CatalogStore:
                 if existing_render is not None:
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
 
+            expected_predecessor = str(predecessor_source_epoch) if predecessor_source_epoch is not None else None
             epoch_row = connection.execute(select(epoch).where(epoch.c.source_epoch == epoch_key)).mappings().first()
-            if epoch_row is None:
-                return {"source_epoch_missing": True, "commit_seq": str(_current_commit_seq(connection))}
-            if any(
-                (
-                    epoch_row["tenant_id"] != tenant_id,
-                    epoch_row["machine_id"] != machine_id,
-                    epoch_row["provider"] != provider,
-                    epoch_row["opaque_source_id"] != opaque_source_id,
-                    epoch_row["range_kind"] != range_kind,
-                )
-            ):
-                return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
-            if epoch_row["state"] != "open":
-                return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            epoch_is_new = epoch_row is None
+            predecessor_row = None
+            identity_filters = (
+                epoch.c.tenant_id == tenant_id,
+                epoch.c.machine_id == machine_id,
+                epoch.c.provider == provider,
+                epoch.c.opaque_source_id == opaque_source_id,
+            )
+            if epoch_is_new:
+                open_rows = connection.execute(select(epoch).where(*identity_filters, epoch.c.state == "open")).mappings().all()
+                if predecessor_source_epoch is not None:
+                    predecessor_row = (
+                        connection.execute(select(epoch).where(epoch.c.source_epoch == expected_predecessor)).mappings().first()
+                    )
+                    if predecessor_row is None or any(
+                        (
+                            predecessor_row["tenant_id"] != tenant_id,
+                            predecessor_row["machine_id"] != machine_id,
+                            predecessor_row["provider"] != provider,
+                            predecessor_row["opaque_source_id"] != opaque_source_id,
+                            predecessor_row["state"] != "open",
+                        )
+                    ):
+                        return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                    if any(row["source_epoch"] != expected_predecessor for row in open_rows):
+                        return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                elif open_rows:
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                accepted_through = _u64_key(0)
+            else:
+                if any(
+                    (
+                        epoch_row["tenant_id"] != tenant_id,
+                        epoch_row["machine_id"] != machine_id,
+                        epoch_row["provider"] != provider,
+                        epoch_row["opaque_source_id"] != opaque_source_id,
+                        epoch_row["range_kind"] != range_kind,
+                        epoch_row["predecessor_source_epoch"] != expected_predecessor,
+                        _as_aware_utc(epoch_row["opened_at"]) != epoch_opened_at,
+                    )
+                ):
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                if epoch_row["state"] != "open":
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                accepted_through = str(epoch_row["accepted_through"])
 
             same_range = connection.execute(
                 select(raw.c.envelope_id).where(
@@ -3321,7 +3355,7 @@ class CatalogStore:
             ).first()
             if same_range is not None:
                 return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
-            if range_start_key < str(epoch_row["accepted_through"]):
+            if range_start_key < accepted_through:
                 return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
             if range_start < range_end:
                 overlap = connection.execute(
@@ -3338,6 +3372,38 @@ class CatalogStore:
 
             commit_time = datetime.now(UTC)
             commit_seq = _advance_commit_seq(connection, commit_time)
+            if epoch_is_new:
+                if predecessor_row is not None:
+                    connection.execute(
+                        update(epoch)
+                        .where(epoch.c.source_epoch == expected_predecessor)
+                        .values(
+                            state="closed",
+                            replaced_by_source_epoch=epoch_key,
+                            closed_at=epoch_opened_at,
+                            close_reason="replaced",
+                            closed_commit_seq=commit_seq,
+                            updated_at=commit_time,
+                        )
+                    )
+                connection.execute(
+                    insert(epoch).values(
+                        source_epoch=epoch_key,
+                        tenant_id=tenant_id,
+                        machine_id=machine_id,
+                        provider=provider,
+                        opaque_source_id=opaque_source_id,
+                        range_kind=range_kind,
+                        state="open",
+                        predecessor_source_epoch=expected_predecessor,
+                        accepted_through=range_end_key,
+                        object_count=1,
+                        commit_seq=commit_seq,
+                        opened_at=epoch_opened_at,
+                        created_at=commit_time,
+                        updated_at=commit_time,
+                    )
+                )
             connection.execute(
                 insert(raw).values(
                     envelope_id=envelope_id,
@@ -3346,15 +3412,16 @@ class CatalogStore:
                     created_at=commit_time,
                 )
             )
-            connection.execute(
-                update(epoch)
-                .where(epoch.c.source_epoch == epoch_key)
-                .values(
-                    accepted_through=max(str(epoch_row["accepted_through"]), range_end_key),
-                    object_count=int(epoch_row["object_count"] or 0) + 1,
-                    updated_at=commit_time,
+            if not epoch_is_new:
+                connection.execute(
+                    update(epoch)
+                    .where(epoch.c.source_epoch == epoch_key)
+                    .values(
+                        accepted_through=max(accepted_through, range_end_key),
+                        object_count=int(epoch_row["object_count"] or 0) + 1,
+                        updated_at=commit_time,
+                    )
                 )
-            )
             session_values = {
                 "owner_id": owner_id,
                 "environment": session_facts["environment"],

@@ -1405,6 +1405,8 @@ class CatalogDaemon:
             "provider",
             "opaque_source_id",
             "source_epoch",
+            "predecessor_source_epoch",
+            "epoch_opened_at",
             "range_kind",
             "range_start",
             "range_end",
@@ -1849,6 +1851,9 @@ def _validate_raw_object_commit(params: dict) -> None:
     _validate_storage_identity_fields(params)
     params["session_id"] = _canonical_uuid(params["session_id"], "session_id")
     params["source_epoch"] = _canonical_uuid(params["source_epoch"], "source_epoch")
+    predecessor = params["predecessor_source_epoch"]
+    params["predecessor_source_epoch"] = _canonical_uuid(predecessor, "predecessor_source_epoch") if predecessor is not None else None
+    params["epoch_opened_at"] = _parse_datetime(params["epoch_opened_at"], "epoch_opened_at")
     for field in ("range_start", "range_end"):
         value = params[field]
         if type(value) is not int or not 0 <= value < 1 << 64:

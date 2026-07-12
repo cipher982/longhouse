@@ -183,7 +183,7 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
                 "v": 2,
                 "envelope_id": payload["expected_envelope_id"],
                 "object_hash": receipt["object_hash"],
-                "commit_seq": "2",
+                "commit_seq": "1",
                 "raw_state": "durable",
                 "render_state": "ready",
                 "media_state": "complete",

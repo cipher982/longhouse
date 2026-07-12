@@ -460,21 +460,6 @@ async def _commit_admitted_envelope(
         if objects[0].get("receipt") is not None:
             return _validated_receipt(objects[0]["receipt"])
 
-        await catalogd.call(
-            "storage.source_epoch.open.v2",
-            {
-                "tenant_id": tenant_id,
-                "machine_id": machine_id,
-                "provider": spec.provider,
-                "opaque_source_id": spec.opaque_source_id,
-                "source_epoch": str(spec.source_epoch),
-                "range_kind": spec.range_kind,
-                "predecessor_source_epoch": (
-                    str(parsed["predecessor_source_epoch"]) if parsed["predecessor_source_epoch"] is not None else None
-                ),
-                "opened_at": parsed["opened_at"].isoformat(),
-            },
-        )
         raw_task = asyncio.create_task(raw_workers.seal(spec, lane=parsed["lane"]))
         render_spec = parsed["render_spec"]
         render_task = asyncio.create_task(render_workers.seal(render_spec, lane=parsed["lane"])) if render_spec is not None else None
@@ -528,6 +513,10 @@ async def _commit_admitted_envelope(
                 "provider": spec.provider,
                 "opaque_source_id": spec.opaque_source_id,
                 "source_epoch": str(spec.source_epoch),
+                "predecessor_source_epoch": (
+                    str(parsed["predecessor_source_epoch"]) if parsed["predecessor_source_epoch"] is not None else None
+                ),
+                "epoch_opened_at": parsed["opened_at"].isoformat(),
                 "range_kind": spec.range_kind,
                 "range_start": spec.range_start,
                 "range_end": spec.range_end,
