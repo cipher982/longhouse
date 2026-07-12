@@ -37,6 +37,7 @@ mod opencode_db;
 mod outbox;
 mod pipeline;
 mod process_identity;
+mod raw_records;
 mod scheduler;
 mod shipper;
 mod shipping;

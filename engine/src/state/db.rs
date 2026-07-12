@@ -136,6 +136,29 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             observed_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             PRIMARY KEY (provider, provider_session_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS source_epoch_registry (
+            source_epoch TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            opaque_source_id TEXT NOT NULL,
+            file_incarnation TEXT NOT NULL,
+            predecessor_epoch TEXT,
+            start_reason TEXT NOT NULL,
+            max_observed_len INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            ended_at TEXT,
+            end_reason TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS source_epoch_lane_state (
+            source_epoch TEXT NOT NULL,
+            lane TEXT NOT NULL,
+            last_position INTEGER NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (source_epoch, lane),
+            FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
         );",
     )?;
 
@@ -195,7 +218,14 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
          ON managed_session_state(provider, updated_at DESC);
 
          CREATE INDEX IF NOT EXISTS idx_unmanaged_process_binding_observed
-         ON unmanaged_process_binding_state(provider, observed_at DESC);",
+         ON unmanaged_process_binding_state(provider, observed_at DESC);
+
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_source_epoch_current
+         ON source_epoch_registry(provider, opaque_source_id)
+         WHERE ended_at IS NULL;
+
+         CREATE INDEX IF NOT EXISTS idx_source_epoch_incarnation
+         ON source_epoch_registry(provider, opaque_source_id, file_incarnation, created_at DESC);",
     )?;
 
     tracing::debug!("Opened shipper DB: {}", path.display());
