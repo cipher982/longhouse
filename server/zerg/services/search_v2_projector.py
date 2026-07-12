@@ -43,9 +43,11 @@ class SearchV2Projector:
         self.search = search
         self.render_workers = render_workers
         self.worker_id = worker_id or f"search-v2:{os.getpid()}"
+        self._bound_store_id: str | None = None
 
     async def run_once(self, *, limit: int = 4, now: datetime | None = None) -> int:
         observed_at = now or datetime.now(UTC)
+        await self._ensure_store_binding(observed_at=observed_at)
         claim_token = str(uuid4())
         claim = await self.catalog.call(
             "projector.state.claim.v2",
@@ -64,6 +66,25 @@ class SearchV2Projector:
         for state in states:
             await self._run_claim(state, claim_token=claim_token)
         return len(states)
+
+    async def _ensure_store_binding(self, *, observed_at: datetime) -> None:
+        ping = await self.search.call("search.ping.v2")
+        store_id = _uuid(ping.get("store_id"), "store_id")
+        schema_generation = ping.get("schema_generation")
+        if not isinstance(schema_generation, str) or not schema_generation:
+            raise SearchProjectionError("invalid_search_response", "searchd omitted its schema generation")
+        if store_id == self._bound_store_id:
+            return
+        await self.catalog.call(
+            "projector.store.bind.v2",
+            {
+                "projector": PROJECTOR,
+                "store_id": store_id,
+                "schema_generation": schema_generation,
+                "observed_at": observed_at.isoformat(),
+            },
+        )
+        self._bound_store_id = store_id
 
     async def _run_claim(self, state: object, *, claim_token: str) -> None:
         try:
@@ -229,6 +250,8 @@ class SearchV2Projector:
                 "tool_name": record.tool_name,
                 "tool_output_text": record.tool_output_text,
                 "tool_call_id": record.tool_call_id,
+                "thread_id": record.thread_id,
+                "branch_kind": record.branch_kind,
             }
             for ordinal, record in enumerate(spec.records)
         ]

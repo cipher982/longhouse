@@ -236,6 +236,8 @@ async def test_projector_state_coalesces_claims_completion_failure_and_restart(d
             {"projector": projector, "after_session_id": None, "limit": 100},
         )
         assert [(row["desired_revision"], row["completed_revision"]) for row in lag["states"]] == [("5", "2")]
+        assert lag["lag_count"] == 1
+        assert lag["indexed_through"] == "4"
 
         failure_token = str(uuid4())
         second_claim = await client.call("projector.state.claim.v2", {**claim, "claim_token": failure_token})
@@ -283,6 +285,98 @@ async def test_projector_state_coalesces_claims_completion_failure_and_restart(d
         )
         assert terminal_claim_replay["exact_replay"] is True
         assert terminal_claim_replay["claimed"] == []
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_projector_store_replacement_requeues_completed_state_exactly_once(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    projector = "search-v2"
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call(
+            "projector.state.advance.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "desired_revision": 7,
+                "observed_at": now.isoformat(),
+            },
+        )
+        claim_token = str(uuid4())
+        claim = {
+            "projector": projector,
+            "worker_id": "search-worker",
+            "claim_token": claim_token,
+            "now": now.isoformat(),
+            "lease_seconds": 60,
+            "limit": 10,
+        }
+        await client.call("projector.state.claim.v2", claim)
+        await client.call(
+            "projector.state.complete.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "claim_token": claim_token,
+                "completed_revision": 7,
+                "completed_at": now.isoformat(),
+            },
+        )
+        store_a = str(uuid4())
+        binding = {
+            "projector": projector,
+            "store_id": store_a,
+            "schema_generation": "searchd-test-v1",
+            "observed_at": now.isoformat(),
+        }
+        first_bind = await client.call("projector.store.bind.v2", binding)
+        assert first_bind["changed"] is True
+        assert first_bind["invalidated_states"] == 1
+        lag = await client.call(
+            "projector.state.list_lag.v2",
+            {"projector": projector, "after_session_id": None, "limit": 10},
+        )
+        assert lag["states"][0]["completed_revision"] == "0"
+
+        reproject_token = str(uuid4())
+        claimed = await client.call("projector.state.claim.v2", {**claim, "claim_token": reproject_token})
+        assert claimed["claimed"][0]["claimed_revision"] == "7"
+        await client.call(
+            "projector.state.complete.v2",
+            {
+                "projector": projector,
+                "session_id": session_id,
+                "claim_token": reproject_token,
+                "completed_revision": 7,
+                "completed_at": now.isoformat(),
+            },
+        )
+        replay = await client.call("projector.store.bind.v2", binding)
+        assert replay["changed"] is False
+        current = await client.call(
+            "projector.state.list_lag.v2",
+            {"projector": projector, "after_session_id": None, "limit": 10},
+        )
+        assert current["states"] == []
+
+        replacement = await client.call(
+            "projector.store.bind.v2",
+            {**binding, "store_id": str(uuid4())},
+        )
+        assert replacement["changed"] is True
+        assert replacement["invalidated_states"] == 1
+        lagged_again = await client.call(
+            "projector.state.list_lag.v2",
+            {"projector": projector, "after_session_id": None, "limit": 10},
+        )
+        assert lagged_again["states"][0]["completed_revision"] == "0"
     finally:
         await client.close()
         await daemon.close()
@@ -359,6 +453,8 @@ async def test_projector_state_cannot_resurrect_or_claim_tombstoned_session(daem
             {"projector": projector, "after_session_id": None, "limit": 100},
         )
         assert lag["states"] == []
+        assert lag["lag_count"] == 0
+        assert lag["indexed_through"] == lag["commit_seq"]
     finally:
         await client.close()
         await daemon.close()

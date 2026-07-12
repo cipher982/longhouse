@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+from uuid import UUID
 from uuid import uuid4
 
 import pytest
@@ -26,6 +27,8 @@ def _records(text: str) -> list[dict]:
             "tool_name": None,
             "tool_output_text": None,
             "tool_call_id": None,
+            "thread_id": "thread-subagent",
+            "branch_kind": "subagent",
         },
         {
             "event_id": "event-2",
@@ -38,6 +41,8 @@ def _records(text: str) -> list[dict]:
             "tool_name": None,
             "tool_output_text": None,
             "tool_call_id": None,
+            "thread_id": "thread-subagent",
+            "branch_kind": "subagent",
         },
     ]
 
@@ -58,13 +63,15 @@ def _search_params(query: str) -> dict:
 def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
     path = tmp_path / "search.db"
     connection = open_search_database(path)
+    previous_store_id = connection.execute("SELECT store_id FROM search_meta").fetchone()[0]
     connection.execute("UPDATE search_meta SET schema_generation = 'obsolete'")
     connection.close()
 
     rebuilt = open_search_database(path)
     try:
         meta = rebuilt.execute("SELECT schema_version, schema_generation FROM search_meta").fetchone()
-        assert tuple(meta) == (1, "searchd-v1-atomic-projection-membership")
+        assert tuple(meta) == (1, "searchd-v1-frozen-worklog-snapshots")
+        assert rebuilt.execute("SELECT store_id FROM search_meta").fetchone()[0] != previous_store_id
         assert rebuilt.execute("SELECT COUNT(*) FROM session_index").fetchone()[0] == 0
     finally:
         rebuilt.close()
@@ -85,6 +92,7 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
     try:
         ping = await client.call("search.ping.v2")
         assert ping["ready"] is True
+        assert str(UUID(ping["store_id"])) == ping["store_id"]
         index_params = {
             "session_id": session_id,
             "generation_id": generation_id,
@@ -142,18 +150,39 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         assert "content_text" not in search["results"][0]
         filtered = await client.call("search.query.v2", {**_search_params("speed"), "provider": "claude"})
         assert filtered["results"] == []
-        worklog = await client.call(
+        worklog_sessions = await client.call(
             "worklog.day.v2",
             {
                 "owner_id": "42",
                 "window_start_us": 1_720_780_399_000_000,
                 "window_end_us": 1_720_780_401_000_000,
                 "include_test": False,
+                "section": "sessions",
+                "snapshot_id": None,
+                "offset": 0,
                 "limit": 100,
             },
         )
-        assert [event["role"] for event in worklog["events"]] == ["user", "assistant"]
-        assert worklog["truncated"] is False
+        assert worklog_sessions["items"][0]["message_count"] == 2
+        assert worklog_sessions["items"][0]["day_event_count"] == 2
+        assert worklog_sessions["items"][0]["user_messages"] == 1
+        assert worklog_sessions["items"][0]["assistant_messages"] == 1
+        assert worklog_sessions["items"][0]["is_sidechain"] == 1
+        first_worklog_page = await client.call(
+            "worklog.day.v2",
+            {
+                "owner_id": "42",
+                "window_start_us": 1_720_780_399_000_000,
+                "window_end_us": 1_720_780_401_000_000,
+                "include_test": False,
+                "section": "events",
+                "snapshot_id": worklog_sessions["snapshot_id"],
+                "offset": 0,
+                "limit": 1,
+            },
+        )
+        assert [event["role"] for event in first_worklog_page["items"]] == ["user"]
+        assert first_worklog_page["has_more"] is True
 
         replacement_id = hashlib.sha256(b"replacement-render-object").hexdigest()
         replacement_params = {
@@ -166,7 +195,6 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
         # Staging revision 8 must not disturb the fully published revision 7.
         assert len((await client.call("search.query.v2", _search_params("speed")))["results"]) == 1
         assert (await client.call("search.query.v2", _search_params("replacement")))["results"] == []
-
         replacement_publish = {
             **base_publish,
             "desired_revision": "8",
@@ -174,6 +202,27 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
             "object_count": 1,
         }
         assert (await client.call("search.index.publish.v2", replacement_publish))["published"] is True
+
+        second_worklog_page = await client.call(
+            "worklog.day.v2",
+            {
+                "owner_id": "42",
+                "window_start_us": 1_720_780_399_000_000,
+                "window_end_us": 1_720_780_401_000_000,
+                "include_test": False,
+                "section": "events",
+                "snapshot_id": first_worklog_page["snapshot_id"],
+                "offset": first_worklog_page["next_offset"],
+                "limit": 1,
+            },
+        )
+        assert [event["role"] for event in second_worklog_page["items"]] == ["assistant"]
+        assert second_worklog_page["has_more"] is False
+        released = await client.call(
+            "worklog.snapshot.release.v2",
+            {"snapshot_id": worklog_sessions["snapshot_id"], "owner_id": "42"},
+        )
+        assert released["released"] is True
         assert (await client.call("search.query.v2", _search_params("speed")))["results"] == []
         assert len((await client.call("search.query.v2", _search_params("replacement")))["results"]) == 1
     finally:

@@ -23,6 +23,8 @@ from sqlalchemy.orm import Session
 
 import zerg.database as database_module
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
+from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.database import get_live_session_factory
@@ -36,11 +38,13 @@ from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
+from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_archive import SessionArchiveBundleResponse
 from zerg.services.session_archive import SessionArchiveManifestResponse
 from zerg.services.session_archive import build_session_archive_bundle
@@ -115,7 +119,9 @@ from zerg.services.startup_context import STARTUP_CONTEXT_MAX_LIMIT
 from zerg.services.startup_context import load_startup_context_items
 from zerg.services.startup_context import render_startup_context
 from zerg.services.worklog_day_export import WorklogDayExportResponse
+from zerg.services.worklog_day_export import WorklogV2Error
 from zerg.services.worklog_day_export import build_worklog_day_export
+from zerg.services.worklog_day_export import build_worklog_day_export_v2
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
 
@@ -175,16 +181,46 @@ def _owner_id_from_agents_auth(db: Session, auth: object) -> int | None:
 
 
 @router.get("/worklog/day", response_model=WorklogDayExportResponse)
-def export_worklog_day(
+async def export_worklog_day(
     date: date_type = Query(..., description="Digest day in the supplied timezone, YYYY-MM-DD"),
     timezone_name: str = Query("America/New_York", alias="timezone", description="IANA timezone for day boundaries"),
     include_test: bool = Query(False, description="Include test/e2e sessions"),
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(_session_detail_db),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> WorklogDayExportResponse:
     """Return one day of session messages for machine worklog consumers."""
     try:
+        if database_module.live_catalog_enabled():
+            owner_id = getattr(_auth, "owner_id", None)
+            if owner_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "code": "owner_required",
+                        "message": "Worklog export requires an owner-bound device token.",
+                    },
+                )
+            catalog = get_catalogd_client()
+            search = get_searchd_client()
+            if catalog is None or search is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "worklog_projection_unavailable",
+                        "message": "The derived worklog projection is temporarily unavailable.",
+                    },
+                )
+            return await build_worklog_day_export_v2(
+                catalog=catalog,
+                search=search,
+                owner_id=str(owner_id),
+                day=date,
+                timezone_name=timezone_name,
+                include_test=include_test,
+            )
+        if db is None:
+            raise RuntimeError("legacy worklog database dependency is unavailable")
         return build_worklog_day_export(
             db,
             day=date,
@@ -193,6 +229,21 @@ def export_worklog_day(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except WorklogV2Error as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except (CatalogUnavailable, CatalogRemoteError) as exc:
+        reason = exc.code if isinstance(exc, CatalogRemoteError) else "search_unavailable"
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "worklog_projection_unavailable",
+                "message": "The derived worklog projection is temporarily unavailable.",
+                "reason": reason,
+            },
+        ) from exc
 
 
 def _active_live_session_candidates(*, limit: int, days_back: int, now: datetime) -> list[UUID] | None:

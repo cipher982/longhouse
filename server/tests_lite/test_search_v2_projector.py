@@ -41,6 +41,7 @@ async def test_search_projector_indexes_frozen_manifest_then_completes_claim(mon
     source_epoch = uuid4()
     claim_token = str(uuid4())
     object_id = hashlib.sha256(b"render-object").hexdigest()
+    search_store_id = str(uuid4())
     record = SimpleNamespace(
         event_id="event-1",
         order_time_us=1_720_780_400_000_000,
@@ -51,6 +52,8 @@ async def test_search_projector_indexes_frozen_manifest_then_completes_claim(mon
         tool_name=None,
         tool_output_text=None,
         tool_call_id=None,
+        thread_id="thread-subagent",
+        branch_kind="subagent",
     )
     decoded = SimpleNamespace(
         object_hash=object_id,
@@ -67,6 +70,7 @@ async def test_search_projector_indexes_frozen_manifest_then_completes_claim(mon
     now = datetime.now(UTC).replace(microsecond=0)
     catalog = FakeClient(
         {
+            "projector.store.bind.v2": {"changed": True, "invalidated_states": 0},
             "projector.state.claim.v2": {
                 "claimed": [
                     {
@@ -107,6 +111,11 @@ async def test_search_projector_indexes_frozen_manifest_then_completes_claim(mon
     )
     search = FakeClient(
         {
+            "search.ping.v2": {
+                "ready": True,
+                "schema_generation": "searchd-test-v1",
+                "store_id": search_store_id,
+            },
             "search.index.object.v2": {"created": True},
             "search.index.publish.v2": {"published": True},
         }
@@ -121,9 +130,12 @@ async def test_search_projector_indexes_frozen_manifest_then_completes_claim(mon
     assert await projector.run_once(now=now) == 1
 
     assert workers.calls == [(f"render/v2/{object_id}.zst", object_id, "background")]
+    binding_call = next(params for method, params in catalog.calls if method == "projector.store.bind.v2")
+    assert binding_call["store_id"] == search_store_id
     index_call = next(params for method, params in search.calls if method == "search.index.object.v2")
     assert index_call["desired_revision"] == "7"
     assert index_call["records"][0]["record_ordinal"] == 0
+    assert index_call["records"][0]["branch_kind"] == "subagent"
     publish_call = next(params for method, params in search.calls if method == "search.index.publish.v2")
     assert publish_call["object_count"] == 1
     assert publish_call["event_count"] == 1

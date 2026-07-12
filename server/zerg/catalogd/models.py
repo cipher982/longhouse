@@ -267,6 +267,7 @@ class SessionTombstone(CatalogBase):
     __tablename__ = "session_tombstones"
 
     session_id = Column(String(36), primary_key=True)
+    deletion_id = Column(String(36), nullable=True, unique=True)
     deletion_revision = Column(BigInteger, nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=False)
     reason = Column(String(64), nullable=True)
@@ -340,10 +341,24 @@ class ProjectorState(CatalogBase):
     __table_args__ = (Index("ix_projector_state_lag", "projector", "completed_revision", "desired_revision", "session_id"),)
 
 
+class ProjectorStoreBinding(CatalogBase):
+    """Durable identity of one disposable derived store generation."""
+
+    __tablename__ = "projector_store_bindings"
+
+    projector = Column(String(64), primary_key=True)
+    store_id = Column(String(36), nullable=False)
+    schema_generation = Column(String(128), nullable=False)
+    commit_seq = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+
+
 __all__ = [
     "CatalogBase",
     "MediaObject",
     "ProjectorState",
+    "ProjectorStoreBinding",
     "RawObject",
     "RenderGeneration",
     "RenderObject",

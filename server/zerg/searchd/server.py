@@ -19,6 +19,8 @@ from zerg.catalogd.protocol import ProtocolError
 from zerg.catalogd.protocol import read_frame
 from zerg.catalogd.protocol import write_frame
 from zerg.searchd.store import SearchStore
+from zerg.searchd.store import WorklogPageTooLarge
+from zerg.searchd.store import WorklogSnapshotError
 from zerg.searchd.store import open_search_database
 
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
@@ -156,6 +158,16 @@ class SearchDaemon:
             if request.method == "worklog.day.v2":
                 params = _worklog_params(request.params)
                 return self._result(request, await self._run(self._store.worklog_day, **params))
+            if request.method == "worklog.snapshot.release.v2":
+                _exact_keys(request.params, {"snapshot_id", "owner_id"})
+                return self._result(
+                    request,
+                    await self._run(
+                        self._store.release_worklog_snapshot,
+                        snapshot_id=_uuid(request.params["snapshot_id"], "snapshot_id"),
+                        owner_id=_text(request.params["owner_id"], "owner_id", 64),
+                    ),
+                )
             if request.method == "search.session.delete.v2":
                 _exact_keys(request.params, {"session_id"})
                 return self._result(
@@ -165,6 +177,10 @@ class SearchDaemon:
             return self._error(request, "unknown_method", "searchd method is unknown")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
+        except WorklogPageTooLarge as exc:
+            return self._error(request, "record_too_large", str(exc))
+        except WorklogSnapshotError as exc:
+            return self._error(request, exc.code, str(exc), retryable=exc.code in {"snapshot_capacity", "stale_snapshot"})
         except Exception:
             return self._error(request, "internal", "searchd operation failed")
 
@@ -257,6 +273,8 @@ def _index_object_params(value: dict) -> dict:
         "tool_name",
         "tool_output_text",
         "tool_call_id",
+        "thread_id",
+        "branch_kind",
     }
     for record in records:
         if not isinstance(record, dict) or set(record) != expected_record_fields:
@@ -280,6 +298,8 @@ def _index_object_params(value: dict) -> dict:
             ("tool_name", 255),
             ("tool_output_text", 2_097_152),
             ("tool_call_id", 255),
+            ("thread_id", 255),
+            ("branch_kind", 64),
         ):
             item = record[field]
             if item is not None and (not isinstance(item, str) or len(item.encode()) > maximum):
@@ -384,21 +404,41 @@ def _search_params(value: dict) -> dict:
 
 
 def _worklog_params(value: dict) -> dict:
-    _exact_keys(value, {"owner_id", "window_start_us", "window_end_us", "include_test", "limit"})
+    _exact_keys(
+        value,
+        {
+            "owner_id",
+            "window_start_us",
+            "window_end_us",
+            "include_test",
+            "section",
+            "snapshot_id",
+            "offset",
+            "limit",
+        },
+    )
     if (
         type(value["window_start_us"]) is not int
         or type(value["window_end_us"]) is not int
         or value["window_start_us"] >= value["window_end_us"]
         or type(value["include_test"]) is not bool
         or type(value["limit"]) is not int
-        or not 1 <= value["limit"] <= 100_000
+        or not 1 <= value["limit"] <= 500
+        or value["section"] not in {"sessions", "events"}
+        or type(value["offset"]) is not int
+        or not 0 <= value["offset"] <= 100_000
     ):
         raise ValueError("worklog window is invalid")
+    snapshot_value = value["snapshot_id"]
+    snapshot_id = _uuid(snapshot_value, "snapshot_id") if snapshot_value is not None else None
     return {
         "owner_id": _text(value["owner_id"], "owner_id", 64),
         "window_start_us": value["window_start_us"],
         "window_end_us": value["window_end_us"],
         "include_test": value["include_test"],
+        "section": value["section"],
+        "snapshot_id": snapshot_id,
+        "offset": value["offset"],
         "limit": value["limit"],
     }
 

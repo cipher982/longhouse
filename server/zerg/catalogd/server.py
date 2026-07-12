@@ -304,6 +304,8 @@ class CatalogDaemon:
             return await self._raw_objects_exist_batch(request)
         if request.method == "storage.session.read.v2":
             return await self._read_storage_session(request)
+        if request.method == "storage.session.delete.v2":
+            return await self._delete_storage_session(request)
         if request.method == "storage.session.timeline.list.v2":
             return await self._list_storage_sessions(request)
         if request.method == "storage.session.raw_manifest.v2":
@@ -328,6 +330,8 @@ class CatalogDaemon:
             return await self._fail_projector_claim(request)
         if request.method == "projector.state.list_lag.v2":
             return await self._list_projector_lag(request)
+        if request.method == "projector.store.bind.v2":
+            return await self._bind_projector_store(request)
         if request.params:
             return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
         metadata = await self._run_store(read_catalog_meta, self._engine)
@@ -1512,6 +1516,27 @@ class CatalogDaemon:
         result = await self._run_store(self._store.read_storage_session, session_id=session_id)
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _delete_storage_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "deletion_id", "reason", "deleted_at"}:
+            return self._error(request, "invalid_request", "storage.session.delete.v2 has invalid parameters")
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+            deletion_id = _canonical_uuid(request.params["deletion_id"], "deletion_id")
+            reason_value = request.params["reason"]
+            reason = _bounded_text(reason_value, "reason", 64) if reason_value is not None else None
+            deleted_at = _parse_datetime(request.params["deleted_at"], "deleted_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.delete_storage_session,
+            session_id=session_id,
+            deletion_id=deletion_id,
+            reason=reason,
+            deleted_at=deleted_at,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _list_storage_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         expected = {
             "owner_id",
@@ -1825,6 +1850,30 @@ class CatalogDaemon:
             projector=projector,
             after_session_id=after_session_id,
             limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _bind_projector_store(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"projector", "store_id", "schema_generation", "observed_at"}:
+            return self._error(request, "invalid_request", "projector.store.bind.v2 has invalid parameters")
+        try:
+            projector = _projector_name(request.params["projector"])
+            store_id = _canonical_uuid(request.params["store_id"], "store_id")
+            schema_generation = _bounded_text(
+                request.params["schema_generation"],
+                "schema_generation",
+                128,
+            )
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.bind_projector_store,
+            projector=projector,
+            store_id=store_id,
+            schema_generation=schema_generation,
+            observed_at=observed_at,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

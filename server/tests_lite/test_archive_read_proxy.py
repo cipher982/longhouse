@@ -147,7 +147,6 @@ async def test_background_source_proof_cannot_block_user_archive_read(monkeypatc
 @pytest.mark.parametrize(
     "path",
     (
-        "/agents/worklog/day",
         "/agents/ingest-health",
         "/agents/usage-stats",
         "/agents/machines/health",
@@ -155,6 +154,10 @@ async def test_background_source_proof_cannot_block_user_archive_read(monkeypatc
 )
 def test_archive_backed_machine_gets_are_discovered_from_route_dependencies(path):
     assert should_proxy_archive_request(_request(path), routes=api_app.routes)
+
+
+def test_v2_worklog_is_not_discovered_as_an_archive_read():
+    assert not should_proxy_archive_request(_request("/agents/worklog/day"), routes=api_app.routes)
 
 
 @pytest.mark.parametrize(

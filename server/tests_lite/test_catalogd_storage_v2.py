@@ -236,6 +236,73 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
 
 
 @pytest.mark.asyncio
+async def test_storage_session_delete_fences_replay_retires_manifests_and_queues_search_cleanup(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = uuid4()
+    session_id = uuid4()
+    generation_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
+        raw.update(render_state="ready", render_manifest=_render_manifest(generation_id), projectors=["search-v2"])
+        committed = await client.call("storage.raw_object.commit.v2", raw)
+        deletion_id = str(uuid4())
+        deleted = await client.call(
+            "storage.session.delete.v2",
+            {
+                "session_id": str(session_id),
+                "deletion_id": deletion_id,
+                "reason": "user_requested",
+                "deleted_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        assert deleted["changed"] is True
+        assert deleted["retired_raw_objects"] == 1
+        assert deleted["retired_render_objects"] == 1
+        replay = await client.call(
+            "storage.session.delete.v2",
+            {
+                "session_id": str(session_id),
+                "deletion_id": deletion_id,
+                "reason": "user_requested",
+                "deleted_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        assert replay["changed"] is False and replay["exact_replay"] is True
+
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["deleted"] is True
+        existence = await client.call(
+            "storage.raw_object.exists.batch.v2",
+            {"envelope_ids": [committed["receipt"]["envelope_id"]]},
+        )
+        assert existence["objects"][0]["state"] == "deleted"
+        cleanup_claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": "search-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=2)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 10,
+            },
+        )
+        assert cleanup_claim["claimed"][0]["session_id"] == str(session_id)
+        assert cleanup_claim["claimed"][0]["claimed_revision"] == deleted["deletion_revision"]
+
+        with pytest.raises(CatalogRemoteError) as resurrection:
+            await client.call("storage.raw_object.commit.v2", raw)
+        assert resurrection.value.code == "session_deleted"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_render_object_projection_pages_are_frozen_at_claimed_revision(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
@@ -560,6 +627,8 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         )
         assert projector_lag["states"][0]["session_id"] == str(session_id)
         assert projector_lag["states"][0]["desired_revision"] == committed["receipt"]["commit_seq"]
+        assert projector_lag["lag_count"] == 1
+        assert projector_lag["indexed_through"] == str(int(committed["receipt"]["commit_seq"]) - 1)
 
         derived_drift = {
             **raw,

@@ -17,6 +17,7 @@ from uuid import uuid5
 
 from sqlalchemy import Engine
 from sqlalchemy import and_
+from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy import insert
 from sqlalchemy import or_
@@ -27,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from zerg.catalogd.models import MediaObject
 from zerg.catalogd.models import ProjectorState
+from zerg.catalogd.models import ProjectorStoreBinding
 from zerg.catalogd.models import RawObject as LiveRawObject
 from zerg.catalogd.models import RenderGeneration
 from zerg.catalogd.models import RenderObject
@@ -35,6 +37,7 @@ from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import catalog_meta
+from zerg.models.live_store import LiveAPNSLiveActivityRegistration
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveDeviceToken
@@ -3822,6 +3825,140 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def delete_storage_session(
+        self,
+        *,
+        session_id: UUID,
+        deletion_id: UUID,
+        reason: str | None,
+        deleted_at: datetime,
+    ) -> dict[str, Any]:
+        """Fence a session, retire durable manifests, and remove bounded live state."""
+
+        session_key = str(session_id)
+        deletion_key = str(deletion_id)
+        tombstones = LiveSessionTombstone.__table__
+        sessions = StorageSession.__table__
+        raw = LiveRawObject.__table__
+        render_objects = RenderObject.__table__
+        generations = RenderGeneration.__table__
+        media_refs = SessionMediaRef.__table__
+        projector_state = ProjectorState.__table__
+        with _write_transaction(self.engine) as connection:
+            existing = connection.execute(select(tombstones).where(tombstones.c.session_id == session_key)).mappings().first()
+            if existing is not None:
+                return {
+                    "changed": False,
+                    "exact_replay": existing["deletion_id"] == deletion_key,
+                    "session_id": session_key,
+                    "deletion_id": existing["deletion_id"],
+                    "deletion_revision": str(existing["deletion_revision"]),
+                    "commit_seq": str(existing["commit_seq"]),
+                }
+            commit_seq = _advance_commit_seq(connection, deleted_at)
+            connection.execute(
+                insert(tombstones).values(
+                    session_id=session_key,
+                    deletion_id=deletion_key,
+                    deletion_revision=commit_seq,
+                    deleted_at=deleted_at,
+                    reason=reason,
+                    commit_seq=commit_seq,
+                )
+            )
+            retired_raw = connection.execute(
+                update(raw)
+                .where(raw.c.session_id == session_key, raw.c.retired_at.is_(None))
+                .values(retired_at=deleted_at, retirement_revision=commit_seq)
+            ).rowcount
+            retired_render = connection.execute(
+                update(render_objects)
+                .where(render_objects.c.session_id == session_key, render_objects.c.retired_at.is_(None))
+                .values(retired_at=deleted_at, retirement_revision=commit_seq)
+            ).rowcount
+            retired_generations = connection.execute(
+                update(generations)
+                .where(generations.c.session_id == session_key, generations.c.state != "superseded")
+                .values(state="superseded", superseded_at=deleted_at, updated_at=deleted_at, commit_seq=commit_seq)
+            ).rowcount
+            retired_media_refs = connection.execute(
+                update(media_refs)
+                .where(media_refs.c.session_id == session_key, media_refs.c.state == "active")
+                .values(
+                    state="retired",
+                    retired_at=deleted_at,
+                    deletion_revision=commit_seq,
+                    commit_seq=commit_seq,
+                )
+            ).rowcount
+            connection.execute(
+                update(sessions)
+                .where(sessions.c.session_id == session_key)
+                .values(
+                    user_state="deleted",
+                    ended_at=func.coalesce(sessions.c.ended_at, deleted_at),
+                    updated_at=deleted_at,
+                    commit_seq=commit_seq,
+                )
+            )
+            search_state = (
+                connection.execute(
+                    select(projector_state).where(
+                        projector_state.c.projector == "search-v2",
+                        projector_state.c.session_id == session_key,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if search_state is None:
+                connection.execute(
+                    insert(projector_state).values(
+                        projector="search-v2",
+                        session_id=session_key,
+                        desired_revision=commit_seq,
+                        completed_revision=0,
+                        status="idle",
+                        failure_count=0,
+                        commit_seq=commit_seq,
+                        created_at=deleted_at,
+                        updated_at=deleted_at,
+                    )
+                )
+            else:
+                connection.execute(
+                    update(projector_state)
+                    .where(
+                        projector_state.c.projector == "search-v2",
+                        projector_state.c.session_id == session_key,
+                    )
+                    .values(
+                        desired_revision=commit_seq,
+                        claimed_revision=None,
+                        claim_token=None,
+                        worker_id=None,
+                        claim_expires_at=None,
+                        status="idle",
+                        retry_at=None,
+                        commit_seq=commit_seq,
+                        updated_at=deleted_at,
+                    )
+                )
+            live_deleted = _delete_bounded_live_session_state(connection, session_key=session_key, deleted_at=deleted_at)
+            return {
+                "changed": True,
+                "exact_replay": False,
+                "session_id": session_key,
+                "deletion_id": deletion_key,
+                "deletion_revision": str(commit_seq),
+                "retired_raw_objects": int(retired_raw or 0),
+                "retired_render_objects": int(retired_render or 0),
+                "retired_render_generations": int(retired_generations or 0),
+                "retired_media_refs": int(retired_media_refs or 0),
+                "live_rows_removed": live_deleted,
+                "commit_seq": str(commit_seq),
+            }
+
     def read_storage_session(self, *, session_id: UUID) -> dict[str, Any]:
         table = StorageSession.__table__
         tombstone = LiveSessionTombstone.__table__
@@ -4481,18 +4618,17 @@ class CatalogStore:
                     "exact_replay": True,
                     "commit_seq": str(terminal_replay[0]),
                 }
+            eligible_predicates = [
+                table.c.projector == projector,
+                table.c.desired_revision > table.c.completed_revision,
+                or_(table.c.claim_expires_at.is_(None), table.c.claim_expires_at <= now),
+                or_(table.c.retry_at.is_(None), table.c.retry_at <= now),
+            ]
+            if projector != "search-v2":
+                eligible_predicates.append(~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists())
             eligible = (
                 connection.execute(
-                    select(table)
-                    .where(
-                        table.c.projector == projector,
-                        table.c.desired_revision > table.c.completed_revision,
-                        ~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists(),
-                        or_(table.c.claim_expires_at.is_(None), table.c.claim_expires_at <= now),
-                        or_(table.c.retry_at.is_(None), table.c.retry_at <= now),
-                    )
-                    .order_by(table.c.updated_at.asc(), table.c.session_id.asc())
-                    .limit(limit)
+                    select(table).where(*eligible_predicates).order_by(table.c.updated_at.asc(), table.c.session_id.asc()).limit(limit)
                 )
                 .mappings()
                 .all()
@@ -4672,18 +4808,100 @@ class CatalogStore:
         tombstones = LiveSessionTombstone.__table__
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:
-            statement = select(table).where(
+            lag_predicate = [
                 table.c.projector == projector,
                 table.c.desired_revision > table.c.completed_revision,
-                ~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists(),
-            )
+            ]
+            if projector != "search-v2":
+                lag_predicate.append(~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists())
+            statement = select(table).where(*lag_predicate)
             if after_session_id is not None:
                 statement = statement.where(table.c.session_id > after_session_id)
             rows = connection.execute(statement.order_by(table.c.session_id.asc()).limit(limit)).mappings().all()
+            lag_count, first_lag_revision = connection.execute(
+                select(func.count(), func.min(table.c.desired_revision)).where(*lag_predicate)
+            ).one()
+            commit_seq = _current_commit_seq(connection)
             return {
                 "states": [_projector_state_dto(row) for row in rows],
-                "commit_seq": str(_current_commit_seq(connection)),
+                "lag_count": int(lag_count),
+                "indexed_through": (str(int(first_lag_revision) - 1) if first_lag_revision is not None else str(commit_seq)),
+                "commit_seq": str(commit_seq),
                 "observed_at": observed_at.isoformat(),
+            }
+
+    def bind_projector_store(
+        self,
+        *,
+        projector: str,
+        store_id: UUID,
+        schema_generation: str,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Invalidate completed rows exactly once when a disposable store is replaced."""
+
+        bindings = ProjectorStoreBinding.__table__
+        states = ProjectorState.__table__
+        store_key = str(store_id)
+        with _write_transaction(self.engine) as connection:
+            existing = connection.execute(select(bindings).where(bindings.c.projector == projector)).mappings().first()
+            if existing is not None and str(existing["store_id"]) == store_key and str(existing["schema_generation"]) == schema_generation:
+                return {
+                    "changed": False,
+                    "invalidated_states": 0,
+                    "store_id": store_key,
+                    "schema_generation": schema_generation,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            invalidated = connection.execute(
+                update(states)
+                .where(states.c.projector == projector)
+                .values(
+                    completed_revision=0,
+                    claimed_revision=None,
+                    claim_token=None,
+                    worker_id=None,
+                    claim_expires_at=None,
+                    status="idle",
+                    failure_count=0,
+                    last_error_code=None,
+                    last_error_message=None,
+                    retry_at=None,
+                    last_completion_token=None,
+                    last_failure_token=None,
+                    commit_seq=commit_seq,
+                    updated_at=observed_at,
+                )
+            ).rowcount
+            if existing is None:
+                connection.execute(
+                    insert(bindings).values(
+                        projector=projector,
+                        store_id=store_key,
+                        schema_generation=schema_generation,
+                        commit_seq=commit_seq,
+                        created_at=observed_at,
+                        updated_at=observed_at,
+                    )
+                )
+            else:
+                connection.execute(
+                    update(bindings)
+                    .where(bindings.c.projector == projector)
+                    .values(
+                        store_id=store_key,
+                        schema_generation=schema_generation,
+                        commit_seq=commit_seq,
+                        updated_at=observed_at,
+                    )
+                )
+            return {
+                "changed": True,
+                "invalidated_states": int(invalidated or 0),
+                "store_id": store_key,
+                "schema_generation": schema_generation,
+                "commit_seq": str(commit_seq),
             }
 
     def checkpoint_passive(self) -> dict[str, int]:
@@ -5527,6 +5745,50 @@ def _storage_session_dto(row) -> dict[str, Any]:
         "created_at": _encode_datetime(row["created_at"]),
         "updated_at": _encode_datetime(row["updated_at"]),
     }
+
+
+def _delete_bounded_live_session_state(connection, *, session_key: str, deleted_at: datetime) -> int:
+    threads = LiveSessionThread.__table__
+    aliases = LiveSessionThreadAlias.__table__
+    runs = LiveSessionRun.__table__
+    connections = LiveSessionConnection.__table__
+    thread_ids = list(connection.execute(select(threads.c.id).where(threads.c.session_id == session_key)).scalars())
+    run_ids = list(connection.execute(select(runs.c.id).where(runs.c.thread_id.in_(thread_ids))).scalars()) if thread_ids else []
+    removed = 0
+    if run_ids:
+        removed += int(connection.execute(delete(connections).where(connections.c.run_id.in_(run_ids))).rowcount or 0)
+        removed += int(connection.execute(delete(runs).where(runs.c.id.in_(run_ids))).rowcount or 0)
+    if thread_ids:
+        removed += int(connection.execute(delete(aliases).where(aliases.c.thread_id.in_(thread_ids))).rowcount or 0)
+        removed += int(connection.execute(delete(threads).where(threads.c.id.in_(thread_ids))).rowcount or 0)
+    for table in (
+        LiveSessionCatalog.__table__,
+        LiveTimelineCard.__table__,
+        LiveSessionLaunchAttempt.__table__,
+        LiveSession.__table__,
+        LiveRuntimeState.__table__,
+        LiveInteractionRequest.__table__,
+        LiveControlLease.__table__,
+        LiveLaunchReadiness.__table__,
+        LiveSessionLivePreview.__table__,
+        LiveMachineControlOperation.__table__,
+        LiveSessionInputReceipt.__table__,
+    ):
+        removed += int(connection.execute(delete(table).where(table.c.session_id == session_key)).rowcount or 0)
+    connection.execute(
+        update(LiveNotificationClientPresence.__table__)
+        .where(LiveNotificationClientPresence.session_id == session_key)
+        .values(session_id=None, updated_at=deleted_at)
+    )
+    connection.execute(
+        update(LiveAPNSLiveActivityRegistration.__table__)
+        .where(
+            LiveAPNSLiveActivityRegistration.session_id == session_key,
+            LiveAPNSLiveActivityRegistration.ended_at.is_(None),
+        )
+        .values(ended_at=deleted_at, updated_at=deleted_at)
+    )
+    return removed
 
 
 def _render_generation_dto(row) -> dict[str, Any]:

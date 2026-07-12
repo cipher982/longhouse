@@ -20,6 +20,7 @@ from zerg.main import api_app
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
+from zerg.routers.agents_sessions import _session_detail_db
 from zerg.services.worklog_day_export import WORKLOG_DAY_MESSAGE_SQL
 
 
@@ -40,6 +41,7 @@ def _make_client(tmp_path):
         return SimpleNamespace(device_id="worklog-day", id="token-1", owner_id=1)
 
     api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[_session_detail_db] = override_db
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     return TestClient(api_app), factory
 
@@ -211,6 +213,109 @@ def test_worklog_day_export_derives_sidechain_from_session_thread(tmp_path):
 
         assert response.status_code == 200, response.text
         assert response.json()["sessions"][0]["is_sidechain"] is True
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_worklog_day_live_catalog_uses_search_projection_without_cold_fallback(tmp_path, monkeypatch):
+    client, _factory = _make_client(tmp_path)
+    api_app.dependency_overrides.pop(_session_detail_db)
+
+    class FakeCatalog:
+        async def call(self, method, params):
+            assert method == "projector.state.list_lag.v2"
+            assert params["projector"] == "search-v2"
+            return {"lag_count": 1, "indexed_through": "8", "commit_seq": "10", "states": [{}]}
+
+    class FakeSearch:
+        def __init__(self):
+            self.calls = []
+            self.snapshot_id = "55555555-5555-4555-8555-555555555555"
+
+        async def call(self, method, params):
+            if method == "worklog.snapshot.release.v2":
+                assert params == {"snapshot_id": self.snapshot_id, "owner_id": "1"}
+                return {"released": True}
+            assert method == "worklog.day.v2"
+            self.calls.append(params)
+            assert params["offset"] == 0
+            if params["section"] == "sessions":
+                assert params["snapshot_id"] is None
+                return {
+                    "items": [
+                        {
+                            "session_id": "44444444-4444-4444-8444-444444444444",
+                            "project": "longhouse",
+                            "provider": "codex",
+                            "cwd": "/workspace/longhouse",
+                            "git_repo": "cipher982/longhouse",
+                            "started_at": "2026-07-07T12:00:00+00:00",
+                            "user_messages": 3,
+                            "assistant_messages": 2,
+                            "tool_calls": 1,
+                            "is_sidechain": 0,
+                            "first_event_us": 1_783_426_400_000_000,
+                            "last_event_us": 1_783_426_460_000_000,
+                            "first_message_us": 1_783_426_400_000_000,
+                            "message_count": 2,
+                            "day_event_count": 3,
+                        }
+                    ],
+                    "has_more": False,
+                    "next_offset": None,
+                    "snapshot_id": self.snapshot_id,
+                }
+            assert params["snapshot_id"] == self.snapshot_id
+            return {
+                "items": [
+                    {
+                        "session_id": "44444444-4444-4444-8444-444444444444",
+                        "role": "user",
+                        "content_text": "search projection only",
+                        "order_time_us": 1_783_426_400_000_000,
+                    },
+                    {
+                        "session_id": "44444444-4444-4444-8444-444444444444",
+                        "role": "assistant",
+                        "content_text": "no archive fallback",
+                        "order_time_us": 1_783_426_460_000_000,
+                    },
+                ],
+                "has_more": False,
+                "next_offset": None,
+                "snapshot_id": self.snapshot_id,
+            }
+
+    search = FakeSearch()
+    import zerg.routers.agents_sessions as route_module
+
+    monkeypatch.setattr(route_module.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(
+        route_module.database_module,
+        "get_session_factory",
+        lambda: (_ for _ in ()).throw(AssertionError("cold database factory opened")),
+    )
+    monkeypatch.setattr(route_module, "get_catalogd_client", lambda: FakeCatalog())
+    monkeypatch.setattr(route_module, "get_searchd_client", lambda: search)
+    monkeypatch.setattr(
+        route_module,
+        "build_worklog_day_export",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("cold worklog fallback opened")),
+    )
+    try:
+        response = client.get(
+            "/agents/worklog/day?date=2026-07-07&timezone=America/New_York",
+            headers={"X-Agents-Token": "dev"},
+        )
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["source"] == "longhouse-worklog-search-v2"
+        assert payload["projection_lag"] is True
+        assert payload["indexed_through"] == "8"
+        assert payload["desired_through"] == "10"
+        assert payload["stats"] == {"session_count": 1, "message_count": 2, "event_count": 3}
+        assert [call["section"] for call in search.calls] == ["sessions", "events"]
     finally:
         api_app.dependency_overrides.clear()
 
