@@ -41,6 +41,7 @@ from zerg.services.archive_transcript import archive_owning_session_ids
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.media_store import absolute_media_path
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.raw_json_compression import decompress_raw_json
 from zerg.storage_v2.media_objects import MediaObjectError
 from zerg.storage_v2.media_objects import MediaObjectSpec
 from zerg.storage_v2.media_objects import seal_media_object
@@ -62,6 +63,7 @@ STREAMING_EVENT_PAGE = 50
 STREAMING_MATCH_PAGE = 250
 STREAMING_SQL_PAGE = 1_000
 STREAMING_EVENT_LAYOUT_REVISION = "bounded-events-v2"
+STREAMING_SOURCE_LAYOUT_REVISION = "mixed-stream-v3"
 
 
 class CatalogCaller(Protocol):
@@ -654,32 +656,87 @@ class LegacyCorpusConverter:
                 "source_path TEXT NOT NULL, source_offset INTEGER NOT NULL, line_hash TEXT NOT NULL, "
                 "PRIMARY KEY(source_path, source_offset, line_hash)) WITHOUT ROWID"
             )
+            work_db.execute(
+                "CREATE TABLE migration_inline_sources ("
+                "source_path TEXT NOT NULL, source_offset INTEGER NOT NULL, line_hash TEXT NOT NULL, "
+                "branch_id INTEGER NOT NULL, raw_bytes BLOB NOT NULL, "
+                "PRIMARY KEY(source_path, source_offset, line_hash)) WITHOUT ROWID"
+            )
             source_cursor = connection.connection.cursor()
             indexed_source_rows = 0
             try:
                 source_cursor.execute(
-                    "SELECT source_path, source_offset, line_hash, raw_json_z, raw_json FROM source_lines "
+                    "SELECT source_path, source_offset, line_hash, branch_id, raw_json, raw_json_z, raw_json_codec "
+                    "FROM source_lines "
                     "WHERE session_id = ? AND id <= ?",
                     (str(session_id), watermark.source_line_id),
                 )
                 while rows := source_cursor.fetchmany(STREAMING_SQL_PAGE):
                     indexed_source_rows += len(rows)
-                    if any(raw_json_z is not None or bool(raw_json) for _, _, _, raw_json_z, raw_json in rows):
-                        raise RuntimeError("large-session streaming requires archived slim source rows")
                     work_db.executemany(
                         "INSERT INTO migration_source_counts"
                         "(source_path, source_offset, line_hash, row_count, consumed) VALUES (?, ?, ?, 1, 0) "
                         "ON CONFLICT(source_path, source_offset, line_hash) "
                         "DO UPDATE SET row_count = row_count + 1",
-                        ((path, offset, line_hash) for path, offset, line_hash, _, _ in rows),
+                        ((path, offset, line_hash) for path, offset, line_hash, *_ in rows),
                     )
+                    inline_rows = []
+                    for path, offset, line_hash, branch_id, raw_json, raw_json_z, raw_json_codec in rows:
+                        value = None
+                        if int(raw_json_codec or 0) == 1 and raw_json_z is not None:
+                            value = decompress_raw_json(raw_json_z)
+                        elif raw_json:
+                            value = str(raw_json)
+                        if value is None:
+                            continue
+                        raw_bytes = value.encode("utf-8")
+                        if len(raw_bytes) <= MAX_RECORD_BYTES and hashlib.sha256(raw_bytes).hexdigest() == line_hash:
+                            inline_rows.append((path, offset, line_hash, int(branch_id), raw_bytes))
+                    if inline_rows:
+                        work_db.executemany(
+                            "INSERT OR IGNORE INTO migration_inline_sources VALUES (?, ?, ?, ?, ?)",
+                            inline_rows,
+                        )
                     work_db.commit()
-                    del rows
+                    del inline_rows, rows
                     _return_free_heap_to_os()
             finally:
                 source_cursor.close()
             if indexed_source_rows != source_expected:
                 raise RuntimeError(f"frozen source count changed: expected {source_expected}, indexed {indexed_source_rows}")
+
+            source_plans: dict[str, tuple[UUID, UUID | None, int]] = {}
+            covered = 0
+            inline_cursor = work_db.execute(
+                "SELECT source_path, source_offset, line_hash, raw_bytes "
+                "FROM migration_inline_sources ORDER BY source_path, source_offset, line_hash"
+            )
+            while inline_rows := inline_cursor.fetchmany(STREAMING_MATCH_PAGE):
+                inline_page = {
+                    (str(path), int(offset), str(line_hash)): ArchiveRecord(
+                        tenant_id=self.tenant_id,
+                        session_id=str(session_id),
+                        stream="source_lines",
+                        source_seq=index,
+                        raw_bytes=bytes(raw_bytes),
+                        source_path=str(path),
+                        source_offset=int(offset),
+                    )
+                    for index, (path, offset, line_hash, raw_bytes) in enumerate(inline_rows)
+                }
+                covered += await self._commit_archive_record_page(
+                    work_db,
+                    session,
+                    watermark,
+                    inline_page,
+                    source_plans=source_plans,
+                    generation=generation,
+                    owner_id=owner_id,
+                    output_proof=output_proof,
+                    replace_existing_epochs=replace_existing_epochs,
+                )
+                del inline_page, inline_rows
+                _return_free_heap_to_os()
 
             owner_ids = [UUID(value) for value in archive_owning_session_ids(db, session_id)]
             manifests = (
@@ -692,8 +749,6 @@ class LegacyCorpusConverter:
                 .order_by(ArchiveChunk.first_source_seq.asc(), ArchiveChunk.id.asc())
                 .yield_per(4)
             )
-            covered = 0
-            source_plans: dict[str, tuple[UUID, UUID | None, int]] = {}
             for (relative_path,) in manifests:
                 archive_page: dict[tuple[str, int, str], ArchiveRecord] = {}
                 for record in archive_store.iter_chunk_records(relative_path):
@@ -790,6 +845,7 @@ class LegacyCorpusConverter:
                     "legacy_source_lines",
                     watermark,
                     replace_existing_epochs=replace_existing_epochs,
+                    layout_revision=STREAMING_SOURCE_LAYOUT_REVISION,
                 )
                 plan = (epoch, predecessor, 0)
             epoch, predecessor, next_ordinal = plan

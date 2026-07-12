@@ -131,7 +131,7 @@ def test_source_batches_bound_dense_render_payloads():
 
 
 @pytest.mark.asyncio
-async def test_all_slim_high_row_session_streams_archive_and_events_in_bounded_batches(
+async def test_high_row_session_streams_inline_archive_and_events_in_bounded_batches(
     legacy_db,
     tmp_path: Path,
     monkeypatch,
@@ -171,7 +171,7 @@ async def test_all_slim_high_row_session_streams_archive_and_events_in_bounded_b
                         "branch_id": 0,
                         "revision": 1,
                         "is_branch_copy": 0,
-                        "raw_json": "",
+                        "raw_json": f'{{"index":{index},"message":"archived"}}' if index == 0 else "",
                         "raw_json_z": None,
                         "raw_json_codec": 0,
                         "line_hash": hashlib.sha256(f'{{"index":{index},"message":"archived"}}'.encode()).hexdigest(),
@@ -200,7 +200,7 @@ async def test_all_slim_high_row_session_streams_archive_and_events_in_bounded_b
         watermark = freeze_high_watermark(db)
 
     def forbidden_materializing_path(*_args, **_kwargs):
-        raise AssertionError("giant all-slim conversion must not materialize legacy source/event rows")
+        raise AssertionError("giant conversion must not materialize legacy source/event rows")
 
     monkeypatch.setattr(LegacyCorpusConverter, "_load_sources", forbidden_materializing_path)
     loaded_event_high_watermark = 0
