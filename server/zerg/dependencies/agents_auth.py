@@ -18,7 +18,7 @@ from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.auth.managed_local_hook_tokens import validate_managed_local_hook_token
 from zerg.config import get_settings
 from zerg.database import get_catalog_session_factory
-from zerg.database import live_catalog_enabled
+from zerg.database import live_store_configured
 from zerg.models.device_token import DeviceToken
 
 logger = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ def _managed_local_hook_token_allowed(request: Request) -> bool:
 def _validate_device_token_for_request(token: str) -> DeviceToken | None:
     """Validate a device token without holding a DB session for the request lifetime."""
 
-    if live_catalog_enabled():
+    if live_store_configured() and not get_settings().testing:
         return _validate_device_token_through_catalogd(token)
 
     from zerg.routers.device_tokens import validate_device_token

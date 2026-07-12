@@ -184,7 +184,8 @@ def test_production_agents_token_validation_uses_catalogd_without_opening_db():
         }
 
     with (
-        patch("zerg.dependencies.agents_auth.live_catalog_enabled", return_value=True),
+        patch("zerg.dependencies.agents_auth.live_store_configured", return_value=True),
+        patch("zerg.dependencies.agents_auth.get_settings", return_value=SimpleNamespace(testing=False)),
         patch("zerg.dependencies.agents_auth.get_session_factory", side_effect=AssertionError("must not open DB")),
         patch("zerg.catalogd.client.call_catalogd_sync", side_effect=catalog_call),
         patch(
@@ -206,7 +207,8 @@ def test_production_agents_token_validation_maps_catalog_failure_to_typed_503():
     from zerg.catalogd.client import CatalogUnavailable
 
     with (
-        patch("zerg.dependencies.agents_auth.live_catalog_enabled", return_value=True),
+        patch("zerg.dependencies.agents_auth.live_store_configured", return_value=True),
+        patch("zerg.dependencies.agents_auth.get_settings", return_value=SimpleNamespace(testing=False)),
         patch("zerg.catalogd.client.call_catalogd_sync", side_effect=CatalogUnavailable("down")),
         patch(
             "zerg.services.catalogd_supervisor.catalogd_paths",
