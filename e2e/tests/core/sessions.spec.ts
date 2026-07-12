@@ -23,7 +23,9 @@ async function ensureDemoProviders(
   if (await heroEmpty.isVisible({ timeout: 2000 }).catch(() => false)) {
     const resp = await request.post("/api/timeline/demo").catch(() => null);
     if (!resp || !resp.ok()) {
-      throw new Error(`Demo seed failed: ${resp ? resp.status() : "no response"}`);
+      throw new Error(
+        `Demo seed failed: ${resp ? resp.status() : "no response"}`,
+      );
     }
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
@@ -54,7 +56,10 @@ async function ensureFilterPanelOpen(page: Page): Promise<void> {
   }
 }
 
-async function gotoTimelineReady(page: Page, path = "/timeline"): Promise<void> {
+async function gotoTimelineReady(
+  page: Page,
+  path = "/timeline",
+): Promise<void> {
   await page.goto(path, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 }
@@ -75,6 +80,7 @@ async function ingestSession(
     branched_from_event_id: number;
     started_at: string;
     ended_at: string | null;
+    agents_token: string;
     events: Array<{
       role: string;
       content_text: string;
@@ -89,6 +95,9 @@ async function ingestSession(
 
   const ingest = await request.post("/api/agents/ingest", {
     headers: {
+      ...(overrides.agents_token
+        ? { "X-Agents-Token": overrides.agents_token }
+        : {}),
       "X-Longhouse-Ship-Trace": JSON.stringify({
         schema: "ship_trace.v1",
         work_context: "live_transcript",
@@ -112,7 +121,8 @@ async function ingestSession(
       origin_label: overrides.origin_label,
       branched_from_event_id: overrides.branched_from_event_id,
       started_at: timestamp,
-      ended_at: overrides.ended_at === undefined ? timestamp : overrides.ended_at,
+      ended_at:
+        overrides.ended_at === undefined ? timestamp : overrides.ended_at,
       events: overrides.events || [
         {
           role: "user",
@@ -132,11 +142,14 @@ async function ingestSession(
 async function enrollTestMachine(
   request: APIRequestContext,
   deviceId: string,
-): Promise<void> {
+): Promise<string> {
   const response = await request.post("/api/devices/tokens", {
     data: { device_id: deviceId },
   });
   expect(response.ok()).toBe(true);
+  const payload = await response.json();
+  expect(typeof payload.token).toBe("string");
+  return payload.token;
 }
 
 async function ingestRuntimeEvents(
@@ -146,7 +159,11 @@ async function ingestRuntimeEvents(
     provider?: string;
     device_id?: string;
     source: string;
-    kind: "phase_signal" | "progress_signal" | "terminal_signal" | "binding_signal";
+    kind:
+      | "phase_signal"
+      | "progress_signal"
+      | "terminal_signal"
+      | "binding_signal";
     phase?: string;
     tool_name?: string;
     occurred_at: string;
@@ -159,7 +176,9 @@ async function ingestRuntimeEvents(
   const response = await request.post("/api/agents/runtime/events/batch", {
     data: {
       events: events.map((event) => ({
-        runtime_key: event.runtime_key || `${event.provider || "claude"}:${event.session_id}`,
+        runtime_key:
+          event.runtime_key ||
+          `${event.provider || "claude"}:${event.session_id}`,
         provider: event.provider || "claude",
         payload: {},
         ...event,
@@ -167,7 +186,10 @@ async function ingestRuntimeEvents(
     },
   });
 
-  expect(response.ok(), `runtime ingest failed: ${response.status()} ${await response.text()}`).toBe(true);
+  expect(
+    response.ok(),
+    `runtime ingest failed: ${response.status()} ${await response.text()}`,
+  ).toBe(true);
 }
 
 test.describe("Sessions Page", () => {
@@ -323,7 +345,9 @@ test.describe("Sessions Page", () => {
     const suffix = randomUUID().slice(0, 8);
     const project = `thread-search-${suffix}`;
     const magicToken = `older-hit-${suffix}`;
-    const rootTimestamp = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const rootTimestamp = new Date(
+      Date.now() - 2 * 60 * 60 * 1000,
+    ).toISOString();
     const headTimestamp = new Date(Date.now() - 60 * 60 * 1000).toISOString();
 
     const rootId = await ingestSession(request, {
@@ -397,8 +421,12 @@ test.describe("Sessions Page", () => {
     const suffix = randomUUID().slice(0, 8);
     const project = `thread-query-group-${suffix}`;
     const token = `grouped-hit-${suffix}`;
-    const rootTimestamp = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
-    const matchedTimestamp = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    const rootTimestamp = new Date(
+      Date.now() - 3 * 60 * 60 * 1000,
+    ).toISOString();
+    const matchedTimestamp = new Date(
+      Date.now() - 2 * 60 * 60 * 1000,
+    ).toISOString();
     const headTimestamp = new Date(Date.now() - 60 * 60 * 1000).toISOString();
     const runtimeTimestamp = new Date().toISOString();
 
@@ -456,7 +484,8 @@ test.describe("Sessions Page", () => {
       events: [
         {
           role: "user",
-          content_text: "Newest writable head is just housekeeping without the search token",
+          content_text:
+            "Newest writable head is just housekeeping without the search token",
           timestamp: headTimestamp,
           source_path: "/tmp/thread-query-group-head.jsonl",
           source_offset: 0,
@@ -501,9 +530,14 @@ test.describe("Sessions Page", () => {
     );
 
     await row.click();
-    await expect(page).toHaveURL(new RegExp(`/timeline/${matchedId}.*event_id=`));
+    await expect(page).toHaveURL(
+      new RegExp(`/timeline/${matchedId}.*event_id=`),
+    );
     await expect(
-      page.getByTestId("session-timeline-row").filter({ hasText: token }).first(),
+      page
+        .getByTestId("session-timeline-row")
+        .filter({ hasText: token })
+        .first(),
     ).toBeVisible({ timeout: 15000 });
   });
 
@@ -704,7 +738,10 @@ test.describe("Sessions Page", () => {
     });
 
     const streamConnected = page.waitForResponse((response) => {
-      return response.url().includes("/api/timeline/sessions/stream") && response.status() === 200;
+      return (
+        response.url().includes("/api/timeline/sessions/stream") &&
+        response.status() === 200
+      );
     });
     await page.goto(`/timeline?project=${project}`);
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
@@ -741,7 +778,9 @@ test.describe("Sessions Page", () => {
     // The runtime fact updates the older row's status in place, but the
     // inbox layout is anchored to start time — so order MUST NOT change.
     // This is the no-jitter contract.
-    await expect(olderRow).toHaveAttribute("data-status", "running", { timeout: 15000 });
+    await expect(olderRow).toHaveAttribute("data-status", "running", {
+      timeout: 15000,
+    });
     await expect(olderRow).toHaveAttribute("data-closed", "false");
     await expect(olderRow).toHaveCount(1);
     await expect(recentRow).toHaveCount(1);
@@ -751,7 +790,10 @@ test.describe("Sessions Page", () => {
 });
 
 test.describe("Filter Chips and Popover", () => {
-  test("selecting a filter creates a chip in the toolbar", async ({ page, request }) => {
+  test("selecting a filter creates a chip in the toolbar", async ({
+    page,
+    request,
+  }) => {
     await gotoTimelineReady(page);
     await ensureDemoProviders(page, request);
 
@@ -787,10 +829,11 @@ test.describe("Filter Chips and Popover", () => {
     request,
   }) => {
     const machineName = `e2e-multichip-${randomUUID().slice(0, 8)}`;
-    await enrollTestMachine(request, machineName);
+    const machineToken = await enrollTestMachine(request, machineName);
     await ingestSession(request, {
       environment: machineName,
       device_id: machineName,
+      agents_token: machineToken,
       project: "multichip-e2e",
       provider: "claude",
     });
@@ -930,7 +973,9 @@ test.describe("Session Detail Page", () => {
 
     try {
       await page.route(
-        new RegExp(String.raw`/api/timeline/sessions/${sessionId}/workspace(?:\?.*)?$`),
+        new RegExp(
+          String.raw`/api/timeline/sessions/${sessionId}/workspace(?:\?.*)?$`,
+        ),
         async (route) => {
           workspaceRequests += 1;
           const response = await route.fetch();
@@ -970,7 +1015,11 @@ test.describe("Session Detail Page", () => {
             },
             presentation: {
               ...payload.session.session_state.presentation,
-              access: { key: "live_control", label: "Live control", tone: "connected" },
+              access: {
+                key: "live_control",
+                label: "Live control",
+                tone: "connected",
+              },
             },
           };
 
@@ -1055,11 +1104,17 @@ test.describe("Session Detail Page", () => {
         },
       );
 
-      await page.goto(`/timeline/${sessionId}`, { waitUntil: "domcontentloaded" });
+      await page.goto(`/timeline/${sessionId}`, {
+        waitUntil: "domcontentloaded",
+      });
       await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
-      await expect.poll(() => workspaceRequests, { timeout: 10000 }).toBeGreaterThan(0);
+      await expect
+        .poll(() => workspaceRequests, { timeout: 10000 })
+        .toBeGreaterThan(0);
 
-      await expect(page.getByTestId("session-continuation-panel")).toBeVisible();
+      await expect(
+        page.getByTestId("session-continuation-panel"),
+      ).toBeVisible();
 
       const composer = page.locator(".session-chat-composer textarea");
       await expect(composer).toBeEnabled();
@@ -1072,7 +1127,9 @@ test.describe("Session Detail Page", () => {
       // After the send completes, the lock poll kicks in and keeps the composer locked
       await expect.poll(() => chatRequests, { timeout: 10000 }).toBe(1);
       await expect(composer).toBeDisabled();
-      await expect.poll(() => lockRequests, { timeout: 10000 }).toBeGreaterThan(1);
+      await expect
+        .poll(() => lockRequests, { timeout: 10000 })
+        .toBeGreaterThan(1);
     } finally {
       await page.unrouteAll({ behavior: "ignoreErrors" });
     }
@@ -1184,8 +1241,10 @@ test.describe("Session Detail Page", () => {
         };
       });
 
-    const streamConnected = page.waitForResponse((response) =>
-      response.url().includes(`/workspace/stream`) && response.status() === 200,
+    const streamConnected = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/workspace/stream`) &&
+        response.status() === 200,
     );
 
     await ingestSession(request, {
@@ -1211,9 +1270,12 @@ test.describe("Session Detail Page", () => {
       events: makeEvents(251),
     });
 
-    await expect(timelineList).toContainText(`tail-anchor event 251 ${suffix}`, {
-      timeout: 15000,
-    });
+    await expect(timelineList).toContainText(
+      `tail-anchor event 251 ${suffix}`,
+      {
+        timeout: 15000,
+      },
+    );
   });
 });
 
@@ -1247,17 +1309,19 @@ test.describe("SSE Fallback", () => {
     });
 
     // Navigate and wait for SSE stream to connect
-    const streamConnected = page.waitForResponse((response) =>
-      response.url().includes(`/workspace/stream`) && response.status() === 200,
+    const streamConnected = page.waitForResponse(
+      (response) =>
+        response.url().includes(`/workspace/stream`) &&
+        response.status() === 200,
     );
     await page.goto(`/timeline/${sessionId}`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
     await streamConnected;
 
     // Verify initial event is visible
-    await expect(
-      page.getByTestId("session-timeline-list"),
-    ).toContainText(`initial event ${suffix}`);
+    await expect(page.getByTestId("session-timeline-list")).toContainText(
+      `initial event ${suffix}`,
+    );
 
     // Kill the SSE stream — abort all future workspace/stream requests
     await page.route(`**/workspace/stream**`, (route) => route.abort());
@@ -1287,9 +1351,10 @@ test.describe("SSE Fallback", () => {
     });
 
     // The new event should appear via fallback polling (2s interval)
-    await expect(
-      page.getByTestId("session-timeline-list"),
-    ).toContainText(`fallback-proof event ${suffix}`, { timeout: 15000 });
+    await expect(page.getByTestId("session-timeline-list")).toContainText(
+      `fallback-proof event ${suffix}`,
+      { timeout: 15000 },
+    );
   });
 });
 
@@ -1298,17 +1363,19 @@ test.describe("Machine Filter", () => {
     // Ingest sessions with distinct machine names
     const machineA = `e2e-machine-a-${randomUUID().slice(0, 8)}`;
     const machineB = `e2e-machine-b-${randomUUID().slice(0, 8)}`;
-    await enrollTestMachine(request, machineA);
-    await enrollTestMachine(request, machineB);
+    const tokenA = await enrollTestMachine(request, machineA);
+    const tokenB = await enrollTestMachine(request, machineB);
 
     await ingestSession(request, {
       environment: machineA,
       device_id: machineA,
+      agents_token: tokenA,
       project: "machine-filter-e2e",
     });
     await ingestSession(request, {
       environment: machineB,
       device_id: machineB,
+      agents_token: tokenB,
       project: "machine-filter-e2e",
     });
 
@@ -1327,10 +1394,11 @@ test.describe("Machine Filter", () => {
     request,
   }) => {
     const machineName = `e2e-machine-${randomUUID().slice(0, 8)}`;
-    await enrollTestMachine(request, machineName);
+    const machineToken = await enrollTestMachine(request, machineName);
     await ingestSession(request, {
       environment: machineName,
       device_id: machineName,
+      agents_token: machineToken,
       project: "machine-ui-e2e",
     });
 
@@ -1348,10 +1416,11 @@ test.describe("Machine Filter", () => {
 
   test("selecting a machine updates the URL", async ({ page, request }) => {
     const machineName = `e2e-select-${randomUUID().slice(0, 8)}`;
-    await enrollTestMachine(request, machineName);
+    const machineToken = await enrollTestMachine(request, machineName);
     await ingestSession(request, {
       environment: machineName,
       device_id: machineName,
+      agents_token: machineToken,
       project: "machine-url-e2e",
     });
 
@@ -1377,17 +1446,19 @@ test.describe("Machine Filter", () => {
   }) => {
     const machineToken = `filter-machine-${randomUUID().slice(0, 8)}`;
     const otherToken = `other-machine-${randomUUID().slice(0, 8)}`;
-    await enrollTestMachine(request, machineToken);
-    await enrollTestMachine(request, otherToken);
+    const machineAgentsToken = await enrollTestMachine(request, machineToken);
+    const otherAgentsToken = await enrollTestMachine(request, otherToken);
 
     const keptId = await ingestSession(request, {
       environment: machineToken,
       device_id: machineToken,
+      agents_token: machineAgentsToken,
       project: "machine-filter-sessions",
     });
     const otherId = await ingestSession(request, {
       environment: otherToken,
       device_id: otherToken,
+      agents_token: otherAgentsToken,
       project: "machine-filter-other",
     });
 
