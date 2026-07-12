@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
+import functools
 import hashlib
 import json
 from collections import defaultdict
@@ -872,6 +874,15 @@ class LegacyCorpusConverter:
             last_id = int(events[-1].id)
             for event in events:
                 db.expunge(event)
+            # This migration can serialize multiple GiB over hundreds of
+            # thousands of small pages. Drop every page-owned reference before
+            # asking glibc to return its now-free zstd/JSON arenas to the host;
+            # otherwise RSS follows total bytes processed instead of page size.
+            events.clear()
+            source_records.clear()
+            event_groups.clear()
+            query = event = normalized = encoded = record = batch = adjusted = render_records = None
+            _return_free_heap_to_os()
 
     async def _stream_epoch_plan(
         self,
@@ -1292,6 +1303,25 @@ def _estimated_render_bytes(event: AgentEvent) -> int:
         ).encode("utf-8")
         total += len(encoded_tool_input)
     return total
+
+
+@functools.cache
+def _malloc_trim_function() -> Any | None:
+    """Resolve glibc's optional heap-release hook once per converter process."""
+
+    try:
+        trim = ctypes.CDLL(None).malloc_trim
+    except (AttributeError, OSError):
+        return None
+    trim.argtypes = [ctypes.c_size_t]
+    trim.restype = ctypes.c_int
+    return trim
+
+
+def _return_free_heap_to_os() -> None:
+    trim = _malloc_trim_function()
+    if trim is not None:
+        trim(0)
 
 
 def _events_by_source(events: list[AgentEvent]) -> dict[tuple[str, int], list[AgentEvent]]:
