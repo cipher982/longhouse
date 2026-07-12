@@ -229,6 +229,10 @@ class CatalogDaemon:
             return await self._apply_session_runtime(request)
         if request.method == "control.command_result.apply.v2":
             return await self._apply_control_command_result(request)
+        if request.method == "control.command.prepare.v2":
+            return await self._prepare_control_command(request)
+        if request.method == "control.operation.finish.v2":
+            return await self._finish_control_operation(request)
         if request.method == "session.timeline.list.v2":
             return await self._list_session_timeline(request)
         if request.method == "session.read.v2":
@@ -655,6 +659,76 @@ class CatalogDaemon:
             owner_id=owner_id,
             device_id=device_id,
             message=normalized_message,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _prepare_control_command(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "operation_id",
+            "owner_id",
+            "session_id",
+            "device_id",
+            "provider",
+            "command_type",
+            "command_id",
+            "capability",
+            "request_payload",
+            "timeout_secs",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "control.command.prepare.v2 has invalid parameters")
+        params = dict(request.params)
+        for field in ("operation_id", "session_id"):
+            value = params[field]
+            try:
+                parsed = uuid.UUID(value) if isinstance(value, str) else None
+            except ValueError:
+                parsed = None
+            if parsed is None or str(parsed) != value:
+                return self._error(request, "invalid_request", f"{field} must be a canonical UUID")
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        for field, maximum in (("device_id", 255), ("provider", 64), ("command_type", 64), ("command_id", 96)):
+            if not _is_string(params[field], maximum=maximum):
+                return self._error(request, "invalid_request", f"{field} must contain 1 to {maximum} characters")
+        if params["capability"] not in {"send", "interrupt", "terminate"}:
+            return self._error(request, "invalid_request", "capability is not recognized")
+        if not isinstance(params["request_payload"], dict):
+            return self._error(request, "invalid_request", "request_payload must be an object")
+        if type(params["timeout_secs"]) is not int or not 1 <= params["timeout_secs"] <= 300:
+            return self._error(request, "invalid_request", "timeout_secs must be an integer from 1 through 300")
+        assert self._store is not None
+        result = await self._run_store(self._store.prepare_control_command, **params)
+        if result.get("reason") == "idempotency_conflict":
+            return self._error(request, "conflict", "command_id was reused with different attributes")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _finish_control_operation(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"operation_id", "status", "result", "error"}:
+            return self._error(request, "invalid_request", "control.operation.finish.v2 has invalid parameters")
+        operation_id = request.params["operation_id"]
+        try:
+            parsed = uuid.UUID(operation_id) if isinstance(operation_id, str) else None
+        except ValueError:
+            parsed = None
+        if parsed is None or str(parsed) != operation_id:
+            return self._error(request, "invalid_request", "operation_id must be a canonical UUID")
+        status = request.params["status"]
+        if status not in {"succeeded", "failed", "timed_out"}:
+            return self._error(request, "invalid_request", "status is not terminal")
+        result_payload = request.params["result"]
+        error_payload = request.params["error"]
+        if result_payload is not None and not isinstance(result_payload, dict):
+            return self._error(request, "invalid_request", "result must be an object or null")
+        if error_payload is not None and not isinstance(error_payload, dict):
+            return self._error(request, "invalid_request", "error must be an object or null")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.finish_control_operation,
+            operation_id=operation_id,
+            status=status,
+            result=result_payload,
+            error=error_payload,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

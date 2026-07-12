@@ -977,6 +977,153 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
+    def prepare_control_command(
+        self,
+        *,
+        operation_id: str,
+        owner_id: int,
+        session_id: str,
+        device_id: str,
+        provider: str,
+        command_type: str,
+        command_id: str,
+        capability: str,
+        request_payload: dict[str, Any],
+        timeout_secs: int,
+    ) -> dict[str, Any]:
+        """Validate the command-time lease and durably reserve one operation."""
+
+        from zerg.services.live_control_catalog import get_live_control_grant
+        from zerg.services.machine_control_operations import MACHINE_OPERATION_TIMEOUT_GRACE_SECS
+
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                existing = orm.query(LiveMachineControlOperation).filter(LiveMachineControlOperation.command_id == command_id).one_or_none()
+                if existing is not None:
+                    stored_request = _decode_json_object(existing.request_json)
+                    stored_grant = stored_request.pop("longhouse_control_grant", None)
+                    exact_replay = (
+                        str(existing.id) == operation_id
+                        and existing.owner_id == owner_id
+                        and str(existing.session_id or "") == session_id
+                        and str(existing.device_id) == device_id
+                        and str(existing.provider or "") == provider
+                        and str(existing.command_type) == command_type
+                        and int(existing.timeout_secs) == timeout_secs
+                        and stored_request == request_payload
+                        and isinstance(stored_grant, dict)
+                    )
+                    orm.rollback()
+                    return {
+                        "allowed": exact_replay,
+                        "reason": None if exact_replay else "idempotency_conflict",
+                        "operation_id": str(existing.id) if exact_replay else None,
+                        "grant": stored_grant if exact_replay else None,
+                        "exact_replay": exact_replay,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                grant = get_live_control_grant(orm, session_id=session_id, capability=capability)
+                if grant is None:
+                    orm.rollback()
+                    return {
+                        "allowed": False,
+                        "reason": "control_unavailable",
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                operation = LiveMachineControlOperation(
+                    id=operation_id,
+                    owner_id=owner_id,
+                    session_id=session_id,
+                    device_id=device_id,
+                    provider=provider,
+                    command_type=command_type,
+                    command_id=command_id,
+                    status="running",
+                    request_json=json.dumps(
+                        {
+                            **request_payload,
+                            "longhouse_control_grant": {
+                                "connection_id": grant.connection_id,
+                                "run_id": grant.run_id,
+                                "lease_generation": grant.lease_generation,
+                            },
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    timeout_secs=timeout_secs,
+                    started_at=observed_at,
+                    created_at=observed_at,
+                    updated_at=observed_at,
+                    expires_at=observed_at + timedelta(seconds=timeout_secs + MACHINE_OPERATION_TIMEOUT_GRACE_SECS),
+                )
+                orm.add(operation)
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "allowed": True,
+                "reason": None,
+                "operation_id": operation_id,
+                "grant": {
+                    "connection_id": grant.connection_id,
+                    "run_id": grant.run_id,
+                    "lease_generation": grant.lease_generation,
+                },
+                "exact_replay": False,
+                "commit_seq": str(commit_seq),
+            }
+
+    def finish_control_operation(
+        self,
+        *,
+        operation_id: str,
+        status: str,
+        result: dict[str, Any] | None,
+        error: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Finish one command operation in catalogd's serialized transaction."""
+
+        from zerg.services.machine_control_operations import TERMINAL_OPERATION_STATUSES
+
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            changed = False
+            try:
+                operation = orm.get(LiveMachineControlOperation, operation_id)
+                if operation is None:
+                    orm.rollback()
+                    return {
+                        "found": False,
+                        "changed": False,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                if str(operation.status) not in TERMINAL_OPERATION_STATUSES:
+                    operation.status = status
+                    operation.result_json = json.dumps(result, sort_keys=True, separators=(",", ":")) if result is not None else None
+                    operation.error_json = json.dumps(error, sort_keys=True, separators=(",", ":")) if error is not None else None
+                    operation.finished_at = observed_at
+                    operation.updated_at = observed_at
+                    operation.expires_at = None
+                    changed = True
+                    orm.commit()
+                else:
+                    orm.rollback()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at) if changed else _current_commit_seq(connection)
+            return {"found": True, "changed": changed, "commit_seq": str(commit_seq)}
+
     def list_session_timeline(
         self,
         *,

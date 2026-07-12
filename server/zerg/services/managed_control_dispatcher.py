@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -107,7 +108,11 @@ def _engine_command_id(
         seed = uuid4().hex
     if not command:
         return None
-    return f"managed-control:{getattr(session, 'id')}:{command}:{seed}"
+    command_id = f"managed-control:{getattr(session, 'id')}:{command}:{seed}"
+    if len(command_id) <= 96:
+        return command_id
+    digest = hashlib.sha256(seed.encode()).hexdigest()[:20]
+    return f"managed-control:{getattr(session, 'id')}:{command}:{digest}"
 
 
 async def _create_live_managed_control_operation(
@@ -155,6 +160,55 @@ async def _create_live_managed_control_operation(
     return operation_id
 
 
+async def _prepare_catalog_managed_control_operation(
+    *,
+    owner_id: int,
+    session: AgentSession,
+    command_type: str,
+    command_id: str,
+    capability: str,
+    payload: Mapping[str, Any],
+    timeout_secs: int,
+) -> tuple[str, Mapping[str, Any]] | None:
+    """Atomically validate the lease and reserve the command in catalogd."""
+
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    device_id = _session_device_id(session)
+    if catalogd is None or device_id is None:
+        return None
+    operation_id = str(uuid4())
+    try:
+        result = await catalogd.call(
+            "control.command.prepare.v2",
+            {
+                "operation_id": operation_id,
+                "owner_id": owner_id,
+                "session_id": str(getattr(session, "id")),
+                "device_id": device_id,
+                "provider": str(getattr(session, "provider", "") or "").strip().lower() or "unknown",
+                "command_type": command_type,
+                "command_id": command_id,
+                "capability": capability,
+                "request_payload": {
+                    "session_id": str(getattr(session, "id")),
+                    "payload": dict(payload or {}),
+                },
+                "timeout_secs": timeout_secs,
+            },
+            timeout_seconds=1.0,
+        )
+    except Exception:
+        logger.warning("Failed to prepare catalog managed-control operation %s", command_id, exc_info=True)
+        return None
+    grant = result.get("grant")
+    prepared_operation_id = result.get("operation_id")
+    if result.get("allowed") is not True or not isinstance(grant, Mapping) or not prepared_operation_id:
+        return None
+    return str(prepared_operation_id), grant
+
+
 async def _finish_live_managed_control_operation(
     *,
     operation_id: str | None,
@@ -163,6 +217,27 @@ async def _finish_live_managed_control_operation(
     error: Mapping[str, Any] | None = None,
 ) -> None:
     if not operation_id or not database_module.live_store_configured():
+        return
+    if database_module.live_catalog_enabled():
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            logger.warning("Catalogd is unavailable while finishing managed-control operation %s", operation_id)
+            return
+        try:
+            await catalogd.call(
+                "control.operation.finish.v2",
+                {
+                    "operation_id": operation_id,
+                    "status": status,
+                    "result": dict(result) if result is not None else None,
+                    "error": dict(error) if error is not None else None,
+                },
+                timeout_seconds=1.0,
+            )
+        except Exception:
+            logger.warning("Failed to finish catalog managed-control operation %s", operation_id, exc_info=True)
         return
     live_ws = get_live_write_serializer()
     if not live_ws.is_configured:
@@ -218,15 +293,15 @@ async def dispatch_managed_control_command(
 ) -> ManagedControlDispatchResult:
     """Dispatch one managed-control command through the Machine Agent channel."""
     dispatch_payload = dict(payload or {})
-    if database_module.live_catalog_enabled() and command_type in {
+    controlled_actions = {
         MANAGED_CONTROL_COMMAND_SEND_TEXT,
         MANAGED_CONTROL_COMMAND_STEER_TEXT,
         MANAGED_CONTROL_COMMAND_ANSWER_PAUSE,
         MANAGED_CONTROL_COMMAND_INTERRUPT,
         MANAGED_CONTROL_COMMAND_TERMINATE,
-    }:
-        from zerg.services.live_control_catalog import get_live_control_grant
-
+    }
+    action = None
+    if command_type in controlled_actions:
         action = {
             MANAGED_CONTROL_COMMAND_SEND_TEXT: "send",
             MANAGED_CONTROL_COMMAND_STEER_TEXT: "send",
@@ -234,34 +309,50 @@ async def dispatch_managed_control_command(
             MANAGED_CONTROL_COMMAND_INTERRUPT: "interrupt",
             MANAGED_CONTROL_COMMAND_TERMINATE: "terminate",
         }[command_type]
-        grant = get_live_control_grant(db, session_id=getattr(session, "id"), capability=action)
-        if grant is None:
-            return ManagedControlDispatchResult(
-                ok=False,
-                transport=MANAGED_CONTROL_TRANSPORT_NONE,
-                error=MANAGED_CONTROL_UNAVAILABLE_ERROR,
-            )
-        run_id = grant.run_id
-        dispatch_payload["longhouse_control_grant"] = {
-            "connection_id": grant.connection_id,
-            "run_id": grant.run_id,
-            "lease_generation": grant.lease_generation,
-        }
 
     transport = select_managed_control_transport(session, owner_id=owner_id, command_type=command_type)
     if transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL:
+        command_id = _engine_command_id(
+            session=session,
+            command_type=command_type,
+            request_id=request_id,
+            run_id=run_id,
+        )
+        prepared_operation_id = None
+        if database_module.live_catalog_enabled() and action is not None and command_type is not None and command_id is not None:
+            prepared = await _prepare_catalog_managed_control_operation(
+                owner_id=owner_id,
+                session=session,
+                command_type=command_type,
+                command_id=command_id,
+                capability=action,
+                payload={
+                    "provider": str(getattr(session, "provider", "") or "").strip().lower(),
+                    **dispatch_payload,
+                },
+                timeout_secs=timeout_secs,
+            )
+            if prepared is None:
+                return ManagedControlDispatchResult(
+                    ok=False,
+                    transport=MANAGED_CONTROL_TRANSPORT_NONE,
+                    error=MANAGED_CONTROL_UNAVAILABLE_ERROR,
+                )
+            prepared_operation_id, grant = prepared
+            run_id = str(grant["run_id"])
+            dispatch_payload["longhouse_control_grant"] = {
+                "connection_id": int(grant["connection_id"]),
+                "run_id": run_id,
+                "lease_generation": str(grant["lease_generation"]),
+            }
         return await _dispatch_engine_channel(
             owner_id=owner_id,
             session=session,
             command_type=command_type,
             payload=dispatch_payload,
             timeout_secs=timeout_secs,
-            command_id=_engine_command_id(
-                session=session,
-                command_type=command_type,
-                request_id=request_id,
-                run_id=run_id,
-            ),
+            command_id=command_id,
+            prepared_operation_id=prepared_operation_id,
         )
     return ManagedControlDispatchResult(
         ok=False,
@@ -300,6 +391,7 @@ async def _dispatch_engine_channel(
     payload: Mapping[str, Any] | None,
     timeout_secs: int,
     command_id: str | None = None,
+    prepared_operation_id: str | None = None,
 ) -> ManagedControlDispatchResult:
     if command_type is None:
         return ManagedControlDispatchResult(
@@ -319,8 +411,8 @@ async def _dispatch_engine_channel(
         "provider": str(getattr(session, "provider", "") or "").strip().lower(),
         **dict(payload or {}),
     }
-    live_operation_id = None
-    if command_id is not None:
+    live_operation_id = prepared_operation_id
+    if command_id is not None and live_operation_id is None and not database_module.live_catalog_enabled():
         live_operation_id = await _create_live_managed_control_operation(
             owner_id=owner_id,
             session=session,

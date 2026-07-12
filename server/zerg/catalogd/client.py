@@ -32,6 +32,10 @@ _SAFE_RETRY_METHODS = {
     # with different content, so a lost response can safely replay once.
     "machine.heartbeat.apply.v2",
     "machine.workspace.list.v2",
+    # Both control mutations are caller-keyed and exact/idempotent. A replay
+    # returns the reserved grant or observes the already-terminal operation.
+    "control.command.prepare.v2",
+    "control.operation.finish.v2",
     "ping.v2",
     "schema.v2",
     "session.prefix.resolve.v2",

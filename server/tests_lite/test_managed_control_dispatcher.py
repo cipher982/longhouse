@@ -13,20 +13,21 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+import zerg.services.managed_control_dispatcher as dispatcher_module
 from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
 from zerg.models.live_store import LiveMachineControlOperation
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-import zerg.services.managed_control_dispatcher as dispatcher_module
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
-from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_TERMINATE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_STEER_TEXT
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_TERMINATE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_NONE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
+from zerg.services.managed_control_dispatcher import _engine_command_id
 from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
 
@@ -121,6 +122,26 @@ def test_select_managed_control_transport_requires_engine_channel_even_with_runn
         )
         is None
     )
+
+
+def test_engine_command_id_is_stable_and_bounded_for_long_request_ids():
+    session = _session()
+    first = _engine_command_id(
+        session=session,
+        command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+        request_id="request-" + "x" * 200,
+        run_id=None,
+    )
+    second = _engine_command_id(
+        session=session,
+        command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+        request_id="request-" + "x" * 200,
+        run_id=None,
+    )
+    assert first == second
+    assert first is not None
+    assert len(first) <= 96
+    assert first.startswith(f"managed-control:{session.id}:")
 
 
 def test_select_managed_control_transport_returns_none_without_engine_channel():
@@ -428,6 +449,76 @@ def test_dispatch_managed_control_command_records_live_store_operation(tmp_path,
         finally:
             await _clear_machine_registry()
             live_engine.dispose()
+
+    asyncio.run(_run())
+
+
+def test_catalog_managed_control_uses_catalogd_for_grant_and_operation(monkeypatch):
+    calls = []
+
+    class _CatalogClient:
+        async def call(self, method, params, **_kwargs):
+            calls.append((method, params))
+            if method == "control.command.prepare.v2":
+                return {
+                    "allowed": True,
+                    "operation_id": params["operation_id"],
+                    "grant": {
+                        "connection_id": 17,
+                        "run_id": str(uuid4()),
+                        "lease_generation": "17:lease",
+                    },
+                }
+            if method == "control.operation.finish.v2":
+                return {"found": True, "changed": True, "commit_seq": "2"}
+            raise AssertionError(method)
+
+    monkeypatch.setattr(dispatcher_module.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(dispatcher_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(
+        "zerg.services.catalogd_supervisor.get_catalogd_client",
+        lambda: _CatalogClient(),
+    )
+    monkeypatch.setattr(
+        dispatcher_module,
+        "get_live_write_serializer",
+        lambda: (_ for _ in ()).throw(AssertionError("API process must not open the live serializer")),
+    )
+
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            websocket = await _connect_fake_engine(owner_id=42, supports=["codex.send"])
+            session = _session(source_runner_id=None)
+            completer = asyncio.create_task(
+                _complete_first_machine_command(
+                    websocket,
+                    {
+                        "ok": True,
+                        "result": {"exit_code": 0, "stdout": "accepted", "stderr": ""},
+                    },
+                )
+            )
+            result = await dispatch_managed_control_command(
+                db=object(),
+                owner_id=42,
+                session=session,
+                timeout_secs=15,
+                command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                payload={"text": "continue"},
+                request_id="req-catalog",
+            )
+            await completer
+            assert result.ok is True
+            assert [method for method, _params in calls] == [
+                "control.command.prepare.v2",
+                "control.operation.finish.v2",
+            ]
+            grant = websocket.sent[0]["payload"]["longhouse_control_grant"]
+            assert grant["connection_id"] == 17
+            assert grant["lease_generation"] == "17:lease"
+        finally:
+            await _clear_machine_registry()
 
     asyncio.run(_run())
 
