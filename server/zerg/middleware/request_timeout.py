@@ -28,6 +28,7 @@ MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS = 45
 INTERACTIVE_AUTH_TIMEOUT_SECONDS = 30
 INGEST_TIMEOUT_SECONDS = 30
 ARCHIVE_BUNDLE_TIMEOUT_SECONDS = 120
+ARCHIVE_READ_TIMEOUT_SECONDS = 60
 
 # Paths that are excluded from the timeout enforcement.
 _SKIP_PATHS = ("/readyz", "/health")
@@ -43,6 +44,29 @@ _TIMEOUT_OVERRIDES = {
     "/sessions/managed-local/this-device": MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS,
     "/agents/sessions/": ARCHIVE_BUNDLE_TIMEOUT_SECONDS,
 }
+
+_ARCHIVE_READ_EXACT_PATHS = {
+    "/agents/ingest-health",
+    "/agents/machines/health",
+    "/agents/usage-stats",
+    "/timeline/filters",
+    "/timeline/recall",
+    "/timeline/sessions/semantic",
+    "/timeline/sessions/summary",
+}
+
+
+def _uses_archive_read_timeout(api_path: str, method: str) -> bool:
+    if method not in {"GET", "HEAD"}:
+        return False
+    return (
+        api_path in _ARCHIVE_READ_EXACT_PATHS
+        or api_path.startswith("/agents/worklog/")
+        or api_path.startswith("/agents/sessions/")
+        or api_path.startswith("/timeline/sessions/")
+        or api_path.startswith("/timeline/workflows/")
+        or api_path.startswith("/timeline/session-shares/")
+    )
 
 
 class RequestTimeoutMiddleware:
@@ -90,6 +114,9 @@ class RequestTimeoutMiddleware:
             return
 
         timeout = self.timeout
+        method = str(scope.get("method") or "GET").upper()
+        if _uses_archive_read_timeout(api_path, method):
+            timeout = ARCHIVE_READ_TIMEOUT_SECONDS
         for prefix, override in _TIMEOUT_OVERRIDES.items():
             if prefix == "/agents/sessions/":
                 if api_path.startswith(prefix) and api_path.endswith("/archive-bundle"):

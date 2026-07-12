@@ -137,7 +137,9 @@ async def submit_archive_worker_job(
             response["job_wait_ms"] = round((time.monotonic() - submitted_at) * 1000, 1)
             return response
         error = result_payload.get("error") or {}
-        raise ArchiveWorkerJobError(f"{error.get('type') or 'ArchiveWorkerError'}: {error.get('message') or 'job failed'}")
+        error_type = error.get("type") or "ArchiveWorkerError"
+        error_message = error.get("message") or "job failed"
+        raise ArchiveWorkerJobError(f"{error_type}: {error_message}")
     raise ArchiveWorkerJobTimeout(f"archive worker job {job_id} exceeded {timeout_seconds:.1f}s")
 
 
@@ -165,6 +167,7 @@ def recover_interrupted_archive_jobs() -> int:
 def process_next_archive_worker_job(
     *,
     on_start: Callable[[dict[str, Any]], None] | None = None,
+    allow_background: bool = True,
 ) -> bool:
     from zerg.services.archive_api_writer_status import archive_api_writer_busy
 
@@ -172,6 +175,8 @@ def process_next_archive_worker_job(
         return False
     pending, running, results = _job_dirs()
     request_paths = sorted(pending.glob("*.json"), key=lambda path: path.name)
+    if not allow_background:
+        request_paths = [path for path in request_paths if path.name.startswith("000-")]
     if not request_paths:
         return False
     request_path = request_paths[0]

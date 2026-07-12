@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -102,6 +103,12 @@ def test_archive_read_lane_reserves_user_capacity_from_source_proof():
 async def test_background_source_proof_cannot_block_user_archive_read(monkeypatch):
     background_started = asyncio.Event()
     release_background = asyncio.Event()
+    signaled_lanes = []
+
+    @contextmanager
+    def reader_activity(*, enabled):
+        signaled_lanes.append(enabled)
+        yield
 
     class Child:
         returncode = 0
@@ -122,6 +129,7 @@ async def test_background_source_proof_cannot_block_user_archive_read(monkeypatc
         return Child()
 
     monkeypatch.setattr("asyncio.create_subprocess_exec", spawn)
+    monkeypatch.setattr("zerg.services.archive_read_proxy.archive_api_reader_activity", reader_activity)
     background = asyncio.create_task(proxy_archive_request(_request("/agents/source-lines/claims", method="POST")))
     await background_started.wait()
 
@@ -133,6 +141,7 @@ async def test_background_source_proof_cannot_block_user_archive_read(monkeypatc
 
     release_background.set()
     assert (await background).status_code == 200
+    assert signaled_lanes == [False, True]
 
 
 @pytest.mark.parametrize(

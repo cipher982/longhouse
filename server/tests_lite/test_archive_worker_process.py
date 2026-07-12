@@ -222,6 +222,39 @@ async def test_archive_worker_recovers_ingest_job_after_native_exit(tmp_path, mo
         assert db.query(AgentEvent).count() == 1
 
 
+def test_archive_worker_defers_background_jobs_while_user_reader_is_active(tmp_path, monkeypatch):
+    from zerg.services import archive_api_writer_status
+    from zerg.services import archive_worker_jobs
+
+    monkeypatch.setattr(
+        archive_worker_jobs,
+        "archive_worker_status_path",
+        lambda: tmp_path / "archive-worker-status.json",
+    )
+    monkeypatch.setattr(archive_api_writer_status, "archive_api_writer_busy", lambda: False)
+    monkeypatch.setattr(archive_worker_jobs, "_execute_job", lambda _kind, payload: {"label": payload["label"]})
+    pending, _running, _results = archive_worker_jobs._job_dirs()
+    background = pending / "030-00000000000000000001-background.json"
+    live = pending / "000-00000000000000000002-live.json"
+    background.write_text(
+        json.dumps({"job_id": "background", "kind": "test", "payload": {"label": "ingest-replay"}}),
+        encoding="utf-8",
+    )
+    live.write_text(
+        json.dumps({"job_id": "live", "kind": "test", "payload": {"label": "ingest-live"}}),
+        encoding="utf-8",
+    )
+    started: list[str] = []
+
+    assert archive_worker_jobs.process_next_archive_worker_job(
+        allow_background=False,
+        on_start=lambda request: started.append(str(request["job_id"])),
+    )
+    assert started == ["live"]
+    assert background.exists()
+    assert not archive_worker_jobs.process_next_archive_worker_job(allow_background=False)
+
+
 def test_archive_worker_is_canonical_outside_tests(monkeypatch):
     monkeypatch.setenv("TESTING", "1")
     assert archive_worker_enabled() is False

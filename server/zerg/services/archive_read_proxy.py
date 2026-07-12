@@ -24,6 +24,7 @@ from fastapi import status
 from starlette.responses import Response
 
 from zerg.config import get_settings
+from zerg.services.archive_api_reader_status import archive_api_reader_activity
 
 logger = logging.getLogger(__name__)
 
@@ -136,54 +137,55 @@ async def proxy_archive_request(request: Request) -> Response:
     env = dict(os.environ)
     slots = _ARCHIVE_BACKGROUND_READ_SLOTS if lane == "background" else _ARCHIVE_USER_READ_SLOTS
     admission_timeout = 1.0 if lane == "background" else 25.0
-    try:
-        await asyncio.wait_for(slots.acquire(), timeout=admission_timeout)
-    except TimeoutError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "archive_request_pressure", "message": "Archive workers are busy; retry shortly."},
-        ) from None
-    timeout = 30.0
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "zerg.services.archive_read_subprocess",
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-            start_new_session=True,
-        )
+    with archive_api_reader_activity(enabled=lane == "user"):
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(json.dumps(payload).encode("utf-8")),
-                timeout=timeout,
-            )
+            await asyncio.wait_for(slots.acquire(), timeout=admission_timeout)
         except TimeoutError:
-            await _stop_child(proc)
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "code": "archive_request_timeout",
-                    "message": "Archive operation timed out; live control remains available.",
-                },
+                detail={"code": "archive_request_pressure", "message": "Archive workers are busy; retry shortly."},
             ) from None
-        except asyncio.CancelledError:
-            # RequestTimeoutMiddleware and disconnected clients cancel this
-            # coroutine. Leaving the subprocess alive here both leaked a cold
-            # reader and released its semaphore slot, allowing an unbounded
-            # archive-read storm.
-            await _stop_child(proc)
-            raise
-    except OSError as exc:
-        logger.warning("Could not start archive request child for %s: %s", payload["path"], exc)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={"code": "archive_request_unavailable", "message": "Archive worker could not start."},
-        ) from None
-    finally:
-        slots.release()
+        timeout = 30.0
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "zerg.services.archive_read_subprocess",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+                start_new_session=True,
+            )
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(json.dumps(payload).encode("utf-8")),
+                    timeout=timeout,
+                )
+            except TimeoutError:
+                await _stop_child(proc)
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={
+                        "code": "archive_request_timeout",
+                        "message": "Archive operation timed out; live control remains available.",
+                    },
+                ) from None
+            except asyncio.CancelledError:
+                # RequestTimeoutMiddleware and disconnected clients cancel this
+                # coroutine. Leaving the subprocess alive here both leaked a cold
+                # reader and released its semaphore slot, allowing an unbounded
+                # archive-read storm.
+                await _stop_child(proc)
+                raise
+        except OSError as exc:
+            logger.warning("Could not start archive request child for %s: %s", payload["path"], exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "archive_request_unavailable", "message": "Archive worker could not start."},
+            ) from None
+        finally:
+            slots.release()
     if proc.returncode != 0:
         logger.warning(
             "Archive request child failed returncode=%s path=%s stderr=%s",

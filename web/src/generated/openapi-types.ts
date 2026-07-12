@@ -4352,6 +4352,12 @@ export interface components {
              */
             include_huge: boolean;
             /**
+             * Lease Seconds
+             * @description Expiry for trickle/drain control; ignored for paused mode.
+             * @default 3600
+             */
+            lease_seconds: number;
+            /**
              * Timeout Secs
              * @description Machine-control command timeout.
              */

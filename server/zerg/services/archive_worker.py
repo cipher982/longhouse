@@ -244,9 +244,16 @@ def drain_once(
 def run_worker(*, once: bool = False, restart_count: int = 0, restart_backoff_seconds: float = 1.0) -> int:
     # Cold schema checks/migrations belong inside this crash boundary. A native
     # SQLite failure here must restart the child, not terminate the Runtime Host.
+    from zerg.database import get_write_session_factory
     from zerg.database import initialize_database
+    from zerg.services.single_tenant import bootstrap_owner_user
 
     initialize_database()
+    archive_session_factory = get_write_session_factory()
+    if archive_session_factory is None:
+        raise RuntimeError("archive worker requires an archive session factory")
+    with archive_session_factory() as archive_db:
+        bootstrap_owner_user(archive_db)
     return asyncio.run(
         _run_worker(
             once=once,
@@ -264,6 +271,7 @@ async def _run_worker(
 ) -> int:
     from zerg.database import configure_write_serializer
     from zerg.database import get_live_session_factory
+    from zerg.services.archive_api_reader_status import archive_api_reader_busy
     from zerg.services.archive_worker_jobs import archive_worker_job_counts
     from zerg.services.archive_worker_jobs import process_next_archive_worker_job
     from zerg.services.archive_worker_jobs import prune_archive_worker_jobs
@@ -328,10 +336,12 @@ async def _run_worker(
         try:
             while not stop_requested:
                 try:
+                    user_reader_busy = archive_api_reader_busy()
                     job_processed, outbox_result, prefer_jobs = _select_work_once(
                         prefer_jobs=prefer_jobs,
                         process_job=lambda: process_next_archive_worker_job(
                             on_start=lambda job: report_active("job", job.get("job_id")),
+                            allow_background=not user_reader_busy,
                         ),
                         drain_outbox=lambda: drain_once(
                             on_start=lambda row: report_active("outbox", row.get("id")),
@@ -348,7 +358,7 @@ async def _run_worker(
                         foreground_since_maintenance += 1
 
                     maintenance_name = None
-                    if not once and (not result.get("processed") or foreground_since_maintenance >= 100):
+                    if not once and not user_reader_busy and (not result.get("processed") or foreground_since_maintenance >= 100):
                         maintenance_name = await maintenance.run_one_due(
                             on_start=lambda name: report_active("maintenance", name),
                             allow_expensive=not result.get("processed"),

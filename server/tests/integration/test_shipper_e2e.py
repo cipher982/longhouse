@@ -367,6 +367,15 @@ def _get_session(server: str | dict[str, str], session_id: str) -> dict | None:
 
 
 def _get_events(server: str | dict[str, str], session_id: str) -> list[dict]:
+    if isinstance(server, dict):
+        return [
+            dict(row)
+            for row in _sqlite_rows(
+                server,
+                "SELECT * FROM events WHERE session_id = ? ORDER BY id",
+                (session_id,),
+            )
+        ]
     r = requests.get(
         f"{_server_url(server)}/api/agents/sessions/{session_id}/events",
         headers={"X-Agents-Token": _server_token(server)},
@@ -390,6 +399,12 @@ def _wait_for_session_events(
     last_error = None
     while time.monotonic() < deadline:
         try:
+            if isinstance(server, dict):
+                events = _get_events(server, session_id)
+                if len(events) >= min_events:
+                    return events
+                time.sleep(0.1)
+                continue
             session_response = http.get(
                 f"{_server_url(server)}/api/agents/sessions/{session_id}",
                 headers={"X-Agents-Token": _server_token(server)},
@@ -1512,7 +1527,7 @@ def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path
         (CODEX_FIXTURE, "codex", CODEX_SESSION_ID, True),
     ],
 )
-def test_archival_rows_are_stored_compressed_on_real_ingest(
+def test_raw_archive_chunks_replace_legacy_row_payloads_on_real_ingest(
     server,
     tmp_path,
     fixture: str,
@@ -1520,7 +1535,7 @@ def test_archival_rows_are_stored_compressed_on_real_ingest(
     session_id: str,
     expect_event_raw_payload: bool,
 ):
-    """Full shipper path must persist archival payloads in codec=1 form."""
+    """Full shipper path stores raw bytes in sealed chunks, not row payloads."""
 
     _ship(fixture, server, provider, tmp_path / f"{provider}-storage.db")
 
@@ -1534,23 +1549,33 @@ def test_archival_rows_are_stored_compressed_on_real_ingest(
         "SELECT raw_json, raw_json_z, raw_json_codec FROM source_lines WHERE session_id = ? ORDER BY id",
         (session_id,),
     )
+    source_chunks = _sqlite_rows(
+        server,
+        "SELECT * FROM archive_chunks WHERE session_id = ? AND stream = 'source_lines' ORDER BY id",
+        (session_id,),
+    )
+    event_chunks = _sqlite_rows(
+        server,
+        "SELECT * FROM archive_chunks WHERE session_id = ? AND stream = 'events' ORDER BY id",
+        (session_id,),
+    )
 
     assert event_rows, f"{provider} ingest produced no event rows"
     assert source_line_rows, f"{provider} ingest produced no source_line rows"
-    assert all(row["raw_json_codec"] == 1 for row in source_line_rows)
-    assert all(row["raw_json_z"] is not None for row in source_line_rows)
+    assert source_chunks, f"{provider} ingest produced no sealed source-line chunks"
+    assert all(row["state"] == "sealed" for row in source_chunks)
+    assert all(row["compressed_bytes"] > 0 for row in source_chunks)
+    assert all(row["uncompressed_bytes"] > 0 for row in source_chunks)
+    assert all(len(row["file_sha256"]) == 64 for row in source_chunks)
+    assert all(row["raw_json_codec"] == 0 for row in source_line_rows)
+    assert all(row["raw_json_z"] is None for row in source_line_rows)
     assert all(row["raw_json"] == "" for row in source_line_rows)
 
-    compressed_event_rows = [row for row in event_rows if row["raw_json_z"] is not None]
-    legacy_null_event_rows = [row for row in event_rows if row["raw_json_z"] is None]
-
     assert all(row["raw_json"] is None for row in event_rows)
-    assert all(row["raw_json_codec"] == 1 for row in compressed_event_rows)
-    assert all(row["raw_json_codec"] == 0 for row in legacy_null_event_rows)
+    assert all(row["raw_json_z"] is None for row in event_rows)
+    assert all(row["raw_json_codec"] == 0 for row in event_rows)
     if expect_event_raw_payload:
-        assert len(compressed_event_rows) == len(event_rows), (
-            f"{provider} ingest should preserve raw payloads on every event row"
-        )
+        assert event_chunks, f"{provider} ingest should preserve raw events in sealed chunks"
 
 
 @pytest.mark.parametrize(

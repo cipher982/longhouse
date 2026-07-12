@@ -88,6 +88,37 @@ def test_agents_archive_bundle_route_uses_longer_timeout_budget():
     assert response.json() == {"ok": True}
 
 
+def test_archive_backed_user_read_uses_longer_timeout_budget():
+    app = FastAPI()
+    app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
+
+    @app.get("/api/agents/worklog/day")
+    async def worklog():
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.get("/api/agents/worklog/day")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_session_control_write_keeps_default_timeout_budget():
+    app = FastAPI()
+    app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
+
+    @app.post("/api/agents/sessions/test-session/action")
+    async def session_action():
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.post("/api/agents/sessions/test-session/action")
+
+    assert response.status_code == 503
+
+
 def test_provider_live_proof_route_uses_default_timeout_budget():
     app = FastAPI()
     app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
