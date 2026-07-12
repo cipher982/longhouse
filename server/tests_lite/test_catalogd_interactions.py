@@ -143,8 +143,7 @@ async def test_catalogd_owns_permission_registration_resolution_and_poll(daemon_
         assert row.status == "resolved"
         runtime = db.query(LiveRuntimeState).filter_by(runtime_key=runtime_key).one()
         assert runtime.pending_interaction_id is None
-        outbox = db.query(LiveArchiveOutbox).order_by(LiveArchiveOutbox.id).all()
-        assert len(outbox) == 2
+        assert db.query(LiveArchiveOutbox).count() == 0
     engine.dispose()
 
 

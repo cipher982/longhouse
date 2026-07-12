@@ -205,11 +205,11 @@ def test_live_session_state_upserts_and_marks_missing(tmp_path):
         engine.dispose()
 
 
-def test_archive_and_live_heartbeat_stamp_columns_stay_in_sync():
+def test_live_heartbeat_stamp_extends_legacy_columns_with_bounded_receipt():
     archive_columns = {column.name for column in AgentHeartbeat.__table__.columns if column.name != "id"}
     live_columns = {column.name for column in LiveHeartbeatStamp.__table__.columns if column.name != "id"}
 
-    assert live_columns == archive_columns
+    assert live_columns == archive_columns | {"request_sha256", "catalog_result_json"}
 
 
 def test_archive_and_live_runtime_state_columns_stay_in_sync():
@@ -2202,9 +2202,7 @@ async def test_heartbeat_live_stamp_returns_while_archive_bookkeeping_waits(tmp_
             assert live_session.provider == "codex"
             assert live_session.state == "attached"
             assert live_session.last_seen_at is not None
-            outbox = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == HEARTBEAT_STAMP_KIND).one()
-            assert outbox.drained_at is None
-            assert "live-split" in outbox.idempotency_key
+            assert live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == HEARTBEAT_STAMP_KIND).count() == 0
 
         with ArchiveSession() as archive_db:
             assert archive_db.query(AgentHeartbeat).filter(AgentHeartbeat.device_id == "live-split").count() == 0

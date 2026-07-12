@@ -1259,7 +1259,7 @@ def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
         asyncio.run(session_lock_manager.release(str(session_id)))
 
 
-def test_live_queue_drain_dispatches_receipt_then_projects_archive(monkeypatch, tmp_path):
+def test_live_queue_drain_dispatches_catalog_receipt_without_archive_projection(monkeypatch, tmp_path):
     from zerg.services.session_input_queue import wake_session_input_queue
 
     LiveSession, live_engine = _enable_live_input_store(monkeypatch, tmp_path)
@@ -1299,24 +1299,8 @@ def test_live_queue_drain_dispatches_receipt_then_projects_archive(monkeypatch, 
             receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=live_input_id).one()
             assert receipt.status == INPUT_STATUS_DELIVERED
             assert receipt.delivery_request_id
-            outbox = live_db.query(LiveArchiveOutbox).one()
-            assert outbox.kind == SESSION_INPUT_RECEIPT_KIND
-            assert outbox.drained_at is None
-
-        with LiveSession() as live_db, session_local() as archive_db:
-            drain_result = drain_live_archive_outbox(live_db, archive_db, limit=10)
-        assert drain_result.drained == 1
-
-        with session_local() as db:
-            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
-            assert row.status == INPUT_STATUS_DELIVERED
-            assert row.client_request_id == "live-drain-1"
-            assert row.delivery_request_id
-            turn = db.query(SessionTurn).filter(SessionTurn.request_id == row.delivery_request_id).one()
-            assert turn.session_input_id == row.id
-        with LiveSession() as live_db:
-            receipt = live_db.query(LiveSessionInputReceipt).filter_by(id=live_input_id).one()
-            assert receipt.archive_session_input_id == row.id
+            assert live_db.query(LiveArchiveOutbox).count() == 0
+            assert receipt.archive_session_input_id is None
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         api_app_ref.dependency_overrides = {}
@@ -2525,7 +2509,7 @@ def test_intent_steer_acks_from_live_receipt_without_archive_row(monkeypatch, tm
             assert receipt.status == INPUT_STATUS_DELIVERED
             assert receipt.intent == "steer"
             assert receipt.client_request_id == "live-steer-1"
-            assert live_db.query(LiveArchiveOutbox).filter_by(kind=SESSION_INPUT_RECEIPT_KIND).count() == 1
+            assert live_db.query(LiveArchiveOutbox).filter_by(kind=SESSION_INPUT_RECEIPT_KIND).count() == 0
     finally:
         api_app_ref.dependency_overrides = {}
         live_engine.dispose()

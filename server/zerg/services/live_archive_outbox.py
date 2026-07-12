@@ -164,6 +164,7 @@ def enqueue_managed_local_launch_outbox(
     git_branch: str | None,
     started_at: datetime,
     idempotency_key: str | None = None,
+    completed: bool = False,
 ) -> bool:
     """Persist managed-local launch idempotency evidence."""
 
@@ -205,7 +206,7 @@ def enqueue_managed_local_launch_outbox(
                 },
                 sort_keys=True,
             ),
-            drained_at=started_at,
+            drained_at=started_at if completed else None,
         )
     )
     return True
@@ -224,6 +225,7 @@ def enqueue_remote_launch_outbox(
     *,
     launch: dict[str, Any],
     idempotency_key: str | None = None,
+    completed: bool = False,
 ) -> bool:
     """Persist remote-launch idempotency evidence."""
 
@@ -236,6 +238,7 @@ def enqueue_remote_launch_outbox(
         idempotency_key=key,
         kind=REMOTE_LAUNCH_KIND,
         payload={"launch": _jsonable(launch)},
+        completed=completed,
     )
 
 
@@ -245,6 +248,7 @@ def enqueue_remote_launch_outcome_outbox(
     launch: dict[str, Any],
     outcome: dict[str, Any],
     idempotency_key: str | None = None,
+    completed: bool = False,
 ) -> bool:
     """Persist remote-launch outcome idempotency evidence."""
 
@@ -258,6 +262,7 @@ def enqueue_remote_launch_outcome_outbox(
         idempotency_key=key,
         kind=REMOTE_LAUNCH_OUTCOME_KIND,
         payload={"launch": _jsonable(launch), "outcome": _jsonable(outcome)},
+        completed=completed,
     )
 
 
@@ -267,6 +272,7 @@ def _enqueue_json_outbox(
     idempotency_key: str,
     kind: str,
     payload: dict[str, Any],
+    completed: bool,
 ) -> bool:
     existing = db.query(LiveArchiveOutbox.id).filter(LiveArchiveOutbox.idempotency_key == idempotency_key).first()
     if existing is not None:
@@ -276,7 +282,7 @@ def _enqueue_json_outbox(
             idempotency_key=idempotency_key,
             kind=kind,
             payload_json=json.dumps(payload, sort_keys=True),
-            drained_at=datetime.now(timezone.utc),
+            drained_at=datetime.now(timezone.utc) if completed else None,
         )
     )
     return True

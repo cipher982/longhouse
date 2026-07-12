@@ -392,12 +392,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
             assert receipt.status == INPUT_STATUS_DELIVERED
             assert receipt.client_request_id == "hot-input-stall-1"
             delivery_request_id = receipt.delivery_request_id
-            input_outbox = (
-                live_db.query(LiveArchiveOutbox)
-                .filter(LiveArchiveOutbox.kind == SESSION_INPUT_RECEIPT_KIND)
-                .one()
-            )
-            assert input_outbox.drained_at is None
+            assert live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == SESSION_INPUT_RECEIPT_KIND).count() == 0
             control_operation = (
                 live_db.query(LiveMachineControlOperation)
                 .filter(LiveMachineControlOperation.command_id == control_frame["command_id"])
@@ -448,12 +443,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
             assert live_runtime is not None
             assert live_runtime.phase == "running"
             assert live_runtime.active_tool == "Shell"
-            runtime_outbox = (
-                live_db.query(LiveArchiveOutbox)
-                .filter(LiveArchiveOutbox.kind == RUNTIME_EVENT_KIND)
-                .one()
-            )
-            assert runtime_outbox.drained_at is None
+            assert live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == RUNTIME_EVENT_KIND).count() == 0
 
         registry = _StubRegistry()
         await _register_online(registry)

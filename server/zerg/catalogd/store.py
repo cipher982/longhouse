@@ -2046,7 +2046,7 @@ class CatalogStore:
                     expires_at=launch["expires_at"],
                     now=observed_at,
                 )
-                enqueue_remote_launch_outbox(orm, launch=launch)
+                enqueue_remote_launch_outbox(orm, launch=launch, completed=True)
                 result = live_launch_result(attempt)
                 orm.commit()
             except BaseException:
@@ -2181,6 +2181,7 @@ class CatalogStore:
                     git_repo=launch.get("git_repo"),
                     git_branch=launch.get("git_branch"),
                     started_at=observed_at,
+                    completed=True,
                 )
                 result = live_launch_result(attempt)
                 orm.commit()
@@ -2277,7 +2278,7 @@ class CatalogStore:
                     expires_at=launch["expires_at"],
                     now=observed_at,
                 )
-                enqueue_remote_launch_outbox(orm, launch=launch)
+                enqueue_remote_launch_outbox(orm, launch=launch, completed=True)
                 orm.flush()
                 result = live_launch_result(attempt)
                 orm.commit()
@@ -2386,7 +2387,7 @@ class CatalogStore:
                         force_new_run=True,
                         observed_at=observed_at,
                     )
-                enqueue_remote_launch_outcome_outbox(orm, launch=launch, outcome=outcome)
+                enqueue_remote_launch_outcome_outbox(orm, launch=launch, outcome=outcome, completed=True)
                 result = live_launch_result(attempt)
                 orm.commit()
             except BaseException:

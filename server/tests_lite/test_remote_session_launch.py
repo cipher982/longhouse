@@ -1435,8 +1435,9 @@ def test_live_catalog_continue_uses_snapshot_and_catalog_transactions_only(tmp_p
             attempts = live_db.query(LiveSessionLaunchAttempt).filter_by(session_id=str(session_id)).all()
             assert attempts[-1].state == "adopted"
             assert live_db.query(LiveSessionConnection).filter_by(state="attached").count() == 1
-            outbox = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.drained_at.is_(None)).all()
+            outbox = live_db.query(LiveArchiveOutbox).order_by(LiveArchiveOutbox.id).all()
             assert [row.kind for row in outbox] == ["remote_launch.v1", "remote_launch_outcome.v1"]
+            assert all(row.drained_at is not None for row in outbox)
     finally:
         live_engine.dispose()
 
