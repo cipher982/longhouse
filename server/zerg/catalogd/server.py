@@ -1545,6 +1545,13 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.advance_projector_state, **params)
+        if result.get("session_deleted") is True:
+            return self._error(
+                request,
+                "session_deleted",
+                "session has a durable deletion fence",
+                details={"deletion_revision": result.get("deletion_revision")},
+            )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _claim_projector_lag(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

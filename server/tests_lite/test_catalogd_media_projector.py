@@ -7,7 +7,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.models import MediaObject
@@ -41,9 +40,7 @@ def _media_params(
         "mime_type": "image/png" if present else None,
         "byte_size": 123 if present else None,
         "object_path": f"media/{media_hash[:2]}/{media_hash}.bin" if present else None,
-        "session_refs": (
-            [{"session_id": session_id, "envelope_id": None, "ref_key": "inline:0"}] if session_id is not None else []
-        ),
+        "session_refs": ([{"session_id": session_id, "envelope_id": None, "ref_key": "inline:0"}] if session_id is not None else []),
         "observed_at": observed_at.isoformat(),
     }
 
@@ -278,6 +275,82 @@ async def test_projector_state_coalesces_claims_completion_failure_and_restart(d
         )
         assert terminal_claim_replay["exact_replay"] is True
         assert terminal_claim_replay["claimed"] == []
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_projector_state_cannot_resurrect_or_claim_tombstoned_session(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    live_session_id = str(uuid4())
+    deleted_session_id = str(uuid4())
+    projector = "render-v2"
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        base = {
+            "projector": projector,
+            "desired_revision": 1,
+            "observed_at": now.isoformat(),
+        }
+        await client.call("projector.state.advance.v2", {**base, "session_id": live_session_id})
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with engine.begin() as connection:
+        connection.execute(
+            SessionTombstone.__table__.insert(),
+            [
+                {
+                    "session_id": live_session_id,
+                    "deletion_revision": 20,
+                    "deleted_at": now,
+                    "commit_seq": 2,
+                },
+                {
+                    "session_id": deleted_session_id,
+                    "deletion_revision": 21,
+                    "deleted_at": now,
+                    "commit_seq": 3,
+                },
+            ],
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        with pytest.raises(CatalogRemoteError) as deleted:
+            await client.call(
+                "projector.state.advance.v2",
+                {**base, "session_id": deleted_session_id},
+            )
+        assert deleted.value.code == "session_deleted"
+        assert deleted.value.details["deletion_revision"] == "21"
+
+        claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": projector,
+                "worker_id": "worker-a",
+                "claim_token": str(uuid4()),
+                "now": now.isoformat(),
+                "lease_seconds": 60,
+                "limit": 10,
+            },
+        )
+        assert claim["claimed"] == []
+        lag = await client.call(
+            "projector.state.list_lag.v2",
+            {"projector": projector, "after_session_id": None, "limit": 100},
+        )
+        assert lag["states"] == []
     finally:
         await client.close()
         await daemon.close()

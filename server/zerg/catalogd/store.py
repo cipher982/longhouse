@@ -3593,8 +3593,18 @@ class CatalogStore:
         observed_at: datetime,
     ) -> dict[str, Any]:
         table = ProjectorState.__table__
+        tombstones = LiveSessionTombstone.__table__
         session_key = str(session_id)
         with _write_transaction(self.engine) as connection:
+            deletion_revision = connection.execute(
+                select(tombstones.c.deletion_revision).where(tombstones.c.session_id == session_key)
+            ).scalar_one_or_none()
+            if deletion_revision is not None:
+                return {
+                    "session_deleted": True,
+                    "deletion_revision": str(deletion_revision),
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
             row = (
                 connection.execute(select(table).where(table.c.projector == projector, table.c.session_id == session_key))
                 .mappings()
@@ -3648,6 +3658,7 @@ class CatalogStore:
         limit: int,
     ) -> dict[str, Any]:
         table = ProjectorState.__table__
+        tombstones = LiveSessionTombstone.__table__
         with _write_transaction(self.engine) as connection:
             replay_rows = (
                 connection.execute(
@@ -3687,6 +3698,7 @@ class CatalogStore:
                     .where(
                         table.c.projector == projector,
                         table.c.desired_revision > table.c.completed_revision,
+                        ~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists(),
                         or_(table.c.claim_expires_at.is_(None), table.c.claim_expires_at <= now),
                         or_(table.c.retry_at.is_(None), table.c.retry_at <= now),
                     )
@@ -3868,11 +3880,13 @@ class CatalogStore:
         limit: int,
     ) -> dict[str, Any]:
         table = ProjectorState.__table__
+        tombstones = LiveSessionTombstone.__table__
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:
             statement = select(table).where(
                 table.c.projector == projector,
                 table.c.desired_revision > table.c.completed_revision,
+                ~select(tombstones.c.session_id).where(tombstones.c.session_id == table.c.session_id).exists(),
             )
             if after_session_id is not None:
                 statement = statement.where(table.c.session_id > after_session_id)
