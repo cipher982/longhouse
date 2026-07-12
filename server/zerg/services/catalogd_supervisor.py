@@ -119,7 +119,7 @@ class CatalogdSupervisor:
                 )
                 self._process = process
                 self._write_status("starting", ownership="owned", pid=process.pid)
-                returncode = await process.wait()
+                returncode = await self._monitor_owned_process(process)
                 if self._stopping:
                     return
                 self._restart_count += 1
@@ -146,6 +146,33 @@ class CatalogdSupervisor:
                 await self.client.close()
             await asyncio.sleep(backoff)
             backoff = min(5.0, backoff * 2)
+
+    async def _monitor_owned_process(self, process: asyncio.subprocess.Process) -> int:
+        """Publish live owned-daemon state while retaining process supervision."""
+
+        while process.returncode is None and not self._stopping:
+            try:
+                ping = await self.client.call("ping.v2")
+                if self._is_compatible(ping):
+                    self._write_status(
+                        "running",
+                        ping=ping,
+                        ownership="owned",
+                        restart_count=self._restart_count,
+                    )
+            except CatalogUnavailable as exc:
+                self._write_status(
+                    "degraded",
+                    ownership="owned",
+                    pid=process.pid,
+                    error=f"{type(exc).__name__}: {exc}",
+                    restart_count=self._restart_count,
+                )
+            try:
+                return await asyncio.wait_for(process.wait(), timeout=0.5)
+            except asyncio.TimeoutError:
+                continue
+        return await process.wait()
 
     async def _terminate_owned_process(self) -> None:
         process = self._process

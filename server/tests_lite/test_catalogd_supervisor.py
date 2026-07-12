@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import subprocess
 import sys
@@ -72,6 +73,19 @@ async def _eventually_new_ping(client: CatalogClient, old_pid: int, timeout: flo
     raise AssertionError("catalogd supervisor did not replace the dead process")
 
 
+async def _eventually_running_status(path: Path, expected_pid: int, timeout: float = 10.0):
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            payload = json.loads(path.read_text())
+            if payload.get("status") == "running" and payload.get("ping", {}).get("pid") == expected_pid:
+                return payload
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        await asyncio.sleep(0.05)
+    raise AssertionError("catalogd supervisor status did not converge to running")
+
+
 @pytest.mark.asyncio
 async def test_supervisor_owns_restarts_and_stops_child(supervisor_paths):
     database_path, socket_path = supervisor_paths
@@ -82,6 +96,8 @@ async def test_supervisor_owns_restarts_and_stops_child(supervisor_paths):
     supervisor._process.kill()
     replacement = await _eventually_new_ping(supervisor.client, first["pid"])
     assert replacement["catalog_id"] == first["catalog_id"]
+    status = await _eventually_running_status(supervisor.status_path, replacement["pid"])
+    assert status["restart_count"] == 1
     await supervisor.stop()
     assert not socket_path.exists()
 
