@@ -296,7 +296,7 @@ class LegacyCorpusConverter:
         watermark: LegacyHighWatermark,
     ) -> MigrationResult:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
-        sources, source_missing = self._load_sources(db, session_id, watermark)
+        sources, source_covered, source_missing = self._load_sources(db, session_id, watermark)
         events = (
             db.query(AgentEvent)
             .filter(AgentEvent.session_id == session_id, AgentEvent.id <= watermark.event_id)
@@ -400,7 +400,6 @@ class LegacyCorpusConverter:
             output_parts.extend((sealed_raw.object_hash, sealed_render.object_hash, committed_seq))
 
         media_covered, media_missing, media_hashes = await self._migrate_media(db, session_id, watermark)
-        source_covered = len(sources)
         output_proof = _proof("output", str(session_id), *sorted(output_parts), *sorted(media_hashes))
         expected_tuples = [_event_tuple(event, session_id, head_branch_id=head_branch_id) for event in events]
         expected_event_hash = _event_parity_hash(expected_tuples)
@@ -425,7 +424,7 @@ class LegacyCorpusConverter:
         db: Session,
         session_id: UUID,
         watermark: LegacyHighWatermark,
-    ) -> tuple[list[_SourceRecord], int]:
+    ) -> tuple[list[_SourceRecord], int, int]:
         rows = (
             db.query(AgentSourceLine)
             .filter(AgentSourceLine.session_id == session_id, AgentSourceLine.id <= watermark.source_line_id)
@@ -453,6 +452,8 @@ class LegacyCorpusConverter:
                 .order_by(AgentEvent.id.asc())
             }
             records = []
+            physical_keys: set[tuple[str, int, str]] = set()
+            covered = 0
             missing = 0
             for row in rows:
                 value = decode_raw_json(row)
@@ -470,16 +471,24 @@ class LegacyCorpusConverter:
                 if len(data) > MAX_RECORD_BYTES:
                     missing += 1
                     continue
-                records.append(
-                    _SourceRecord(
-                        data=data,
-                        source_path=row.source_path,
-                        source_offset=int(row.source_offset),
-                        branch_id=int(row.branch_id),
-                        provenance_kind=provenance_kind,
+                raw_hash = hashlib.sha256(data).hexdigest()
+                if raw_hash != row.line_hash:
+                    missing += 1
+                    continue
+                covered += 1
+                physical_key = (row.source_path, int(row.source_offset), raw_hash)
+                if physical_key not in physical_keys:
+                    physical_keys.add(physical_key)
+                    records.append(
+                        _SourceRecord(
+                            data=data,
+                            source_path=row.source_path,
+                            source_offset=int(row.source_offset),
+                            branch_id=int(row.branch_id),
+                            provenance_kind=provenance_kind,
+                        )
                     )
-                )
-            return records, missing
+            return records, covered, missing
 
         events = (
             db.query(AgentEvent)
@@ -488,23 +497,32 @@ class LegacyCorpusConverter:
             .all()
         )
         records = []
+        physical_keys: set[tuple[str, int, str]] = set()
+        covered = 0
         missing = 0
         for event in events:
             value = decode_raw_json(event)
             if value is None or len(value.encode("utf-8")) > MAX_RECORD_BYTES:
                 missing += 1
                 continue
-            records.append(
-                _SourceRecord(
-                    data=value.encode("utf-8"),
-                    source_path=event.source_path or f"legacy-event:{event.id}",
-                    source_offset=int(event.source_offset if event.source_offset is not None else event.id),
-                    branch_id=int(event.branch_id or 0),
-                    provenance_kind="legacy_fallback",
-                    event=event,
+            data = value.encode("utf-8")
+            source_path = event.source_path or f"legacy-event:{event.id}"
+            source_offset = int(event.source_offset if event.source_offset is not None else event.id)
+            physical_key = (source_path, source_offset, hashlib.sha256(data).hexdigest())
+            covered += 1
+            if physical_key not in physical_keys:
+                physical_keys.add(physical_key)
+                records.append(
+                    _SourceRecord(
+                        data=data,
+                        source_path=source_path,
+                        source_offset=source_offset,
+                        branch_id=int(event.branch_id or 0),
+                        provenance_kind="legacy_fallback",
+                        event=event,
+                    )
                 )
-            )
-        return records, missing
+        return records, covered, missing
 
     async def _active_owner_id(self) -> str:
         result = await self.catalog.call("auth.owner.get.v2", {}, timeout_seconds=5.0)

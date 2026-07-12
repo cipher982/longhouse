@@ -264,6 +264,49 @@ async def test_mixed_source_paths_get_separate_epochs_and_contiguous_ordinals(le
 
 
 @pytest.mark.asyncio
+async def test_branch_copy_duplicates_count_coverage_once_per_row_but_seal_one_record(legacy_db, tmp_path: Path):
+    session = _session()
+    raw = '{"type":"user","message":"branch copy"}'
+    line_hash = hashlib.sha256(raw.encode()).hexdigest()
+    with legacy_db() as db:
+        db.add(session)
+        db.flush()
+        for branch_id, is_branch_copy in ((1, 0), (2, 1)):
+            db.add(
+                AgentSourceLine(
+                    session_id=session.id,
+                    source_path="branch.jsonl",
+                    source_offset=55,
+                    branch_id=branch_id,
+                    is_branch_copy=is_branch_copy,
+                    raw_json=raw,
+                    raw_json_codec=0,
+                    line_hash=line_hash,
+                )
+            )
+        db.add(_event(session.id, raw_json=raw, source_path="branch.jsonl", source_offset=55))
+        db.commit()
+        watermark = freeze_high_watermark(db)
+
+    catalog = FakeCatalog()
+    converter = LegacyCorpusConverter(
+        session_factory=legacy_db,
+        catalog=catalog,
+        object_root=tmp_path / "objects-v2",
+        tenant_id="tenant-a",
+    )
+    with legacy_db() as db:
+        result = await converter.convert_session(db, session.id, watermark)
+
+    commits = [payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2"]
+    assert len(commits) == 1
+    assert commits[0]["range_end"] - commits[0]["range_start"] == 1
+    assert commits[0]["record_hashes"] == [line_hash]
+    assert result.source_covered == 2
+    assert result.source_missing == 0
+
+
+@pytest.mark.asyncio
 async def test_missing_source_line_uses_matching_event_raw_as_legacy_fallback(legacy_db, tmp_path: Path):
     session = _session()
     raw = '{"type":"user","message":"recovered"}'
