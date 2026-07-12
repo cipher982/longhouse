@@ -11,6 +11,8 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 
 from zerg.catalogd.protocol import CatalogRpcError
@@ -197,12 +199,28 @@ class CatalogDaemon:
             return self._error(request, "catalog_unavailable", "catalog is not ready", retryable=True)
         if request.method == "auth.device.validate.v2":
             return await self._authenticate_device(request)
+        if request.method == "auth.device.resolve.v2":
+            return await self._resolve_device(request)
         if request.method == "auth.device.create.v2":
             return await self._create_device(request)
         if request.method == "auth.device.list.v2":
             return await self._list_devices(request)
         if request.method == "auth.device.revoke.v2":
             return await self._revoke_device(request)
+        if request.method == "auth.user.get.v2":
+            return await self._get_user(request)
+        if request.method == "auth.user.resolve_cp.v2":
+            return await self._resolve_cp_user(request)
+        if request.method == "auth.user.resolve_local.v2":
+            return await self._resolve_local_user(request)
+        if request.method == "auth.user.update.v2":
+            return await self._update_user(request)
+        if request.method == "auth.refresh.create.v2":
+            return await self._create_refresh(request)
+        if request.method == "auth.refresh.rotate.v2":
+            return await self._rotate_refresh(request)
+        if request.method == "auth.refresh.revoke_family.v2":
+            return await self._revoke_refresh_family(request)
         if request.params:
             return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
         metadata = await self._run_store(read_catalog_meta, self._engine)
@@ -247,6 +265,204 @@ class CatalogDaemon:
             self._store.authenticate_device,
             token_hash=token_hash,
         )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _get_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"user_id", "touch_last_login"}:
+            return self._error(request, "invalid_request", "auth.user.get.v2 requires user_id and touch_last_login")
+        user_id = request.params["user_id"]
+        touch = request.params["touch_last_login"]
+        if type(user_id) is not int or user_id <= 0:
+            return self._error(request, "invalid_request", "user_id must be a positive integer")
+        if type(touch) is not bool:
+            return self._error(request, "invalid_request", "touch_last_login must be a boolean")
+        assert self._store is not None
+        return CatalogRpcResponse(
+            id=request.id, result=await self._run_store(self._store.get_user, user_id=user_id, touch_last_login=touch)
+        )
+
+    async def _resolve_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"token_hash", "touch_last_used", "touch_interval_seconds"}
+        if set(request.params) != expected:
+            return self._error(
+                request,
+                "invalid_request",
+                "auth.device.resolve.v2 requires token_hash, touch_last_used, and touch_interval_seconds",
+            )
+        token_hash = request.params["token_hash"]
+        touch = request.params["touch_last_used"]
+        interval = request.params["touch_interval_seconds"]
+        if not _is_hash(token_hash):
+            return self._error(request, "invalid_request", "token_hash must be 64 lowercase hexadecimal characters")
+        if type(touch) is not bool:
+            return self._error(request, "invalid_request", "touch_last_used must be a boolean")
+        if type(interval) is not int or not 0 <= interval <= 86_400:
+            return self._error(request, "invalid_request", "touch_interval_seconds must be an integer from 0 through 86400")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.resolve_device,
+            token_hash=token_hash,
+            touch_last_used=touch,
+            touch_interval_seconds=interval,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _resolve_cp_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"cp_user_id", "email", "email_verified", "display_name", "avatar_url"}
+        if set(request.params) != expected:
+            return self._error(
+                request,
+                "invalid_request",
+                "auth.user.resolve_cp.v2 requires cp_user_id, email, email_verified, display_name, and avatar_url",
+            )
+        params = request.params
+        if type(params["cp_user_id"]) is not int or params["cp_user_id"] <= 0:
+            return self._error(request, "invalid_request", "cp_user_id must be a positive integer")
+        if not _is_string(params["email"], maximum=320):
+            return self._error(request, "invalid_request", "email must contain 1 to 320 characters")
+        if type(params["email_verified"]) is not bool:
+            return self._error(request, "invalid_request", "email_verified must be a boolean")
+        for field in ("display_name", "avatar_url"):
+            if params[field] is not None and not isinstance(params[field], str):
+                return self._error(request, "invalid_request", f"{field} must be a string or null")
+        assert self._store is not None
+        result = await self._run_store(self._store.resolve_cp_user, **params)
+        if conflict := result.get("conflict"):
+            return self._error(request, "conflict", "control-plane identity conflicts with catalog state", details={"reason": conflict})
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _resolve_local_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "email",
+            "provider",
+            "provider_user_id",
+            "role",
+            "adopt_existing",
+            "require_email_match",
+            "max_users",
+            "promote_role",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "auth.user.resolve_local.v2 has invalid parameters")
+        params = request.params
+        if not _is_string(params["email"], maximum=320) or not _is_string(params["provider"], maximum=64):
+            return self._error(request, "invalid_request", "email and provider must be non-empty bounded strings")
+        if params["provider_user_id"] is not None and not _is_string(params["provider_user_id"], maximum=255):
+            return self._error(request, "invalid_request", "provider_user_id must be a non-empty string or null")
+        if params["role"] not in {"USER", "ADMIN"}:
+            return self._error(request, "invalid_request", "role must be USER or ADMIN")
+        for field in ("adopt_existing", "require_email_match", "promote_role"):
+            if type(params[field]) is not bool:
+                return self._error(request, "invalid_request", f"{field} must be a boolean")
+        if params["max_users"] is not None and (type(params["max_users"]) is not int or params["max_users"] <= 0):
+            return self._error(request, "invalid_request", "max_users must be a positive integer or null")
+        assert self._store is not None
+        result = await self._run_store(self._store.resolve_local_user, **params)
+        if conflict := result.get("conflict"):
+            return self._error(request, "conflict", "local identity conflicts with catalog state", details={"reason": conflict})
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _update_user(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"user_id", "display_name", "avatar_url", "prefs", "update_mask"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "auth.user.update.v2 has invalid parameters")
+        params = request.params
+        if type(params["user_id"]) is not int or params["user_id"] <= 0:
+            return self._error(request, "invalid_request", "user_id must be a positive integer")
+        for field in ("display_name", "avatar_url"):
+            if params[field] is not None and not isinstance(params[field], str):
+                return self._error(request, "invalid_request", f"{field} must be a string or null")
+        if params["prefs"] is not None and not isinstance(params["prefs"], dict):
+            return self._error(request, "invalid_request", "prefs must be an object or null")
+        mask = params["update_mask"]
+        if (
+            not isinstance(mask, list)
+            or any(not isinstance(item, str) for item in mask)
+            or len(mask) != len(set(mask))
+            or not set(mask) <= {"display_name", "avatar_url", "prefs"}
+        ):
+            return self._error(request, "invalid_request", "update_mask must contain unique profile field names")
+        assert self._store is not None
+        result = await self._run_store(self._store.update_user, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _create_refresh(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "user_id",
+            "token_hash",
+            "family_id",
+            "parent_id",
+            "created_at",
+            "absolute_expires_at",
+            "idle_expires_at",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "auth.refresh.create.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["user_id"]) is not int or params["user_id"] <= 0 or not _is_hash(params["token_hash"]):
+            return self._error(request, "invalid_request", "user_id or token_hash is invalid")
+        if not _is_string(params["family_id"], maximum=64):
+            return self._error(request, "invalid_request", "family_id must contain 1 to 64 characters")
+        if params["parent_id"] is not None and (type(params["parent_id"]) is not int or params["parent_id"] <= 0):
+            return self._error(request, "invalid_request", "parent_id must be a positive integer or null")
+        try:
+            for field in ("created_at", "absolute_expires_at", "idle_expires_at"):
+                params[field] = _parse_datetime(params[field], field)
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if not params["created_at"] < params["idle_expires_at"] <= params["absolute_expires_at"]:
+            return self._error(request, "invalid_request", "refresh expiry ordering is invalid")
+        assert self._store is not None
+        result = await self._run_store(self._store.create_refresh_session, **params)
+        if not_found := result.get("not_found"):
+            return self._error(
+                request,
+                "conflict",
+                "refresh session owner does not exist",
+                details={"reason": f"{not_found}_not_found"},
+            )
+        if result.get("created") is False and result.get("exact_replay") is False:
+            return self._error(
+                request,
+                "conflict",
+                "token_hash already exists with different attributes",
+                details={"reason": "token_hash_collision"},
+            )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _rotate_refresh(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"token_hash", "next_token_hash", "now", "idle_expires_at", "reuse_grace_seconds"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "auth.refresh.rotate.v2 has invalid parameters")
+        params = dict(request.params)
+        if not _is_hash(params["token_hash"]) or not _is_hash(params["next_token_hash"]):
+            return self._error(request, "invalid_request", "refresh token hashes must be lowercase hexadecimal SHA-256 values")
+        if params["token_hash"] == params["next_token_hash"]:
+            return self._error(request, "invalid_request", "next_token_hash must differ from token_hash")
+        if type(params["reuse_grace_seconds"]) is not int or not 0 <= params["reuse_grace_seconds"] <= 300:
+            return self._error(request, "invalid_request", "reuse_grace_seconds must be an integer from 0 through 300")
+        try:
+            params["now"] = _parse_datetime(params["now"], "now")
+            params["idle_expires_at"] = _parse_datetime(params["idle_expires_at"], "idle_expires_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if params["idle_expires_at"] <= params["now"]:
+            return self._error(request, "invalid_request", "idle_expires_at must be after now")
+        assert self._store is not None
+        result = await self._run_store(self._store.rotate_refresh_session, **params)
+        if conflict := result.get("conflict"):
+            return self._error(request, "conflict", "refresh rotation conflicts with catalog state", details={"reason": conflict})
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _revoke_refresh_family(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"token_hash", "now"} or not _is_hash(request.params.get("token_hash")):
+            return self._error(request, "invalid_request", "auth.refresh.revoke_family.v2 requires token_hash and now")
+        try:
+            now = _parse_datetime(request.params["now"], "now")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.revoke_refresh_family, token_hash=request.params["token_hash"], now=now)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _revoke_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -355,6 +571,7 @@ class CatalogDaemon:
         message: str,
         *,
         retryable: bool = False,
+        details: dict | None = None,
     ) -> CatalogRpcResponse:
         return CatalogRpcResponse(
             id=request.id,
@@ -363,7 +580,7 @@ class CatalogDaemon:
                 message=message,
                 retryable=retryable,
                 retry_after_ms=0 if retryable else None,
-                details={},
+                details=details or {},
             ),
         )
 
@@ -374,3 +591,23 @@ def socket_path_is_live(path: Path) -> bool:
     except OSError:
         return False
     return stat.S_ISSOCK(mode)
+
+
+def _is_hash(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _is_string(value: object, *, maximum: int) -> bool:
+    return isinstance(value, str) and bool(value) and len(value) <= maximum
+
+
+def _parse_datetime(value: object, field: str) -> datetime:
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be an ISO-8601 UTC datetime string")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be an ISO-8601 UTC datetime string") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError(f"{field} must include a UTC offset")
+    return parsed.astimezone(UTC)
