@@ -63,6 +63,11 @@ _SAFE_RETRY_METHODS = {
     "session.preferences.update.v2",
     "session.active.list.v2",
     "session.timeline.list.v2",
+    # Storage-v2 manifests are caller-identified by UUID/envelope hash. Exact
+    # replay returns the durable manifest receipt; conflicting replay is rejected.
+    "storage.source_epoch.open.v2",
+    "storage.raw_object.commit.v2",
+    "storage.source_epoch.manifest.v2",
 }
 
 # speed-of-light-database.md separates the 250 ms p95 performance target from

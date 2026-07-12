@@ -7,8 +7,10 @@ import fcntl
 import json
 import logging
 import os
+import re
 import stat
 import time
+import unicodedata
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
@@ -292,6 +294,12 @@ class CatalogDaemon:
             return await self._list_machine_enrollments(request)
         if request.method == "machine.workspace.list.v2":
             return await self._list_machine_workspaces(request)
+        if request.method == "storage.source_epoch.open.v2":
+            return await self._open_source_epoch(request)
+        if request.method == "storage.raw_object.commit.v2":
+            return await self._commit_raw_object(request)
+        if request.method == "storage.source_epoch.manifest.v2":
+            return await self._read_source_epoch_manifest(request)
         if request.params:
             return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
         metadata = await self._run_store(read_catalog_meta, self._engine)
@@ -1327,6 +1335,121 @@ class CatalogDaemon:
         result = await self._run_store(self._store.list_machine_workspaces, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _open_source_epoch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "tenant_id",
+            "machine_id",
+            "provider",
+            "opaque_source_id",
+            "source_epoch",
+            "range_kind",
+            "predecessor_source_epoch",
+            "opened_at",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "storage.source_epoch.open.v2 has invalid parameters")
+        params = dict(request.params)
+        try:
+            _validate_storage_identity_fields(params)
+            params["source_epoch"] = _canonical_uuid(params["source_epoch"], "source_epoch")
+            predecessor = params["predecessor_source_epoch"]
+            params["predecessor_source_epoch"] = (
+                _canonical_uuid(predecessor, "predecessor_source_epoch") if predecessor is not None else None
+            )
+            params["opened_at"] = _parse_datetime(params["opened_at"], "opened_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.open_source_epoch, **params)
+        if result.get("source_epoch_conflict") is True:
+            return self._error(
+                request,
+                "source_epoch_conflict",
+                "source epoch identity or replacement boundary conflicts with catalog state",
+            )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _commit_raw_object(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "protocol_version",
+            "tenant_id",
+            "session_id",
+            "machine_id",
+            "provider",
+            "opaque_source_id",
+            "source_epoch",
+            "range_kind",
+            "range_start",
+            "range_end",
+            "record_hashes",
+            "envelope_id",
+            "object_hash",
+            "payload_hash",
+            "compressed_hash",
+            "object_path",
+            "uncompressed_size",
+            "compressed_size",
+            "provenance_kind",
+            "render_state",
+            "media_state",
+            "missing_media_hashes",
+            "sealed_at",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "storage.raw_object.commit.v2 has invalid parameters")
+        params = dict(request.params)
+        try:
+            _validate_raw_object_commit(params)
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.commit_raw_object, **params)
+        if result.get("identity_mismatch") is True:
+            return self._error(request, "invalid_request", "envelope_id does not match the frozen v2 identity")
+        if result.get("session_deleted") is True:
+            return self._error(
+                request,
+                "session_deleted",
+                "session has a durable deletion tombstone",
+                details={"deletion_revision": result.get("deletion_revision")},
+            )
+        if result.get("source_epoch_missing") is True:
+            return self._error(
+                request,
+                "source_epoch_conflict",
+                "source epoch is not registered",
+                details={"reason": "source_epoch_missing"},
+            )
+        if result.get("source_epoch_conflict") is True:
+            return self._error(
+                request,
+                "source_epoch_conflict",
+                "source range overlaps or conflicts with the registered epoch",
+            )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_source_epoch_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"source_epoch", "after_position", "limit"}:
+            return self._error(request, "invalid_request", "storage.source_epoch.manifest.v2 has invalid parameters")
+        try:
+            source_epoch = _canonical_uuid(request.params["source_epoch"], "source_epoch")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        after_position = request.params["after_position"]
+        limit = request.params["limit"]
+        if after_position is not None and (type(after_position) is not int or not 0 <= after_position < 1 << 64):
+            return self._error(request, "invalid_request", "after_position must be a non-negative integer or null")
+        if type(limit) is not int or not 1 <= limit <= 1_000:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.read_source_epoch_manifest,
+            source_epoch=source_epoch,
+            after_position=after_position,
+            limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _run_store(self, operation, *args, **kwargs):
         if self._executor is None:
             raise CatalogDaemonError("catalog executor is not ready")
@@ -1363,6 +1486,97 @@ class CatalogDaemon:
                 details=details or {},
             ),
         )
+
+
+_STORAGE_PROVIDER_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}\Z")
+
+
+def _canonical_uuid(value: object, field: str) -> uuid.UUID:
+    try:
+        parsed = uuid.UUID(value) if isinstance(value, str) else None
+    except ValueError:
+        parsed = None
+    if parsed is None or str(parsed) != value:
+        raise ValueError(f"{field} must be a canonical UUID")
+    return parsed
+
+
+def _canonical_storage_text(value: object, *, field: str, maximum_bytes: int) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field} must be a non-empty string")
+    if unicodedata.normalize("NFC", value) != value:
+        raise ValueError(f"{field} must already be NFC-normalized")
+    if len(value.encode("utf-8")) > maximum_bytes:
+        raise ValueError(f"{field} exceeds {maximum_bytes} UTF-8 bytes")
+    return value
+
+
+def _validate_storage_identity_fields(params: dict) -> None:
+    params["tenant_id"] = _canonical_storage_text(params["tenant_id"], field="tenant_id", maximum_bytes=255)
+    params["machine_id"] = _canonical_storage_text(params["machine_id"], field="machine_id", maximum_bytes=255)
+    params["opaque_source_id"] = _canonical_storage_text(params["opaque_source_id"], field="opaque_source_id", maximum_bytes=4_096)
+    provider = params["provider"]
+    if not isinstance(provider, str) or _STORAGE_PROVIDER_RE.fullmatch(provider) is None:
+        raise ValueError("provider must be canonical lowercase ASCII")
+    if params["range_kind"] not in {"byte_offset", "record_ordinal"}:
+        raise ValueError("range_kind must be byte_offset or record_ordinal")
+
+
+def _validate_raw_object_commit(params: dict) -> None:
+    if params["protocol_version"] != 2:
+        raise ValueError("protocol_version must be 2")
+    _validate_storage_identity_fields(params)
+    params["session_id"] = _canonical_uuid(params["session_id"], "session_id")
+    params["source_epoch"] = _canonical_uuid(params["source_epoch"], "source_epoch")
+    for field in ("range_start", "range_end"):
+        value = params[field]
+        if type(value) is not int or not 0 <= value < 1 << 64:
+            raise ValueError(f"{field} must be an unsigned 64-bit integer")
+    if params["range_start"] > params["range_end"]:
+        raise ValueError("source range must be half-open with start <= end")
+    hashes = params["record_hashes"]
+    if not isinstance(hashes, list) or len(hashes) > 10_000 or any(not _is_hash(value) for value in hashes):
+        raise ValueError("record_hashes must contain at most 10000 lowercase SHA-256 values")
+    if params["range_start"] == params["range_end"] and hashes:
+        raise ValueError("an empty range cannot contain records")
+    if params["range_start"] < params["range_end"] and not hashes:
+        raise ValueError("a non-empty range must contain records")
+    params["record_hashes"] = tuple(bytes.fromhex(value) for value in hashes)
+    for field in ("envelope_id", "object_hash", "payload_hash", "compressed_hash"):
+        if not _is_hash(params[field]):
+            raise ValueError(f"{field} must be lowercase SHA-256 hex")
+    if params["object_hash"] != params["compressed_hash"]:
+        raise ValueError("object_hash must equal the compressed-file hash")
+    path = _canonical_storage_text(params["object_path"], field="object_path", maximum_bytes=2_048)
+    path_parts = Path(path).parts
+    if Path(path).is_absolute() or ".." in path_parts or path in {".", ""}:
+        raise ValueError("object_path must be a safe relative path")
+    if params["object_hash"] not in path:
+        raise ValueError("object_path must be content-addressed by object_hash")
+    for field, maximum in (("uncompressed_size", 4 * 1024 * 1024), ("compressed_size", 8 * 1024 * 1024)):
+        value = params[field]
+        if type(value) is not int or not 0 <= value <= maximum:
+            raise ValueError(f"{field} exceeds its storage-v2 bound")
+    if params["provenance_kind"] not in {"native", "legacy_fallback"}:
+        raise ValueError("provenance_kind is invalid")
+    if params["render_state"] not in {"ready", "pending", "failed"}:
+        raise ValueError("render_state is invalid")
+    if params["media_state"] not in {"complete", "pending", "missing"}:
+        raise ValueError("media_state is invalid")
+    missing = params["missing_media_hashes"]
+    if (
+        not isinstance(missing, list)
+        or len(missing) > 1_000
+        or missing != sorted(set(missing))
+        or any(not _is_hash(value) for value in missing)
+    ):
+        raise ValueError("missing_media_hashes must be sorted unique lowercase SHA-256 values")
+    if params["media_state"] == "complete" and missing:
+        raise ValueError("complete media cannot have missing hashes")
+    if params["media_state"] == "missing" and not missing:
+        raise ValueError("missing media must name at least one hash")
+    params["missing_media_hashes"] = tuple(missing)
+    params["sealed_at"] = _parse_datetime(params["sealed_at"], "sealed_at")
 
 
 _HEARTBEAT_FIELDS = {

@@ -32,6 +32,7 @@ from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveMachineControlOperation
 from zerg.models.live_store import LiveNotificationClientPresence
+from zerg.models.live_store import LiveRawObject
 from zerg.models.live_store import LiveRefreshSession
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession
@@ -43,8 +44,13 @@ from zerg.models.live_store import LiveSessionLivePreview
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
+from zerg.models.live_store import LiveSessionTombstone
+from zerg.models.live_store import LiveSourceEpoch
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
+from zerg.storage_v2.contracts import DurableReceipt
+from zerg.storage_v2.contracts import EnvelopeIdentity
+from zerg.storage_v2.contracts import envelope_id as compute_envelope_id
 
 DEVICE_TOKEN_LIMIT_PER_OWNER = 1_000
 SESSION_READ_LIMIT = 100
@@ -3007,6 +3013,317 @@ class CatalogStore:
                 "limit_exceeded": limit_exceeded,
             }
 
+    def open_source_epoch(
+        self,
+        *,
+        tenant_id: str,
+        machine_id: str,
+        provider: str,
+        opaque_source_id: str,
+        source_epoch: UUID,
+        range_kind: str,
+        predecessor_source_epoch: UUID | None,
+        opened_at: datetime,
+    ) -> dict[str, Any]:
+        epoch = LiveSourceEpoch.__table__
+        epoch_id = str(source_epoch)
+        identity_filters = (
+            epoch.c.tenant_id == tenant_id,
+            epoch.c.machine_id == machine_id,
+            epoch.c.provider == provider,
+            epoch.c.opaque_source_id == opaque_source_id,
+        )
+        with _write_transaction(self.engine) as connection:
+            existing = connection.execute(select(epoch).where(epoch.c.source_epoch == epoch_id)).mappings().first()
+            expected_predecessor = str(predecessor_source_epoch) if predecessor_source_epoch is not None else None
+            if existing is not None:
+                exact = all(
+                    (
+                        existing["tenant_id"] == tenant_id,
+                        existing["machine_id"] == machine_id,
+                        existing["provider"] == provider,
+                        existing["opaque_source_id"] == opaque_source_id,
+                        existing["range_kind"] == range_kind,
+                        existing["predecessor_source_epoch"] == expected_predecessor,
+                        _as_aware_utc(existing["opened_at"]) == opened_at,
+                    )
+                )
+                if not exact:
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                return {
+                    "created": False,
+                    "exact_replay": True,
+                    "source_epoch": _source_epoch_dto(existing),
+                    "commit_seq": str(existing["commit_seq"]),
+                }
+
+            open_rows = (
+                connection.execute(select(epoch).where(*identity_filters, epoch.c.state == "open").order_by(epoch.c.opened_at.desc()))
+                .mappings()
+                .all()
+            )
+            predecessor = None
+            if predecessor_source_epoch is not None:
+                predecessor = connection.execute(select(epoch).where(epoch.c.source_epoch == expected_predecessor)).mappings().first()
+                if predecessor is None or any(
+                    (
+                        predecessor["tenant_id"] != tenant_id,
+                        predecessor["machine_id"] != machine_id,
+                        predecessor["provider"] != provider,
+                        predecessor["opaque_source_id"] != opaque_source_id,
+                        predecessor["state"] != "open",
+                    )
+                ):
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                if any(row["source_epoch"] != expected_predecessor for row in open_rows):
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            elif open_rows:
+                return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+
+            commit_time = datetime.now(UTC)
+            commit_seq = _advance_commit_seq(connection, commit_time)
+            if predecessor is not None:
+                connection.execute(
+                    update(epoch)
+                    .where(epoch.c.source_epoch == expected_predecessor)
+                    .values(
+                        state="closed",
+                        replaced_by_source_epoch=epoch_id,
+                        closed_at=opened_at,
+                        close_reason="replaced",
+                        closed_commit_seq=commit_seq,
+                        updated_at=commit_time,
+                    )
+                )
+            connection.execute(
+                insert(epoch).values(
+                    source_epoch=epoch_id,
+                    tenant_id=tenant_id,
+                    machine_id=machine_id,
+                    provider=provider,
+                    opaque_source_id=opaque_source_id,
+                    range_kind=range_kind,
+                    state="open",
+                    predecessor_source_epoch=expected_predecessor,
+                    accepted_through=_u64_key(0),
+                    object_count=0,
+                    commit_seq=commit_seq,
+                    opened_at=opened_at,
+                    created_at=commit_time,
+                    updated_at=commit_time,
+                )
+            )
+            row = connection.execute(select(epoch).where(epoch.c.source_epoch == epoch_id)).mappings().one()
+            return {
+                "created": True,
+                "exact_replay": False,
+                "source_epoch": _source_epoch_dto(row),
+                "commit_seq": str(commit_seq),
+            }
+
+    def commit_raw_object(
+        self,
+        *,
+        protocol_version: int,
+        tenant_id: str,
+        session_id: UUID,
+        machine_id: str,
+        provider: str,
+        opaque_source_id: str,
+        source_epoch: UUID,
+        range_kind: str,
+        range_start: int,
+        range_end: int,
+        record_hashes: tuple[bytes, ...],
+        envelope_id: str,
+        object_hash: str,
+        payload_hash: str,
+        compressed_hash: str,
+        object_path: str,
+        uncompressed_size: int,
+        compressed_size: int,
+        provenance_kind: str,
+        render_state: str,
+        media_state: str,
+        missing_media_hashes: tuple[str, ...],
+        sealed_at: datetime,
+    ) -> dict[str, Any]:
+        del protocol_version  # validated as v2 by the RPC boundary
+        identity = EnvelopeIdentity(
+            tenant_id=tenant_id,
+            machine_id=machine_id,
+            provider=provider,
+            opaque_source_id=opaque_source_id,
+            source_epoch=source_epoch,
+            range_kind=range_kind,
+            range_start=range_start,
+            range_end=range_end,
+            record_hashes=record_hashes,
+        )
+        if compute_envelope_id(identity) != envelope_id:
+            return {"identity_mismatch": True}
+
+        epoch = LiveSourceEpoch.__table__
+        raw = LiveRawObject.__table__
+        tombstone = LiveSessionTombstone.__table__
+        session_key = str(session_id)
+        epoch_key = str(source_epoch)
+        record_hashes_hash = hashlib.sha256(b"".join(record_hashes)).hexdigest()
+        missing_json = json.dumps(list(missing_media_hashes), separators=(",", ":"))
+        range_start_key = _u64_key(range_start)
+        range_end_key = _u64_key(range_end)
+        immutable = {
+            "tenant_id": tenant_id,
+            "session_id": session_key,
+            "machine_id": machine_id,
+            "provider": provider,
+            "opaque_source_id": opaque_source_id,
+            "source_epoch": epoch_key,
+            "range_kind": range_kind,
+            "range_start": range_start_key,
+            "range_end": range_end_key,
+            "record_count": len(record_hashes),
+            "record_hashes_hash": record_hashes_hash,
+            "object_hash": object_hash,
+            "payload_hash": payload_hash,
+            "compressed_hash": compressed_hash,
+            "object_path": object_path,
+            "uncompressed_size": uncompressed_size,
+            "compressed_size": compressed_size,
+            "provenance_kind": provenance_kind,
+            "render_state": render_state,
+            "media_state": media_state,
+            "missing_media_hashes_json": missing_json,
+            "sealed_at": sealed_at,
+        }
+        replay_identity = {
+            key: value
+            for key, value in immutable.items()
+            if key not in {"object_path", "render_state", "media_state", "missing_media_hashes_json"}
+        }
+        with _write_transaction(self.engine) as connection:
+            deleted = connection.execute(
+                select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
+            ).scalar_one_or_none()
+            if deleted is not None:
+                return {"session_deleted": True, "deletion_revision": str(deleted)}
+
+            existing = connection.execute(select(raw).where(raw.c.envelope_id == envelope_id)).mappings().first()
+            if existing is not None:
+                if existing["retired_at"] is not None or existing["retirement_revision"] is not None:
+                    return {
+                        "session_deleted": True,
+                        "deletion_revision": str(existing["retirement_revision"] or 0),
+                    }
+                if not _raw_object_matches(existing, replay_identity):
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                return {
+                    "created": False,
+                    "exact_replay": True,
+                    "receipt": _raw_object_receipt(existing),
+                }
+
+            epoch_row = connection.execute(select(epoch).where(epoch.c.source_epoch == epoch_key)).mappings().first()
+            if epoch_row is None:
+                return {"source_epoch_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if any(
+                (
+                    epoch_row["tenant_id"] != tenant_id,
+                    epoch_row["machine_id"] != machine_id,
+                    epoch_row["provider"] != provider,
+                    epoch_row["opaque_source_id"] != opaque_source_id,
+                    epoch_row["range_kind"] != range_kind,
+                )
+            ):
+                return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            if epoch_row["state"] != "open":
+                return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+
+            same_range = connection.execute(
+                select(raw.c.envelope_id).where(
+                    raw.c.source_epoch == epoch_key,
+                    raw.c.range_start == range_start_key,
+                    raw.c.range_end == range_end_key,
+                )
+            ).first()
+            if same_range is not None:
+                return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            if range_start_key < str(epoch_row["accepted_through"]):
+                return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            if range_start < range_end:
+                overlap = connection.execute(
+                    select(raw.c.envelope_id)
+                    .where(
+                        raw.c.source_epoch == epoch_key,
+                        raw.c.range_start < range_end_key,
+                        raw.c.range_end > range_start_key,
+                    )
+                    .limit(1)
+                ).first()
+                if overlap is not None:
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+
+            commit_time = datetime.now(UTC)
+            commit_seq = _advance_commit_seq(connection, commit_time)
+            connection.execute(
+                insert(raw).values(
+                    envelope_id=envelope_id,
+                    **immutable,
+                    commit_seq=commit_seq,
+                    created_at=commit_time,
+                )
+            )
+            connection.execute(
+                update(epoch)
+                .where(epoch.c.source_epoch == epoch_key)
+                .values(
+                    accepted_through=max(str(epoch_row["accepted_through"]), range_end_key),
+                    object_count=int(epoch_row["object_count"] or 0) + 1,
+                    updated_at=commit_time,
+                )
+            )
+            row = connection.execute(select(raw).where(raw.c.envelope_id == envelope_id)).mappings().one()
+            return {
+                "created": True,
+                "exact_replay": False,
+                "receipt": _raw_object_receipt(row),
+            }
+
+    def read_source_epoch_manifest(
+        self,
+        *,
+        source_epoch: UUID,
+        after_position: int | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        epoch = LiveSourceEpoch.__table__
+        raw = LiveRawObject.__table__
+        epoch_key = str(source_epoch)
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            epoch_row = connection.execute(select(epoch).where(epoch.c.source_epoch == epoch_key)).mappings().first()
+            if epoch_row is None:
+                return {
+                    "found": False,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                    "observed_at": observed_at.isoformat(),
+                }
+            statement = select(raw).where(raw.c.source_epoch == epoch_key)
+            if after_position is not None:
+                statement = statement.where(raw.c.range_start >= _u64_key(after_position))
+            rows = (
+                connection.execute(statement.order_by(raw.c.range_start.asc(), raw.c.range_end.asc(), raw.c.envelope_id.asc()).limit(limit))
+                .mappings()
+                .all()
+            )
+            return {
+                "found": True,
+                "source_epoch": _source_epoch_dto(epoch_row),
+                "objects": [_raw_object_manifest_dto(row) for row in rows],
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
     def checkpoint_passive(self) -> dict[str, int]:
         """Run a non-blocking WAL checkpoint owned by catalogd."""
 
@@ -3643,6 +3960,72 @@ def _decode_json_object(value: object) -> dict[str, Any]:
     if not isinstance(decoded, dict):
         raise RuntimeError("catalog receipt JSON is not an object")
     return decoded
+
+
+def _source_epoch_dto(row) -> dict[str, Any]:
+    return {
+        "source_epoch": str(row["source_epoch"]),
+        "tenant_id": str(row["tenant_id"]),
+        "machine_id": str(row["machine_id"]),
+        "provider": str(row["provider"]),
+        "opaque_source_id": str(row["opaque_source_id"]),
+        "range_kind": str(row["range_kind"]),
+        "state": str(row["state"]),
+        "predecessor_source_epoch": row["predecessor_source_epoch"],
+        "replaced_by_source_epoch": row["replaced_by_source_epoch"],
+        "accepted_through": str(int(row["accepted_through"])),
+        "object_count": int(row["object_count"]),
+        "commit_seq": str(row["commit_seq"]),
+        "closed_commit_seq": str(row["closed_commit_seq"]) if row["closed_commit_seq"] is not None else None,
+        "opened_at": _encode_datetime(row["opened_at"]),
+        "closed_at": _encode_datetime(row["closed_at"]),
+        "close_reason": row["close_reason"],
+    }
+
+
+def _raw_object_receipt(row) -> dict[str, object]:
+    missing = tuple(json.loads(str(row["missing_media_hashes_json"] or "[]")))
+    return DurableReceipt(
+        envelope_id=str(row["envelope_id"]),
+        object_hash=str(row["object_hash"]),
+        commit_seq=int(row["commit_seq"]),
+        render_state=str(row["render_state"]),
+        media_state=str(row["media_state"]),
+        missing_media_hashes=missing,
+    ).as_wire()
+
+
+def _raw_object_manifest_dto(row) -> dict[str, Any]:
+    return {
+        "envelope_id": str(row["envelope_id"]),
+        "session_id": str(row["session_id"]),
+        "range_start": str(int(row["range_start"])),
+        "range_end": str(int(row["range_end"])),
+        "record_count": int(row["record_count"]),
+        "object_hash": str(row["object_hash"]),
+        "commit_seq": str(row["commit_seq"]),
+        "render_state": str(row["render_state"]),
+        "media_state": str(row["media_state"]),
+        "retired_at": _encode_datetime(row["retired_at"]),
+        "retirement_revision": (str(row["retirement_revision"]) if row["retirement_revision"] is not None else None),
+    }
+
+
+def _raw_object_matches(row, immutable: dict[str, Any]) -> bool:
+    for key, value in immutable.items():
+        existing = row[key]
+        if isinstance(value, datetime):
+            if _as_aware_utc(existing) != value:
+                return False
+        elif existing != value:
+            return False
+    return True
+
+
+def _u64_key(value: int) -> str:
+    if not 0 <= value < 1 << 64:
+        raise ValueError("value exceeds u64")
+    return f"{value:020d}"
 
 
 def _is_bridge_live_transcript_event(event: Any) -> bool:
