@@ -354,8 +354,58 @@ class ProjectorStoreBinding(CatalogBase):
     updated_at = Column(DateTime(timezone=True), nullable=False)
 
 
+class LegacyMigrationRun(CatalogBase):
+    """Frozen legacy-corpus inventory and its aggregate migration state."""
+
+    __tablename__ = "legacy_migration_runs"
+
+    run_id = Column(String(36), primary_key=True)
+    legacy_high_watermark = Column(String(255), nullable=False)
+    expected_session_count = Column(Integer, nullable=False)
+    state = Column(String(16), nullable=False, server_default=text("'inventory'"), index=True)
+    commit_seq = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class LegacyMigrationSession(CatalogBase):
+    """One resumable proof row per legacy session in a frozen migration run."""
+
+    __tablename__ = "legacy_migration_sessions"
+
+    run_id = Column(String(36), primary_key=True)
+    session_id = Column(String(36), primary_key=True)
+    state = Column(String(16), nullable=False, server_default=text("'pending'"), index=True)
+    source_expected = Column(Integer, nullable=False)
+    source_covered = Column(Integer, nullable=False, server_default=text("0"))
+    source_missing = Column(Integer, nullable=False, server_default=text("0"))
+    media_expected = Column(Integer, nullable=False)
+    media_covered = Column(Integer, nullable=False, server_default=text("0"))
+    media_missing = Column(Integer, nullable=False, server_default=text("0"))
+    output_proof_hash = Column(String(64), nullable=True)
+    parity_proof_hash = Column(String(64), nullable=True)
+    error_code = Column(String(64), nullable=True)
+    error_message = Column(Text, nullable=True)
+    attempts = Column(Integer, nullable=False, server_default=text("0"))
+    claim_token = Column(String(36), nullable=True, index=True)
+    worker_id = Column(String(255), nullable=True)
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    retry_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    last_completion_token = Column(String(36), nullable=True)
+    last_failure_token = Column(String(36), nullable=True)
+    commit_seq = Column(BigInteger, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    verified_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_legacy_migration_claim", "run_id", "state", "retry_at", "lease_expires_at", "session_id"),)
+
+
 __all__ = [
     "CatalogBase",
+    "LegacyMigrationRun",
+    "LegacyMigrationSession",
     "MediaObject",
     "ProjectorState",
     "ProjectorStoreBinding",

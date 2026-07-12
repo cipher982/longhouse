@@ -33,7 +33,13 @@ def test_greenfield_catalog_has_pragmas_live_schema_and_identity(tmp_path):
         tables = {
             row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'").all()
         }
-    assert {"catalog_meta", "live_session_catalog", "live_runtime_state"}.issubset(tables)
+    assert {
+        "catalog_meta",
+        "legacy_migration_runs",
+        "legacy_migration_sessions",
+        "live_session_catalog",
+        "live_runtime_state",
+    }.issubset(tables)
 
 
 def test_initialize_is_idempotent_and_preserves_catalog_identity(tmp_path):

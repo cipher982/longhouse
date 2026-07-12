@@ -332,6 +332,22 @@ class CatalogDaemon:
             return await self._list_projector_lag(request)
         if request.method == "projector.store.bind.v2":
             return await self._bind_projector_store(request)
+        if request.method == "migration.run.create.v2":
+            return await self._create_migration_run(request)
+        if request.method == "migration.run.read.v2":
+            return await self._read_migration_run(request)
+        if request.method == "migration.session.register.batch.v2":
+            return await self._register_migration_sessions(request)
+        if request.method == "migration.session.claim.v2":
+            return await self._claim_migration_sessions(request)
+        if request.method == "migration.session.complete.v2":
+            return await self._complete_migration_session(request)
+        if request.method == "migration.session.fail.v2":
+            return await self._fail_migration_session(request)
+        if request.method == "migration.run.summary.v2":
+            return await self._summarize_migration_run(request)
+        if request.method == "migration.gaps.list.v2":
+            return await self._list_migration_gaps(request)
         if request.params:
             return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
         metadata = await self._run_store(read_catalog_meta, self._engine)
@@ -1759,6 +1775,183 @@ class CatalogDaemon:
         result = await self._run_store(self._store.media_objects_exist_batch, media_hashes=media_hashes)
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _create_migration_run(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"run_id", "legacy_high_watermark", "expected_session_count", "created_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "migration.run.create.v2 has invalid parameters")
+        try:
+            params = {
+                "run_id": _canonical_uuid(request.params["run_id"], "run_id"),
+                "legacy_high_watermark": _bounded_text(request.params["legacy_high_watermark"], "legacy_high_watermark", 255),
+                "expected_session_count": _bounded_count(request.params["expected_session_count"], "expected_session_count"),
+                "created_at": _parse_datetime(request.params["created_at"], "created_at"),
+            }
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.create_legacy_migration_run, **params)
+        if result.get("run_conflict"):
+            return self._error(request, "conflict", "migration run identity conflicts with durable state")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_migration_run(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"run_id"}:
+            return self._error(request, "invalid_request", "migration.run.read.v2 requires run_id")
+        try:
+            run_id = _canonical_uuid(request.params["run_id"], "run_id")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.read_legacy_migration_run, run_id=run_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _register_migration_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"run_id", "sessions", "registered_at"}:
+            return self._error(request, "invalid_request", "migration.session.register.batch.v2 has invalid parameters")
+        try:
+            run_id = _canonical_uuid(request.params["run_id"], "run_id")
+            sessions = _validate_migration_inventory(request.params["sessions"])
+            registered_at = _parse_datetime(request.params["registered_at"], "registered_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.register_legacy_migration_sessions,
+            run_id=run_id,
+            sessions=sessions,
+            registered_at=registered_at,
+        )
+        if result.get("run_missing"):
+            return self._error(request, "not_found", "migration run does not exist")
+        if result.get("run_conflict") or result.get("session_conflict"):
+            return self._error(request, "conflict", "migration inventory conflicts with durable state")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _claim_migration_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"run_id", "worker_id", "claim_token", "now", "lease_seconds", "limit"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "migration.session.claim.v2 has invalid parameters")
+        try:
+            params = {
+                "run_id": _canonical_uuid(request.params["run_id"], "run_id"),
+                "worker_id": _bounded_text(request.params["worker_id"], "worker_id", 255),
+                "claim_token": str(_canonical_uuid(request.params["claim_token"], "claim_token")),
+                "now": _parse_datetime(request.params["now"], "now"),
+                "lease_seconds": request.params["lease_seconds"],
+                "limit": request.params["limit"],
+            }
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if type(params["lease_seconds"]) is not int or not 1 <= params["lease_seconds"] <= 3_600:
+            return self._error(request, "invalid_request", "lease_seconds must be an integer from 1 through 3600")
+        if type(params["limit"]) is not int or not 1 <= params["limit"] <= 100:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 100")
+        assert self._store is not None
+        result = await self._run_store(self._store.claim_legacy_migration_sessions, **params)
+        if result.get("run_missing"):
+            return self._error(request, "not_found", "migration run does not exist")
+        if result.get("claim_conflict"):
+            return self._error(request, "conflict", "migration claim token conflicts with durable state")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _complete_migration_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "run_id",
+            "session_id",
+            "claim_token",
+            "source_covered",
+            "source_missing",
+            "media_covered",
+            "media_missing",
+            "output_proof_hash",
+            "parity_proof_hash",
+            "completed_at",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "migration.session.complete.v2 has invalid parameters")
+        try:
+            params = {
+                "run_id": _canonical_uuid(request.params["run_id"], "run_id"),
+                "session_id": _canonical_uuid(request.params["session_id"], "session_id"),
+                "claim_token": str(_canonical_uuid(request.params["claim_token"], "claim_token")),
+                "source_covered": _bounded_count(request.params["source_covered"], "source_covered"),
+                "source_missing": _bounded_count(request.params["source_missing"], "source_missing"),
+                "media_covered": _bounded_count(request.params["media_covered"], "media_covered"),
+                "media_missing": _bounded_count(request.params["media_missing"], "media_missing"),
+                "output_proof_hash": _proof_hash(request.params["output_proof_hash"], "output_proof_hash"),
+                "parity_proof_hash": _proof_hash(request.params["parity_proof_hash"], "parity_proof_hash"),
+                "completed_at": _parse_datetime(request.params["completed_at"], "completed_at"),
+            }
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.complete_legacy_migration_session, **params)
+        if result.get("session_missing"):
+            return self._error(request, "not_found", "migration session does not exist")
+        if result.get("claim_conflict") or result.get("coverage_conflict"):
+            return self._error(request, "conflict", "migration completion conflicts with durable claim or inventory")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _fail_migration_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"run_id", "session_id", "claim_token", "error_code", "error_message", "failed_at", "retry_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "migration.session.fail.v2 has invalid parameters")
+        try:
+            message = request.params["error_message"]
+            params = {
+                "run_id": _canonical_uuid(request.params["run_id"], "run_id"),
+                "session_id": _canonical_uuid(request.params["session_id"], "session_id"),
+                "claim_token": str(_canonical_uuid(request.params["claim_token"], "claim_token")),
+                "error_code": _bounded_text(request.params["error_code"], "error_code", 64),
+                "error_message": _bounded_text(message, "error_message", 2_048) if message is not None else None,
+                "failed_at": _parse_datetime(request.params["failed_at"], "failed_at"),
+                "retry_at": _parse_datetime(request.params["retry_at"], "retry_at"),
+            }
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if params["retry_at"] < params["failed_at"]:
+            return self._error(request, "invalid_request", "retry_at must not precede failed_at")
+        assert self._store is not None
+        result = await self._run_store(self._store.fail_legacy_migration_session, **params)
+        if result.get("session_missing"):
+            return self._error(request, "not_found", "migration session does not exist")
+        if result.get("claim_conflict"):
+            return self._error(request, "conflict", "migration failure does not match the active claim")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _summarize_migration_run(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"run_id"}:
+            return self._error(request, "invalid_request", "migration.run.summary.v2 requires run_id")
+        try:
+            run_id = _canonical_uuid(request.params["run_id"], "run_id")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.summarize_legacy_migration_run, run_id=run_id)
+        if result.get("run_missing"):
+            return self._error(request, "not_found", "migration run does not exist")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_migration_gaps(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"run_id", "after_session_id", "limit"}:
+            return self._error(request, "invalid_request", "migration.gaps.list.v2 has invalid parameters")
+        try:
+            run_id = _canonical_uuid(request.params["run_id"], "run_id")
+            after = request.params["after_session_id"]
+            after_session_id = str(_canonical_uuid(after, "after_session_id")) if after is not None else None
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        limit = request.params["limit"]
+        if type(limit) is not int or not 1 <= limit <= 1_000:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.list_legacy_migration_gaps, run_id=run_id, after_session_id=after_session_id, limit=limit
+        )
+        if result.get("run_missing"):
+            return self._error(request, "not_found", "migration run does not exist")
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _advance_projector_state(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"projector", "session_id", "desired_revision", "observed_at"}:
             return self._error(request, "invalid_request", "projector.state.advance.v2 has invalid parameters")
@@ -2743,6 +2936,41 @@ def socket_path_is_live(path: Path) -> bool:
 
 def _is_hash(value: object) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+
+
+def _proof_hash(value: object, field: str) -> str:
+    if not _is_hash(value):
+        raise ValueError(f"{field} must be lowercase SHA-256 hex")
+    return str(value)
+
+
+def _bounded_count(value: object, field: str) -> int:
+    if type(value) is not int or not 0 <= value <= 1_000_000_000:
+        raise ValueError(f"{field} must be an integer from 0 through 1000000000")
+    return value
+
+
+def _validate_migration_inventory(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list) or not 1 <= len(value) <= 500:
+        raise ValueError("sessions must contain 1 through 500 inventory rows")
+    result: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"session_id", "source_expected", "media_expected"}:
+            raise ValueError("migration inventory row has invalid fields")
+        session_id = _canonical_uuid(item["session_id"], "session_id")
+        session_key = str(session_id)
+        if session_key in seen:
+            raise ValueError("sessions must not contain duplicate session_id values")
+        seen.add(session_key)
+        result.append(
+            {
+                "session_id": session_id,
+                "source_expected": _bounded_count(item["source_expected"], "source_expected"),
+                "media_expected": _bounded_count(item["media_expected"], "media_expected"),
+            }
+        )
+    return result
 
 
 def _is_string(value: object, *, maximum: int) -> bool:

@@ -27,6 +27,8 @@ from sqlalchemy import union_all
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.models import LegacyMigrationRun
+from zerg.catalogd.models import LegacyMigrationSession
 from zerg.catalogd.models import MediaObject
 from zerg.catalogd.models import ProjectorState
 from zerg.catalogd.models import ProjectorStoreBinding
@@ -4956,6 +4958,396 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
+    def create_legacy_migration_run(
+        self,
+        *,
+        run_id: UUID,
+        legacy_high_watermark: str,
+        expected_session_count: int,
+        created_at: datetime,
+    ) -> dict[str, Any]:
+        runs = LegacyMigrationRun.__table__
+        run_key = str(run_id)
+        with _write_transaction(self.engine) as connection:
+            row = connection.execute(select(runs).where(runs.c.run_id == run_key)).mappings().first()
+            if row is not None:
+                if row["legacy_high_watermark"] != legacy_high_watermark or int(row["expected_session_count"]) != expected_session_count:
+                    return {"run_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                return {
+                    "created": False,
+                    "exact_replay": True,
+                    "run": _legacy_migration_run_dto(row),
+                    "commit_seq": str(row["commit_seq"]),
+                }
+            commit_seq = _advance_commit_seq(connection, created_at)
+            connection.execute(
+                insert(runs).values(
+                    run_id=run_key,
+                    legacy_high_watermark=legacy_high_watermark,
+                    expected_session_count=expected_session_count,
+                    state="complete" if expected_session_count == 0 else "inventory",
+                    commit_seq=commit_seq,
+                    created_at=created_at,
+                    updated_at=created_at,
+                    completed_at=created_at if expected_session_count == 0 else None,
+                )
+            )
+            row = connection.execute(select(runs).where(runs.c.run_id == run_key)).mappings().one()
+            return {
+                "created": True,
+                "exact_replay": False,
+                "run": _legacy_migration_run_dto(row),
+                "commit_seq": str(commit_seq),
+            }
+
+    def register_legacy_migration_sessions(
+        self,
+        *,
+        run_id: UUID,
+        sessions: list[dict[str, Any]],
+        registered_at: datetime,
+    ) -> dict[str, Any]:
+        runs = LegacyMigrationRun.__table__
+        rows = LegacyMigrationSession.__table__
+        run_key = str(run_id)
+        with _write_transaction(self.engine) as connection:
+            run = connection.execute(select(runs).where(runs.c.run_id == run_key)).mappings().first()
+            if run is None:
+                return {"run_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if run["state"] in {"complete", "degraded"}:
+                return {"run_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            session_ids = [str(item["session_id"]) for item in sessions]
+            existing = {
+                str(row["session_id"]): row
+                for row in connection.execute(select(rows).where(rows.c.run_id == run_key, rows.c.session_id.in_(session_ids)))
+                .mappings()
+                .all()
+            }
+            new_rows: list[dict[str, Any]] = []
+            for item in sessions:
+                session_key = str(item["session_id"])
+                current = existing.get(session_key)
+                if current is not None:
+                    if (
+                        int(current["source_expected"]) != item["source_expected"]
+                        or int(current["media_expected"]) != item["media_expected"]
+                    ):
+                        return {"session_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                    continue
+                new_rows.append(item)
+            registered_count = int(connection.execute(select(func.count()).select_from(rows).where(rows.c.run_id == run_key)).scalar_one())
+            if registered_count + len(new_rows) > int(run["expected_session_count"]):
+                return {"run_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            if not new_rows:
+                return {
+                    "registered": 0,
+                    "exact_replay": True,
+                    "registered_session_count": registered_count,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            commit_seq = _advance_commit_seq(connection, registered_at)
+            connection.execute(
+                insert(rows),
+                [
+                    {
+                        "run_id": run_key,
+                        "session_id": str(item["session_id"]),
+                        "state": "pending",
+                        "source_expected": item["source_expected"],
+                        "media_expected": item["media_expected"],
+                        "commit_seq": commit_seq,
+                        "created_at": registered_at,
+                        "updated_at": registered_at,
+                    }
+                    for item in new_rows
+                ],
+            )
+            total = registered_count + len(new_rows)
+            connection.execute(
+                update(runs)
+                .where(runs.c.run_id == run_key)
+                .values(
+                    state="migrating" if total == int(run["expected_session_count"]) else "inventory",
+                    commit_seq=commit_seq,
+                    updated_at=registered_at,
+                )
+            )
+            return {
+                "registered": len(new_rows),
+                "exact_replay": False,
+                "registered_session_count": total,
+                "commit_seq": str(commit_seq),
+            }
+
+    def read_legacy_migration_run(self, *, run_id: UUID) -> dict[str, Any]:
+        runs = LegacyMigrationRun.__table__
+        with _read_snapshot(self.engine) as connection:
+            row = connection.execute(select(runs).where(runs.c.run_id == str(run_id))).mappings().first()
+            if row is None:
+                return {"run": None, "commit_seq": str(_current_commit_seq(connection))}
+            return {
+                "run": _legacy_migration_run_dto(row),
+                "summary": _legacy_migration_summary(connection, str(run_id)),
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def claim_legacy_migration_sessions(
+        self,
+        *,
+        run_id: UUID,
+        worker_id: str,
+        claim_token: str,
+        now: datetime,
+        lease_seconds: int,
+        limit: int,
+    ) -> dict[str, Any]:
+        runs = LegacyMigrationRun.__table__
+        rows = LegacyMigrationSession.__table__
+        run_key = str(run_id)
+        with _write_transaction(self.engine) as connection:
+            run = connection.execute(select(runs).where(runs.c.run_id == run_key)).mappings().first()
+            if run is None:
+                return {"run_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            replay = (
+                connection.execute(
+                    select(rows).where(rows.c.run_id == run_key, rows.c.claim_token == claim_token).order_by(rows.c.session_id)
+                )
+                .mappings()
+                .all()
+            )
+            if replay:
+                if any(row["worker_id"] != worker_id for row in replay):
+                    return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                return {
+                    "claimed": [_legacy_migration_session_dto(row) for row in replay],
+                    "exact_replay": True,
+                    "commit_seq": str(replay[0]["commit_seq"]),
+                }
+            terminal = connection.execute(
+                select(rows.c.commit_seq).where(
+                    rows.c.run_id == run_key,
+                    or_(rows.c.last_completion_token == claim_token, rows.c.last_failure_token == claim_token),
+                )
+            ).first()
+            if terminal is not None:
+                return {"claimed": [], "exact_replay": True, "commit_seq": str(terminal[0])}
+            eligible = (
+                connection.execute(
+                    select(rows)
+                    .where(
+                        rows.c.run_id == run_key,
+                        rows.c.state.in_(("pending", "migrating", "degraded")),
+                        or_(rows.c.lease_expires_at.is_(None), rows.c.lease_expires_at <= now),
+                        or_(rows.c.retry_at.is_(None), rows.c.retry_at <= now),
+                    )
+                    .order_by(rows.c.updated_at.asc(), rows.c.session_id.asc())
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+            if not eligible:
+                return {"claimed": [], "exact_replay": False, "commit_seq": str(_current_commit_seq(connection))}
+            commit_seq = _advance_commit_seq(connection, now)
+            expires_at = now + timedelta(seconds=lease_seconds)
+            ids = [row["session_id"] for row in eligible]
+            connection.execute(
+                update(rows)
+                .where(rows.c.run_id == run_key, rows.c.session_id.in_(ids))
+                .values(
+                    state="migrating",
+                    claim_token=claim_token,
+                    worker_id=worker_id,
+                    lease_expires_at=expires_at,
+                    retry_at=None,
+                    attempts=rows.c.attempts + 1,
+                    commit_seq=commit_seq,
+                    updated_at=now,
+                )
+            )
+            connection.execute(
+                update(runs)
+                .where(runs.c.run_id == run_key)
+                .values(state="migrating", commit_seq=commit_seq, updated_at=now, completed_at=None)
+            )
+            claimed = (
+                connection.execute(
+                    select(rows).where(rows.c.run_id == run_key, rows.c.claim_token == claim_token).order_by(rows.c.session_id)
+                )
+                .mappings()
+                .all()
+            )
+            return {
+                "claimed": [_legacy_migration_session_dto(row) for row in claimed],
+                "exact_replay": False,
+                "commit_seq": str(commit_seq),
+            }
+
+    def complete_legacy_migration_session(
+        self,
+        *,
+        run_id: UUID,
+        session_id: UUID,
+        claim_token: str,
+        source_covered: int,
+        source_missing: int,
+        media_covered: int,
+        media_missing: int,
+        output_proof_hash: str,
+        parity_proof_hash: str,
+        completed_at: datetime,
+    ) -> dict[str, Any]:
+        rows = LegacyMigrationSession.__table__
+        run_key, session_key = str(run_id), str(session_id)
+        with _write_transaction(self.engine) as connection:
+            row = connection.execute(select(rows).where(rows.c.run_id == run_key, rows.c.session_id == session_key)).mappings().first()
+            if row is None:
+                return {"session_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if row["last_completion_token"] == claim_token:
+                if (
+                    int(row["source_covered"]) != source_covered
+                    or int(row["source_missing"]) != source_missing
+                    or int(row["media_covered"]) != media_covered
+                    or int(row["media_missing"]) != media_missing
+                    or row["output_proof_hash"] != output_proof_hash
+                    or row["parity_proof_hash"] != parity_proof_hash
+                ):
+                    return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                return {
+                    "changed": False,
+                    "exact_replay": True,
+                    "session": _legacy_migration_session_dto(row),
+                    "commit_seq": str(row["commit_seq"]),
+                }
+            if row["claim_token"] != claim_token:
+                return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            if source_covered + source_missing != int(row["source_expected"]) or media_covered + media_missing != int(
+                row["media_expected"]
+            ):
+                return {"coverage_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            state = "verified" if source_missing == 0 and media_missing == 0 else "degraded"
+            commit_seq = _advance_commit_seq(connection, completed_at)
+            connection.execute(
+                update(rows)
+                .where(rows.c.run_id == run_key, rows.c.session_id == session_key)
+                .values(
+                    state=state,
+                    source_covered=source_covered,
+                    source_missing=source_missing,
+                    media_covered=media_covered,
+                    media_missing=media_missing,
+                    output_proof_hash=output_proof_hash,
+                    parity_proof_hash=parity_proof_hash,
+                    error_code=None,
+                    error_message=None,
+                    claim_token=None,
+                    worker_id=None,
+                    lease_expires_at=None,
+                    retry_at=None,
+                    last_completion_token=claim_token,
+                    commit_seq=commit_seq,
+                    updated_at=completed_at,
+                    verified_at=completed_at,
+                )
+            )
+            _refresh_legacy_migration_run(connection, run_key, commit_seq, completed_at)
+            updated = connection.execute(select(rows).where(rows.c.run_id == run_key, rows.c.session_id == session_key)).mappings().one()
+            return {
+                "changed": True,
+                "exact_replay": False,
+                "session": _legacy_migration_session_dto(updated),
+                "commit_seq": str(commit_seq),
+            }
+
+    def fail_legacy_migration_session(
+        self,
+        *,
+        run_id: UUID,
+        session_id: UUID,
+        claim_token: str,
+        error_code: str,
+        error_message: str | None,
+        failed_at: datetime,
+        retry_at: datetime,
+    ) -> dict[str, Any]:
+        rows = LegacyMigrationSession.__table__
+        run_key, session_key = str(run_id), str(session_id)
+        with _write_transaction(self.engine) as connection:
+            row = connection.execute(select(rows).where(rows.c.run_id == run_key, rows.c.session_id == session_key)).mappings().first()
+            if row is None:
+                return {"session_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if row["last_failure_token"] == claim_token:
+                if (
+                    row["error_code"] != error_code
+                    or row["error_message"] != error_message
+                    or _as_aware_utc(row["updated_at"]) != failed_at
+                    or _as_aware_utc(row["retry_at"]) != retry_at
+                ):
+                    return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                return {
+                    "changed": False,
+                    "exact_replay": True,
+                    "session": _legacy_migration_session_dto(row),
+                    "commit_seq": str(row["commit_seq"]),
+                }
+            if row["claim_token"] != claim_token:
+                return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            commit_seq = _advance_commit_seq(connection, failed_at)
+            connection.execute(
+                update(rows)
+                .where(rows.c.run_id == run_key, rows.c.session_id == session_key)
+                .values(
+                    state="degraded",
+                    error_code=error_code,
+                    error_message=error_message,
+                    claim_token=None,
+                    worker_id=None,
+                    lease_expires_at=None,
+                    retry_at=retry_at,
+                    last_failure_token=claim_token,
+                    commit_seq=commit_seq,
+                    updated_at=failed_at,
+                    verified_at=None,
+                )
+            )
+            _refresh_legacy_migration_run(connection, run_key, commit_seq, failed_at)
+            updated = connection.execute(select(rows).where(rows.c.run_id == run_key, rows.c.session_id == session_key)).mappings().one()
+            return {
+                "changed": True,
+                "exact_replay": False,
+                "session": _legacy_migration_session_dto(updated),
+                "commit_seq": str(commit_seq),
+            }
+
+    def summarize_legacy_migration_run(self, *, run_id: UUID) -> dict[str, Any]:
+        runs = LegacyMigrationRun.__table__
+        with _read_snapshot(self.engine) as connection:
+            run = connection.execute(select(runs).where(runs.c.run_id == str(run_id))).mappings().first()
+            if run is None:
+                return {"run_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            return {
+                "run": _legacy_migration_run_dto(run),
+                "summary": _legacy_migration_summary(connection, str(run_id)),
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def list_legacy_migration_gaps(self, *, run_id: UUID, after_session_id: str | None, limit: int) -> dict[str, Any]:
+        runs = LegacyMigrationRun.__table__
+        rows = LegacyMigrationSession.__table__
+        run_key = str(run_id)
+        with _read_snapshot(self.engine) as connection:
+            if connection.execute(select(runs.c.run_id).where(runs.c.run_id == run_key)).first() is None:
+                return {"run_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            statement = select(rows).where(rows.c.run_id == run_key, rows.c.state != "verified")
+            if after_session_id is not None:
+                statement = statement.where(rows.c.session_id > after_session_id)
+            result = connection.execute(statement.order_by(rows.c.session_id.asc()).limit(limit)).mappings().all()
+            return {
+                "gaps": [_legacy_migration_session_dto(row) for row in result],
+                "next_after_session_id": str(result[-1]["session_id"]) if len(result) == limit else None,
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
     def checkpoint_passive(self) -> dict[str, int]:
         """Run a non-blocking WAL checkpoint owned by catalogd."""
 
@@ -5004,6 +5396,97 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "launch_surface": row["launch_surface"],
         "permission_mode": "bypass",
     }
+
+
+def _legacy_migration_run_dto(row) -> dict[str, Any]:
+    return {
+        "run_id": str(row["run_id"]),
+        "legacy_high_watermark": str(row["legacy_high_watermark"]),
+        "expected_session_count": int(row["expected_session_count"]),
+        "state": str(row["state"]),
+        "commit_seq": str(row["commit_seq"]),
+        "created_at": _encode_datetime(row["created_at"]),
+        "updated_at": _encode_datetime(row["updated_at"]),
+        "completed_at": _encode_datetime(row["completed_at"]),
+    }
+
+
+def _legacy_migration_session_dto(row) -> dict[str, Any]:
+    return {
+        "run_id": str(row["run_id"]),
+        "session_id": str(row["session_id"]),
+        "state": str(row["state"]),
+        "source_expected": int(row["source_expected"]),
+        "source_covered": int(row["source_covered"]),
+        "source_missing": int(row["source_missing"]),
+        "media_expected": int(row["media_expected"]),
+        "media_covered": int(row["media_covered"]),
+        "media_missing": int(row["media_missing"]),
+        "output_proof_hash": row["output_proof_hash"],
+        "parity_proof_hash": row["parity_proof_hash"],
+        "error_code": row["error_code"],
+        "error_message": row["error_message"],
+        "attempts": int(row["attempts"]),
+        "claim_token": row["claim_token"],
+        "worker_id": row["worker_id"],
+        "lease_expires_at": _encode_datetime(row["lease_expires_at"]),
+        "retry_at": _encode_datetime(row["retry_at"]),
+        "commit_seq": str(row["commit_seq"]),
+        "created_at": _encode_datetime(row["created_at"]),
+        "updated_at": _encode_datetime(row["updated_at"]),
+        "verified_at": _encode_datetime(row["verified_at"]),
+    }
+
+
+def _legacy_migration_summary(connection, run_id: str) -> dict[str, Any]:
+    rows = LegacyMigrationSession.__table__
+    state_counts = {
+        str(state): int(count)
+        for state, count in connection.execute(
+            select(rows.c.state, func.count()).where(rows.c.run_id == run_id).group_by(rows.c.state)
+        ).all()
+    }
+    totals = connection.execute(
+        select(
+            func.count(),
+            func.coalesce(func.sum(rows.c.source_expected), 0),
+            func.coalesce(func.sum(rows.c.source_covered), 0),
+            func.coalesce(func.sum(rows.c.source_missing), 0),
+            func.coalesce(func.sum(rows.c.media_expected), 0),
+            func.coalesce(func.sum(rows.c.media_covered), 0),
+            func.coalesce(func.sum(rows.c.media_missing), 0),
+        ).where(rows.c.run_id == run_id)
+    ).one()
+    return {
+        "registered_session_count": int(totals[0]),
+        "state_counts": {state: state_counts.get(state, 0) for state in ("pending", "migrating", "verified", "degraded")},
+        "source_expected": int(totals[1]),
+        "source_covered": int(totals[2]),
+        "source_missing": int(totals[3]),
+        "media_expected": int(totals[4]),
+        "media_covered": int(totals[5]),
+        "media_missing": int(totals[6]),
+    }
+
+
+def _refresh_legacy_migration_run(connection, run_id: str, commit_seq: int, observed_at: datetime) -> None:
+    runs = LegacyMigrationRun.__table__
+    run = connection.execute(select(runs).where(runs.c.run_id == run_id)).mappings().one()
+    summary = _legacy_migration_summary(connection, run_id)
+    registered = int(summary["registered_session_count"])
+    expected = int(run["expected_session_count"])
+    states = summary["state_counts"]
+    if registered < expected or states["pending"] or states["migrating"]:
+        state, completed_at = ("inventory" if registered < expected else "migrating"), None
+    elif states["degraded"]:
+        state, completed_at = "degraded", observed_at
+    else:
+        state, completed_at = "complete", observed_at
+    connection.execute(
+        update(runs)
+        .where(runs.c.run_id == run_id)
+        .values(state=state, commit_seq=commit_seq, updated_at=observed_at, completed_at=completed_at)
+    )
 
 
 def _storage_card_compat_row(row) -> dict[str, Any]:
