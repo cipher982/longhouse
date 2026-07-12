@@ -18,8 +18,18 @@ from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 
 
-def _event_projection(event: dict[str, object], *, session_id: UUID, closed: bool) -> dict[str, object]:
+def _event_projection(
+    event: dict[str, object],
+    *,
+    session_id: UUID,
+    closed: bool,
+    completed_tool_call_ids: set[str],
+) -> dict[str, object]:
     event_id = str(event["event_id"])
+    tool_call_id = str(event["tool_call_id"]) if event.get("tool_call_id") else None
+    tool_call_state = None
+    if event.get("tool_name"):
+        tool_call_state = "completed" if tool_call_id in completed_tool_call_ids else ("dropped" if closed else "running")
     return {
         "kind": "event",
         "session_id": str(session_id),
@@ -36,7 +46,7 @@ def _event_projection(event: dict[str, object], *, session_id: UUID, closed: boo
             "tool_output_text": event.get("tool_output_text"),
             "tool_output_truncated": False,
             "tool_output_original_chars": None,
-            "tool_call_id": event.get("tool_call_id"),
+            "tool_call_id": tool_call_id,
             "timestamp": event["timestamp"],
             "in_active_context": True,
             "branch_id": None,
@@ -46,7 +56,7 @@ def _event_projection(event: dict[str, object], *, session_id: UUID, closed: boo
             "provisional_cursor": None,
             "provisional_complete": False,
             "reconciled_event_id": None,
-            "tool_call_state": "dropped" if closed and event.get("tool_name") else None,
+            "tool_call_state": tool_call_state,
             "media_refs": [],
         },
         "action": None,
@@ -100,7 +110,16 @@ async def build_storage_v2_workspace(
     if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The render projection is invalid.")
     closed = session.lifecycle == "closed"
-    items = [_event_projection(event, session_id=session_id, closed=closed) for event in events]
+    completed_tool_call_ids = {str(event["tool_call_id"]) for event in events if event.get("role") == "tool" and event.get("tool_call_id")}
+    items = [
+        _event_projection(
+            event,
+            session_id=session_id,
+            closed=closed,
+            completed_tool_call_ids=completed_tool_call_ids,
+        )
+        for event in events
+    ]
     session_json = session.model_dump(mode="json")
     latest_event_id = str(events[-1]["event_id"]) if events else None
     fingerprint_payload = {
