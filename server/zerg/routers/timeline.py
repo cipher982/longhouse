@@ -73,7 +73,6 @@ from zerg.services.session_views import SessionMobileTailResponse
 from zerg.services.session_views import SessionNotificationWatchRequest
 from zerg.services.session_views import SessionNotificationWatchResponse
 from zerg.services.session_views import SessionPreviewResponse
-from zerg.services.session_views import SessionProjectionResponse
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
@@ -743,8 +742,8 @@ def get_timeline_session_events(
     )
 
 
-@router.get("/sessions/{session_id}/projection", response_model=SessionProjectionResponse)
-def get_timeline_session_projection(
+@router.get("/sessions/{session_id}/projection")
+async def get_timeline_session_projection(
     session_id: UUID,
     response: Response,
     thread_id: Optional[UUID] = Query(
@@ -755,20 +754,36 @@ def get_timeline_session_projection(
     anchor: str = Query("start", description="Page anchor: start|tail"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
-    db: Session = Depends(get_db),
+    cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
+    legacy_session_factory=Depends(get_legacy_workspace_session_factory),
+    current_user=Depends(get_current_browser_user),
 ):
-    return _sessions_router.get_session_projection(
+    storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
-        thread_id=thread_id,
+        owner_id=int(current_user.id),
         branch_mode=branch_mode,
-        anchor=anchor,
         limit=limit,
-        offset=offset,
-        response=response,
-        db=db,
-        _auth=None,
-        _single=None,
+        cursor=cursor,
     )
+    if storage_workspace is not None:
+        return storage_workspace["projection"]
+
+    def build_legacy_projection():
+        with legacy_session_factory() as db:
+            return _sessions_router.get_session_projection(
+                session_id=session_id,
+                thread_id=thread_id,
+                branch_mode=branch_mode,
+                anchor=anchor,
+                limit=limit,
+                offset=offset,
+                response=response,
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+
+    return await asyncio.to_thread(build_legacy_projection)
 
 
 @router.get("/sessions/{session_id}/workspace")
@@ -841,8 +856,8 @@ async def get_timeline_session_workspace(
     return result
 
 
-@router.get("/sessions/{session_id}/mobile-tail", response_model=SessionMobileTailResponse)
-def get_timeline_session_mobile_tail(
+@router.get("/sessions/{session_id}/mobile-tail")
+async def get_timeline_session_mobile_tail(
     session_id: UUID,
     response: Response,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
@@ -852,21 +867,42 @@ def get_timeline_session_mobile_tail(
         None,
         description="Previous snapshot marker for older-page drift detection",
     ),
-    db: Session = Depends(get_db),
+    cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
+    legacy_session_factory=Depends(get_legacy_workspace_session_factory),
     current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "no-store"
-    result = build_session_mobile_tail(
-        db=db,
+    storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
+        owner_id=int(current_user.id),
         branch_mode=branch_mode,
         limit=limit,
-        offset=offset,
-        snapshot_event_id=snapshot_event_id,
-        timing=timing,
-        owner_id=int(current_user.id),
+        cursor=cursor,
     )
+    if storage_workspace is not None:
+        timing.apply(response)
+        return {
+            "session": storage_workspace["session"],
+            "projection": storage_workspace["projection"],
+            "snapshot_event_id": storage_workspace["workspace_revision"]["latest_event_id"],
+            "workspace_revision": storage_workspace["workspace_revision"],
+        }
+
+    def build_legacy_tail() -> SessionMobileTailResponse:
+        with legacy_session_factory() as db:
+            return build_session_mobile_tail(
+                db=db,
+                session_id=session_id,
+                branch_mode=branch_mode,
+                limit=limit,
+                offset=offset,
+                snapshot_event_id=snapshot_event_id,
+                timing=timing,
+                owner_id=int(current_user.id),
+            )
+
+    result = await asyncio.to_thread(build_legacy_tail)
     timing.apply(response)
     return result
 
