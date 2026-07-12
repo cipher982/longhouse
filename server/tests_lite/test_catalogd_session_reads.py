@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.models import StorageSession
 from zerg.catalogd.protocol import HEADER_BYTES
 from zerg.catalogd.protocol import MAX_PAYLOAD_BYTES
 from zerg.catalogd.protocol import CatalogRpcResponse
@@ -204,6 +205,78 @@ def _seed_session(connection, *, session_id: str, device_id: str, now: datetime,
             last_observation_id=f"observation:{session_id}:7",
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_canonical_session_reads_prefer_storage_v2_facts_without_legacy_catalog_rows(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = str(uuid4())
+    with engine.begin() as connection:
+        connection.execute(
+            StorageSession.__table__.insert().values(
+                session_id=session_id,
+                tenant_id="default",
+                owner_id="42",
+                provider="codex",
+                environment="prod",
+                machine_id="cinder",
+                project="longhouse",
+                cwd="/workspace/longhouse",
+                git_repo="cipher982/longhouse",
+                git_branch="main",
+                started_at=now - timedelta(hours=1),
+                last_activity_at=now,
+                user_messages=2,
+                assistant_messages=3,
+                tool_calls=4,
+                summary_title="Storage v2 session",
+                first_user_message_preview="Migrate the database",
+                last_visible_text_preview="Done",
+                transcript_revision=7,
+                current_render_generation=str(uuid4()),
+                raw_state="durable",
+                render_state="ready",
+                media_state="complete",
+                commit_seq=7,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        read = await client.call("session.read.v2", {"session_id": session_id})
+        assert read["found"] is True
+        assert read["facts"]["catalog"]["device_id"] == "cinder"
+        assert read["facts"]["catalog"]["summary_title"] == "Storage v2 session"
+        assert read["facts"]["card"]["archive_state"] == "current"
+        assert read["facts"]["card"]["tool_calls"] == 4
+        timeline = await client.call(
+            "session.timeline.list.v2",
+            {
+                "project": "longhouse",
+                "provider": None,
+                "environment": None,
+                "include_test": False,
+                "hide_autonomous": True,
+                "include_automation": False,
+                "device_id": None,
+                "days_back": 7,
+                "limit": 20,
+                "offset": 0,
+            },
+        )
+        assert timeline["total"] == 1
+        assert timeline["rows"][0]["facts"]["catalog"]["session_id"] == session_id
+    finally:
+        await client.close()
+        await daemon.close()
 
 
 def test_catalog_gateway_normalizes_missing_file_backing(monkeypatch):

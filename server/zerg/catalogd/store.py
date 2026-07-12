@@ -23,6 +23,7 @@ from sqlalchemy import insert
 from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import tuple_
+from sqlalchemy import union_all
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
@@ -2680,20 +2681,36 @@ class CatalogStore:
         since = observed_at - timedelta(days=days_back)
         card = LiveTimelineCard.__table__
         catalog = LiveSessionCatalog.__table__
+        storage = StorageSession.__table__
+        tombstones = LiveSessionTombstone.__table__
         with _read_snapshot(self.engine) as connection:
-            where = [func.coalesce(card.c.last_activity_at, card.c.started_at) >= since]
+            legacy_where = [
+                func.coalesce(card.c.last_activity_at, card.c.started_at) >= since,
+                ~select(storage.c.session_id).where(storage.c.session_id == card.c.session_id).exists(),
+            ]
+            storage_where = [
+                storage.c.last_activity_at >= since,
+                storage.c.hidden_from_default_timeline == 0,
+                storage.c.user_state != "deleted",
+                ~select(tombstones.c.session_id).where(tombstones.c.session_id == storage.c.session_id).exists(),
+            ]
             if project is not None:
-                where.append(card.c.project == project)
+                legacy_where.append(card.c.project == project)
+                storage_where.append(storage.c.project == project)
             if provider is not None:
-                where.append(card.c.provider == provider)
+                legacy_where.append(card.c.provider == provider)
+                storage_where.append(storage.c.provider == provider)
             if environment is not None:
-                where.append(card.c.environment == environment)
+                legacy_where.append(card.c.environment == environment)
+                storage_where.append(storage.c.environment == environment)
             elif not include_test:
-                where.append(card.c.environment.notin_(("test", "e2e")))
+                legacy_where.append(card.c.environment.notin_(("test", "e2e")))
+                storage_where.append(storage.c.environment.notin_(("test", "e2e")))
             if device_id is not None:
-                where.append(card.c.device_id == device_id)
+                legacy_where.append(card.c.device_id == device_id)
+                storage_where.append(storage.c.machine_id == device_id)
             if hide_autonomous:
-                where.append(
+                legacy_where.append(
                     or_(
                         card.c.user_messages > 0,
                         card.c.archive_state == "pending",
@@ -2701,21 +2718,33 @@ class CatalogStore:
                         card.c.launch_surface.in_(("web", "ios", "api")),
                     )
                 )
+                storage_where.append(
+                    or_(
+                        storage.c.user_messages > 0,
+                        storage.c.launch_actor == "human_ui",
+                        storage.c.launch_surface.in_(("web", "ios", "api")),
+                    )
+                )
             if not include_automation:
-                where.append(or_(card.c.origin_kind.is_(None), card.c.origin_kind != "hatch_automation"))
+                legacy_where.append(or_(card.c.origin_kind.is_(None), card.c.origin_kind != "hatch_automation"))
+                storage_where.append(or_(storage.c.origin_kind.is_(None), storage.c.origin_kind != "hatch_automation"))
 
             joined = card.join(catalog, catalog.c.session_id == card.c.session_id)
-            total = int(connection.execute(select(func.count()).select_from(joined).where(*where)).scalar_one())
+            candidates = union_all(
+                select(
+                    card.c.session_id.label("session_id"),
+                    func.coalesce(card.c.last_activity_at, card.c.started_at).label("order_at"),
+                )
+                .select_from(joined)
+                .where(*legacy_where),
+                select(storage.c.session_id.label("session_id"), storage.c.last_activity_at.label("order_at")).where(*storage_where),
+            ).subquery()
+            total = int(connection.execute(select(func.count()).select_from(candidates)).scalar_one())
             session_ids = [
                 str(value)
                 for value in connection.execute(
-                    select(card.c.session_id)
-                    .select_from(joined)
-                    .where(*where)
-                    .order_by(
-                        func.coalesce(card.c.last_activity_at, card.c.started_at).desc(),
-                        card.c.session_id.desc(),
-                    )
+                    select(candidates.c.session_id)
+                    .order_by(candidates.c.order_at.desc(), candidates.c.session_id.desc())
                     .limit(limit)
                     .offset(offset)
                 ).scalars()
@@ -4916,6 +4945,58 @@ class CatalogStore:
         }
 
 
+def _storage_catalog_compat_row(row) -> dict[str, Any]:
+    return {
+        "session_id": str(row["session_id"]),
+        "provider": str(row["provider"]),
+        "environment": str(row["environment"]),
+        "project": row["project"],
+        "device_id": str(row["machine_id"]),
+        "device_name": str(row["machine_id"]),
+        "cwd": row["cwd"],
+        "git_repo": row["git_repo"],
+        "git_branch": row["git_branch"],
+        "started_at": row["started_at"],
+        "ended_at": row["ended_at"],
+        "closed_at": row["ended_at"],
+        "close_reason": None,
+        "last_activity_at": row["last_activity_at"],
+        "user_messages": int(row["user_messages"]),
+        "assistant_messages": int(row["assistant_messages"]),
+        "tool_calls": int(row["tool_calls"]),
+        "summary": None,
+        "summary_title": row["summary_title"],
+        "anchor_title": row["summary_title"],
+        "first_user_message_preview": row["first_user_message_preview"],
+        "transcript_revision": int(row["transcript_revision"]),
+        "summary_revision": 0,
+        "user_state": str(row["user_state"]),
+        "user_state_at": row["updated_at"],
+        "primary_thread_id": None,
+        "loop_mode": str(row["loop_mode"]),
+        "notification_muted": bool(row["notification_muted"]),
+        "origin_kind": row["origin_kind"],
+        "hidden_from_default_timeline": int(row["hidden_from_default_timeline"]),
+        "launch_actor": row["launch_actor"],
+        "launch_surface": row["launch_surface"],
+        "permission_mode": "bypass",
+    }
+
+
+def _storage_card_compat_row(row) -> dict[str, Any]:
+    return {
+        "session_id": str(row["session_id"]),
+        "last_activity_at": row["last_activity_at"],
+        "summary_title": row["summary_title"],
+        "first_user_message_preview": row["first_user_message_preview"],
+        "user_messages": int(row["user_messages"]),
+        "assistant_messages": int(row["assistant_messages"]),
+        "tool_calls": int(row["tool_calls"]),
+        "transcript_revision": int(row["transcript_revision"]),
+        "archive_state": "current" if row["render_state"] == "ready" else "pending",
+    }
+
+
 def _assemble_session_facts(
     connection,
     *,
@@ -4937,6 +5018,8 @@ def _assemble_session_facts(
     control_lease_table = LiveControlLease.__table__
     live_preview_table = LiveSessionLivePreview.__table__
     alias_table = LiveSessionThreadAlias.__table__
+    storage_table = StorageSession.__table__
+    tombstone_table = LiveSessionTombstone.__table__
 
     catalogs = {
         str(row["session_id"]): row
@@ -4946,6 +5029,18 @@ def _assemble_session_facts(
         str(row["session_id"]): row
         for row in connection.execute(select(card_table).where(card_table.c.session_id.in_(session_ids))).mappings()
     }
+    storage_rows = {
+        str(row["session_id"]): row
+        for row in connection.execute(
+            select(storage_table).where(
+                storage_table.c.session_id.in_(session_ids),
+                ~select(tombstone_table.c.session_id).where(tombstone_table.c.session_id == storage_table.c.session_id).exists(),
+            )
+        ).mappings()
+    }
+    for session_id, row in storage_rows.items():
+        catalogs[session_id] = _storage_catalog_compat_row(row)
+        cards[session_id] = _storage_card_compat_row(row)
     runtime_by_session: dict[str, Any] = {}
     for row in connection.execute(
         select(runtime_table)
