@@ -319,20 +319,36 @@ class LegacyCorpusConverter:
             if event_key is not None and event_key in source_keys:
                 continue
             normalized = _normalized_event_source((event,))
-            if normalized is None or len(normalized.encode("utf-8")) > MAX_RECORD_BYTES:
+            if normalized is None:
                 raise ValueError(f"legacy event {event.id} cannot be preserved as bounded derived evidence")
-            synthetic_key = (synthetic_path, int(event.id))
-            sources.append(
-                _SourceRecord(
-                    data=normalized.encode("utf-8"),
-                    source_path=synthetic_path,
-                    source_offset=int(event.id),
-                    branch_id=int(event.branch_id or 0),
-                    provenance_kind="legacy_normalized_event",
-                    event=event,
+            normalized_bytes = normalized.encode("utf-8")
+            if len(normalized_bytes) <= MAX_RECORD_BYTES:
+                synthetic_key = (synthetic_path, int(event.id))
+                sources.append(
+                    _SourceRecord(
+                        data=normalized_bytes,
+                        source_path=synthetic_path,
+                        source_offset=int(event.id),
+                        branch_id=int(event.branch_id or 0),
+                        provenance_kind="legacy_normalized_event",
+                        event=event,
+                    )
                 )
-            )
-            event_groups[synthetic_key] = [event]
+                event_groups[synthetic_key] = [event]
+                continue
+            chunk_path = f"{synthetic_path}:{event.id}"
+            for chunk_index, start in enumerate(range(0, len(normalized_bytes), MAX_RECORD_BYTES)):
+                sources.append(
+                    _SourceRecord(
+                        data=normalized_bytes[start : start + MAX_RECORD_BYTES],
+                        source_path=chunk_path,
+                        source_offset=chunk_index,
+                        branch_id=int(event.branch_id or 0),
+                        provenance_kind="legacy_normalized_event",
+                        event=event if chunk_index == 0 else None,
+                    )
+                )
+            event_groups[(chunk_path, 0)] = [event]
         batches = _source_batches(sources, event_groups)
         if not batches and not events and source_missing == 0:
             batches = [_SourceBatch("empty", "legacy_source_lines", 0, ())]

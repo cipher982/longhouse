@@ -18,11 +18,13 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.services.legacy_corpus_migration import LegacyCorpusConverter
+from zerg.services.legacy_corpus_migration import _normalized_event_source
 from zerg.services.legacy_corpus_migration import _source_batches
 from zerg.services.legacy_corpus_migration import _SourceRecord
 from zerg.services.legacy_corpus_migration import create_inventory_run
 from zerg.services.legacy_corpus_migration import freeze_high_watermark
 from zerg.services.legacy_corpus_migration import inventory_rows
+from zerg.storage_v2.raw_objects import read_raw_object
 
 
 class FakeCatalog:
@@ -145,6 +147,49 @@ async def test_oversized_legacy_tool_output_keeps_raw_truth_and_terminally_degra
     await converter._complete(uuid4(), uuid4(), result)
     completion = [payload for method, payload in catalog.calls if method == "migration.session.complete.v2"]
     assert completion[0]["degradation_code"] == "render_projection_failed"
+
+
+@pytest.mark.asyncio
+async def test_oversized_unmatched_event_is_split_into_exact_bounded_raw_records(legacy_db, tmp_path: Path):
+    session = _session()
+    with legacy_db() as db:
+        db.add(session)
+        db.flush()
+        event = _event(session.id, raw_json=None, source_path=None, source_offset=None)
+        event.role = "tool"
+        event.tool_output_text = "x" * (4 * 1024 * 1024 + 1)
+        db.add(event)
+        db.flush()
+        expected = (_normalized_event_source((event,)) or "").encode("utf-8")
+        db.commit()
+        watermark = freeze_high_watermark(db)
+
+    catalog = FakeCatalog()
+    object_root = tmp_path / "objects-v2"
+    converter = LegacyCorpusConverter(
+        session_factory=legacy_db,
+        catalog=catalog,
+        object_root=object_root,
+        tenant_id="tenant-a",
+    )
+    with legacy_db() as db:
+        result = await converter.convert_session(db, session.id, watermark)
+
+    commits = [payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2"]
+    commits.sort(key=lambda payload: payload["range_start"])
+    restored = b"".join(
+        record.data
+        for payload in commits
+        for record in read_raw_object(
+            object_root,
+            payload["object_path"],
+            expected_object_hash=payload["object_hash"],
+        ).spec.records
+    )
+    assert len(commits) == 2
+    assert restored == expected
+    assert [payload["render_state"] for payload in commits] == ["failed", "ready"]
+    assert result.degradation_code == "render_projection_failed"
 
 
 @pytest.mark.asyncio
