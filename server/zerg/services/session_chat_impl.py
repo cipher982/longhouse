@@ -126,6 +126,18 @@ class SSEEvent:
         return f"event: {self.event}\ndata: {self.data}\n\n"
 
 
+@dataclass(frozen=True, slots=True)
+class DraftReplyEvent:
+    """Storage-neutral transcript row used to prompt draft generation."""
+
+    id: int | str
+    role: str
+    content_text: str | None = None
+    tool_name: str | None = None
+    tool_input_json: object | None = None
+    tool_output_text: str | None = None
+
+
 # ---------------------------------------------------------------------------
 # Response models (shared between impl and router)
 # ---------------------------------------------------------------------------
@@ -335,7 +347,7 @@ def _managed_local_launch_response_from_plan(plan, *, owner_id: int | None = Non
     return response
 
 
-def _event_content_for_draft(event: AgentEvent) -> str:
+def _event_content_for_draft(event: AgentEvent | DraftReplyEvent) -> str:
     if event.tool_name:
         payload = event.content_text or event.tool_output_text or ""
         if event.tool_input_json:
@@ -349,14 +361,14 @@ def _event_content_for_draft(event: AgentEvent) -> str:
     return f"{event.role}: {event.content_text or ''}".strip()
 
 
-def _format_event_for_draft(event: AgentEvent) -> str:
+def _format_event_for_draft(event: AgentEvent | DraftReplyEvent) -> str:
     text = _event_content_for_draft(event).strip()
     if len(text) > _DRAFT_REPLY_EVENT_CHAR_LIMIT:
         text = f"{text[:_DRAFT_REPLY_EVENT_CHAR_LIMIT].rstrip()} ..."
     return f"[{event.id}] {text}"
 
 
-def _build_draft_reply_messages(*, source_session, events: list[AgentEvent], max_chars: int) -> list[dict[str, str]]:
+def _build_draft_reply_messages(*, source_session, events: list[AgentEvent | DraftReplyEvent], max_chars: int) -> list[dict[str, str]]:
     transcript = "\n\n".join(_format_event_for_draft(event) for event in events)
     metadata_lines = [
         f"provider: {source_session.provider or 'unknown'}",
@@ -396,17 +408,43 @@ async def _build_managed_local_draft_reply_response(
     source_session,
     request_id: str,
     max_chars: int,
-    db: Session,
+    db: Session | None,
     owner_id: int | None = None,
 ) -> SessionDraftReplyResponse:
     _assert_live_session_send_available(db, source_session, owner_id=owner_id)
 
-    events = AgentsStore(db).get_session_events(
-        source_session.id,
-        branch_mode="head",
-        limit=_DRAFT_REPLY_EVENT_LIMIT,
-        load_from_end=True,
-    )
+    if database_module.live_catalog_enabled() and db is None:
+        from zerg.routers.agents_storage_v2 import read_storage_v2_session_events_page
+
+        page = await read_storage_v2_session_events_page(
+            session_id=source_session.id,
+            owner_id=str(owner_id),
+            cursor=None,
+            anchor="tail",
+            limit=_DRAFT_REPLY_EVENT_LIMIT,
+        )
+        rows = page.get("events")
+        if not isinstance(rows, list):
+            rows = []
+        events = [
+            DraftReplyEvent(
+                id=str(row.get("event_id") or row.get("cursor") or "unknown"),
+                role=str(row.get("role") or "unknown"),
+                content_text=row.get("content_text") if isinstance(row.get("content_text"), str) else None,
+                tool_name=row.get("tool_name") if isinstance(row.get("tool_name"), str) else None,
+                tool_input_json=row.get("tool_input_json"),
+                tool_output_text=(row.get("tool_output_text") if isinstance(row.get("tool_output_text"), str) else None),
+            )
+            for row in rows
+            if isinstance(row, dict) and row.get("branch_kind") in {None, "head"}
+        ]
+    else:
+        events = AgentsStore(db).get_session_events(
+            source_session.id,
+            branch_mode="head",
+            limit=_DRAFT_REPLY_EVENT_LIMIT,
+            load_from_end=True,
+        )
     if not events:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -445,11 +483,13 @@ async def _build_managed_local_draft_reply_response(
     if len(draft_text) > max_chars:
         draft_text = draft_text[:max_chars].rstrip()
 
+    event_refs = [str(event.id) for event in events]
+    legacy_event_ids = [int(event_ref.removeprefix("legacy:")) for event_ref in event_refs if event_ref.removeprefix("legacy:").isdigit()]
     return SessionDraftReplyResponse(
         draft_text=draft_text,
         model=str(model),
         generated_at=datetime.now(timezone.utc),
-        based_on_event_ids=[event.id for event in events],
+        based_on_event_ids=legacy_event_ids,
     )
 
 

@@ -1315,7 +1315,7 @@ async def send_to_live_session(
 async def draft_reply_for_live_session(
     session_id: str,
     body: SessionDraftReplyRequest | None = None,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(_catalog_control_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ):
     """Generate a suggested next user message for a live managed-local session."""
@@ -1391,7 +1391,7 @@ async def draft_reply_for_live_session_agents(
     session_id: str,
     request: Request,
     body: SessionDraftReplyRequest | None = None,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(_catalog_control_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ):
@@ -3067,10 +3067,42 @@ async def cancel_live_session_input_endpoint(
 async def cancel_session_input_endpoint(
     session_id: str,
     input_id: int,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(_catalog_control_db_dependency),
     _current_user: User = Depends(get_current_browser_route_user),
 ) -> dict:
     source_session = _load_session_for_continuation(db, session_id)
+    if database_module.live_catalog_enabled():
+        state = await _catalog_recent_input_summaries(source_session.id)
+        if state is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "input_catalog_unavailable",
+                    "message": "The live input catalog is temporarily unavailable.",
+                },
+            )
+        match = next((item for item in state[0] if item.id == input_id and item.live_input_id), None)
+        if match is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "queued_input_not_found",
+                    "message": "Queued input was not found for this session.",
+                },
+            )
+        row = await cancel_live_queued_receipt_catalog(
+            session_id=source_session.id,
+            receipt_id=match.live_input_id,
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "input_no_longer_queued",
+                    "message": "Input is no longer queued.",
+                },
+            )
+        return {"cancelled": True, "live_input_id": row.id, "input_id": row.archive_session_input_id}
     existing = get_session_input(db, input_id)
     if existing is None or existing.session_id != source_session.id:
         raise HTTPException(
