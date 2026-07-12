@@ -29,7 +29,6 @@ from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_CATEGORY
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_THREAD_PREFIX
-from zerg.services.apns_sender import APNSDeviceTarget
 from zerg.services.apns_sender import SessionAttentionPush
 from zerg.services.apns_sender import _attention_collapse_id
 from zerg.services.apns_sender import build_session_attention_payload
@@ -233,13 +232,18 @@ def test_user_notification_settings_default_true_and_patchable(tmp_path):
             db.close()
 
     api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(
+    current_user = SimpleNamespace(
         id=1,
         email="user@example.com",
         role="ADMIN",
+        prefs={},
     )
+    api_app.dependency_overrides[get_current_user] = lambda: current_user
 
-    with TestClient(api_app) as client:
+    def update_catalog_user(**_params):
+        return {"found": True, "changed": True, "user": current_user, "commit_seq": "1"}
+
+    with patch("zerg.routers.users.update_user", side_effect=update_catalog_user), TestClient(api_app) as client:
         initial = client.get("/users/me/notifications")
         assert initial.status_code == 200, initial.text
         assert initial.json()["apns_enabled"] is True
@@ -248,10 +252,7 @@ def test_user_notification_settings_default_true_and_patchable(tmp_path):
         assert updated.status_code == 200, updated.text
         assert updated.json()["apns_enabled"] is False
 
-    with SessionLocal() as db:
-        user = db.query(User).filter(User.id == 1).first()
-        assert user is not None
-        assert dict(user.prefs or {})["apns_enabled"] is False
+    assert current_user.prefs["apns_enabled"] is False
 
     _cleanup_overrides()
     engine.dispose()

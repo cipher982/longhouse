@@ -195,14 +195,9 @@ def _request_is_trusted(request: Request) -> bool:
     # only be a trust signal when auth is actually enforced.
     if not settings.auth_disabled:
         try:
-            from zerg.database import get_catalog_session_factory
             from zerg.dependencies.browser_auth import _get_browser_session_user
 
-            db = get_catalog_session_factory()()
-            try:
-                user = _get_browser_session_user(request, db)
-            finally:
-                db.close()
+            user = _get_browser_session_user(request)
             if user is not None and getattr(user, "role", "USER") == "ADMIN":
                 return True
         except Exception:

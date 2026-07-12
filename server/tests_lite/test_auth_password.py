@@ -4,6 +4,7 @@ import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from zerg.database import Base
@@ -22,7 +23,7 @@ def _make_db(tmp_path):
     return SessionLocal
 
 
-def _get_client(session_factory):
+def _get_client(session_factory, refresh_calls=None):
     """Create a TestClient with DB override."""
     from zerg.main import api_app
 
@@ -33,9 +34,40 @@ def _get_client(session_factory):
         finally:
             db.close()
 
+    def _resolve_local_user(**params):
+        with session_factory() as db:
+            user = db.query(User).filter(User.email == params["email"]).first()
+            existing = (
+                db.query(User).filter((User.provider != "service") | User.provider.is_(None)).order_by(User.id).first()
+            )
+            if user is None and existing is not None and params["require_email_match"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Password auth is bound to the configured owner. Existing user does not match OWNER_EMAIL.",
+                )
+            if user is None and existing is not None and params["adopt_existing"]:
+                user = existing
+            if user is None:
+                user = User(email=params["email"], provider=params["provider"], role=params["role"])
+                db.add(user)
+                db.commit()
+                db.refresh(user)
+            else:
+                _ = (user.id, user.email, user.display_name, user.avatar_url)
+                db.expunge(user)
+            return user
+
+    def _create_refresh(**params):
+        if refresh_calls is not None:
+            refresh_calls.append(params)
+        return {"created": True, "exact_replay": False}
+
     api_app.dependency_overrides[get_db] = _override_db
-    client = TestClient(api_app)
-    yield client
+    with (
+        patch("zerg.routers.auth_browser.resolve_local_user", side_effect=_resolve_local_user),
+        patch("zerg.routers.auth_browser.create_refresh", side_effect=_create_refresh),
+    ):
+        yield TestClient(api_app)
     api_app.dependency_overrides.clear()
 
 
@@ -168,7 +200,7 @@ def test_password_login_adopts_existing_user_with_null_provider(tmp_path):
 
 
 def test_password_login_routes_refresh_session_write_through_serializer(tmp_path):
-    """Password login should issue the browser refresh session via WriteSerializer."""
+    """Password login should issue refresh state through the catalog boundary."""
     sf = _make_db(tmp_path)
 
     settings = SimpleNamespace(
@@ -177,23 +209,16 @@ def test_password_login_routes_refresh_session_write_through_serializer(tmp_path
         single_tenant=True,
         testing=False,
     )
-    labels: list[str] = []
-
-    class _FakeSerializer:
-        async def execute_or_direct(self, fn, fallback_db, *, label="", auto_commit=True, priority=None):
-            labels.append(label)
-            result = fn(fallback_db)
-            if auto_commit:
-                fallback_db.commit()
-            return result
+    refresh_calls: list[dict] = []
 
     with (
         patch.dict(os.environ, {"OWNER_EMAIL": "alice@example.com"}, clear=False),
         patch("zerg.routers.auth_browser.get_settings", return_value=settings),
-        patch("zerg.routers.auth_browser.get_write_serializer", return_value=_FakeSerializer()),
     ):
-        for client in _get_client(sf):
+        for client in _get_client(sf, refresh_calls):
             resp = client.post("/auth/password", json={"password": "secret"})
             assert resp.status_code == 200
 
-    assert labels == ["refresh-session"]
+    assert len(refresh_calls) == 1
+    assert refresh_calls[0]["user_id"] == 1
+    assert len(refresh_calls[0]["token_hash"]) == 64

@@ -5,6 +5,7 @@ routes require authentication so we rely on the existing `get_current_user`
 dependency to supply the active user.
 """
 
+import asyncio
 from datetime import datetime
 from datetime import timezone
 from typing import Literal
@@ -20,7 +21,7 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
-from zerg.crud import update_user
+from zerg.auth.catalog_gateway import update_user
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 
@@ -29,7 +30,6 @@ from zerg.dependencies.auth import get_current_user
 from zerg.events import EventType
 from zerg.events.decorators import publish_event
 from zerg.models.notification_client_presence import NotificationClientPresence
-from zerg.models.user import User
 from zerg.schemas.schemas import UserOut
 from zerg.schemas.schemas import UserUpdate
 from zerg.schemas.usage import UserUsageResponse
@@ -122,24 +122,26 @@ def read_current_user_usage(
 @publish_event(EventType.USER_UPDATED)
 async def update_current_user(
     patch: UserUpdate,
-    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ):
     """Patch the authenticated user's profile (display name, avatar, prefs)."""
 
-    updated = update_user(
-        db,
-        current_user.id,
+    update_mask = [
+        field for field in ("display_name", "avatar_url", "prefs") if field in patch.model_fields_set and getattr(patch, field) is not None
+    ]
+    result = await asyncio.to_thread(
+        update_user,
+        user_id=current_user.id,
         display_name=patch.display_name,
         avatar_url=patch.avatar_url,
         prefs=patch.prefs,
+        update_mask=update_mask,
     )
-
-    if updated is None:
+    if result.get("found") is not True:
         # Should not happen if auth dependency returned a valid row.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    return updated
+    return result["user"]
 
 
 @router.get("/users/me/notifications", response_model=UserNotificationSettingsResponse)
@@ -160,25 +162,26 @@ def read_current_user_notification_settings(current_user=Depends(get_current_use
 @publish_event(EventType.USER_UPDATED)
 async def update_current_user_notification_settings(
     patch: UserNotificationSettingsUpdate,
-    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ) -> UserNotificationSettingsResponse:
     """Update mobile notification preferences for the authenticated user."""
 
-    user = db.query(User).filter(User.id == current_user.id).first()
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
     updates = patch.model_dump(exclude_unset=True)
     if not updates:
-        prefs = load_user_notification_prefs(user)
+        prefs = load_user_notification_prefs(current_user)
     else:
         try:
-            prefs = apply_user_notification_prefs(user, updates)
+            prefs = apply_user_notification_prefs(current_user, updates)
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
-    db.commit()
-    db.refresh(user)
+        result = await asyncio.to_thread(
+            update_user,
+            user_id=int(current_user.id),
+            prefs=dict(current_user.prefs or {}),
+            update_mask=["prefs"],
+        )
+        if result.get("found") is not True:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
     return UserNotificationSettingsResponse(
         apns_enabled=prefs.apns_enabled,
         notify_only_when_away=prefs.notify_only_when_away,
@@ -252,15 +255,19 @@ async def update_current_user_client_presence(
 async def upload_current_user_avatar(
     *,
     file: UploadFile = File(..., description="Avatar image file (PNG/JPEG/WebP ≤2 MB)"),
-    db: Session = Depends(_catalog_db_dependency),
     current_user=Depends(get_current_user),
 ):
     """Handle *multipart/form-data* avatar upload for the authenticated user."""
 
     avatar_url = store_avatar_for_user(file)
 
-    updated_user = update_user(db, current_user.id, avatar_url=avatar_url)
-    if updated_user is None:
+    result = await asyncio.to_thread(
+        update_user,
+        user_id=int(current_user.id),
+        avatar_url=avatar_url,
+        update_mask=["avatar_url"],
+    )
+    if result.get("found") is not True:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
-    return updated_user
+    return result["user"]

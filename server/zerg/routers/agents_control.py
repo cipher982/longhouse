@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session
 import zerg.database as database_module
 from zerg.config import get_settings
 from zerg.database import get_catalog_session_factory
+from zerg.dependencies.agents_auth import _validate_device_token_for_request
 from zerg.models.device_token import DeviceToken
-from zerg.routers.device_tokens import validate_device_token
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.machine_control_operations import reconcile_live_machine_control_operation_from_command_result
 from zerg.services.machine_control_operations import reconcile_machine_control_operation_from_command_result
@@ -36,13 +36,13 @@ def _auth_disabled_identity(hello: Mapping[str, Any]) -> tuple[int, str]:
     return 0, device_id or "test-machine"
 
 
-def _validate_websocket_device_token(websocket: WebSocket, db: Session) -> DeviceToken | None:
+def _validate_websocket_device_token(websocket: WebSocket) -> DeviceToken | None:
     token = websocket.headers.get("x-agents-token")
     if not token:
         return None
     if not token.startswith("zdt_"):
         return None
-    return validate_device_token(token, db)
+    return _validate_device_token_for_request(token)
 
 
 async def _reconcile_machine_control_operation_result(
@@ -129,7 +129,7 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
         if settings.auth_disabled:
             owner_id, device_id = _auth_disabled_identity(hello)
         else:
-            token = _validate_websocket_device_token(websocket, db)
+            token = await asyncio.to_thread(_validate_websocket_device_token, websocket)
             if token is None:
                 await _close_control_ws(websocket, reason="Invalid or missing device token")
                 return

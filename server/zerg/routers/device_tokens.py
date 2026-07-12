@@ -29,6 +29,7 @@ from zerg.config import get_settings
 from zerg.database import archive_database_is_read_only
 from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
+from zerg.dependencies.auth import _auth_compat_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
@@ -162,7 +163,7 @@ class APNSLiveActivityEndRequest(BaseModel):
 @router.post("/tokens", response_model=CreateTokenResponse, status_code=status.HTTP_201_CREATED)
 async def create_device_token(
     request: CreateTokenRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_auth_compat_db),
     current_user=Depends(get_current_user),
 ) -> CreateTokenResponse:
     """Create a new device token.
@@ -244,6 +245,8 @@ async def create_device_token(
         )
 
     ws = get_write_serializer()
+    if db is None:
+        raise RuntimeError("legacy device-token create requires a test database")
 
     def _create_token(wdb: Session) -> tuple[str, str, datetime]:
         device_token = DeviceToken(
@@ -276,7 +279,7 @@ async def create_device_token(
 @router.get("/tokens", response_model=TokenListResponse)
 async def list_device_tokens(
     include_revoked: bool = False,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_auth_compat_db),
     current_user=Depends(get_current_user),
 ) -> TokenListResponse:
     """List all device tokens for the current user.
@@ -335,6 +338,8 @@ async def list_device_tokens(
             total=len(token_payloads),
         )
 
+    if db is None:
+        raise RuntimeError("legacy device-token list requires a test database")
     query = db.query(DeviceToken).filter(DeviceToken.owner_id == current_user.id)
 
     if not include_revoked:
@@ -549,7 +554,7 @@ async def end_apns_live_activity(
 @router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_device_token(
     token_id: UUID,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_auth_compat_db),
     current_user=Depends(get_current_user),
 ) -> None:
     """Revoke a device token.
@@ -607,6 +612,8 @@ async def revoke_device_token(
         return
 
     ws = get_write_serializer()
+    if db is None:
+        raise RuntimeError("legacy device-token revoke requires a test database")
 
     def _revoke_token(wdb: Session) -> None:
         token = wdb.query(DeviceToken).filter(DeviceToken.id == token_id, DeviceToken.owner_id == current_user.id).first()
@@ -630,12 +637,43 @@ async def revoke_device_token(
 
 
 @router.get("/tokens/{token_id}", response_model=TokenResponse)
-def get_device_token(
+async def get_device_token(
     token_id: UUID,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_auth_compat_db),
     current_user=Depends(get_current_user),
 ) -> TokenResponse:
     """Get details of a specific device token."""
+    if live_store_configured() and not get_settings().testing:
+        from zerg.catalogd.client import CatalogRemoteError
+        from zerg.catalogd.client import CatalogUnavailable
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        client = get_catalogd_client()
+        if client is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "catalog_unavailable", "message": "Catalog read is temporarily unavailable."},
+            )
+        try:
+            result = await client.call(
+                "auth.device.list.v2",
+                {"owner_id": int(current_user.id), "include_revoked": True},
+            )
+        except (CatalogUnavailable, CatalogRemoteError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "catalog_unavailable", "message": "Catalog read is temporarily unavailable."},
+            ) from exc
+        payload = next(
+            (item for item in result.get("tokens", []) if isinstance(item, dict) and item.get("id") == str(token_id)),
+            None,
+        )
+        if payload is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Token {token_id} not found")
+        return TokenResponse.model_validate(payload)
+
+    if db is None:
+        raise RuntimeError("legacy device-token get requires a test database")
     token = db.query(DeviceToken).filter(DeviceToken.id == token_id, DeviceToken.owner_id == current_user.id).first()
 
     if not token:

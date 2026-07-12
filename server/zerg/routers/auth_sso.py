@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 
 import httpx
 from fastapi import APIRouter
-from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 from zerg.auth.hosted import TENANT_LOGIN_STATE_COOKIE
 from zerg.auth.hosted import hosted_instance_id
@@ -22,11 +21,9 @@ from zerg.auth.redirects import normalize_local_return_to
 from zerg.auth.session_tokens import _clear_refresh_cookie
 from zerg.auth.session_tokens import _set_session_cookie
 from zerg.config import get_settings
-from zerg.database import catalog_db_dependency
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
-_catalog_db_dependency = catalog_db_dependency()
 
 
 class NativeHandoffRequest(BaseModel):
@@ -95,7 +92,6 @@ async def accept_handoff_request(
     response: Response,
     return_to: str | None = None,
     tenant_state: str | None = None,
-    db: Session = Depends(_catalog_db_dependency),
 ):
     settings = get_settings()
     control_plane_url = getattr(settings, "control_plane_url", None)
@@ -122,7 +118,7 @@ async def accept_handoff_request(
 
     from zerg.dependencies.auth import _get_strategy
 
-    user = _get_strategy().validate_ws_token(runtime_token, db)
+    user = await asyncio.to_thread(_get_strategy().validate_ws_token, runtime_token)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid runtime token")
 
@@ -144,7 +140,7 @@ async def accept_handoff_request(
 
 
 @router.post("/accept-native-handoff")
-async def accept_native_handoff(body: NativeHandoffRequest, db: Session = Depends(_catalog_db_dependency)):
+async def accept_native_handoff(body: NativeHandoffRequest):
     settings = get_settings()
     control_plane_url = getattr(settings, "control_plane_url", None)
     if not control_plane_url:
@@ -162,7 +158,7 @@ async def accept_native_handoff(body: NativeHandoffRequest, db: Session = Depend
 
     from zerg.dependencies.auth import _get_strategy
 
-    user = _get_strategy().validate_ws_token(runtime_token, db)
+    user = await asyncio.to_thread(_get_strategy().validate_ws_token, runtime_token)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid runtime token")
 

@@ -227,11 +227,13 @@ def test_hosted_browser_auth_accepts_runtime_bearer(monkeypatch, db_session):
     db_session.refresh(user)
 
     class Strategy:
-        def validate_ws_token(self, token, db):
+        def validate_ws_token(self, token, db=None):
             assert token == "cp.runtime.jwt"
             return user
 
-    monkeypatch.setattr(browser_auth, "get_settings", lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"))
+    monkeypatch.setattr(
+        browser_auth, "get_settings", lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai")
+    )
     monkeypatch.setattr(browser_auth.auth_deps, "AUTH_DISABLED", False)
     monkeypatch.setattr(browser_auth.auth_deps, "_get_strategy", lambda: Strategy())
     request = Request(
@@ -262,7 +264,9 @@ def test_hosted_browser_auth_rejects_legacy_jwt_bearer(monkeypatch, db_session):
         "test-jwt-secret-1234",
     )
 
-    monkeypatch.setattr(browser_auth, "get_settings", lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"))
+    monkeypatch.setattr(
+        browser_auth, "get_settings", lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai")
+    )
     monkeypatch.setattr(browser_auth.auth_deps, "AUTH_DISABLED", False)
     monkeypatch.setattr(browser_auth.auth_deps, "_get_strategy", lambda: HostedCPAuthStrategy())
     request = Request(
@@ -295,7 +299,7 @@ async def test_accept_handoff_allows_code_only_control_plane_open_instance(monke
         return {"runtime_token": "cp.runtime.jwt", "expires_in": 3600}
 
     class Strategy:
-        def validate_ws_token(self, token, db):
+        def validate_ws_token(self, token, db=None):
             assert token == "cp.runtime.jwt"
             return user
 
@@ -322,7 +326,7 @@ async def test_accept_handoff_allows_code_only_control_plane_open_instance(monke
         }
     )
 
-    redirect = await accept_handoff_request(request, "one-use-code", Response(), db=db_session)
+    redirect = await accept_handoff_request(request, "one-use-code", Response())
 
     assert redirect.status_code == 302
     assert redirect.headers["location"] == "/timeline"
@@ -352,7 +356,7 @@ async def test_accept_handoff_requires_cookie_for_tenant_state(monkeypatch, db_s
     )
 
     with pytest.raises(HTTPException) as exc:
-        await accept_handoff_request(request, "one-use-code", Response(), tenant_state="state-1", db=db_session)
+        await accept_handoff_request(request, "one-use-code", Response(), tenant_state="state-1")
 
     assert exc.value.status_code == 403
     assert exc.value.detail == "Missing login state"
@@ -378,7 +382,7 @@ async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_sess
         }
 
     class Strategy:
-        def validate_ws_token(self, token, db):
+        def validate_ws_token(self, token, db=None):
             assert token == "cp.runtime.jwt"
             return user
 
@@ -390,7 +394,7 @@ async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_sess
     monkeypatch.setattr("zerg.routers.auth_sso._exchange_handoff_code", exchange)
     monkeypatch.setattr("zerg.dependencies.auth._get_strategy", lambda: Strategy())
 
-    result = await accept_native_handoff(NativeHandoffRequest(code="one-use-code", tenant_state="verifier"), db_session)
+    result = await accept_native_handoff(NativeHandoffRequest(code="one-use-code", tenant_state="verifier"))
 
     assert result == {
         "runtime_token": "cp.runtime.jwt",
@@ -429,6 +433,7 @@ async def test_refresh_runtime_token_proxies_bearer_to_cp(monkeypatch):
 
     class FakeResponse:
         status_code = 200
+
         def json(self):
             return {
                 "runtime_token": "cp.fresh.jwt",
@@ -503,6 +508,7 @@ async def test_refresh_runtime_token_returns_404_when_not_hosted(monkeypatch):
 async def test_refresh_runtime_token_propagates_cp_rejection(monkeypatch):
     class FakeResponse:
         status_code = 401
+
         def json(self):
             return {"detail": "Invalid or expired runtime token"}
 
@@ -539,6 +545,7 @@ async def test_refresh_native_session_proxies_refresh_token_to_cp(monkeypatch):
 
     class FakeResponse:
         status_code = 200
+
         def json(self):
             return {
                 "runtime_token": "cp.fresh.jwt",
@@ -581,6 +588,7 @@ async def test_refresh_native_session_proxies_refresh_token_to_cp(monkeypatch):
 async def test_refresh_native_session_propagates_cp_rejection(monkeypatch):
     class FakeResponse:
         status_code = 401
+
         def json(self):
             return {"detail": "revoked"}
 

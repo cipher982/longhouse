@@ -22,6 +22,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import _validate_device_token_for_request
+from zerg.dependencies.auth import _auth_compat_db
 from zerg.dependencies.auth import get_current_user
 from zerg.main import api_app
 from zerg.models.device_token import DeviceToken
@@ -52,6 +53,7 @@ def _setup_app(tmp_path):
         return SimpleNamespace(id=1, email="alice@example.com", role="ADMIN")
 
     api_app.dependency_overrides[get_db] = _override_db
+    api_app.dependency_overrides[_auth_compat_db] = _override_db
     api_app.dependency_overrides[get_current_user] = _override_user
 
     with factory() as db:
@@ -61,6 +63,7 @@ def _setup_app(tmp_path):
 
     def _cleanup():
         api_app.dependency_overrides.pop(get_db, None)
+        api_app.dependency_overrides.pop(_auth_compat_db, None)
         api_app.dependency_overrides.pop(get_current_user, None)
 
     return factory, _cleanup
@@ -198,8 +201,10 @@ def test_production_agents_token_validation_uses_catalogd_without_opening_db():
     assert validated is not None
     assert validated.owner_id == 1
     assert validated.device_id == "cinder"
-    assert observed["method"] == "auth.device.validate.v2"
+    assert observed["method"] == "auth.device.resolve.v2"
     assert observed["params"]["token_hash"] == hash_token(plain_token)
+    assert observed["params"]["touch_last_used"] is True
+    assert observed["params"]["touch_interval_seconds"] == 300
     assert observed["timeout_seconds"] == 0.1
 
 

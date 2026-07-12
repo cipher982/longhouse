@@ -2,18 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
 import secrets
 import time
 import urllib.parse
+import uuid
 from collections import defaultdict
 from collections import deque
+from datetime import datetime
 from datetime import timedelta
+from datetime import timezone
 from typing import Any
-from typing import Callable
-from typing import TypeVar
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -23,9 +25,12 @@ from fastapi import Response
 from fastapi import status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
 
 from zerg.auth import refresh_tokens
+from zerg.auth.catalog_gateway import create_refresh
+from zerg.auth.catalog_gateway import resolve_local_user
+from zerg.auth.catalog_gateway import revoke_refresh_family
+from zerg.auth.catalog_gateway import rotate_refresh
 from zerg.auth.hosted import TENANT_LOGIN_STATE_COOKIE
 from zerg.auth.session_tokens import ACCESS_TOKEN_LIFETIME
 from zerg.auth.session_tokens import REFRESH_COOKIE_NAME
@@ -35,25 +40,13 @@ from zerg.auth.session_tokens import _issue_access_token
 from zerg.auth.session_tokens import _set_refresh_cookie
 from zerg.auth.session_tokens import _set_session_cookie
 from zerg.config import get_settings
-from zerg.crud import count_users
-from zerg.crud import create_user
-from zerg.crud import get_user_by_email
-from zerg.crud import update_user
-from zerg.database import catalog_db_dependency
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_auth import get_optional_browser_user
 from zerg.schemas.schemas import TokenOut
-from zerg.services.write_serializer import get_catalog_write_serializer
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-_catalog_db_dependency = catalog_db_dependency()
-
-# Preserve the established patch seam while routing it to the catalog owner.
-get_write_serializer = get_catalog_write_serializer
-
 # Refresh token cookie max-age: 90 days (matches absolute lifetime in refresh_tokens module).
 _REFRESH_COOKIE_MAX_AGE = 90 * 24 * 60 * 60
-_RefreshWriteResult = TypeVar("_RefreshWriteResult")
 
 
 def _control_plane_url(settings: Any | None = None) -> str | None:
@@ -61,17 +54,8 @@ def _control_plane_url(settings: Any | None = None) -> str | None:
     return getattr(settings, "control_plane_url", None) or None
 
 
-async def _run_refresh_session_write(
-    db: Session,
-    fn: Callable[[Session], _RefreshWriteResult],
-) -> _RefreshWriteResult:
-    ws = get_write_serializer()
-    return await ws.execute_or_direct(fn, db, label="refresh-session")
-
-
 async def _issue_session(
     response: Response,
-    db: Session,
     user,
     *,
     display_name: str | None = None,
@@ -89,9 +73,23 @@ async def _issue_session(
         display_name=display_name or getattr(user, "display_name", None),
         avatar_url=avatar_url or getattr(user, "avatar_url", None),
     )
-    _set_session_cookie(response, access_token, at_seconds)
 
-    raw_rt = await _run_refresh_session_write(db, lambda current_db: refresh_tokens.create(current_db, user_id=user.id))
+    raw_rt = refresh_tokens._generate_token()
+    now = datetime.now(timezone.utc)
+    family_id = uuid.uuid4().hex
+    result = await asyncio.to_thread(
+        create_refresh,
+        user_id=int(user.id),
+        token_hash=refresh_tokens._hash_token(raw_rt),
+        family_id=family_id,
+        parent_id=None,
+        created_at=now,
+        absolute_expires_at=now + refresh_tokens.ABSOLUTE_LIFETIME,
+        idle_expires_at=now + refresh_tokens.IDLE_LIFETIME,
+    )
+    if not (result.get("created") is True or result.get("exact_replay") is True):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Catalog refresh issuance failed")
+    _set_session_cookie(response, access_token, at_seconds)
     _set_refresh_cookie(response, raw_rt, _REFRESH_COOKIE_MAX_AGE)
 
     return TokenOut(access_token=access_token, expires_in=at_seconds)
@@ -224,7 +222,7 @@ def _verify_google_id_token(id_token_str: str) -> dict[str, Any]:
 
 
 @router.post("/dev-login", response_model=TokenOut)
-async def dev_login(response: Response, db: Session = Depends(_catalog_db_dependency)) -> TokenOut:
+async def dev_login(response: Response) -> TokenOut:
     settings = get_settings()
     if not settings.auth_disabled:
         raise HTTPException(
@@ -232,22 +230,22 @@ async def dev_login(response: Response, db: Session = Depends(_catalog_db_depend
             detail="Dev login only available when AUTH_DISABLED=1",
         )
 
-    user = get_user_by_email(db, "dev@local")
-    if not user:
-        user = create_user(
-            db,
-            email="dev@local",
-            provider="dev",
-            provider_user_id="dev-user-1",
-            role="ADMIN",
-            skip_notification=True,
-        )
-
-    return await _issue_session(response, db, user, display_name=user.display_name or "Dev User")
+    user = await asyncio.to_thread(
+        resolve_local_user,
+        email="dev@local",
+        provider="dev",
+        provider_user_id="dev-user-1",
+        role="ADMIN",
+        adopt_existing=False,
+        require_email_match=False,
+        max_users=None,
+        promote_role=True,
+    )
+    return await _issue_session(response, user, display_name=user.display_name or "Dev User")
 
 
 @router.post("/service-login", response_model=TokenOut, include_in_schema=False)
-async def service_login(request: Request, response: Response, db: Session = Depends(_catalog_db_dependency)) -> TokenOut:
+async def service_login(request: Request, response: Response) -> TokenOut:
     settings = get_settings()
     if _control_plane_url(settings):
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted local service login is disabled")
@@ -262,31 +260,22 @@ async def service_login(request: Request, response: Response, db: Session = Depe
     provider_user_id = "smoke-test"
     display_name = "Smoke Test" + (f" ({run_id[:20]})" if run_id else "")
 
-    user = get_user_by_email(db, email)
-    if not user:
-        try:
-            user = create_user(
-                db,
-                email=email,
-                provider="service",
-                provider_user_id=provider_user_id,
-                role="USER",
-                skip_notification=True,
-            )
-        except Exception:
-            db.rollback()
-            user = get_user_by_email(db, email)
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Failed to create service user",
-                )
-
-    return await _issue_session(response, db, user, display_name=display_name)
+    user = await asyncio.to_thread(
+        resolve_local_user,
+        email=email,
+        provider="service",
+        provider_user_id=provider_user_id,
+        role="USER",
+        adopt_existing=False,
+        require_email_match=False,
+        max_users=None,
+        promote_role=False,
+    )
+    return await _issue_session(response, user, display_name=display_name)
 
 
 @router.post("/google", response_model=TokenOut)
-async def google_sign_in(response: Response, body: dict[str, str], db: Session = Depends(_catalog_db_dependency)) -> TokenOut:
+async def google_sign_in(response: Response, body: dict[str, str]) -> TokenOut:
     if _control_plane_url():
         raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted local Google login is disabled")
 
@@ -314,55 +303,41 @@ async def google_sign_in(response: Response, body: dict[str, str], db: Session =
                 detail="This Zerg instance is configured for a specific owner. Sign-in with the owner email.",
             )
 
-    user = get_user_by_email(db, email)
     admin_emails = {e.strip().lower() for e in (settings.admin_emails or "").split(",") if e.strip()}
     is_admin = email.lower() in admin_emails
+    try:
+        user = await asyncio.to_thread(
+            resolve_local_user,
+            email=email,
+            provider="google",
+            provider_user_id=sub,
+            role="ADMIN" if is_admin else "USER",
+            adopt_existing=False,
+            require_email_match=bool(settings.single_tenant and not settings.testing),
+            max_users=(settings.max_users if not settings.testing and not is_admin and not settings.single_tenant else None),
+            promote_role=is_admin,
+        )
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_409_CONFLICT and settings.single_tenant:
+            exc.detail = "Single-tenant mode: instance already has an owner. Cannot create additional users."
+        elif exc.status_code == status.HTTP_409_CONFLICT:
+            exc.status_code = status.HTTP_403_FORBIDDEN
+            exc.detail = "Sign-ups disabled: user limit reached"
+        raise
 
-    if not user:
-        if settings.single_tenant and not settings.testing:
-            from zerg.services.single_tenant import can_create_user_locked
-
-            if not can_create_user_locked(db):
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Single-tenant mode: instance already has an owner. Cannot create additional users.",
-                )
-
-        if not settings.testing and not is_admin:
-            total = count_users(db)
-            if settings.max_users and total >= settings.max_users:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Sign-ups disabled: user limit reached",
-                )
-
-        role = "ADMIN" if is_admin else "USER"
-        user = create_user(db, email=email, provider="google", provider_user_id=sub, role=role)
-    else:
-        if is_admin and getattr(user, "role", None) != "ADMIN":
-            try:
-                _ = update_user(db, user.id, display_name=user.display_name)
-                user.role = "ADMIN"  # type: ignore[assignment]
-                db.commit()
-                db.refresh(user)
-            except Exception:
-                pass
-
-    return await _issue_session(response, db, user)
+    return await _issue_session(response, user)
 
 
 @router.get("/verify", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-def verify_session(request: Request, db: Session = Depends(_catalog_db_dependency)):
+def verify_session(_request: Request, _user=Depends(get_current_browser_user)):
     settings = get_settings()
     if settings.auth_disabled:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
-    get_current_browser_user(request, db)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/status")
-def auth_status(request: Request, db: Session = Depends(_catalog_db_dependency)):
-    user = get_optional_browser_user(request, db)
+def auth_status(_request: Request, user=Depends(get_optional_browser_user)):
     if not user:
         return {"authenticated": False, "user": None}
 
@@ -384,25 +359,22 @@ def auth_status(request: Request, db: Session = Depends(_catalog_db_dependency))
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
-async def logout(request: Request, response: Response, db: Session = Depends(_catalog_db_dependency)):
+async def logout(request: Request, response: Response):
     # Revoke the refresh token family so the RT can't be replayed after logout.
     raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
     if raw_rt:
-
-        def _revoke_refresh_cookie_family(current_db: Session) -> None:
-            token_hash = refresh_tokens._hash_token(raw_rt)
-            row = current_db.query(refresh_tokens.RefreshSession).filter_by(token_hash=token_hash).first()
-            if row:
-                refresh_tokens.revoke_family(current_db, row.family_id)
-
-        await _run_refresh_session_write(db, _revoke_refresh_cookie_family)
+        await asyncio.to_thread(
+            revoke_refresh_family,
+            token_hash=refresh_tokens._hash_token(raw_rt),
+            now=datetime.now(timezone.utc),
+        )
 
     _clear_session_cookie(response)
     _clear_refresh_cookie(response)
 
 
 @router.post("/refresh", response_model=TokenOut)
-async def refresh_session(request: Request, response: Response, db: Session = Depends(_catalog_db_dependency)) -> TokenOut:
+async def refresh_session(request: Request, response: Response) -> TokenOut:
     """Exchange a valid refresh token for a new access token + rotated refresh token.
 
     This is the silent-refresh endpoint called by the frontend on 401.
@@ -416,24 +388,23 @@ async def refresh_session(request: Request, response: Response, db: Session = De
     if not raw_rt:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token")
 
-    result = await _run_refresh_session_write(db, lambda current_db: refresh_tokens.rotate(current_db, raw_rt))
-    if result is None:
+    next_raw = refresh_tokens._generate_token()
+    now = datetime.now(timezone.utc)
+    result = await asyncio.to_thread(
+        rotate_refresh,
+        token_hash=refresh_tokens._hash_token(raw_rt),
+        next_token_hash=refresh_tokens._hash_token(next_raw),
+        now=now,
+        idle_expires_at=now + refresh_tokens.IDLE_LIFETIME,
+        reuse_grace_seconds=refresh_tokens.REUSE_GRACE_SECONDS,
+    )
+    if result.get("status") not in {"rotated", "exact_replay"}:
         # Token invalid, expired, or revoked — clear cookies and force re-login.
         _clear_session_cookie(response)
         _clear_refresh_cookie(response)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Refresh token expired or revoked")
 
-    from zerg.crud import get_user
-
-    user = get_user(db, result.user_id)
-    if user is None or not getattr(user, "is_active", True):
-        await _run_refresh_session_write(
-            db,
-            lambda current_db: refresh_tokens.revoke_family(current_db, result.family_id),
-        )
-        _clear_session_cookie(response)
-        _clear_refresh_cookie(response)
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+    user = result["user"]
 
     at_seconds = int(ACCESS_TOKEN_LIFETIME.total_seconds())
     access_token = _issue_access_token(
@@ -443,7 +414,7 @@ async def refresh_session(request: Request, response: Response, db: Session = De
         avatar_url=getattr(user, "avatar_url", None),
     )
     _set_session_cookie(response, access_token, at_seconds)
-    _set_refresh_cookie(response, result.raw_token, _REFRESH_COOKIE_MAX_AGE)
+    _set_refresh_cookie(response, next_raw, _REFRESH_COOKIE_MAX_AGE)
 
     return TokenOut(access_token=access_token, expires_in=at_seconds)
 
@@ -469,48 +440,42 @@ class PasswordLoginRequest(BaseModel):
     password: str
 
 
-def _resolve_password_user(db: Session):
+def _resolve_password_user():
     settings = get_settings()
 
     if settings.single_tenant and not settings.testing:
         import os
 
-        from fastapi import HTTPException
-        from fastapi import status
-
-        from zerg.models import User
         from zerg.services.single_tenant import get_owner_email
 
         owner_email = get_owner_email().strip().lower()
-        user = get_user_by_email(db, owner_email)
-        if user:
-            return user
+        owner_email_explicit = bool(os.getenv("OWNER_EMAIL", "").strip())
+        try:
+            return resolve_local_user(
+                email=owner_email,
+                provider="password",
+                provider_user_id=None,
+                role="ADMIN",
+                adopt_existing=not owner_email_explicit,
+                require_email_match=owner_email_explicit,
+                max_users=None,
+                promote_role=False,
+            )
+        except HTTPException as exc:
+            if owner_email_explicit and exc.status_code == status.HTTP_409_CONFLICT:
+                exc.detail = "Password auth is bound to the configured owner. Existing user does not match OWNER_EMAIL."
+            raise
 
-        from sqlalchemy import or_
-
-        # NB: provider is nullable; `!= "service"` excludes NULL in SQL, so OR in
-        # the NULL case to avoid missing a real pre-existing owner.
-        existing = db.query(User).filter(or_(User.provider != "service", User.provider.is_(None))).order_by(User.id.asc()).first()
-        if existing:
-            # When OWNER_EMAIL is explicitly configured, password auth is bound
-            # to that identity — a different existing user is a real misconfig,
-            # so fail closed. But a password-auth self-hoster with NO explicit
-            # OWNER_EMAIL is just upgrading a prior local (no-auth) instance:
-            # adopt the single existing owner instead of locking them out.
-            owner_email_explicit = bool(os.getenv("OWNER_EMAIL", "").strip())
-            if owner_email_explicit:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="Password auth is bound to the configured owner. Existing user does not match OWNER_EMAIL.",
-                )
-            return existing
-
-        return create_user(db, email=owner_email, provider="password", role="ADMIN", skip_notification=True)
-
-    user = get_user_by_email(db, "local@longhouse")
-    if not user:
-        user = create_user(db, email="local@longhouse", provider="password", skip_notification=True)
-    return user
+    return resolve_local_user(
+        email="local@longhouse",
+        provider="password",
+        provider_user_id=None,
+        role="USER",
+        adopt_existing=False,
+        require_email_match=False,
+        max_users=None,
+        promote_role=False,
+    )
 
 
 @router.post("/password", response_model=TokenOut)
@@ -518,7 +483,6 @@ async def password_login(
     request: Request,
     response: Response,
     body: PasswordLoginRequest,
-    db: Session = Depends(_catalog_db_dependency),
 ) -> TokenOut:
     settings = get_settings()
     if _control_plane_url(settings):
@@ -545,9 +509,9 @@ async def password_login(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
 
     _clear_password_failures(client_ip)
-    user = _resolve_password_user(db)
+    user = await asyncio.to_thread(_resolve_password_user)
 
-    return await _issue_session(response, db, user, display_name=user.display_name or "Local User")
+    return await _issue_session(response, user, display_name=user.display_name or "Local User")
 
 
 class CLILoginRequest(BaseModel):
@@ -555,10 +519,9 @@ class CLILoginRequest(BaseModel):
 
 
 @router.post("/cli-login")
-def cli_login(
+async def cli_login(
     request: Request,
     body: CLILoginRequest,
-    db: Session = Depends(_catalog_db_dependency),
 ) -> dict[str, str]:
     settings = get_settings()
     if _control_plane_url(settings):
@@ -585,7 +548,7 @@ def cli_login(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid password")
 
     _clear_password_failures(client_ip)
-    user = _resolve_password_user(db)
+    user = await asyncio.to_thread(_resolve_password_user)
     access_token = _issue_access_token(
         user.id,
         user.email,

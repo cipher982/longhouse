@@ -6,6 +6,7 @@ using a topic-based subscription system.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -87,10 +88,8 @@ async def websocket_endpoint(
         # Try to get token from session cookie (browser auth)
         auth_token = websocket.cookies.get("longhouse_session")
 
-    with catalog_db_session() as db_for_auth:
-        user = validate_ws_jwt(auth_token, db_for_auth)
-        # Extract user ID while still in session context to avoid DetachedInstanceError
-        user_id = getattr(user, "id", None) if user is not None else None
+    user = await asyncio.to_thread(validate_ws_jwt, auth_token)
+    user_id = getattr(user, "id", None) if user is not None else None
 
     if user is None:
         # Auth failed and AUTH_DISABLED is *not* enabled.  We close the
