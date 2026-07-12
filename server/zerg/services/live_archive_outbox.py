@@ -165,7 +165,7 @@ def enqueue_managed_local_launch_outbox(
     started_at: datetime,
     idempotency_key: str | None = None,
 ) -> bool:
-    """Queue a hot managed-local launch for async archive materialization."""
+    """Persist managed-local launch idempotency evidence."""
 
     key = idempotency_key or managed_local_launch_idempotency_key(session_id=plan.session_id)
     existing = db.query(LiveArchiveOutbox.id).filter(LiveArchiveOutbox.idempotency_key == key).first()
@@ -205,6 +205,7 @@ def enqueue_managed_local_launch_outbox(
                 },
                 sort_keys=True,
             ),
+            drained_at=started_at,
         )
     )
     return True
@@ -224,7 +225,7 @@ def enqueue_remote_launch_outbox(
     launch: dict[str, Any],
     idempotency_key: str | None = None,
 ) -> bool:
-    """Queue a remote launch intent for async archive materialization."""
+    """Persist remote-launch idempotency evidence."""
 
     session_id = str(launch.get("session_id") or "").strip()
     if not session_id:
@@ -245,7 +246,7 @@ def enqueue_remote_launch_outcome_outbox(
     outcome: dict[str, Any],
     idempotency_key: str | None = None,
 ) -> bool:
-    """Queue a remote launch command outcome for async archive reconciliation."""
+    """Persist remote-launch outcome idempotency evidence."""
 
     session_id = str(launch.get("session_id") or "").strip()
     if not session_id:
@@ -275,6 +276,7 @@ def _enqueue_json_outbox(
             idempotency_key=idempotency_key,
             kind=kind,
             payload_json=json.dumps(payload, sort_keys=True),
+            drained_at=datetime.now(timezone.utc),
         )
     )
     return True

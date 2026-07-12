@@ -254,18 +254,6 @@ def mark_live_receipt_delivered_with_projection(
     row.status = INPUT_STATUS_DELIVERED
     row.delivery_request_id = str(delivery_request_id)
     row.updated_at = datetime.now(timezone.utc)
-    from zerg.services.live_archive_outbox import enqueue_session_input_receipt_outbox
-
-    enqueue_session_input_receipt_outbox(
-        db,
-        receipt_id=str(row.id),
-        owner_id=int(row.owner_id),
-        session_id=str(row.session_id),
-        text=str(row.text or ""),
-        intent=str(row.intent or "auto"),
-        client_request_id=row.client_request_id,
-        delivery_request_id=delivery_request_id,
-    )
     db.commit()
     return _snapshot(row)
 
@@ -471,19 +459,7 @@ def _record_live_input_receipt(
         error=error,
         expires_at=expires_at,
     )
-    if enqueue_archive_projection:
-        from zerg.services.live_archive_outbox import enqueue_session_input_receipt_outbox
-
-        enqueue_session_input_receipt_outbox(
-            live_db,
-            receipt_id=str(row.id),
-            owner_id=owner_id,
-            session_id=session_id,
-            text=text,
-            intent=intent,
-            client_request_id=client_request_id,
-            delivery_request_id=delivery_request_id,
-        )
+    del enqueue_archive_projection
     return str(row.id)
 
 

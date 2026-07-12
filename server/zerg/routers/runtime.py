@@ -37,7 +37,6 @@ from zerg.services.apns_sender import prepare_session_needs_answer_push
 from zerg.services.apns_sender import prepare_widget_timeline_push
 from zerg.services.apns_sender import send_presence_pushes
 from zerg.services.catalogd_supervisor import get_catalogd_client
-from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
@@ -466,10 +465,6 @@ async def ingest_runtime_observation_batch(
                     _push_contexts_for_result(result),
                     occurred_at=now_utc,
                 )
-                # Bridge live transcript deltas are high-frequency provisional
-                # preview facts; final transcript ingest owns durable history.
-                archive_events = [event for event in events if not _is_bridge_live_transcript_event(event)]
-                enqueue_runtime_events_outbox(live_db, archive_events)
                 return result
 
             try:

@@ -50,7 +50,7 @@ def _event(*, session_id: str, runtime_key: str, dedupe_key: str, occurred_at: d
 
 
 @pytest.mark.asyncio
-async def test_runtime_apply_owns_state_outbox_resume_preview_and_commit_sequence(daemon_paths):
+async def test_runtime_apply_owns_state_resume_preview_and_commit_sequence(daemon_paths):
     database_path, socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
@@ -128,9 +128,7 @@ async def test_runtime_apply_owns_state_outbox_resume_preview_and_commit_sequenc
             LiveSessionCatalog.__table__.select().where(LiveSessionCatalog.session_id == session_id)
         ).mappings().one()
         assert catalog["user_state"] == "active"
-        outbox_rows = connection.execute(LiveArchiveOutbox.__table__.select()).mappings().all()
-        assert len(outbox_rows) == 1
-        assert json.loads(outbox_rows[0]["payload_json"])["event"]["dedupe_key"] == "catalog-runtime-1"
+        assert connection.execute(LiveArchiveOutbox.__table__.select()).first() is None
         live_preview = connection.execute(
             LiveSessionLivePreview.__table__.select().where(LiveSessionLivePreview.session_id == preview_session_id)
         ).mappings().one()

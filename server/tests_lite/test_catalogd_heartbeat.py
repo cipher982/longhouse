@@ -170,15 +170,10 @@ async def test_heartbeat_apply_is_atomic_replay_safe_and_reconciles_snapshot(dae
             ("cinder", "new-digest"),
             ("other", "other-stale"),
         ]
-        outbox_rows = connection.execute(LiveArchiveOutbox.__table__.select()).mappings().all()
-        assert len(outbox_rows) == 1
-        outbox_payload = json.loads(outbox_rows[0]["payload_json"])
-        # The existing archive drainer reads payload["heartbeat"] and ignores
-        # sibling receipt metadata, so this replay receipt stays compatible.
-        assert outbox_rows[0]["kind"] == "heartbeat_stamp.v1"
-        assert outbox_payload["heartbeat"]["device_id"] == "cinder"
-        assert outbox_payload["heartbeat"]["received_at"] == now.isoformat()
-        assert outbox_payload["catalog_result"]["commit_seq"] == "1"
+        assert connection.execute(LiveArchiveOutbox.__table__.select()).first() is None
+        current_stamp = next(row for row in stamps if row["sessions_digest"] == "new-digest")
+        assert len(current_stamp["request_sha256"]) == 64
+        assert json.loads(current_stamp["catalog_result_json"])["commit_seq"] == "1"
         leases = {
             row["session_id"]: row["state"]
             for row in connection.execute(LiveControlLease.__table__.select()).mappings()

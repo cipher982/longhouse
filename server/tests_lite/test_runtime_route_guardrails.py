@@ -161,7 +161,7 @@ def test_runtime_batch_releases_request_db_before_serialized_write(tmp_path, mon
     assert observations == {"before_close": 1, "after_close": 0}
 
 
-def test_runtime_batch_uses_live_store_and_outbox_without_archive_observations(tmp_path, monkeypatch):
+def test_runtime_batch_uses_live_store_without_archive_observations(tmp_path, monkeypatch):
     import zerg.routers.runtime as runtime_router
 
     async def run_test():
@@ -236,9 +236,7 @@ def test_runtime_batch_uses_live_store_and_outbox_without_archive_observations(t
                 live_state = live_db.query(LiveRuntimeState).filter(LiveRuntimeState.runtime_key == "codex:runtime-live-route").one()
                 assert live_state.phase == "running"
                 assert live_state.active_tool == "Shell"
-                outbox = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == RUNTIME_EVENT_KIND).one()
-                assert outbox.drained_at is None
-                assert "runtime-live-route-1" in outbox.idempotency_key
+                assert live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == RUNTIME_EVENT_KIND).count() == 0
             with ArchiveSession() as archive_db:
                 assert archive_db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == "codex:runtime-live-route").count() == 0
         finally:
