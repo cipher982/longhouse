@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 from contextlib import contextmanager
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
 
@@ -16,9 +19,12 @@ from sqlalchemy import insert
 from sqlalchemy import or_
 from sqlalchemy import select
 from sqlalchemy import update
+from sqlalchemy.orm import Session
 
 from zerg.catalogd.schema import catalog_meta
+from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveDeviceToken
+from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRefreshSession
 from zerg.models.live_store import LiveRuntimeState
@@ -723,6 +729,138 @@ class CatalogStore:
                 "revoked_at": now.isoformat(),
                 "commit_seq": str(commit_seq),
             }
+
+    def apply_machine_heartbeat(
+        self,
+        *,
+        heartbeat: dict[str, Any],
+        managed_leases: list[dict[str, Any]],
+        managed_leases_present: bool,
+        owner_id: int | None,
+    ) -> dict[str, Any]:
+        """Atomically persist and reconcile one hosted Machine Agent heartbeat."""
+
+        from zerg.services.live_session_state import mark_missing_live_sessions
+        from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
+        from zerg.services.managed_control_state import mark_missing_live_control_leases
+        from zerg.services.managed_control_state import upsert_live_control_leases
+
+        device_id = str(heartbeat["device_id"])
+        received_at = heartbeat["received_at"]
+        assert isinstance(received_at, datetime)
+        request_key = _heartbeat_idempotency_key(device_id=device_id, received_at=received_at)
+        request_sha256 = _heartbeat_request_sha256(
+            heartbeat=heartbeat,
+            managed_leases=managed_leases,
+            managed_leases_present=managed_leases_present,
+            owner_id=owner_id,
+        )
+        outbox = LiveArchiveOutbox.__table__
+        stamp = LiveHeartbeatStamp.__table__
+        with _write_transaction(self.engine) as connection:
+            replay = connection.execute(select(outbox).where(outbox.c.idempotency_key == request_key)).mappings().first()
+            if replay is not None:
+                payload = _decode_json_object(replay["payload_json"])
+                if payload.get("request_sha256") != request_sha256:
+                    return {
+                        "idempotency_conflict": True,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                stored_result = payload.get("catalog_result")
+                if not isinstance(stored_result, dict):
+                    raise RuntimeError("heartbeat replay receipt is incomplete")
+                return {**stored_result, "exact_replay": True}
+
+            incoming_digest = str(heartbeat.get("sessions_digest") or "").strip() or None
+            previous_sessions_digest: str | None = None
+            if managed_leases_present and incoming_digest is not None:
+                previous = connection.execute(
+                    select(stamp.c.sessions_digest)
+                    .where(stamp.c.device_id == device_id)
+                    .order_by(stamp.c.received_at.desc(), stamp.c.id.desc())
+                    .limit(1)
+                ).scalar_one_or_none()
+                previous_sessions_digest = str(previous or "").strip() or None
+
+            cutoff = received_at - timedelta(days=30)
+            connection.execute(stamp.delete().where(stamp.c.device_id == device_id, stamp.c.received_at < cutoff))
+            connection.execute(insert(stamp).values(**heartbeat))
+            provisional_payload = {
+                "heartbeat": _jsonable_catalog_value(heartbeat),
+                "request_sha256": request_sha256,
+                "catalog_result": None,
+            }
+            outbox_id = connection.execute(
+                insert(outbox)
+                .values(
+                    idempotency_key=request_key,
+                    kind="heartbeat_stamp.v1",
+                    payload_json=json.dumps(provisional_payload, sort_keys=True, separators=(",", ":")),
+                    created_at=received_at,
+                )
+                .returning(outbox.c.id)
+            ).scalar_one()
+
+            lease_objects = [SimpleNamespace(**lease) for lease in managed_leases]
+            touched: set[UUID] = set()
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                if lease_objects:
+                    touched.update(
+                        upsert_live_control_leases(
+                            orm,
+                            lease_objects,
+                            device_id=device_id,
+                            received_at=received_at,
+                        )
+                    )
+                    touched.update(
+                        upsert_live_sessions_from_managed_leases(
+                            orm,
+                            lease_objects,
+                            device_id=device_id,
+                            owner_id=owner_id,
+                            received_at=received_at,
+                        )
+                    )
+                if managed_leases_present:
+                    touched.update(
+                        mark_missing_live_control_leases(
+                            orm,
+                            lease_objects,
+                            device_id=device_id,
+                            received_at=received_at,
+                        )
+                    )
+                    touched.update(
+                        mark_missing_live_sessions(
+                            orm,
+                            {UUID(str(lease.session_id)) for lease in lease_objects},
+                            device_id=device_id,
+                            received_at=received_at,
+                        )
+                    )
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+
+            commit_seq = _advance_commit_seq(connection, received_at)
+            result = {
+                "previous_sessions_digest": previous_sessions_digest,
+                "commit_seq": str(commit_seq),
+                "touched_session_ids": sorted(str(session_id) for session_id in touched),
+                "exact_replay": False,
+            }
+            provisional_payload["catalog_result"] = result
+            connection.execute(
+                update(outbox)
+                .where(outbox.c.id == outbox_id)
+                .values(payload_json=json.dumps(provisional_payload, sort_keys=True, separators=(",", ":")))
+            )
+            return result
 
     def list_session_timeline(
         self,
@@ -1457,6 +1595,49 @@ def _truncate_utf8(value: str, maximum_bytes: int) -> str:
     if len(encoded) <= maximum_bytes:
         return value
     return encoded[:maximum_bytes].decode("utf-8", errors="ignore")
+
+
+def _heartbeat_idempotency_key(*, device_id: str, received_at: datetime) -> str:
+    return f"heartbeat_stamp.v1:{device_id}:{received_at.isoformat()}"
+
+
+def _heartbeat_request_sha256(
+    *,
+    heartbeat: dict[str, Any],
+    managed_leases: list[dict[str, Any]],
+    managed_leases_present: bool,
+    owner_id: int | None,
+) -> str:
+    payload = {
+        "heartbeat": _jsonable_catalog_value(heartbeat),
+        "managed_leases": _jsonable_catalog_value(managed_leases),
+        "managed_leases_present": managed_leases_present,
+        "owner_id": owner_id,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _jsonable_catalog_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return _encode_datetime(value)
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable_catalog_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_catalog_value(item) for item in value]
+    return value
+
+
+def _decode_json_object(value: object) -> dict[str, Any]:
+    try:
+        decoded = json.loads(str(value or "{}"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("catalog receipt JSON is invalid") from exc
+    if not isinstance(decoded, dict):
+        raise RuntimeError("catalog receipt JSON is not an object")
+    return decoded
 
 
 def _recency_weight(age_days: float) -> int:

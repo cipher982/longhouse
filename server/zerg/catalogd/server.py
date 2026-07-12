@@ -223,6 +223,8 @@ class CatalogDaemon:
             return await self._rotate_refresh(request)
         if request.method == "auth.refresh.revoke_family.v2":
             return await self._revoke_refresh_family(request)
+        if request.method == "machine.heartbeat.apply.v2":
+            return await self._apply_machine_heartbeat(request)
         if request.method == "session.timeline.list.v2":
             return await self._list_session_timeline(request)
         if request.method == "session.read.v2":
@@ -568,6 +570,44 @@ class CatalogDaemon:
             return self._error(request, "resource_exhausted", "device token list exceeds the catalog bound")
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _apply_machine_heartbeat(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"heartbeat", "managed_leases", "managed_leases_present", "owner_id"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "machine.heartbeat.apply.v2 has invalid parameters")
+        heartbeat = request.params["heartbeat"]
+        leases = request.params["managed_leases"]
+        snapshot_present = request.params["managed_leases_present"]
+        owner_id = request.params["owner_id"]
+        if not isinstance(heartbeat, dict):
+            return self._error(request, "invalid_request", "heartbeat must be an object")
+        if not isinstance(leases, list) or len(leases) > 512:
+            return self._error(request, "invalid_request", "managed_leases must contain at most 512 rows")
+        if type(snapshot_present) is not bool:
+            return self._error(request, "invalid_request", "managed_leases_present must be a boolean")
+        if owner_id is not None and (type(owner_id) is not int or owner_id <= 0):
+            return self._error(request, "invalid_request", "owner_id must be a positive integer or null")
+        try:
+            parsed_heartbeat = _validate_heartbeat_stamp(heartbeat)
+            parsed_leases = [_validate_managed_lease(row) for row in leases]
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.apply_machine_heartbeat,
+            heartbeat=parsed_heartbeat,
+            managed_leases=parsed_leases,
+            managed_leases_present=snapshot_present,
+            owner_id=owner_id,
+        )
+        if result.get("idempotency_conflict") is True:
+            return self._error(
+                request,
+                "conflict",
+                "heartbeat idempotency identity was reused with different content",
+                details={"reason": "idempotency_conflict"},
+            )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _list_session_timeline(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         expected = {
             "project",
@@ -695,6 +735,134 @@ class CatalogDaemon:
                 details=details or {},
             ),
         )
+
+
+_HEARTBEAT_FIELDS = {
+    "device_id",
+    "received_at",
+    "version",
+    "last_ship_at",
+    "last_ship_attempt_at",
+    "last_ship_result",
+    "last_ship_latency_ms",
+    "last_ship_http_status",
+    "spool_pending",
+    "spool_dead",
+    "parse_errors_1h",
+    "consecutive_failures",
+    "ship_attempts_1h",
+    "ship_successes_1h",
+    "ship_rate_limited_1h",
+    "ship_server_errors_1h",
+    "ship_payload_rejections_1h",
+    "ship_payload_too_large_1h",
+    "ship_retryable_client_errors_1h",
+    "ship_connect_errors_1h",
+    "ship_latency_p50_ms_1h",
+    "ship_latency_p95_ms_1h",
+    "disk_free_bytes",
+    "is_offline",
+    "raw_json",
+    "sessions_digest",
+    "sessions_sequence",
+}
+_HEARTBEAT_REQUIRED_INTEGER_FIELDS = {
+    "spool_pending",
+    "spool_dead",
+    "parse_errors_1h",
+    "consecutive_failures",
+    "ship_attempts_1h",
+    "ship_successes_1h",
+    "ship_rate_limited_1h",
+    "ship_server_errors_1h",
+    "ship_payload_rejections_1h",
+    "ship_payload_too_large_1h",
+    "ship_retryable_client_errors_1h",
+    "ship_connect_errors_1h",
+    "disk_free_bytes",
+}
+_HEARTBEAT_OPTIONAL_INTEGER_FIELDS = {
+    "last_ship_latency_ms",
+    "last_ship_http_status",
+    "ship_latency_p50_ms_1h",
+    "ship_latency_p95_ms_1h",
+    "sessions_sequence",
+}
+_MANAGED_LEASE_FIELDS = {
+    "session_id",
+    "provider",
+    "machine_id",
+    "sequence",
+    "state",
+    "phase",
+    "tool_name",
+    "bridge_status",
+    "thread_subscription_status",
+    "observed_at",
+    "lease_ttl_ms",
+}
+
+
+def _validate_heartbeat_stamp(value: dict) -> dict:
+    if set(value) != _HEARTBEAT_FIELDS:
+        raise ValueError("heartbeat has invalid fields")
+    result = dict(value)
+    if not _is_string(result["device_id"], maximum=255):
+        raise ValueError("heartbeat.device_id must contain 1 to 255 characters")
+    result["received_at"] = _parse_datetime(result["received_at"], "heartbeat.received_at")
+    for field in ("last_ship_at", "last_ship_attempt_at"):
+        if result[field] is not None:
+            result[field] = _parse_datetime(result[field], f"heartbeat.{field}")
+    for field in _HEARTBEAT_REQUIRED_INTEGER_FIELDS:
+        if type(result[field]) is not int or result[field] < 0:
+            raise ValueError(f"heartbeat.{field} must be a non-negative integer")
+    for field in _HEARTBEAT_OPTIONAL_INTEGER_FIELDS:
+        if result[field] is not None and (type(result[field]) is not int or result[field] < 0):
+            raise ValueError(f"heartbeat.{field} must be a non-negative integer or null")
+    if type(result["is_offline"]) is not int or result["is_offline"] not in (0, 1):
+        raise ValueError("heartbeat.is_offline must be 0 or 1")
+    for field, maximum in (("version", 50), ("last_ship_result", 64), ("sessions_digest", 128)):
+        if result[field] is not None and (not isinstance(result[field], str) or not result[field] or len(result[field]) > maximum):
+            raise ValueError(f"heartbeat.{field} must be null or contain 1 to {maximum} characters")
+    if result["raw_json"] is not None and (not isinstance(result["raw_json"], str) or len(result["raw_json"].encode("utf-8")) > 512 * 1024):
+        raise ValueError("heartbeat.raw_json must be null or at most 512 KiB")
+    return result
+
+
+def _validate_managed_lease(value: object) -> dict:
+    if not isinstance(value, dict) or set(value) != _MANAGED_LEASE_FIELDS:
+        raise ValueError("managed lease has invalid fields")
+    result = dict(value)
+    session_id = result["session_id"]
+    try:
+        parsed_session_id = uuid.UUID(session_id) if isinstance(session_id, str) else None
+    except ValueError:
+        parsed_session_id = None
+    if parsed_session_id is None or str(parsed_session_id) != session_id:
+        raise ValueError("managed lease session_id must be a canonical UUID")
+    result["session_id"] = parsed_session_id
+    for field, maximum, nullable in (
+        ("provider", 64, False),
+        ("machine_id", 255, True),
+        ("state", 32, False),
+        ("phase", 32, True),
+        ("tool_name", 128, True),
+        ("bridge_status", 64, True),
+        ("thread_subscription_status", 64, True),
+    ):
+        raw = result[field]
+        if raw is None and nullable:
+            continue
+        if not isinstance(raw, str) or not raw or len(raw) > maximum:
+            suffix = " or null" if nullable else ""
+            raise ValueError(f"managed lease {field} must contain 1 to {maximum} characters{suffix}")
+    if type(result["sequence"]) is not int or result["sequence"] < 0:
+        raise ValueError("managed lease sequence must be a non-negative integer")
+    if type(result["lease_ttl_ms"]) is not int or not 1 <= result["lease_ttl_ms"] <= 3_600_000:
+        raise ValueError("managed lease lease_ttl_ms must be an integer from 1 through 3600000")
+    if result["observed_at"] is not None:
+        result["observed_at"] = _parse_datetime(result["observed_at"], "managed lease observed_at")
+    return result
 
 
 def socket_path_is_live(path: Path) -> bool:
