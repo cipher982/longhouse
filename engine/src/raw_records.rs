@@ -88,7 +88,7 @@ pub(crate) fn read_next_raw_batch(
         });
     }
     match framing {
-        RawSourceFraming::LfDelimited => read_next_lf_batch(path, file, start_offset),
+        RawSourceFraming::LfDelimited => read_next_lf_batch(path, file, start_offset, length),
         RawSourceFraming::WholeDocument => read_whole_document(path, file, start_offset, length),
     }
 }
@@ -97,6 +97,7 @@ fn read_next_lf_batch(
     path: &Path,
     mut file: File,
     start_offset: u64,
+    source_len: u64,
 ) -> Result<Option<RawRecordBatch>, RawRecordError> {
     ensure_lf_boundary(path, &mut file, start_offset)?;
     file.seek(SeekFrom::Start(start_offset))
@@ -109,16 +110,16 @@ fn read_next_lf_batch(
     while records.len() < MAX_RAW_BATCH_RECORDS {
         let remaining = MAX_RAW_BATCH_BYTES - batch_bytes;
         let mut bytes = Vec::new();
-        // One extra byte distinguishes a complete fitting record from one that
-        // belongs in the next call, without loading that later record.
-        let mut bounded = (&mut reader).take((remaining + 1) as u64);
+        let mut bounded = (&mut reader).take(remaining as u64);
         let read = bounded
             .read_until(b'\n', &mut bytes)
             .map_err(|source| read_error(path, source))?;
         if read == 0 {
             break;
         }
-        if read > remaining {
+        let ended_at_lf = bytes.last() == Some(&b'\n');
+        let ended_at_eof = position + read as u64 == source_len;
+        if read == remaining && !ended_at_lf && !ended_at_eof {
             if records.is_empty() {
                 return Err(RawRecordError::RecordTooLarge {
                     start: position,
