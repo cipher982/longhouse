@@ -34,6 +34,7 @@ from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import ArchiveChunk
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
+from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.archive_transcript import archive_owning_session_ids
 from zerg.services.archive_transcript import load_session_source_line_bytes
@@ -681,90 +682,123 @@ class LegacyCorpusConverter:
         covered = 0
         source_plans: dict[str, tuple[UUID, UUID | None, int]] = {}
         for (relative_path,) in manifests:
-            records = archive_store.read_chunk(relative_path)
-            archive_by_key: dict[tuple[str, int, str], object] = {}
-            for record in records:
+            archive_page: dict[tuple[str, int, str], ArchiveRecord] = {}
+            for record in archive_store.iter_chunk_records(relative_path):
                 if record.source_path is None or record.source_offset is None:
                     continue
                 raw_hash = hashlib.sha256(record.raw_bytes).hexdigest()
-                archive_by_key.setdefault((record.source_path, int(record.source_offset), raw_hash), record)
-            keys = list(archive_by_key)
-            connection.exec_driver_sql("DELETE FROM migration_archive_page")
-            for start in range(0, len(keys), STREAMING_MATCH_PAGE):
-                page = keys[start : start + STREAMING_MATCH_PAGE]
-                connection.exec_driver_sql(
-                    "INSERT OR IGNORE INTO migration_archive_page VALUES (?, ?, ?)",
-                    page,
-                )
-            matched = connection.execute(
-                text(
-                    "SELECT c.source_path, c.source_offset, c.line_hash, c.row_count "
-                    "FROM migration_archive_page p JOIN migration_source_counts c "
-                    "USING(source_path, source_offset, line_hash) WHERE c.consumed = 0 "
-                    "ORDER BY c.source_path, c.source_offset, c.line_hash"
-                ),
-            ).all()
-            connection.exec_driver_sql(
-                "UPDATE migration_source_counts SET consumed = 1 WHERE consumed = 0 AND EXISTS ("
-                "SELECT 1 FROM migration_archive_page p WHERE p.source_path = migration_source_counts.source_path "
-                "AND p.source_offset = migration_source_counts.source_offset "
-                "AND p.line_hash = migration_source_counts.line_hash)"
-            )
-            matched_records: list[_SourceRecord] = []
-            for path, offset, line_hash, row_count in matched:
-                record = archive_by_key[(str(path), int(offset), str(line_hash))]
-                covered += int(row_count)
-                matched_records.append(
-                    _SourceRecord(
-                        data=record.raw_bytes,
-                        source_path=str(path),
-                        source_offset=int(offset),
-                        branch_id=0,
-                        provenance_kind="legacy_source_lines",
-                    )
-                )
-            groups: dict[str, list[_SourceRecord]] = defaultdict(list)
-            for record in matched_records:
-                groups[record.source_path].append(record)
-            for source_path, source_records in sorted(groups.items()):
-                batches = _source_batches(
-                    source_records,
-                    {},
-                )
-                plan = source_plans.get(source_path)
-                if plan is None:
-                    epoch, predecessor = await self._stream_epoch_plan(
-                        session_id,
-                        source_path,
-                        "legacy_source_lines",
+                archive_page.setdefault((record.source_path, int(record.source_offset), raw_hash), record)
+                if len(archive_page) >= STREAMING_MATCH_PAGE:
+                    covered += await self._commit_archive_record_page(
+                        connection,
+                        session,
                         watermark,
+                        archive_page,
+                        source_plans=source_plans,
+                        generation=generation,
+                        owner_id=owner_id,
+                        output_proof=output_proof,
                         replace_existing_epochs=replace_existing_epochs,
                     )
-                    plan = (epoch, predecessor, 0)
-                epoch, predecessor, next_ordinal = plan
-                for batch in batches:
-                    adjusted = _SourceBatch(
-                        source_path=source_path,
-                        provenance_kind=batch.provenance_kind,
-                        range_start=next_ordinal,
-                        records=batch.records,
-                    )
-                    next_ordinal += len(batch.records)
-                    await self._commit_stream_batch(
-                        session,
-                        adjusted,
-                        generation=generation,
-                        source_epoch=epoch,
-                        predecessor_source_epoch=predecessor,
-                        owner_id=owner_id,
-                        render_records=(),
-                        output_proof=output_proof,
-                    )
-                source_plans[source_path] = (epoch, predecessor, next_ordinal)
-            del records, archive_by_key, keys, matched, matched_records, groups
-            _return_free_heap_to_os()
+                    archive_page.clear()
+                    _return_free_heap_to_os()
+            if archive_page:
+                covered += await self._commit_archive_record_page(
+                    connection,
+                    session,
+                    watermark,
+                    archive_page,
+                    source_plans=source_plans,
+                    generation=generation,
+                    owner_id=owner_id,
+                    output_proof=output_proof,
+                    replace_existing_epochs=replace_existing_epochs,
+                )
+                archive_page.clear()
+                _return_free_heap_to_os()
         connection.exec_driver_sql("DROP TABLE migration_archive_page")
         connection.exec_driver_sql("DROP TABLE migration_source_counts")
+        return covered
+
+    async def _commit_archive_record_page(
+        self,
+        connection: Any,
+        session: AgentSession,
+        watermark: LegacyHighWatermark,
+        archive_page: dict[tuple[str, int, str], ArchiveRecord],
+        *,
+        source_plans: dict[str, tuple[UUID, UUID | None, int]],
+        generation: UUID,
+        owner_id: str,
+        output_proof: _IncrementalProof,
+        replace_existing_epochs: bool,
+    ) -> int:
+        connection.exec_driver_sql("DELETE FROM migration_archive_page")
+        connection.exec_driver_sql(
+            "INSERT OR IGNORE INTO migration_archive_page VALUES (?, ?, ?)",
+            list(archive_page),
+        )
+        matched = connection.execute(
+            text(
+                "SELECT c.source_path, c.source_offset, c.line_hash, c.row_count "
+                "FROM migration_archive_page p JOIN migration_source_counts c "
+                "USING(source_path, source_offset, line_hash) WHERE c.consumed = 0 "
+                "ORDER BY c.source_path, c.source_offset, c.line_hash"
+            ),
+        ).all()
+        connection.exec_driver_sql(
+            "UPDATE migration_source_counts SET consumed = 1 WHERE consumed = 0 AND EXISTS ("
+            "SELECT 1 FROM migration_archive_page p WHERE p.source_path = migration_source_counts.source_path "
+            "AND p.source_offset = migration_source_counts.source_offset "
+            "AND p.line_hash = migration_source_counts.line_hash)"
+        )
+        covered = 0
+        groups: dict[str, list[_SourceRecord]] = defaultdict(list)
+        for path, offset, line_hash, row_count in matched:
+            record = archive_page[(str(path), int(offset), str(line_hash))]
+            covered += int(row_count)
+            groups[str(path)].append(
+                _SourceRecord(
+                    data=record.raw_bytes,
+                    source_path=str(path),
+                    source_offset=int(offset),
+                    branch_id=0,
+                    provenance_kind="legacy_source_lines",
+                )
+            )
+        session_id = UUID(str(session.id))
+        for source_path, source_records in sorted(groups.items()):
+            batches = _source_batches(source_records, {})
+            plan = source_plans.get(source_path)
+            if plan is None:
+                epoch, predecessor = await self._stream_epoch_plan(
+                    session_id,
+                    source_path,
+                    "legacy_source_lines",
+                    watermark,
+                    replace_existing_epochs=replace_existing_epochs,
+                )
+                plan = (epoch, predecessor, 0)
+            epoch, predecessor, next_ordinal = plan
+            for batch in batches:
+                adjusted = _SourceBatch(
+                    source_path=source_path,
+                    provenance_kind=batch.provenance_kind,
+                    range_start=next_ordinal,
+                    records=batch.records,
+                )
+                next_ordinal += len(batch.records)
+                await self._commit_stream_batch(
+                    session,
+                    adjusted,
+                    generation=generation,
+                    source_epoch=epoch,
+                    predecessor_source_epoch=predecessor,
+                    owner_id=owner_id,
+                    render_records=(),
+                    output_proof=output_proof,
+                )
+            source_plans[source_path] = (epoch, predecessor, next_ordinal)
         return covered
 
     async def _stream_normalized_events(

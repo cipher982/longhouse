@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any
 from typing import Collection
 from typing import Iterable
+from typing import Iterator
 from typing import Mapping
 
 import zstandard as zstd
@@ -227,6 +229,72 @@ class FilesystemArchiveStore(ArchiveStore):
         if not result.valid:
             raise ArchiveCorruptionError("; ".join(result.errors))
         return result.records
+
+    def iter_chunk_records(self, relative_path: str) -> Iterator[ArchiveRecord]:
+        """Verify then replay a chunk without materializing its full payload."""
+
+        path = self._resolve_relative(relative_path)
+        parsed = _parse_chunk_filename(path.name)
+        if parsed is None:
+            raise ArchiveCorruptionError("invalid chunk filename")
+        stream, first_seq, last_seq, expected_payload_sha = parsed
+        if not path.exists():
+            raise ArchiveCorruptionError("chunk file is missing")
+
+        errors: list[str] = []
+        payload_digest = hashlib.sha256()
+        observed_first: int | None = None
+        observed_last: int | None = None
+        record_count = 0
+        try:
+            for ordinal, line in enumerate(_iter_zstd_lines(path), start=1):
+                payload_digest.update(line)
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    errors.append(f"line {ordinal}: malformed JSON: {exc.msg}")
+                    continue
+                record = _decode_record_obj(obj, ordinal=ordinal, errors=errors)
+                if record is None:
+                    continue
+                if record.stream != stream:
+                    errors.append(f"line {ordinal}: stream does not match chunk filename")
+                if observed_last is not None and record.source_seq <= observed_last:
+                    errors.append("source_seq values must be strictly increasing")
+                observed_first = record.source_seq if observed_first is None else observed_first
+                observed_last = record.source_seq
+                record_count += 1
+        except zstd.ZstdError as exc:
+            raise ArchiveCorruptionError(f"zstd decompression failed: {exc}") from exc
+
+        if payload_digest.hexdigest() != expected_payload_sha:
+            errors.append("payload sha does not match chunk filename")
+        if record_count == 0:
+            errors.append("chunk contains no records")
+        else:
+            if observed_first != first_seq:
+                errors.append("first source_seq does not match chunk filename")
+            if observed_last != last_seq:
+                errors.append("last source_seq does not match chunk filename")
+        if errors:
+            raise ArchiveCorruptionError("; ".join(errors))
+
+        # Decode a second time only after the complete artifact is proven. This
+        # keeps memory bounded without allowing a corrupt prefix to be committed.
+        for ordinal, line in enumerate(_iter_zstd_lines(path), start=1):
+            if not line.strip():
+                continue
+            decode_errors: list[str] = []
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ArchiveCorruptionError(f"line {ordinal}: malformed JSON: {exc.msg}") from exc
+            record = _decode_record_obj(obj, ordinal=ordinal, errors=decode_errors)
+            if record is None or decode_errors:
+                raise ArchiveCorruptionError("; ".join(decode_errors) or f"line {ordinal}: invalid record")
+            yield record
 
     def list_chunks(
         self,
@@ -442,6 +510,14 @@ def _encode_record(record: ArchiveRecord) -> bytes:
 
 def _encode_records(records: Iterable[ArchiveRecord]) -> bytes:
     return b"".join(_encode_record(record) + b"\n" for record in records)
+
+
+def _iter_zstd_lines(path: Path) -> Iterator[bytes]:
+    with path.open("rb") as compressed:
+        with zstd.ZstdDecompressor().stream_reader(compressed) as reader:
+            with io.BufferedReader(reader) as buffered:
+                while line := buffered.readline():
+                    yield line
 
 
 def _decode_record_obj(obj: object, *, ordinal: int, errors: list[str]) -> ArchiveRecord | None:

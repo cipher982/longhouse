@@ -7,6 +7,7 @@ import time
 import pytest
 import zstandard as zstd
 
+from zerg.services.archive_store import ArchiveCorruptionError
 from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
 
@@ -36,7 +37,7 @@ def _recompress(path, payload: bytes) -> None:
 
 def test_filesystem_archive_store_roundtrips_exact_raw_bytes(tmp_path):
     store = FilesystemArchiveStore(tmp_path)
-    raw = b"\x00exact bytes\n{\"unicode\":\"\xe2\x9c\x93\"}\n"
+    raw = b'\x00exact bytes\n{"unicode":"\xe2\x9c\x93"}\n'
 
     chunk = store.write_chunk([_record(1, raw)])
     records = store.read_chunk(chunk.relative_path)
@@ -47,6 +48,24 @@ def test_filesystem_archive_store_roundtrips_exact_raw_bytes(tmp_path):
     assert verified.valid is True
     assert verified.chunk is not None
     assert verified.chunk.file_sha256 == chunk.file_sha256
+
+
+def test_filesystem_archive_store_streams_verified_records(tmp_path):
+    store = FilesystemArchiveStore(tmp_path)
+    expected = [_record(index, b"x" * 1024) for index in range(1, 20)]
+    chunk = store.write_chunk(expected)
+
+    assert list(store.iter_chunk_records(chunk.relative_path)) == expected
+
+
+def test_filesystem_archive_store_stream_rejects_corrupt_payload_before_yield(tmp_path):
+    store = FilesystemArchiveStore(tmp_path)
+    chunk = store.write_chunk([_record(1), _record(2)])
+    payload = _decompress(chunk.path)
+    _recompress(chunk.path, payload.replace(b'"raw_sha256":"', b'"raw_sha256":"0', 1))
+
+    with pytest.raises(ArchiveCorruptionError, match="raw_sha256 mismatch|payload sha"):
+        next(store.iter_chunk_records(chunk.relative_path))
 
 
 def test_filesystem_archive_store_duplicate_write_is_idempotent(tmp_path):
