@@ -44,6 +44,7 @@ class LiveControlSession:
     loop_mode: str
     permission_mode: str
     primary_thread_id: UUID | None
+    catalog_facts: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,47 @@ def load_live_control_session(db: Session, session_id: UUID | str) -> LiveContro
         loop_mode=str(row.loop_mode or "assist"),
         permission_mode=str(row.permission_mode or "bypass"),
         primary_thread_id=thread_id,
+    )
+
+
+def load_live_control_session_snapshot(session_id: UUID | str) -> LiveControlSession | None:
+    """Load bounded control facts through catalogd without opening SQLite."""
+
+    from zerg.services.catalog_read_gateway import CatalogReadError
+    from zerg.services.catalog_read_gateway import session_snapshot
+
+    try:
+        result = session_snapshot(str(session_id))
+    except CatalogReadError:
+        logger.warning("Catalog control snapshot failed for session %s", session_id, exc_info=True)
+        return None
+    facts = result.get("facts")
+    if result.get("found") is not True or not isinstance(facts, dict):
+        return None
+    catalog = facts.get("catalog")
+    if not isinstance(catalog, dict):
+        return None
+
+    def _datetime(value):
+        return normalize_utc(datetime.fromisoformat(value)) if isinstance(value, str) and value else None
+
+    primary_thread_id = catalog.get("primary_thread_id")
+    return LiveControlSession(
+        id=UUID(str(catalog["session_id"])),
+        provider=str(catalog.get("provider") or "unknown"),
+        device_id=str(catalog["device_id"]) if catalog.get("device_id") else None,
+        device_name=str(catalog["device_name"]) if catalog.get("device_name") else None,
+        cwd=catalog.get("cwd"),
+        project=catalog.get("project"),
+        git_repo=catalog.get("git_repo"),
+        git_branch=catalog.get("git_branch"),
+        ended_at=_datetime(catalog.get("ended_at")),
+        closed_at=_datetime(catalog.get("closed_at")),
+        close_reason=str(catalog["close_reason"]) if catalog.get("close_reason") else None,
+        loop_mode=str(catalog.get("loop_mode") or "assist"),
+        permission_mode=str(catalog.get("permission_mode") or "bypass"),
+        primary_thread_id=UUID(str(primary_thread_id)) if primary_thread_id else None,
+        catalog_facts=facts,
     )
 
 
@@ -149,9 +191,40 @@ def live_control_capability_available(
     return get_live_control_grant(db, session_id=session_id, capability=capability) is not None
 
 
+def live_control_session_capability_available(session: LiveControlSession, *, capability: str) -> bool:
+    """Project a preflight capability from one catalogd session snapshot."""
+
+    facts = session.catalog_facts
+    if not isinstance(facts, dict):
+        raise ValueError("session does not contain catalog snapshot facts")
+    latest_run = facts.get("latest_run")
+    if not isinstance(latest_run, dict) or latest_run.get("ended_at") is not None:
+        return False
+    connections = facts.get("connections")
+    if not isinstance(connections, list) or not connections or not isinstance(connections[0], dict):
+        return False
+    connection = connections[0]
+    column = {
+        "send": "can_send_input",
+        "interrupt": "can_interrupt",
+        "terminate": "can_terminate",
+    }.get(capability)
+    if column is None:
+        raise ValueError(f"unknown live control capability: {capability}")
+    return connection.get("state") == "attached" and connection.get("released_at") is None and int(connection.get(column) or 0) == 1
+
+
 def live_session_input_block_reason(db: Session, session: LiveControlSession) -> str | None:
     if normalize_utc(session.closed_at) is not None:
         return "session_closed"
+    if isinstance(session.catalog_facts, dict):
+        runtime = session.catalog_facts.get("runtime")
+        terminal_state = str(runtime.get("terminal_state") or "").strip() if isinstance(runtime, dict) else ""
+        if terminal_state == "user_closed":
+            return "session_closed"
+        if terminal_state in {"", "finished", "host_expired"}:
+            return None
+        return "run_ended"
     row = (
         db.query(LiveRuntimeState.terminal_state)
         .filter(LiveRuntimeState.session_id == session.id)

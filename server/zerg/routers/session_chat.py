@@ -132,6 +132,18 @@ _STEER_ACTIVE_PRESENCE_STATES = frozenset({"thinking", "running"})
 _MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS = 300
 
 
+def _no_catalog_control_db():
+    """Catalog-owned control routes receive no request-scoped SQLite session."""
+
+    yield None
+
+
+# Select the dependency once while routes are registered, matching
+# catalog_db_dependency(). Keeping get_db as the exact callable in legacy/test
+# mode lets FastAPI's dependency override machinery inject isolated test DBs.
+_catalog_control_db_dependency = _no_catalog_control_db if database_module.live_catalog_enabled() else get_db
+
+
 # ---------------------------------------------------------------------------
 # Request / Response models
 # ---------------------------------------------------------------------------
@@ -1094,7 +1106,7 @@ def _assert_no_answerable_pause_request_pending(*, db: Session, source_session) 
 async def send_to_live_session(
     session_id: str,
     body: SessionMessageRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ):
     """Send text into the live managed-local session and return a fast JSON ack."""
@@ -1159,7 +1171,7 @@ async def send_to_live_session_agents(
     session_id: str,
     body: SessionMessageRequest,
     request: Request,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ):
@@ -1244,7 +1256,7 @@ async def draft_reply_for_live_session_agents(
 @router.post("/{session_id}/interrupt-live", response_model=SessionInterruptResponse)
 async def interrupt_live_session(
     session_id: str,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> SessionInterruptResponse:
     """Browser-authenticated explicit interrupt for managed-local sessions."""
@@ -1263,7 +1275,7 @@ async def interrupt_live_session(
 async def interrupt_live_session_agents(
     session_id: str,
     request: Request,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionInterruptResponse:
@@ -1295,7 +1307,7 @@ async def interrupt_live_session_agents(
 @router.post("/{session_id}/terminate-live", response_model=SessionTerminateResponse)
 async def terminate_live_session(
     session_id: str,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> SessionTerminateResponse:
     """Browser-authenticated explicit terminate for managed-local sessions."""
@@ -1314,7 +1326,7 @@ async def terminate_live_session(
 async def terminate_live_session_agents(
     session_id: str,
     request: Request,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionTerminateResponse:
@@ -1633,7 +1645,7 @@ async def continue_remote_session_endpoint(
 @router.get("/{session_id}/lock")
 async def get_session_lock_status(
     session_id: str,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     _current_user=Depends(get_current_browser_route_user),
 ) -> SessionLockInfo:
     """Check if a session is currently locked.
@@ -2762,7 +2774,7 @@ async def _create_session_input_response(
 async def create_session_input_endpoint(
     session_id: str,
     body: SessionInputRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> SessionInputResponse:
     source_session = _load_session_for_continuation(db, session_id)
@@ -2779,7 +2791,7 @@ async def list_session_inputs_endpoint(
     session_id: str,
     request: Request,
     response: Response,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     _current_user: User = Depends(get_current_browser_route_user),
 ):
     """List queued + recently-failed inputs for the chip UI.
@@ -2817,7 +2829,7 @@ async def list_session_inputs_endpoint(
 async def cancel_live_session_input_endpoint(
     session_id: str,
     live_input_id: str,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     _current_user: User = Depends(get_current_browser_route_user),
 ) -> dict:
     source_session = _load_session_for_continuation(db, session_id)
@@ -2886,7 +2898,7 @@ async def cancel_session_input_endpoint(
 @router.delete("/{session_id}/lock")
 async def force_release_lock(
     session_id: str,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     _current_user=Depends(get_current_browser_route_user),
 ) -> dict:
     """Force release a session lock (admin operation).

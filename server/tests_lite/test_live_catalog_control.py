@@ -238,7 +238,6 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
 
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: factory)
     monkeypatch.setattr(database_module, "get_live_write_session_factory", lambda: factory)
     catalog_store = CatalogStore(engine)
 
@@ -270,9 +269,12 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
     monkeypatch.setattr(dispatcher, "dispatch_managed_control_command", fake_dispatch)
     monkeypatch.setattr(chat_impl, "_schedule_catalog_lock_release", lambda **_kwargs: None)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
+    monkeypatch.setattr("zerg.services.catalog_read_gateway.session_snapshot", lambda value: catalog_store.read_session(session_id=value))
+
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
     with factory() as db:
-        session = load_live_control_session(db, session_id)
+        session = load_live_control_session_snapshot(session_id)
         assert session is not None
         response = await _create_session_input_response(
             source_session=session,
@@ -380,7 +382,7 @@ async def test_catalog_lock_timeout_releases_and_attempts_queue_recovery(tmp_pat
         wakes.append(str(value))
         return False
 
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: factory)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: object())
     monkeypatch.setattr(chat_impl, "MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS", 0)
     monkeypatch.setattr(live_control, "wake_next_live_catalog_input", fake_wake)
 

@@ -176,6 +176,15 @@ class SessionDraftReplyResponse(BaseModel):
 
 def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> int:
     owner_id = getattr(device_token, "owner_id", None)
+    if database_module.live_catalog_enabled() and db is None:
+        if owner_id is not None:
+            return int(owner_id)
+        from zerg.services.catalog_read_gateway import active_owner_id
+
+        resolved = active_owner_id()
+        if resolved is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="No Longhouse user is configured")
+        return resolved
     if owner_id is not None:
         owner = db.query(User.id).filter(User.id == int(owner_id)).first()
         if owner is not None:
@@ -465,7 +474,11 @@ def _load_session_for_continuation(db: Session, session_id: str):
             detail=f"Invalid session id: {session_id}",
         ) from exc
 
-    if database_module.live_catalog_enabled():
+    if database_module.live_catalog_enabled() and db is None:
+        from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+        source_session = load_live_control_session_snapshot(source_session_uuid)
+    elif database_module.live_catalog_enabled():
         from zerg.services.live_control_catalog import load_live_control_session
 
         source_session = load_live_control_session(db, source_session_uuid)
@@ -495,6 +508,25 @@ def _assert_live_session_action_available(
     action: str,
     owner_id: int | None = None,
 ) -> None:
+    if database_module.live_catalog_enabled() and getattr(source_session, "catalog_facts", None) is not None:
+        from zerg.services.live_control_catalog import live_control_session_capability_available
+        from zerg.services.live_control_catalog import live_session_input_block_reason
+
+        block_reason = live_session_input_block_reason(db, source_session)
+        if block_reason is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error_code": block_reason,
+                    "message": "This session is closed." if block_reason == "session_closed" else "This run has ended.",
+                },
+            )
+        if live_control_session_capability_available(source_session, capability=action):
+            return
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This session does not have a live Longhouse control channel.",
+        )
     if database_module.live_catalog_enabled():
         from zerg.services.live_control_catalog import live_control_capability_available
         from zerg.services.live_control_catalog import live_session_input_block_reason
@@ -508,6 +540,7 @@ def _assert_live_session_action_available(
                     "message": "This session is closed." if block_reason == "session_closed" else "This run has ended.",
                 },
             )
+
         if live_control_capability_available(db, session_id=source_session.id, capability=action):
             return
         raise HTTPException(
@@ -1092,29 +1125,26 @@ async def _release_catalog_lock_after_terminal(
 ) -> None:
     """Release a hot control lock from live runtime truth, never cold rows."""
 
-    from zerg.models.live_store import LiveRuntimeState
+    from zerg.services.catalogd_supervisor import get_catalogd_client
 
-    factory = database_module.get_live_session_factory()
-    if factory is None:
+    catalogd = get_catalogd_client()
+    if catalogd is None:
         await session_lock_manager.release(lock_scope_id, request_id)
         return
     deadline = asyncio.get_running_loop().time() + MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS
     while asyncio.get_running_loop().time() < deadline:
-        with factory() as live_db:
-            state = (
-                live_db.query(LiveRuntimeState)
-                .filter(LiveRuntimeState.session_id == session_id)
-                .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
-                .first()
-            )
-        if state is not None:
-            observed_at = normalize_utc(
-                getattr(state, "phase_started_at", None)
-                or getattr(state, "last_runtime_signal_at", None)
-                or getattr(state, "updated_at", None)
-            )
-            phase = str(getattr(state, "phase", "") or "").strip()
-            terminal = str(getattr(state, "terminal_state", "") or "").strip()
+        snapshot = await catalogd.call(
+            "session.read.v2",
+            {"session_id": str(session_id)},
+            timeout_seconds=1.0,
+        )
+        facts = snapshot.get("facts")
+        state = facts.get("runtime") if isinstance(facts, dict) else None
+        if isinstance(state, dict):
+            raw_observed_at = state.get("phase_started_at") or state.get("last_runtime_signal_at") or state.get("updated_at")
+            observed_at = normalize_utc(datetime.fromisoformat(raw_observed_at)) if isinstance(raw_observed_at, str) else None
+            phase = str(state.get("phase") or "").strip()
+            terminal = str(state.get("terminal_state") or "").strip()
             if observed_at is not None and observed_at >= dispatched_at and (phase in _MANAGED_LOCAL_TERMINAL_PHASES or terminal):
                 released = await session_lock_manager.release(lock_scope_id, request_id)
                 if released:
