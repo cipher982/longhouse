@@ -155,6 +155,46 @@ async def test_catalogd_claims_and_finishes_queued_input_exactly_once(daemon_pat
             },
         )
         assert finish_replay["changed"] is False
+        upserted = await client.call(
+            "session.input.receipt.upsert.v2",
+            {
+                "receipt": {
+                    "owner_id": 7,
+                    "session_id": str(session_id),
+                    "provider": "codex",
+                    "text": "a second queued input",
+                    "intent": "queue",
+                    "status": "queued",
+                    "client_request_id": "queued-2",
+                    "device_id": "cinder",
+                    "thread_id": None,
+                    "archive_session_input_id": None,
+                    "control_command_id": None,
+                    "delivery_request_id": None,
+                    "enqueue_archive_projection": False,
+                    "error": None,
+                    "expires_at": None,
+                }
+            },
+        )
+        second_id = upserted["receipt"]["id"]
+        read = await client.call(
+            "session.input.receipt.read.v2",
+            {
+                "owner_id": 7,
+                "session_id": str(session_id),
+                "client_request_id": "queued-2",
+            },
+        )
+        assert read["receipt"]["id"] == second_id
+        recent = await client.call("session.input.recent.list.v2", {"session_id": str(session_id)})
+        assert recent["queued_count"] == 1
+        assert [receipt["id"] for receipt in recent["receipts"]] == [second_id]
+        cancelled = await client.call(
+            "session.input.cancel.v2",
+            {"session_id": str(session_id), "receipt_id": second_id},
+        )
+        assert cancelled["cancelled"] is True
     finally:
         await client.close()
         await daemon.close()

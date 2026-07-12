@@ -46,11 +46,11 @@ from zerg.services.live_catalog_launch import create_live_launch_catalog_shell
 from zerg.services.live_launch_readiness import upsert_live_launch_readiness
 from zerg.services.live_session_inputs import LiveInputReceiptSnapshot
 from zerg.services.live_session_inputs import cancel_live_queued_receipt
+from zerg.services.live_session_inputs import cancel_live_queued_receipt_catalog
 from zerg.services.live_session_inputs import count_live_queued_receipts
 from zerg.services.live_session_inputs import list_recent_live_input_receipts
+from zerg.services.live_session_inputs import list_recent_live_input_receipts_catalog
 from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request_best_effort
-from zerg.services.live_session_inputs import mark_live_receipt_delivered_with_projection
-from zerg.services.live_session_inputs import mark_live_receipt_failed
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
 from zerg.services.managed_local_control import answer_pause_request_on_managed_local_session
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
@@ -1688,6 +1688,14 @@ def _live_queued_summary(receipt: LiveInputReceiptSnapshot) -> QueuedInputSummar
     )
 
 
+async def _catalog_recent_input_summaries(session_id) -> tuple[list[QueuedInputSummary], int] | None:
+    state = await list_recent_live_input_receipts_catalog(session_id=session_id)
+    if state is None:
+        return None
+    receipts, queued_count = state
+    return [_live_queued_summary(receipt) for receipt in receipts], queued_count
+
+
 def _live_input_store_available() -> bool:
     return bool(database_module.live_store_configured() and database_module.get_live_session_factory() is not None)
 
@@ -1785,8 +1793,10 @@ def _live_receipt_response(
     source_session,
     db: Session,
     receipt: LiveInputReceiptSnapshot,
+    recent: list[QueuedInputSummary] | None = None,
 ) -> SessionInputResponse:
-    recent = _recent_input_summaries(source_session, db)
+    if recent is None:
+        recent = _recent_input_summaries(source_session, db)
     return SessionInputResponse(
         outcome="sent" if receipt.status == INPUT_STATUS_DELIVERED else "queued",
         input_id=receipt.archive_session_input_id,
@@ -1831,25 +1841,24 @@ async def _finish_catalog_input_receipt(
     delivery_request_id: str,
     error: str | None = None,
 ) -> None:
-    live_ws = get_live_write_serializer()
-    if not live_ws.is_configured:
-        raise HTTPException(status_code=503, detail="Live input writer is unavailable")
-    if error is None:
-        await live_ws.execute(
-            lambda live_db: mark_live_receipt_delivered_with_projection(
-                live_db,
-                receipt_id=receipt_id,
-                delivery_request_id=delivery_request_id,
-            ),
-            auto_commit=False,
-            label="live-input-delivered",
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(status_code=503, detail="Live input catalog is unavailable")
+    try:
+        await catalogd.call(
+            "session.input.finish.v2",
+            {
+                "receipt_id": receipt_id,
+                "delivery_request_id": delivery_request_id,
+                "status": "delivered" if error is None else "failed",
+                "error": str(error)[:500] if error else None,
+            },
+            timeout_seconds=1.0,
         )
-        return
-    await live_ws.execute(
-        lambda live_db: mark_live_receipt_failed(live_db, receipt_id=receipt_id, error=error),
-        auto_commit=False,
-        label="live-input-failed",
-    )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Live input catalog could not finish the receipt") from exc
 
 
 async def _create_catalog_session_input_response(
@@ -1881,10 +1890,15 @@ async def _create_catalog_session_input_response(
                 },
             )
         if existing.status in (INPUT_STATUS_DELIVERED, INPUT_STATUS_QUEUED, INPUT_STATUS_DELIVERING):
-            return _live_receipt_response(source_session=source_session, db=db, receipt=existing)
+            state = await _catalog_recent_input_summaries(source_session.id)
+            recent = state[0] if state is not None else []
+            return _live_receipt_response(source_session=source_session, db=db, receipt=existing, recent=recent)
 
-    current = _count_active_live_inputs(source_session)
-    if current is not None and current >= MAX_QUEUED_PER_SESSION:
+    state = await _catalog_recent_input_summaries(source_session.id)
+    if state is None:
+        raise HTTPException(status_code=503, detail="Live input catalog is unavailable")
+    current = state[1]
+    if current >= MAX_QUEUED_PER_SESSION:
         raise HTTPException(status_code=409, detail=f"Too many queued inputs for this session ({current})")
 
     delivery_request_id = uuid.uuid4().hex
@@ -1905,7 +1919,7 @@ async def _create_catalog_session_input_response(
             live_input_id=receipt_id,
             client_request_id=client_request_id,
             intent=INPUT_INTENT_QUEUE,
-            queued=_recent_input_summaries(source_session, db),
+            queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
         )
 
     if body.intent == INPUT_INTENT_AUTO:
@@ -1932,7 +1946,7 @@ async def _create_catalog_session_input_response(
                 live_input_id=receipt_id,
                 client_request_id=client_request_id,
                 intent=INPUT_INTENT_AUTO,
-                queued=_recent_input_summaries(source_session, db),
+                queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
             )
     else:
         lock_scope_id = session_lock_scope_id(source_session.id)
@@ -2000,7 +2014,7 @@ async def _create_catalog_session_input_response(
         live_input_id=receipt_id,
         client_request_id=client_request_id,
         intent=body.intent,
-        queued=_recent_input_summaries(source_session, db),
+        queued=(await _catalog_recent_input_summaries(source_session.id) or ([], 0))[0],
     )
 
 
@@ -2777,7 +2791,13 @@ async def list_session_inputs_endpoint(
     at the aggregate QPS of many active session-detail pages.
     """
     source_session = _load_session_for_continuation(db, session_id)
-    rows = _recent_input_summaries(source_session, db)
+    if database_module.live_catalog_enabled():
+        state = await _catalog_recent_input_summaries(source_session.id)
+        if state is None:
+            raise HTTPException(status_code=503, detail="Live input catalog is unavailable")
+        rows = state[0]
+    else:
+        rows = _recent_input_summaries(source_session, db)
 
     # Cheap stable hash of the state that matters to the client. If none of
     # id/status/updated_at/last_error changed, neither did the chip.
@@ -2801,6 +2821,17 @@ async def cancel_live_session_input_endpoint(
     _current_user: User = Depends(get_current_browser_route_user),
 ) -> dict:
     source_session = _load_session_for_continuation(db, session_id)
+    if database_module.live_catalog_enabled():
+        row = await cancel_live_queued_receipt_catalog(
+            session_id=source_session.id,
+            receipt_id=live_input_id,
+        )
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="input is no longer queued",
+            )
+        return {"cancelled": True, "live_input_id": row.id, "input_id": row.archive_session_input_id}
     if not _live_input_store_available():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

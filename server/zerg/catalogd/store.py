@@ -1561,6 +1561,124 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
+    def upsert_input_receipt(self, *, receipt: dict[str, Any]) -> dict[str, Any]:
+        """Persist one idempotent live input receipt and optional archive projection."""
+
+        from zerg.services.live_session_inputs import _record_live_input_receipt
+        from zerg.services.live_session_inputs import load_live_input_receipt_by_id
+
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                receipt_id = _record_live_input_receipt(
+                    orm,
+                    owner_id=receipt["owner_id"],
+                    session_id=receipt["session_id"],
+                    provider=receipt["provider"],
+                    text=receipt["text"],
+                    intent=receipt["intent"],
+                    status=receipt["status"],
+                    client_request_id=receipt.get("client_request_id"),
+                    device_id=receipt.get("device_id"),
+                    thread_id=receipt.get("thread_id"),
+                    archive_session_input_id=receipt.get("archive_session_input_id"),
+                    control_command_id=receipt.get("control_command_id"),
+                    delivery_request_id=receipt.get("delivery_request_id"),
+                    enqueue_archive_projection=receipt["enqueue_archive_projection"],
+                    error=receipt.get("error"),
+                    expires_at=receipt.get("expires_at"),
+                )
+                orm.commit()
+                snapshot = load_live_input_receipt_by_id(orm, receipt_id=receipt_id)
+                if snapshot is None:
+                    raise RuntimeError("input receipt disappeared after upsert")
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "receipt": _input_receipt_dto(snapshot),
+                "commit_seq": str(commit_seq),
+            }
+
+    def read_input_receipt(
+        self,
+        *,
+        owner_id: int,
+        session_id: str,
+        client_request_id: str,
+    ) -> dict[str, Any]:
+        """Read one public input idempotency receipt."""
+
+        from zerg.services.live_session_inputs import get_live_input_receipt_by_client_request
+
+        with _read_snapshot(self.engine) as connection:
+            orm = Session(bind=connection, expire_on_commit=False)
+            try:
+                receipt = get_live_input_receipt_by_client_request(
+                    orm,
+                    owner_id=owner_id,
+                    session_id=session_id,
+                    client_request_id=client_request_id,
+                )
+            finally:
+                orm.close()
+            return {
+                "found": receipt is not None,
+                "receipt": _input_receipt_dto(receipt) if receipt is not None else None,
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def list_recent_input_receipts(self, *, session_id: str) -> dict[str, Any]:
+        """Return bounded queued/delivering/recent-failed receipts for UI state."""
+
+        from zerg.services.live_session_inputs import count_live_queued_receipts
+        from zerg.services.live_session_inputs import list_recent_live_input_receipts
+
+        with _read_snapshot(self.engine) as connection:
+            orm = Session(bind=connection, expire_on_commit=False)
+            try:
+                receipts = list_recent_live_input_receipts(orm, session_id=session_id)
+                queued_count = count_live_queued_receipts(orm, session_id=session_id)
+            finally:
+                orm.close()
+            return {
+                "receipts": [_input_receipt_dto(receipt) for receipt in receipts],
+                "queued_count": queued_count,
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def cancel_input_receipt(self, *, session_id: str, receipt_id: str) -> dict[str, Any]:
+        """Cancel one still-queued receipt through catalogd's writer."""
+
+        from zerg.services.live_session_inputs import cancel_live_queued_receipt
+
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                receipt = cancel_live_queued_receipt(orm, session_id=session_id, receipt_id=receipt_id)
+                if receipt is None:
+                    orm.rollback()
+                    return {
+                        "cancelled": False,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "cancelled": True,
+                "receipt": _input_receipt_dto(receipt),
+                "commit_seq": str(commit_seq),
+            }
+
     def list_session_timeline(
         self,
         *,

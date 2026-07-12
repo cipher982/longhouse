@@ -245,6 +245,14 @@ class CatalogDaemon:
             return await self._claim_queued_input(request)
         if request.method == "session.input.finish.v2":
             return await self._finish_queued_input(request)
+        if request.method == "session.input.receipt.upsert.v2":
+            return await self._upsert_input_receipt(request)
+        if request.method == "session.input.receipt.read.v2":
+            return await self._read_input_receipt(request)
+        if request.method == "session.input.recent.list.v2":
+            return await self._list_recent_input_receipts(request)
+        if request.method == "session.input.cancel.v2":
+            return await self._cancel_input_receipt(request)
         if request.method == "session.timeline.list.v2":
             return await self._list_session_timeline(request)
         if request.method == "session.read.v2":
@@ -849,6 +857,63 @@ class CatalogDaemon:
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _upsert_input_receipt(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"receipt"}:
+            return self._error(request, "invalid_request", "session.input.receipt.upsert.v2 requires receipt")
+        try:
+            receipt = _validate_input_receipt(request.params["receipt"])
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.upsert_input_receipt, receipt=receipt)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_input_receipt(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "session_id", "client_request_id"}:
+            return self._error(request, "invalid_request", "session.input.receipt.read.v2 has invalid parameters")
+        owner_id = request.params["owner_id"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        session_id = request.params["session_id"]
+        if not _is_canonical_uuid(session_id):
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        client_request_id = request.params["client_request_id"]
+        if not _is_string(client_request_id, maximum=255):
+            return self._error(request, "invalid_request", "client_request_id must contain 1 to 255 characters")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.read_input_receipt,
+            owner_id=owner_id,
+            session_id=session_id,
+            client_request_id=client_request_id,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_recent_input_receipts(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id"} or not _is_canonical_uuid(request.params.get("session_id")):
+            return self._error(request, "invalid_request", "session.input.recent.list.v2 requires a canonical session_id")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.list_recent_input_receipts,
+            session_id=request.params["session_id"],
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _cancel_input_receipt(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "receipt_id"}:
+            return self._error(request, "invalid_request", "session.input.cancel.v2 has invalid parameters")
+        if not _is_canonical_uuid(request.params["session_id"]):
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        if not _is_canonical_uuid(request.params["receipt_id"]):
+            return self._error(request, "invalid_request", "receipt_id must be a canonical UUID")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.cancel_input_receipt,
+            session_id=request.params["session_id"],
+            receipt_id=request.params["receipt_id"],
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _list_session_timeline(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         expected = {
             "project",
@@ -1064,6 +1129,62 @@ _LAUNCH_FIELDS = {
     "launch_actor",
     "launch_surface",
 }
+_INPUT_RECEIPT_FIELDS = {
+    "owner_id",
+    "session_id",
+    "provider",
+    "text",
+    "intent",
+    "status",
+    "client_request_id",
+    "device_id",
+    "thread_id",
+    "archive_session_input_id",
+    "control_command_id",
+    "delivery_request_id",
+    "enqueue_archive_projection",
+    "error",
+    "expires_at",
+}
+
+
+def _validate_input_receipt(value: object) -> dict:
+    if not isinstance(value, dict) or set(value) != _INPUT_RECEIPT_FIELDS:
+        raise ValueError("receipt has invalid fields")
+    result = dict(value)
+    if type(result["owner_id"]) is not int or result["owner_id"] <= 0:
+        raise ValueError("receipt.owner_id must be a positive integer")
+    if not _is_canonical_uuid(result["session_id"]):
+        raise ValueError("receipt.session_id must be a canonical UUID")
+    if not _is_string(result["provider"], maximum=64):
+        raise ValueError("receipt.provider must contain 1 to 64 characters")
+    if not isinstance(result["text"], str) or len(result["text"].encode("utf-8")) > 512 * 1024:
+        raise ValueError("receipt.text must be at most 512 KiB")
+    for field, maximum in (("intent", 32), ("status", 32)):
+        if not _is_string(result[field], maximum=maximum):
+            raise ValueError(f"receipt.{field} must contain 1 to {maximum} characters")
+    for field, maximum in (
+        ("client_request_id", 255),
+        ("device_id", 255),
+        ("control_command_id", 96),
+        ("delivery_request_id", 64),
+    ):
+        raw = result[field]
+        if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
+            raise ValueError(f"receipt.{field} must be null or contain 1 to {maximum} characters")
+    thread_id = result["thread_id"]
+    if thread_id is not None and not _is_canonical_uuid(thread_id):
+        raise ValueError("receipt.thread_id must be a canonical UUID or null")
+    archive_id = result["archive_session_input_id"]
+    if archive_id is not None and (type(archive_id) is not int or archive_id <= 0):
+        raise ValueError("receipt.archive_session_input_id must be a positive integer or null")
+    if type(result["enqueue_archive_projection"]) is not bool:
+        raise ValueError("receipt.enqueue_archive_projection must be a boolean")
+    if result["error"] is not None and not isinstance(result["error"], dict):
+        raise ValueError("receipt.error must be an object or null")
+    if result["expires_at"] is not None:
+        result["expires_at"] = _parse_datetime(result["expires_at"], "receipt.expires_at")
+    return result
 
 
 def _validate_launch_rpc(value: object) -> dict:
@@ -1240,6 +1361,14 @@ def _is_hash(value: object) -> bool:
 
 def _is_string(value: object, *, maximum: int) -> bool:
     return isinstance(value, str) and bool(value) and len(value) <= maximum
+
+
+def _is_canonical_uuid(value: object) -> bool:
+    try:
+        parsed = uuid.UUID(value) if isinstance(value, str) else None
+    except ValueError:
+        return False
+    return parsed is not None and str(parsed) == value
 
 
 def _parse_datetime(value: object, field: str) -> datetime:

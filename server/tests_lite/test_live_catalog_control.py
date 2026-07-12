@@ -33,7 +33,6 @@ from zerg.services.live_control_catalog import wake_next_live_catalog_input
 from zerg.services.live_session_inputs import upsert_live_input_receipt
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import ManagedControlDispatchResult
-from zerg.services.write_serializer import WriteSerializer
 
 
 def _seed_live_control(db):
@@ -227,8 +226,12 @@ async def test_hot_pause_request_is_answerable_before_archive_convergence(tmp_pa
 
 @pytest.mark.asyncio
 async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path, monkeypatch):
+    from zerg.catalogd.schema import initialize_catalog_schema
+    from zerg.catalogd.store import CatalogStore
+
     engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
     initialize_live_database(engine)
+    initialize_catalog_schema(engine)
     factory = make_sessionmaker(engine)
     with factory() as db:
         session_id = _seed_live_control(db)
@@ -237,11 +240,23 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(database_module, "get_live_session_factory", lambda: factory)
     monkeypatch.setattr(database_module, "get_live_write_session_factory", lambda: factory)
-    serializer = WriteSerializer(name="catalog-control-test")
-    serializer.configure(factory)
+    catalog_store = CatalogStore(engine)
 
-    import zerg.routers.session_chat as session_chat
-    import zerg.services.live_session_inputs as live_inputs
+    class _CatalogClient:
+        async def call(self, method, params, **_kwargs):
+            if method == "session.input.receipt.read.v2":
+                return catalog_store.read_input_receipt(**params)
+            if method == "session.input.receipt.upsert.v2":
+                receipt = dict(params["receipt"])
+                if receipt["expires_at"] is not None:
+                    receipt["expires_at"] = datetime.fromisoformat(receipt["expires_at"])
+                return catalog_store.upsert_input_receipt(receipt=receipt)
+            if method == "session.input.finish.v2":
+                return catalog_store.finish_queued_input(**params)
+            if method == "session.input.recent.list.v2":
+                return catalog_store.list_recent_input_receipts(**params)
+            raise AssertionError(method)
+
     import zerg.services.managed_control_dispatcher as dispatcher
     import zerg.services.session_chat_impl as chat_impl
 
@@ -254,8 +269,7 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
 
     monkeypatch.setattr(dispatcher, "dispatch_managed_control_command", fake_dispatch)
     monkeypatch.setattr(chat_impl, "_schedule_catalog_lock_release", lambda **_kwargs: None)
-    monkeypatch.setattr(live_inputs, "get_live_write_serializer", lambda: serializer)
-    monkeypatch.setattr(session_chat, "get_live_write_serializer", lambda: serializer)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
 
     with factory() as db:
         session = load_live_control_session(db, session_id)
