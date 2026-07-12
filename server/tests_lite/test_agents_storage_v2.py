@@ -228,6 +228,21 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
             assert second.json()["events"][0]["event_id"] == "assistant-1"
             assert second.json()["has_more"] is False
 
+            tail = await client.get(
+                f"/agents/storage/v2/sessions/{payload['session_id']}/events",
+                params={"anchor": "tail", "limit": 1},
+            )
+            assert tail.status_code == 200, tail.text
+            assert tail.json()["events"][0]["event_id"] == "assistant-1"
+            assert tail.json()["has_more"] is True
+            older = await client.get(
+                f"/agents/storage/v2/sessions/{payload['session_id']}/events",
+                params={"anchor": "tail", "cursor": tail.json()["next_cursor"], "limit": 1},
+            )
+            assert older.status_code == 200, older.text
+            assert older.json()["events"][0]["event_id"] == "user-1"
+            assert older.json()["has_more"] is False
+
             stale_cursor = render_detail_cursor_token(
                 RenderDetailCursor(
                     session_id=UUID(payload["session_id"]),

@@ -4136,6 +4136,7 @@ class CatalogStore:
         owner_id: str,
         generation_id: UUID | None,
         after_order_key: str | None,
+        before_order_key: str | None,
         limit: int,
     ) -> dict[str, Any]:
         session_table = StorageSession.__table__
@@ -4192,22 +4193,44 @@ class CatalogStore:
                         )
                         > after_values
                     )
-                rows = list(
-                    connection.execute(
-                        statement.order_by(
-                            object_table.c.first_order_time_us.asc(),
-                            object_table.c.first_machine_id.asc(),
-                            object_table.c.first_provider.asc(),
-                            object_table.c.first_opaque_source_id.asc(),
-                            object_table.c.first_source_epoch.asc(),
-                            object_table.c.first_source_position.asc(),
-                            object_table.c.first_event_subordinal.asc(),
-                            object_table.c.object_id.asc(),
-                        ).limit(limit + 1)
+                if before_order_key is not None:
+                    before_values = tuple(json.loads(before_order_key))
+                    statement = statement.where(
+                        tuple_(
+                            object_table.c.first_order_time_us,
+                            object_table.c.first_machine_id,
+                            object_table.c.first_provider,
+                            object_table.c.first_opaque_source_id,
+                            object_table.c.first_source_epoch,
+                            object_table.c.first_source_position,
+                            object_table.c.first_event_subordinal,
+                        )
+                        < before_values
                     )
-                    .mappings()
-                    .all()
+                ordering = (
+                    (
+                        object_table.c.last_order_time_us.desc(),
+                        object_table.c.last_machine_id.desc(),
+                        object_table.c.last_provider.desc(),
+                        object_table.c.last_opaque_source_id.desc(),
+                        object_table.c.last_source_epoch.desc(),
+                        object_table.c.last_source_position.desc(),
+                        object_table.c.last_event_subordinal.desc(),
+                        object_table.c.object_id.desc(),
+                    )
+                    if before_order_key is not None
+                    else (
+                        object_table.c.first_order_time_us.asc(),
+                        object_table.c.first_machine_id.asc(),
+                        object_table.c.first_provider.asc(),
+                        object_table.c.first_opaque_source_id.asc(),
+                        object_table.c.first_source_epoch.asc(),
+                        object_table.c.first_source_position.asc(),
+                        object_table.c.first_event_subordinal.asc(),
+                        object_table.c.object_id.asc(),
+                    )
                 )
+                rows = list(connection.execute(statement.order_by(*ordering).limit(limit + 1)).mappings().all())
             objects_truncated = len(rows) > limit
             if objects_truncated:
                 rows = rows[:limit]

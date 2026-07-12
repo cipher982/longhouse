@@ -1627,7 +1627,14 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session_render_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "owner_id", "generation_id", "after_order_key", "limit"}:
+        if set(request.params) != {
+            "session_id",
+            "owner_id",
+            "generation_id",
+            "after_order_key",
+            "before_order_key",
+            "limit",
+        }:
             return self._error(request, "invalid_request", "storage.session.render_manifest.v2 has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
@@ -1640,9 +1647,17 @@ class CatalogDaemon:
         if not _is_string(owner_id, maximum=64):
             return self._error(request, "invalid_request", "owner_id must be a bounded non-empty string")
         after_order_key = request.params["after_order_key"]
+        before_order_key = request.params["before_order_key"]
+        if after_order_key is not None and before_order_key is not None:
+            return self._error(request, "invalid_request", "only one render cursor direction may be set")
         if after_order_key is not None:
             try:
                 _validate_render_order_key(after_order_key, "after_order_key")
+            except ValueError as exc:
+                return self._error(request, "invalid_request", str(exc))
+        if before_order_key is not None:
+            try:
+                _validate_render_order_key(before_order_key, "before_order_key")
             except ValueError as exc:
                 return self._error(request, "invalid_request", str(exc))
         limit = request.params["limit"]
@@ -1655,6 +1670,7 @@ class CatalogDaemon:
             owner_id=owner_id,
             generation_id=generation_id,
             after_order_key=after_order_key,
+            before_order_key=before_order_key,
             limit=limit,
         )
         return CatalogRpcResponse(id=request.id, result=result)

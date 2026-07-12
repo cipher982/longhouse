@@ -200,6 +200,7 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
                 "owner_id": "42",
                 "generation_id": str(generation_id),
                 "after_order_key": None,
+                "before_order_key": None,
                 "limit": 100,
             },
         )
@@ -213,6 +214,7 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
                 "owner_id": "42",
                 "generation_id": str(generation_id),
                 "after_order_key": render["objects"][0]["last_order_key"],
+                "before_order_key": None,
                 "limit": 100,
             },
         )
@@ -225,6 +227,7 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
                 "owner_id": "42",
                 "generation_id": str(uuid4()),
                 "after_order_key": None,
+                "before_order_key": None,
                 "limit": 100,
             },
         )

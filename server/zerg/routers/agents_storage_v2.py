@@ -883,6 +883,16 @@ def _manifest_first_key(manifest: dict[str, object]) -> tuple[int, str, str, str
     return tuple(decoded)  # type: ignore[return-value]
 
 
+def _manifest_last_key(manifest: dict[str, object]) -> tuple[int, str, str, str, str, int, int]:
+    raw = manifest.get("last_order_key")
+    if not isinstance(raw, str):
+        raise ValueError("render manifest is missing its last order key")
+    decoded = json.loads(raw)
+    if not isinstance(decoded, list) or len(decoded) != 7:
+        raise ValueError("render manifest last order key is invalid")
+    return tuple(decoded)  # type: ignore[return-value]
+
+
 def _render_event_wire(session_id: UUID, generation_id: UUID, decoded, record: RenderRecord) -> dict[str, object]:
     spec = decoded.spec
     try:
@@ -1136,25 +1146,29 @@ async def read_storage_v2_session_raw(
     }
 
 
-@router.get("/sessions/{session_id}/events")
-async def read_storage_v2_session_events(
+async def read_storage_v2_session_events_page(
+    *,
     session_id: UUID,
-    cursor: str | None = Query(None, description="Exclusive generation-qualified render cursor"),
-    limit: int = Query(100, ge=1, le=500),
-    _auth: DeviceToken | object | None = Depends(verify_agents_token),
-    _single: None = Depends(require_single_tenant),
+    owner_id: str,
+    cursor: str | None,
+    anchor: str,
+    limit: int,
 ) -> dict[str, object]:
-    owner_value = getattr(_auth, "owner_id", None)
-    if owner_value is None:
-        raise _http_error(status.HTTP_403_FORBIDDEN, "owner_required", "Storage-v2 reads require owner identity.")
-    owner_id = str(owner_value)
-    after = None
+    """Read one verified render page for a known owner.
+
+    Browser and machine routes share this physical read so the canonical
+    product surfaces cannot drift back toward the cold monolith.
+    """
+
+    if anchor not in {"start", "tail"}:
+        raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_anchor", "anchor must be start or tail")
+    decoded_cursor = None
     if cursor is not None:
         try:
-            after = decode_render_detail_cursor_token(cursor)
+            decoded_cursor = decode_render_detail_cursor_token(cursor)
         except ValueError as exc:
             raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_cursor", str(exc)) from exc
-        if after.session_id != session_id:
+        if decoded_cursor.session_id != session_id:
             raise _http_error(
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
                 "invalid_cursor",
@@ -1168,15 +1182,16 @@ async def read_storage_v2_session_events(
             "catalog_unavailable",
             "The session catalog is temporarily unavailable.",
         )
-    after_order_key = json.dumps(_cursor_order_key(after), separators=(",", ":")) if after is not None else None
+    cursor_order_key = json.dumps(_cursor_order_key(decoded_cursor), separators=(",", ":")) if decoded_cursor is not None else None
     try:
         manifest = await catalogd.call(
             "storage.session.render_manifest.v2",
             {
                 "session_id": str(session_id),
                 "owner_id": owner_id,
-                "generation_id": str(after.render_generation) if after is not None else None,
-                "after_order_key": after_order_key,
+                "generation_id": str(decoded_cursor.render_generation) if decoded_cursor is not None else None,
+                "after_order_key": cursor_order_key if anchor == "start" else None,
+                "before_order_key": cursor_order_key if anchor == "tail" else None,
                 "limit": _RENDER_MANIFEST_LIMIT,
             },
         )
@@ -1222,7 +1237,7 @@ async def read_storage_v2_session_events(
     workers = get_render_object_worker_pool()
     ordered_events: list[tuple[tuple[int, str, str, str, str, int, int], dict[str, object]]] = []
     next_object_index = 0
-    after_key = _cursor_order_key(after) if after is not None else None
+    cursor_key = _cursor_order_key(decoded_cursor) if decoded_cursor is not None else None
     try:
         while next_object_index < len(objects):
             batch_manifests = objects[next_object_index : next_object_index + _RENDER_READ_BATCH]
@@ -1242,13 +1257,19 @@ async def read_storage_v2_session_events(
                     raise ValueError("render object does not match its catalog manifest")
                 for record in spec.records:
                     key = _render_record_order_key(decoded, record)
-                    if after_key is None or key > after_key:
+                    if (anchor == "start" and (cursor_key is None or key > cursor_key)) or (
+                        anchor == "tail" and (cursor_key is None or key < cursor_key)
+                    ):
                         ordered_events.append((key, _render_event_wire(session_id, generation_id, decoded, record)))
             next_object_index += len(batch_manifests)
             ordered_events.sort(key=lambda item: item[0])
             if len(ordered_events) > limit:
-                cutoff = ordered_events[limit][0]
-                if next_object_index >= len(objects) or _manifest_first_key(objects[next_object_index]) > cutoff:
+                cutoff = ordered_events[limit][0] if anchor == "start" else ordered_events[-limit - 1][0]
+                if (
+                    next_object_index >= len(objects)
+                    or (anchor == "start" and _manifest_first_key(objects[next_object_index]) > cutoff)
+                    or (anchor == "tail" and _manifest_last_key(objects[next_object_index]) < cutoff)
+                ):
                     break
     except (KeyError, TypeError, ValueError, RenderObjectCorruptError, RenderObjectWorkerError) as exc:
         raise _http_error(
@@ -1257,17 +1278,38 @@ async def read_storage_v2_session_events(
             "The immutable render generation could not be verified.",
         ) from exc
 
-    page = ordered_events[:limit]
+    page = ordered_events[:limit] if anchor == "start" else ordered_events[-limit:]
     has_more = len(ordered_events) > limit or next_object_index < len(objects) or manifest.get("objects_truncated") is True
     return {
         "v": 2,
         "session_id": str(session_id),
         "generation_id": str(generation_id),
         "events": [event for _, event in page],
-        "next_cursor": page[-1][1]["cursor"] if page and has_more else None,
+        "next_cursor": (page[-1][1]["cursor"] if anchor == "start" else page[0][1]["cursor"]) if page and has_more else None,
         "has_more": has_more,
         "total": total,
     }
+
+
+@router.get("/sessions/{session_id}/events")
+async def read_storage_v2_session_events(
+    session_id: UUID,
+    cursor: str | None = Query(None, description="Exclusive generation-qualified render cursor"),
+    anchor: str = Query("start", description="Page from the beginning or latest tail: start|tail"),
+    limit: int = Query(100, ge=1, le=500),
+    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    owner_value = getattr(_auth, "owner_id", None)
+    if owner_value is None:
+        raise _http_error(status.HTTP_403_FORBIDDEN, "owner_required", "Storage-v2 reads require owner identity.")
+    return await read_storage_v2_session_events_page(
+        session_id=session_id,
+        owner_id=str(owner_value),
+        cursor=cursor,
+        anchor=anchor,
+        limit=limit,
+    )
 
 
 @router.post("/envelopes")
