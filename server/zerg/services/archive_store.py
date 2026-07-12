@@ -8,6 +8,8 @@ ingest, projectors, and legacy export.
 from __future__ import annotations
 
 import base64
+import ctypes
+import functools
 import hashlib
 import io
 import json
@@ -266,6 +268,9 @@ class FilesystemArchiveStore(ArchiveStore):
                 observed_first = record.source_seq if observed_first is None else observed_first
                 observed_last = record.source_seq
                 record_count += 1
+                if record_count % 250 == 0:
+                    del obj, record
+                    _return_free_heap_to_os()
         except zstd.ZstdError as exc:
             raise ArchiveCorruptionError(f"zstd decompression failed: {exc}") from exc
 
@@ -518,6 +523,23 @@ def _iter_zstd_lines(path: Path) -> Iterator[bytes]:
             with io.BufferedReader(reader) as buffered:
                 while line := buffered.readline():
                     yield line
+
+
+@functools.cache
+def _malloc_trim_function() -> Any | None:
+    try:
+        trim = ctypes.CDLL(None).malloc_trim
+    except (AttributeError, OSError):
+        return None
+    trim.argtypes = [ctypes.c_size_t]
+    trim.restype = ctypes.c_int
+    return trim
+
+
+def _return_free_heap_to_os() -> None:
+    trim = _malloc_trim_function()
+    if trim is not None:
+        trim(0)
 
 
 def _decode_record_obj(obj: object, *, ordinal: int, errors: list[str]) -> ArchiveRecord | None:
