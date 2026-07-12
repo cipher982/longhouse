@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC
+from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import inspect as sa_inspect
 
@@ -151,6 +156,68 @@ def test_agents_token_validation_returns_detached_device_token(tmp_path):
     assert validated.owner_id == 1
     assert validated.device_id == "cinder"
     assert sa_inspect(validated).detached
+
+
+def test_production_agents_token_validation_uses_catalogd_without_opening_db():
+    plain_token = generate_device_token()
+    observed: dict = {}
+    now = datetime.now(UTC)
+
+    def catalog_call(socket_path, method, *, params, timeout_seconds):
+        observed.update(
+            socket_path=socket_path,
+            method=method,
+            params=params,
+            timeout_seconds=timeout_seconds,
+        )
+        return {
+            "valid": True,
+            "commit_seq": "9",
+            "token": {
+                "id": "token-1",
+                "owner_id": 1,
+                "device_id": "cinder",
+                "created_at": now.isoformat(),
+                "last_used_at": now.isoformat(),
+                "revoked_at": None,
+            },
+        }
+
+    with (
+        patch("zerg.dependencies.agents_auth.live_catalog_enabled", return_value=True),
+        patch("zerg.dependencies.agents_auth.get_session_factory", side_effect=AssertionError("must not open DB")),
+        patch("zerg.catalogd.client.call_catalogd_sync", side_effect=catalog_call),
+        patch(
+            "zerg.services.catalogd_supervisor.catalogd_paths",
+            return_value=(Path("/data/longhouse-live.db"), Path("/data/.catalogd/catalogd.sock")),
+        ),
+    ):
+        validated = _validate_device_token_for_request(plain_token)
+
+    assert validated is not None
+    assert validated.owner_id == 1
+    assert validated.device_id == "cinder"
+    assert observed["method"] == "auth.device.validate.v2"
+    assert observed["params"]["token_hash"] == hash_token(plain_token)
+    assert observed["timeout_seconds"] == 0.1
+
+
+def test_production_agents_token_validation_maps_catalog_failure_to_typed_503():
+    from zerg.catalogd.client import CatalogUnavailable
+
+    with (
+        patch("zerg.dependencies.agents_auth.live_catalog_enabled", return_value=True),
+        patch("zerg.catalogd.client.call_catalogd_sync", side_effect=CatalogUnavailable("down")),
+        patch(
+            "zerg.services.catalogd_supervisor.catalogd_paths",
+            return_value=(Path("/data/longhouse-live.db"), Path("/data/.catalogd/catalogd.sock")),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        _validate_device_token_for_request(generate_device_token())
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail["code"] == "catalog_unavailable"
 
 
 def test_create_device_token_routes_write_through_serializer(tmp_path):

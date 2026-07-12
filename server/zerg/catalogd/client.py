@@ -114,6 +114,7 @@ def call_catalogd_sync(
     socket_path: Path,
     method: str,
     *,
+    params: dict[str, Any] | None = None,
     timeout_seconds: float = 0.25,
 ) -> dict[str, Any]:
     """One-shot RPC for synchronous health/readiness handlers."""
@@ -122,7 +123,7 @@ def call_catalogd_sync(
         id=secrets.token_hex(16),
         method=method,
         deadline_mono_ns=str(time.monotonic_ns() + int(timeout_seconds * 1_000_000_000)),
-        params={},
+        params=params or {},
     )
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import logging
 import os
 import stat
 import time
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
 from pathlib import Path
 
 from zerg.catalogd.protocol import CatalogRpcError
@@ -21,6 +24,9 @@ from zerg.catalogd.schema import CatalogMeta
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.schema import read_catalog_meta
+from zerg.catalogd.store import CatalogStore
+
+logger = logging.getLogger(__name__)
 
 
 class CatalogDaemonError(RuntimeError):
@@ -34,6 +40,7 @@ class CatalogDaemon:
         database_path: Path,
         socket_path: Path,
         schema_generation: str = CATALOG_SCHEMA_GENERATION,
+        checkpoint_interval_seconds: float = 30.0,
     ) -> None:
         self.database_path = database_path.expanduser().resolve()
         self.socket_path = socket_path.expanduser().resolve()
@@ -44,6 +51,10 @@ class CatalogDaemon:
         self._published_inode: tuple[int, int] | None = None
         self._meta: CatalogMeta | None = None
         self._schema_generation = schema_generation
+        self._checkpoint_interval_seconds = checkpoint_interval_seconds
+        self._executor: ThreadPoolExecutor | None = None
+        self._store: CatalogStore | None = None
+        self._checkpoint_task: asyncio.Task | None = None
 
     async def start(self) -> CatalogMeta:
         self.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -59,6 +70,8 @@ class CatalogDaemon:
         try:
             self._engine = create_catalog_engine(self.database_path)
             self._meta = initialize_catalog_schema(self._engine)
+            self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-sqlite")
+            self._store = CatalogStore(self._engine)
             if os.getenv("LONGHOUSE_CATALOGD_TEST_EXIT_AFTER_SCHEMA") == "1":
                 os._exit(93)
             self._prepare_final_socket_path()
@@ -71,6 +84,11 @@ class CatalogDaemon:
             os.replace(temporary_socket, self.socket_path)
             published = self.socket_path.stat()
             self._published_inode = (published.st_dev, published.st_ino)
+            if self._checkpoint_interval_seconds > 0:
+                self._checkpoint_task = asyncio.create_task(
+                    self._checkpoint_loop(),
+                    name="catalogd-checkpoint",
+                )
             return self._meta
         except BaseException:
             await self.close()
@@ -83,11 +101,20 @@ class CatalogDaemon:
             await self._server.serve_forever()
 
     async def close(self) -> None:
+        if self._checkpoint_task is not None:
+            self._checkpoint_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._checkpoint_task
+            self._checkpoint_task = None
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
             self._server = None
         self._unlink_published_socket()
+        self._store = None
+        if self._executor is not None:
+            self._executor.shutdown(wait=True, cancel_futures=True)
+            self._executor = None
         if self._engine is not None:
             self._engine.dispose()
             self._engine = None
@@ -139,7 +166,16 @@ class CatalogDaemon:
                 message = await read_frame(reader)
                 if not isinstance(message, CatalogRpcRequest):
                     raise ProtocolError("invalid_request", "catalogd accepts request frames only")
-                response = self._dispatch(message)
+                try:
+                    response = await self._dispatch(message)
+                except Exception:
+                    logger.exception("catalogd operation failed method=%s", message.method)
+                    response = self._error(
+                        message,
+                        "internal",
+                        "catalog operation failed",
+                        retryable=True,
+                    )
                 await write_frame(writer, response)
         except (EOFError, asyncio.IncompleteReadError, ConnectionError, ProtocolError):
             pass
@@ -150,14 +186,16 @@ class CatalogDaemon:
             except OSError:
                 pass
 
-    def _dispatch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+    async def _dispatch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if time.monotonic_ns() > int(request.deadline_mono_ns):
             return self._error(request, "deadline_exceeded", "request deadline exceeded", retryable=True)
-        if request.params:
-            return self._error(request, "invalid_request", "initial catalog methods accept empty params")
-        if self._engine is None or self._meta is None:
+        if self._engine is None or self._meta is None or self._store is None:
             return self._error(request, "catalog_unavailable", "catalog is not ready", retryable=True)
-        metadata = read_catalog_meta(self._engine)
+        if request.method == "auth.device.validate.v2":
+            return await self._authenticate_device(request)
+        if request.params:
+            return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
+        metadata = await self._run_store(read_catalog_meta, self._engine)
         if request.method == "ping.v2":
             return CatalogRpcResponse(
                 id=request.id,
@@ -183,6 +221,40 @@ class CatalogDaemon:
                 },
             )
         return self._error(request, "unknown_method", f"unknown catalog method: {request.method}")
+
+    async def _authenticate_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"token_hash"}:
+            return self._error(
+                request,
+                "invalid_request",
+                "auth.device.validate.v2 requires token_hash",
+            )
+        token_hash = request.params["token_hash"]
+        if not isinstance(token_hash, str) or len(token_hash) != 64 or any(character not in "0123456789abcdef" for character in token_hash):
+            return self._error(request, "invalid_request", "token_hash must be 64 lowercase hexadecimal characters")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.authenticate_device,
+            token_hash=token_hash,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _run_store(self, operation, *args, **kwargs):
+        if self._executor is None:
+            raise CatalogDaemonError("catalog executor is not ready")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._executor, lambda: operation(*args, **kwargs))
+
+    async def _checkpoint_loop(self) -> None:
+        assert self._store is not None
+        while True:
+            await asyncio.sleep(self._checkpoint_interval_seconds)
+            try:
+                await self._run_store(self._store.checkpoint_passive)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("catalogd passive checkpoint failed")
 
     @staticmethod
     def _error(

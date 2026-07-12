@@ -3,19 +3,27 @@ from __future__ import annotations
 import asyncio
 import os
 import stat
+import time
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
 
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.protocol import CatalogRpcRequest
 from zerg.catalogd.protocol import CatalogRpcResponse
 from zerg.catalogd.protocol import read_frame
 from zerg.catalogd.protocol import write_frame
 from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
+from zerg.catalogd.schema import create_catalog_engine
+from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.server import CatalogDaemonError
+from zerg.models.live_store import LiveDeviceToken
 
 
 @pytest.fixture
@@ -51,6 +59,126 @@ async def test_daemon_publishes_private_socket_and_serves_ping_schema(daemon_pat
         assert stat.S_IMODE(socket_path.stat().st_mode) == 0o600
     finally:
         await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_device_auth_is_typed_read_only_and_reports_commit_seq(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    created_at = datetime.now(UTC) - timedelta(days=2)
+    token_hash = "a" * 64
+    with engine.begin() as connection:
+        connection.execute(
+            LiveDeviceToken.__table__.insert().values(
+                id="token-1",
+                owner_id=7,
+                device_id="cinder",
+                token_hash=token_hash,
+                created_at=created_at,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        first = await client.call("auth.device.validate.v2", {"token_hash": token_hash})
+        retry = await client.call("auth.device.validate.v2", {"token_hash": token_hash})
+        invalid = await client.call("auth.device.validate.v2", {"token_hash": "b" * 64})
+        ping = await client.call("ping.v2")
+
+        assert first == {
+            "valid": True,
+            "commit_seq": "0",
+            "token": {
+                "id": "token-1",
+                "owner_id": 7,
+                "device_id": "cinder",
+                "created_at": created_at.isoformat(),
+                "last_used_at": None,
+                "revoked_at": None,
+            },
+        }
+        assert retry == first
+        assert invalid == {"valid": False, "commit_seq": "0"}
+        assert ping["commit_seq"] == "0"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_device_auth_rejects_malformed_params_without_touching_store(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call(
+                "auth.device.validate.v2",
+                {"token_hash": "NOT-A-HASH"},
+            )
+        assert exc_info.value.code == "invalid_request"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_catalog_operations_run_off_the_socket_event_loop(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    assert daemon._store is not None
+    original = daemon._store.authenticate_device
+
+    def slow_authenticate(**kwargs):
+        time.sleep(0.08)
+        return original(**kwargs)
+
+    daemon._store.authenticate_device = slow_authenticate
+    client = CatalogClient(socket_path)
+    try:
+        call = asyncio.create_task(client.call("auth.device.validate.v2", {"token_hash": "a" * 64}))
+        started = time.monotonic()
+        await asyncio.sleep(0.01)
+        assert time.monotonic() - started < 0.05
+        assert not call.done()
+        assert await call == {"valid": False, "commit_seq": "0"}
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_catalogd_owns_periodic_passive_checkpoint(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(
+        database_path=database_path,
+        socket_path=socket_path,
+        checkpoint_interval_seconds=0.01,
+    )
+    await daemon.start()
+    assert daemon._store is not None
+    original = daemon._store.checkpoint_passive
+    checkpoints = 0
+
+    def counted_checkpoint():
+        nonlocal checkpoints
+        checkpoints += 1
+        return original()
+
+    daemon._store.checkpoint_passive = counted_checkpoint
+    try:
+        deadline = time.monotonic() + 1
+        while checkpoints == 0 and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        assert checkpoints > 0
+    finally:
         await daemon.close()
     assert not socket_path.exists()
 

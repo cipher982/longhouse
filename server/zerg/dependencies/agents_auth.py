@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import threading
 import time
 from collections import deque
+from datetime import datetime
 
 from fastapi import HTTPException
 from fastapi import Request
@@ -16,6 +18,7 @@ from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.auth.managed_local_hook_tokens import validate_managed_local_hook_token
 from zerg.config import get_settings
 from zerg.database import get_catalog_session_factory
+from zerg.database import live_catalog_enabled
 from zerg.models.device_token import DeviceToken
 
 logger = logging.getLogger(__name__)
@@ -90,6 +93,9 @@ def _managed_local_hook_token_allowed(request: Request) -> bool:
 def _validate_device_token_for_request(token: str) -> DeviceToken | None:
     """Validate a device token without holding a DB session for the request lifetime."""
 
+    if live_catalog_enabled():
+        return _validate_device_token_through_catalogd(token)
+
     from zerg.routers.device_tokens import validate_device_token
 
     db = get_session_factory()()
@@ -114,6 +120,64 @@ def _validate_device_token_for_request(token: str) -> DeviceToken | None:
         return device_token
     finally:
         db.close()
+
+
+def _validate_device_token_through_catalogd(token: str) -> DeviceToken | None:
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.catalogd.client import call_catalogd_sync
+    from zerg.services.catalogd_supervisor import catalogd_paths
+
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    _database_path, socket_path = catalogd_paths()
+    try:
+        result = call_catalogd_sync(
+            socket_path,
+            "auth.device.validate.v2",
+            params={
+                "token_hash": token_hash,
+            },
+            timeout_seconds=0.1,
+        )
+    except (CatalogUnavailable, CatalogRemoteError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "catalog_unavailable", "message": "Catalog authentication is temporarily unavailable."},
+        ) from exc
+    if result.get("valid") is not True:
+        return None
+    payload = result.get("token")
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "catalog_unavailable", "message": "Catalog authentication returned an invalid response."},
+        )
+    try:
+        return DeviceToken(
+            id=payload["id"],
+            owner_id=payload["owner_id"],
+            device_id=payload["device_id"],
+            token_hash=token_hash,
+            created_at=_decode_catalog_datetime(payload.get("created_at")),
+            last_used_at=_decode_catalog_datetime(payload.get("last_used_at")),
+            revoked_at=_decode_catalog_datetime(payload.get("revoked_at")),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "catalog_unavailable", "message": "Catalog authentication returned an invalid response."},
+        ) from exc
+
+
+def _decode_catalog_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("catalog datetime must be a string or null")
+    decoded = datetime.fromisoformat(value)
+    if decoded.tzinfo is None:
+        raise ValueError("catalog datetime must include a timezone")
+    return decoded
 
 
 def verify_agents_token(request: Request) -> DeviceToken | ManagedLocalHookToken | None:
