@@ -67,7 +67,10 @@ async def test_catalogd_owns_permission_registration_resolution_and_poll(daemon_
 
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
-    client = CatalogClient(socket_path)
+    # Functional ownership test, not an RPC latency benchmark. Parallel full
+    # suite workers can starve this private daemon beyond the production 1s
+    # hard deadline on developer/CI hosts.
+    client = CatalogClient(socket_path, default_timeout_seconds=5.0)
     try:
         registration = {
             "interaction": {
