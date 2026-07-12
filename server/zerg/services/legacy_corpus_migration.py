@@ -306,13 +306,13 @@ class LegacyCorpusConverter:
             .all()
         )
         sources, source_covered, source_missing = self._load_sources(db, session_id, watermark, events)
-        batches = _source_batches(sources)
+        event_groups = _events_by_source(events)
+        batches = _source_batches(sources, event_groups)
         if not batches and not events and source_missing == 0:
             batches = [_SourceBatch("empty", "legacy_source_lines", 0, ())]
         generation = _stable_uuid("render", str(session_id), watermark.encode())
         envelope_ids: list[str] = []
         output_parts: list[str] = []
-        event_groups = _events_by_source(events)
         head_branch_id = (
             db.query(AgentSessionBranch.id)
             .filter(
@@ -646,7 +646,10 @@ class LegacyCorpusConverter:
         )
 
 
-def _source_batches(records: list[_SourceRecord]) -> list[_SourceBatch]:
+def _source_batches(
+    records: list[_SourceRecord],
+    event_groups: dict[tuple[str, int], list[AgentEvent]],
+) -> list[_SourceBatch]:
     grouped: dict[tuple[str, str], list[_SourceRecord]] = defaultdict(list)
     for record in records:
         grouped[(record.source_path, record.provenance_kind)].append(record)
@@ -654,21 +657,58 @@ def _source_batches(records: list[_SourceRecord]) -> list[_SourceBatch]:
     for (source_path, provenance_kind), source_records in grouped.items():
         current: list[_SourceRecord] = []
         size = 0
+        render_events = 0
+        render_bytes = 0
         range_start = 0
         for record in source_records:
+            related_events = event_groups.get((record.source_path, record.source_offset), ())
+            related_render_bytes = sum(_estimated_render_bytes(event) for event in related_events)
             # Leave room for normalized render records. The hard storage
             # contract remains 10k/4MiB; these smaller batches are an operator
             # fairness bound and preserve contiguous ordinals per source epoch.
-            if current and (len(current) >= 1_000 or size + len(record.data) > 1024 * 1024):
+            if current and (
+                len(current) >= 1_000
+                or size + len(record.data) > 1024 * 1024
+                or render_events + len(related_events) > 2_000
+                or render_bytes + related_render_bytes > 1024 * 1024
+            ):
                 batches.append(_SourceBatch(source_path, provenance_kind, range_start, tuple(current)))
                 range_start += len(current)
                 current = []
                 size = 0
+                render_events = 0
+                render_bytes = 0
             current.append(record)
             size += len(record.data)
+            render_events += len(related_events)
+            render_bytes += related_render_bytes
         if current:
             batches.append(_SourceBatch(source_path, provenance_kind, range_start, tuple(current)))
     return batches
+
+
+def _estimated_render_bytes(event: AgentEvent) -> int:
+    """Conservative bound used only to keep legacy render batches small."""
+
+    total = 512
+    for value in (
+        event.content_text,
+        event.tool_name,
+        event.tool_output_text,
+        event.tool_call_id,
+        str(event.thread_id) if event.thread_id is not None else None,
+    ):
+        if value is not None:
+            total += len(str(value).encode("utf-8"))
+    if event.tool_input_json is not None:
+        encoded_tool_input = json.dumps(
+            event.tool_input_json,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        total += len(encoded_tool_input)
+    return total
 
 
 def _events_by_source(events: list[AgentEvent]) -> dict[tuple[str, int], list[AgentEvent]]:

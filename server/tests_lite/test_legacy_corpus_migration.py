@@ -18,6 +18,8 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.services.legacy_corpus_migration import LegacyCorpusConverter
+from zerg.services.legacy_corpus_migration import _source_batches
+from zerg.services.legacy_corpus_migration import _SourceRecord
 from zerg.services.legacy_corpus_migration import create_inventory_run
 from zerg.services.legacy_corpus_migration import freeze_high_watermark
 from zerg.services.legacy_corpus_migration import inventory_rows
@@ -78,6 +80,24 @@ def _event(session_id, *, raw_json: str | None, source_path: str | None, source_
         raw_json=raw_json,
         raw_json_codec=0,
     )
+
+
+def test_source_batches_bound_dense_render_payloads():
+    session_id = uuid4()
+    records = [
+        _SourceRecord(b"{}", "dense.jsonl", offset, 0, "legacy_source_lines")
+        for offset in range(3)
+    ]
+    groups = {}
+    for offset in range(3):
+        event = _event(session_id, raw_json="{}", source_path="dense.jsonl", source_offset=offset)
+        event.content_text = "x" * 600_000
+        groups[("dense.jsonl", offset)] = [event]
+
+    batches = _source_batches(records, groups)
+
+    assert [len(batch.records) for batch in batches] == [1, 1, 1]
+    assert [batch.range_start for batch in batches] == [0, 1, 2]
 
 
 @pytest.mark.asyncio
