@@ -18,11 +18,56 @@ _OBJECT_SET_DOMAIN = b"longhouse-search-object-set-v1\0"
 
 def open_search_database(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise RuntimeError("searchd database path must not be a symlink")
+    connection: sqlite3.Connection | None = None
+    try:
+        connection = _connect(path)
+        incompatible = _existing_store_is_incompatible(connection)
+    except sqlite3.DatabaseError:
+        if connection is not None:
+            connection.close()
+        incompatible = True
+    if incompatible:
+        if connection is not None:
+            connection.close()
+        _discard_derived_store(path)
+        connection = _connect(path)
+    assert connection is not None
+    _initialize_schema(connection)
+    return connection
+
+
+def _connect(path: Path) -> sqlite3.Connection:
     connection = sqlite3.connect(path, timeout=5.0, isolation_level=None, check_same_thread=False)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA journal_mode=WAL")
     connection.execute("PRAGMA synchronous=NORMAL")
     connection.execute("PRAGMA busy_timeout=5000")
+    return connection
+
+
+def _existing_store_is_incompatible(connection: sqlite3.Connection) -> bool:
+    tables = {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+    }
+    if not tables:
+        return False
+    if "search_meta" not in tables:
+        return True
+    row = connection.execute("SELECT schema_version, schema_generation FROM search_meta WHERE singleton = 1").fetchone()
+    return row is None or (row["schema_version"], row["schema_generation"]) != (SCHEMA_VERSION, SCHEMA_GENERATION)
+
+
+def _discard_derived_store(path: Path) -> None:
+    for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+        candidate.unlink(missing_ok=True)
+
+
+def _initialize_schema(connection: sqlite3.Connection) -> None:
     connection.executescript(
         """
         CREATE TABLE IF NOT EXISTS search_meta (
@@ -121,8 +166,7 @@ def open_search_database(path: Path) -> sqlite3.Connection:
             (SCHEMA_VERSION, SCHEMA_GENERATION, now),
         )
     elif (existing["schema_version"], existing["schema_generation"]) != (SCHEMA_VERSION, SCHEMA_GENERATION):
-        raise RuntimeError("searchd schema is incompatible with this build")
-    return connection
+        raise AssertionError("incompatible derived search store survived rebuild")
 
 
 class SearchStore:

@@ -10,6 +10,7 @@ from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.searchd.server import SearchDaemon
 from zerg.searchd.store import object_set_hash
+from zerg.searchd.store import open_search_database
 
 
 def _records(text: str) -> list[dict]:
@@ -39,6 +40,21 @@ def _records(text: str) -> list[dict]:
             "tool_call_id": None,
         },
     ]
+
+
+def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
+    path = tmp_path / "search.db"
+    connection = open_search_database(path)
+    connection.execute("UPDATE search_meta SET schema_generation = 'obsolete'")
+    connection.close()
+
+    rebuilt = open_search_database(path)
+    try:
+        meta = rebuilt.execute("SELECT schema_version, schema_generation FROM search_meta").fetchone()
+        assert tuple(meta) == (1, "searchd-v1-generation-qualified-locators")
+        assert rebuilt.execute("SELECT COUNT(*) FROM session_index").fetchone()[0] == 0
+    finally:
+        rebuilt.close()
 
 
 @pytest.mark.asyncio
