@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from uuid import UUID
 from uuid import uuid4
@@ -54,13 +55,14 @@ def _raw_params(
     records: tuple[bytes, ...],
     sealed_at: datetime,
     predecessor: UUID | None = None,
+    opaque_source_id: str = "history.jsonl",
 ) -> dict:
     record_hashes = tuple(hashlib.sha256(record).digest() for record in records)
     identity = EnvelopeIdentity(
         tenant_id="tenant-a",
         machine_id="cinder",
         provider="codex",
-        opaque_source_id="history.jsonl",
+        opaque_source_id=opaque_source_id,
         source_epoch=epoch,
         range_kind="byte_offset",
         range_start=start,
@@ -77,7 +79,7 @@ def _raw_params(
         "session_id": str(session_id),
         "machine_id": "cinder",
         "provider": "codex",
-        "opaque_source_id": "history.jsonl",
+        "opaque_source_id": opaque_source_id,
         "source_epoch": str(epoch),
         "predecessor_source_epoch": str(predecessor) if predecessor is not None else None,
         "epoch_opened_at": sealed_at.isoformat(),
@@ -95,7 +97,7 @@ def _raw_params(
         "provenance_kind": "native",
         "render_state": "pending",
         "media_refs": [],
-        "projectors": ["render-v2", "search-v2"],
+        "projectors": ["render-v2"],
         "render_manifest": None,
         "session_facts": {
             "environment": "local",
@@ -115,15 +117,23 @@ def _raw_params(
     }
 
 
-def _render_manifest(generation_id: UUID, *, seed: bytes = b"render-object", position: int = 0) -> dict:
+def _render_manifest(
+    generation_id: UUID,
+    *,
+    seed: bytes = b"render-object",
+    position: int = 0,
+    opaque_source_id: str = "history.jsonl",
+    source_epoch: UUID | None = None,
+) -> dict:
+    source_epoch = source_epoch or UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
     object_hash = hashlib.sha256(seed).hexdigest()
     first_key = json.dumps(
         [
             1_700_000_000_000_000 + position,
             "cinder",
             "codex",
-            "history.jsonl",
-            "018f0c3a-7b2d-7f10-8a11-123456789abc",
+            opaque_source_id,
+            str(source_epoch),
             position,
             0,
         ],
@@ -162,7 +172,7 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
     client = CatalogClient(socket_path)
     try:
         raw = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
-        raw.update(render_state="ready", render_manifest=_render_manifest(generation_id))
+        raw.update(render_state="ready", render_manifest=_render_manifest(generation_id), projectors=["search-v2"])
         committed = await client.call("storage.raw_object.commit.v2", raw)
         assert committed["receipt"]["render_state"] == "ready"
         session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
@@ -237,12 +247,20 @@ async def test_render_object_projection_pages_are_frozen_at_claimed_revision(dae
     client = CatalogClient(socket_path)
     try:
         first = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
-        first.update(render_state="ready", render_manifest=_render_manifest(generation_id, seed=b"first", position=0))
+        first.update(
+            render_state="ready",
+            render_manifest=_render_manifest(generation_id, seed=b"first", position=0),
+            projectors=["search-v2"],
+        )
         first_commit = await client.call("storage.raw_object.commit.v2", first)
         first_revision = first_commit["receipt"]["commit_seq"]
 
         second = _raw_params(epoch=epoch, session_id=session_id, start=6, end=12, records=(b"world\n",), sealed_at=now)
-        second.update(render_state="ready", render_manifest=_render_manifest(generation_id, seed=b"second", position=6))
+        second.update(
+            render_state="ready",
+            render_manifest=_render_manifest(generation_id, seed=b"second", position=6),
+            projectors=["search-v2"],
+        )
         second_commit = await client.call("storage.raw_object.commit.v2", second)
         second_revision = second_commit["receipt"]["commit_seq"]
 
@@ -289,6 +307,133 @@ async def test_render_object_projection_pages_are_frozen_at_claimed_revision(dae
             first["render_manifest"]["object_id"],
             second["render_manifest"]["object_id"],
         }
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_source_epoch_replacement_retires_only_superseded_membership(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    old_epoch = uuid4()
+    side_epoch = uuid4()
+    replacement_epoch = uuid4()
+    session_id = uuid4()
+    generation_id = uuid4()
+    missing_hash = "d" * 64
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        old = _raw_params(
+            epoch=old_epoch,
+            session_id=session_id,
+            start=0,
+            end=4,
+            records=(b"old\n",),
+            sealed_at=now,
+        )
+        old.update(
+            render_state="ready",
+            render_manifest=_render_manifest(generation_id, seed=b"old", source_epoch=old_epoch),
+            projectors=["search-v2"],
+            media_refs=[
+                {
+                    "media_hash": missing_hash,
+                    "source_position": 0,
+                    "ref_key": "missing:0",
+                    "availability": "missing",
+                }
+            ],
+        )
+        old_commit = await client.call("storage.raw_object.commit.v2", old)
+
+        side = _raw_params(
+            epoch=side_epoch,
+            session_id=session_id,
+            start=0,
+            end=5,
+            records=(b"side\n",),
+            sealed_at=now,
+            opaque_source_id="side.jsonl",
+        )
+        side.update(
+            render_state="ready",
+            render_manifest=_render_manifest(
+                generation_id,
+                seed=b"side",
+                opaque_source_id="side.jsonl",
+                source_epoch=side_epoch,
+            ),
+            projectors=["search-v2"],
+        )
+        await client.call("storage.raw_object.commit.v2", side)
+
+        replacement = _raw_params(
+            epoch=replacement_epoch,
+            predecessor=old_epoch,
+            session_id=session_id,
+            start=0,
+            end=4,
+            records=(b"new\n",),
+            sealed_at=now + timedelta(seconds=1),
+        )
+        replacement.update(
+            render_state="ready",
+            render_manifest=_render_manifest(generation_id, seed=b"new", source_epoch=replacement_epoch),
+            projectors=["search-v2"],
+        )
+        replacement_commit = await client.call("storage.raw_object.commit.v2", replacement)
+
+        historical_page = await client.call(
+            "storage.session.render_objects.list.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(generation_id),
+                "snapshot_revision": int(old_commit["receipt"]["commit_seq"]),
+                "after_object_id": None,
+                "limit": 100,
+            },
+        )
+        assert [row["source_envelope_id"] for row in historical_page["objects"]] == [old["envelope_id"]]
+
+        raw_manifest = await client.call(
+            "storage.session.raw_manifest.v2",
+            {"session_id": str(session_id), "owner_id": "42", "after_source_key": None, "limit": 100},
+        )
+        assert {row["envelope_id"] for row in raw_manifest["objects"]} == {
+            side["envelope_id"],
+            replacement["envelope_id"],
+        }
+        render_page = await client.call(
+            "storage.session.render_objects.list.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(generation_id),
+                "snapshot_revision": int(replacement_commit["receipt"]["commit_seq"]),
+                "after_object_id": None,
+                "limit": 100,
+            },
+        )
+        assert render_page["snapshot_object_count"] == 2
+        assert render_page["snapshot_event_count"] == 2
+        assert {row["source_envelope_id"] for row in render_page["objects"]} == {
+            side["envelope_id"],
+            replacement["envelope_id"],
+        }
+        session = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert session["session"]["user_messages"] == 2
+        assert session["session"]["media_state"] == "complete"
+        assert session["session"]["missing_media_hashes"] == []
+        media = await client.call(
+            "storage.media.read.v2",
+            {"media_hash": missing_hash, "session_id": str(session_id), "limit": 10},
+        )
+        assert media["refs"][0]["state"] == "retired"
+        with pytest.raises(CatalogRemoteError) as stale_retry:
+            await client.call("storage.raw_object.commit.v2", old)
+        assert stale_retry.value.code == "source_epoch_conflict"
     finally:
         await client.close()
         await daemon.close()
@@ -576,7 +721,7 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
 
 
 @pytest.mark.asyncio
-async def test_raw_manifest_honors_session_tombstone_and_retired_receipt(daemon_paths):
+async def test_raw_manifest_distinguishes_session_tombstone_from_retired_epoch(daemon_paths):
     database_path, socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
@@ -640,8 +785,7 @@ async def test_raw_manifest_honors_session_tombstone_and_retired_receipt(daemon_
     try:
         with pytest.raises(CatalogRemoteError) as retired:
             await client.call("storage.raw_object.commit.v2", live_raw)
-        assert retired.value.code == "session_deleted"
-        assert retired.value.details["deletion_revision"] == "10"
+        assert retired.value.code == "source_epoch_conflict"
     finally:
         await client.close()
         await daemon.close()

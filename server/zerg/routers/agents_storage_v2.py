@@ -67,7 +67,6 @@ router = APIRouter(prefix="/agents/storage/v2", tags=["agents"])
 logger = logging.getLogger(__name__)
 
 MAX_WIRE_BODY_BYTES = 12 * 1024 * 1024
-PROJECTORS = ("render-v2", "search-v2")
 _EXPECTED_ENVELOPE_FIELDS = {
     "protocol_version",
     "tenant_id",
@@ -813,7 +812,7 @@ async def _commit_admitted_envelope(
                 "provenance_kind": spec.provenance_kind,
                 "render_state": "ready" if render_manifest is not None else "pending",
                 "media_refs": parsed["media_refs"],
-                "projectors": [projector for projector in PROJECTORS if render_manifest is None or projector != "render-v2"],
+                "projectors": ["search-v2"] if render_manifest is not None else ["render-v2"],
                 "render_manifest": render_manifest,
                 "session_facts": parsed["session_facts"],
                 "sealed_at": datetime.now(UTC).isoformat(),

@@ -3243,10 +3243,7 @@ class CatalogStore:
             existing = connection.execute(select(raw).where(raw.c.envelope_id == envelope_id)).mappings().first()
             if existing is not None:
                 if existing["retired_at"] is not None or existing["retirement_revision"] is not None:
-                    return {
-                        "session_deleted": True,
-                        "deletion_revision": str(existing["retirement_revision"] or 0),
-                    }
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 if not _raw_object_matches(existing, replay_identity):
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 return {
@@ -3345,6 +3342,7 @@ class CatalogStore:
             epoch_row = connection.execute(select(epoch).where(epoch.c.source_epoch == epoch_key)).mappings().first()
             epoch_is_new = epoch_row is None
             predecessor_row = None
+            predecessor_raw_rows: list[Any] = []
             identity_filters = (
                 epoch.c.tenant_id == tenant_id,
                 epoch.c.machine_id == machine_id,
@@ -3369,6 +3367,13 @@ class CatalogStore:
                         return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                     if any(row["source_epoch"] != expected_predecessor for row in open_rows):
                         return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                    predecessor_raw_rows = list(
+                        connection.execute(select(raw).where(raw.c.source_epoch == expected_predecessor, raw.c.retired_at.is_(None)))
+                        .mappings()
+                        .all()
+                    )
+                    if any(str(row["session_id"]) != session_key for row in predecessor_raw_rows):
+                        return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 elif open_rows:
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 accepted_through = _u64_key(0)
@@ -3386,6 +3391,11 @@ class CatalogStore:
                 ):
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 if epoch_row["state"] != "open":
+                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                linked_session = connection.execute(
+                    select(raw.c.session_id).where(raw.c.source_epoch == epoch_key).limit(1)
+                ).scalar_one_or_none()
+                if linked_session is not None and str(linked_session) != session_key:
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 accepted_through = str(epoch_row["accepted_through"])
 
@@ -3429,6 +3439,34 @@ class CatalogStore:
                             updated_at=commit_time,
                         )
                     )
+                    retired_envelope_ids = [str(row["envelope_id"]) for row in predecessor_raw_rows]
+                    if retired_envelope_ids:
+                        connection.execute(
+                            update(raw)
+                            .where(raw.c.envelope_id.in_(retired_envelope_ids))
+                            .values(retired_at=commit_time, retirement_revision=commit_seq)
+                        )
+                        connection.execute(
+                            update(render_object)
+                            .where(
+                                render_object.c.source_envelope_id.in_(retired_envelope_ids),
+                                render_object.c.retired_at.is_(None),
+                            )
+                            .values(retired_at=commit_time, retirement_revision=commit_seq)
+                        )
+                        connection.execute(
+                            update(session_media_ref)
+                            .where(
+                                session_media_ref.c.envelope_id.in_(retired_envelope_ids),
+                                session_media_ref.c.state == "active",
+                            )
+                            .values(
+                                state="retired",
+                                retired_at=commit_time,
+                                deletion_revision=commit_seq,
+                                commit_seq=commit_seq,
+                            )
+                        )
                 connection.execute(
                     insert(epoch).values(
                         source_epoch=epoch_key,
@@ -3536,7 +3574,19 @@ class CatalogStore:
                     )
                 )
             else:
-                if existing_session["media_state"] == "missing":
+                if predecessor_row is not None:
+                    active_missing: set[str] = set()
+                    for active_raw in connection.execute(
+                        select(raw.c.missing_media_hashes_json).where(
+                            raw.c.session_id == session_key,
+                            raw.c.retired_at.is_(None),
+                        )
+                    ):
+                        active_missing.update(json.loads(active_raw[0] or "[]"))
+                    bounded_missing = sorted(active_missing)[:1_000]
+                    session_values["media_state"] = "missing" if bounded_missing else "complete"
+                    session_values["missing_media_hashes_json"] = json.dumps(bounded_missing, separators=(",", ":"))
+                elif existing_session["media_state"] == "missing":
                     previous_missing = json.loads(existing_session["missing_media_hashes_json"] or "[]")
                     combined_missing = sorted(set(previous_missing) | set(missing_media_hashes))[:1_000]
                     session_values["media_state"] = "missing"
@@ -3621,6 +3671,11 @@ class CatalogStore:
                         uncompressed_size=render_manifest["uncompressed_size"],
                         compressed_size=render_manifest["compressed_size"],
                         event_count=render_manifest["event_count"],
+                        user_messages=render_manifest["user_messages"],
+                        assistant_messages=render_manifest["assistant_messages"],
+                        tool_calls=render_manifest["tool_calls"],
+                        first_user_message_preview=render_manifest["first_user_message_preview"],
+                        last_visible_text_preview=render_manifest["last_visible_text_preview"],
                         first_order_key=render_manifest["first_order_key"],
                         last_order_key=render_manifest["last_order_key"],
                         **_render_order_columns(
@@ -3644,6 +3699,20 @@ class CatalogStore:
                 if render_manifest["last_visible_text_preview"]:
                     projection_values["last_visible_text_preview"] = render_manifest["last_visible_text_preview"]
                 connection.execute(update(storage_session).where(storage_session.c.session_id == session_key).values(**projection_values))
+            if predecessor_row is not None:
+                generation_to_recompute = (
+                    str(render_manifest["generation_id"])
+                    if render_manifest is not None
+                    else str((existing_session or {}).get("current_render_generation") or "")
+                )
+                if generation_to_recompute:
+                    _recompute_render_generation_projection(
+                        connection,
+                        session_id=session_key,
+                        generation_id=generation_to_recompute,
+                        commit_seq=commit_seq,
+                        commit_time=commit_time,
+                    )
             projector_table = ProjectorState.__table__
             for projector in projectors:
                 projector_row = (
@@ -5315,6 +5384,84 @@ def _raw_object_manifest_dto(row) -> dict[str, Any]:
     }
 
 
+def _recompute_render_generation_projection(
+    connection,
+    *,
+    session_id: str,
+    generation_id: str,
+    commit_seq: int,
+    commit_time: datetime,
+) -> None:
+    """Rebuild bounded heads after the rare source-epoch replacement path."""
+
+    generation = RenderGeneration.__table__
+    objects = RenderObject.__table__
+    sessions = StorageSession.__table__
+    rows = list(
+        connection.execute(
+            select(objects).where(
+                objects.c.session_id == session_id,
+                objects.c.generation_id == generation_id,
+                objects.c.retired_at.is_(None),
+            )
+        )
+        .mappings()
+        .all()
+    )
+    first_order = None
+    last_order = None
+    first_preview_row = None
+    last_preview_row = None
+    for row in rows:
+        first_order = _minimum_order_key(first_order, row["first_order_key"])
+        last_order = _maximum_order_key(last_order, row["last_order_key"])
+        if (
+            row["first_user_message_preview"] is not None
+            and row["first_order_key"] is not None
+            and (
+                first_preview_row is None
+                or tuple(json.loads(str(row["first_order_key"]))) < tuple(json.loads(str(first_preview_row["first_order_key"])))
+            )
+        ):
+            first_preview_row = row
+        if (
+            row["last_visible_text_preview"] is not None
+            and row["last_order_key"] is not None
+            and (
+                last_preview_row is None
+                or tuple(json.loads(str(row["last_order_key"]))) > tuple(json.loads(str(last_preview_row["last_order_key"])))
+            )
+        ):
+            last_preview_row = row
+    source_ids = sorted(str(row["source_envelope_id"]) for row in rows)
+    source_chain_hash = hashlib.sha256(
+        b"longhouse-render-source-set-v1\0" + b"".join(bytes.fromhex(value) for value in source_ids)
+    ).hexdigest()
+    generation_values = {
+        "state": "current",
+        "source_chain_hash": source_chain_hash,
+        "object_count": len(rows),
+        "event_count": sum(int(row["event_count"]) for row in rows),
+        "first_order_key": first_order,
+        "last_order_key": last_order,
+        "commit_seq": commit_seq,
+        "updated_at": commit_time,
+    }
+    connection.execute(update(generation).where(generation.c.generation_id == generation_id).values(**generation_values))
+    connection.execute(
+        update(sessions)
+        .where(sessions.c.session_id == session_id)
+        .values(
+            current_render_generation=generation_id,
+            user_messages=sum(int(row["user_messages"]) for row in rows),
+            assistant_messages=sum(int(row["assistant_messages"]) for row in rows),
+            tool_calls=sum(int(row["tool_calls"]) for row in rows),
+            first_user_message_preview=(str(first_preview_row["first_user_message_preview"]) if first_preview_row is not None else None),
+            last_visible_text_preview=(str(last_preview_row["last_visible_text_preview"]) if last_preview_row is not None else None),
+        )
+    )
+
+
 def _minimum_order_key(left: object, right: object) -> str | None:
     values = [value for value in (left, right) if value is not None]
     return min(values, key=lambda value: tuple(json.loads(str(value)))) if values else None
@@ -5413,6 +5560,11 @@ def _render_object_manifest_dto(row) -> dict[str, Any]:
         "uncompressed_size": int(row["uncompressed_size"]),
         "compressed_size": int(row["compressed_size"]),
         "event_count": int(row["event_count"]),
+        "user_messages": int(row["user_messages"]),
+        "assistant_messages": int(row["assistant_messages"]),
+        "tool_calls": int(row["tool_calls"]),
+        "first_user_message_preview": row["first_user_message_preview"],
+        "last_visible_text_preview": row["last_visible_text_preview"],
         "first_order_key": row["first_order_key"],
         "last_order_key": row["last_order_key"],
         "commit_seq": str(row["commit_seq"]),
