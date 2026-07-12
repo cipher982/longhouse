@@ -351,6 +351,8 @@ class CatalogDaemon:
             return await self._complete_migration_session(request)
         if request.method == "migration.session.fail.v2":
             return await self._fail_migration_session(request)
+        if request.method == "migration.run.reconcile.v2":
+            return await self._reconcile_migration_run(request)
         if request.method == "migration.run.summary.v2":
             return await self._summarize_migration_run(request)
         if request.method == "migration.gaps.list.v2":
@@ -1946,6 +1948,28 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.summarize_legacy_migration_run, run_id=run_id)
+        if result.get("run_missing"):
+            return self._error(request, "not_found", "migration run does not exist")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _reconcile_migration_run(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"run_id", "observed_at", "release_claims"}:
+            return self._error(request, "invalid_request", "migration.run.reconcile.v2 has invalid parameters")
+        try:
+            run_id = _canonical_uuid(request.params["run_id"], "run_id")
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+            release_claims = request.params["release_claims"]
+            if type(release_claims) is not bool:
+                raise ValueError("release_claims must be a boolean")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.reconcile_legacy_migration_run,
+            run_id=run_id,
+            observed_at=observed_at,
+            release_claims=release_claims,
+        )
         if result.get("run_missing"):
             return self._error(request, "not_found", "migration run does not exist")
         return CatalogRpcResponse(id=request.id, result=result)

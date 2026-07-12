@@ -5347,6 +5347,71 @@ class CatalogStore:
                 "commit_seq": str(_current_commit_seq(connection)),
             }
 
+    def reconcile_legacy_migration_run(
+        self,
+        *,
+        run_id: UUID,
+        observed_at: datetime,
+        release_claims: bool,
+    ) -> dict[str, Any]:
+        """Classify legacy coverage gaps and optionally requeue stopped-worker claims."""
+
+        runs = LegacyMigrationRun.__table__
+        rows = LegacyMigrationSession.__table__
+        run_key = str(run_id)
+        with _write_transaction(self.engine) as connection:
+            if connection.execute(select(runs.c.run_id).where(runs.c.run_id == run_key)).first() is None:
+                return {"run_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            coverage = and_(
+                rows.c.run_id == run_key,
+                rows.c.state == "degraded",
+                rows.c.retry_at.is_(None),
+                rows.c.error_code.is_(None),
+            )
+            categories = (
+                (
+                    and_(rows.c.source_missing > 0, rows.c.media_missing > 0),
+                    "source_and_media_coverage_missing",
+                    "source and media coverage missing; see counters",
+                ),
+                (rows.c.source_missing > 0, "source_coverage_missing", "source coverage missing; see counters"),
+                (rows.c.media_missing > 0, "media_coverage_missing", "media coverage missing; see counters"),
+            )
+            classified = 0
+            commit_seq = _current_commit_seq(connection)
+            for predicate, code, message in categories:
+                result = connection.execute(
+                    update(rows).where(coverage, predicate).values(error_code=code, error_message=message, updated_at=observed_at)
+                )
+                classified += int(result.rowcount or 0)
+            released = 0
+            if release_claims:
+                result = connection.execute(
+                    update(rows)
+                    .where(rows.c.run_id == run_key, rows.c.state == "migrating")
+                    .values(
+                        state="pending",
+                        claim_token=None,
+                        worker_id=None,
+                        lease_expires_at=None,
+                        retry_at=None,
+                        updated_at=observed_at,
+                    )
+                )
+                released = int(result.rowcount or 0)
+            if classified or released:
+                commit_seq = _advance_commit_seq(connection, observed_at)
+                connection.execute(
+                    update(rows).where(rows.c.run_id == run_key, rows.c.updated_at == observed_at).values(commit_seq=commit_seq)
+                )
+                _refresh_legacy_migration_run(connection, run_key, commit_seq, observed_at)
+            return {
+                "classified": classified,
+                "released_claims": released,
+                "summary": _legacy_migration_summary(connection, run_key),
+                "commit_seq": str(commit_seq),
+            }
+
     def list_legacy_migration_gaps(self, *, run_id: UUID, after_session_id: str | None, limit: int) -> dict[str, Any]:
         runs = LegacyMigrationRun.__table__
         rows = LegacyMigrationSession.__table__

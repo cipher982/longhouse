@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -122,6 +124,36 @@ def status(
     async def execute() -> dict:
         try:
             return await catalog.call("migration.run.summary.v2", {"run_id": str(run_id)}, timeout_seconds=5.0)
+        finally:
+            await catalog.close()
+
+    try:
+        _print(asyncio.run(execute()))
+    finally:
+        engine.dispose()
+
+
+@app.command("reconcile")
+def reconcile(
+    run_id: UUID = typer.Option(..., "--run-id"),
+    release_claims: bool = typer.Option(False, "--release-claims", help="Requeue all claims after stopping every converter."),
+    database_url: str | None = typer.Option(None, "--database-url"),
+) -> None:
+    """Classify terminal gaps and optionally release stopped-worker claims."""
+
+    _, engine, _, catalog = _context(database_url)
+
+    async def execute() -> dict:
+        try:
+            return await catalog.call(
+                "migration.run.reconcile.v2",
+                {
+                    "run_id": str(run_id),
+                    "observed_at": datetime.now(UTC).isoformat(),
+                    "release_claims": release_claims,
+                },
+                timeout_seconds=30.0,
+            )
         finally:
             await catalog.close()
 

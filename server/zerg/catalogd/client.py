@@ -90,6 +90,7 @@ _SAFE_RETRY_METHODS = {
     "migration.session.claim.v2",
     "migration.session.complete.v2",
     "migration.session.fail.v2",
+    "migration.run.reconcile.v2",
     "migration.run.summary.v2",
     "migration.gaps.list.v2",
     # search.db is disposable and every mutation is exact/idempotent on its

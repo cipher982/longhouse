@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -263,6 +264,99 @@ async def test_explicit_coverage_degradation_is_terminal_not_reclaimed(daemon_pa
             },
         )
         assert reclaimed["claimed"] == []
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_migration_reconcile_classifies_legacy_gaps_and_releases_stopped_claims(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    run_id, session_id, claim_token = str(uuid4()), str(uuid4()), str(uuid4())
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call(
+            "migration.run.create.v2",
+            {
+                "run_id": run_id,
+                "legacy_high_watermark": "frozen",
+                "expected_session_count": 1,
+                "created_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "migration.session.register.batch.v2",
+            {
+                "run_id": run_id,
+                "sessions": [{"session_id": session_id, "source_expected": 1, "media_expected": 0}],
+                "registered_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "migration.session.claim.v2",
+            {
+                "run_id": run_id,
+                "worker_id": "stopped-worker",
+                "claim_token": claim_token,
+                "now": now.isoformat(),
+                "lease_seconds": 3600,
+                "limit": 1,
+            },
+        )
+        released = await client.call(
+            "migration.run.reconcile.v2",
+            {"run_id": run_id, "observed_at": (now + timedelta(seconds=1)).isoformat(), "release_claims": True},
+        )
+        assert released["released_claims"] == 1
+        assert released["summary"]["state_counts"]["pending"] == 1
+
+        retry_token = str(uuid4())
+        claim = await client.call(
+            "migration.session.claim.v2",
+            {
+                "run_id": run_id,
+                "worker_id": "replacement-worker",
+                "claim_token": retry_token,
+                "now": (now + timedelta(seconds=2)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        row = claim["claimed"][0]
+        await client.call(
+            "migration.session.complete.v2",
+            {
+                "run_id": run_id,
+                "session_id": session_id,
+                "claim_token": retry_token,
+                "source_covered": 0,
+                "source_missing": 1,
+                "media_covered": 0,
+                "media_missing": 0,
+                "output_proof_hash": "a" * 64,
+                "parity_proof_hash": "b" * 64,
+                "completed_at": (now + timedelta(seconds=3)).isoformat(),
+            },
+        )
+        assert row["attempts"] == 2
+        with sqlite3.connect(database_path) as connection:
+            connection.execute(
+                "UPDATE legacy_migration_sessions SET error_code = NULL, error_message = NULL WHERE run_id = ?",
+                (run_id,),
+            )
+        classified = await client.call(
+            "migration.run.reconcile.v2",
+            {"run_id": run_id, "observed_at": (now + timedelta(seconds=4)).isoformat(), "release_claims": False},
+        )
+        assert classified["classified"] == 1
+        gaps = await client.call(
+            "migration.gaps.list.v2",
+            {"run_id": run_id, "after_session_id": None, "limit": 10},
+        )
+        assert gaps["gaps"][0]["error_code"] == "source_coverage_missing"
     finally:
         await client.close()
         await daemon.close()
