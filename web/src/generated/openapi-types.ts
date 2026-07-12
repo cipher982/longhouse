@@ -3454,6 +3454,149 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/storage/v2/media/claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Claim Storage V2 Media
+         * @description Return the exact media hashes that still need verified immutable bytes.
+         */
+        post: operations["claim_storage_v2_media_agents_storage_v2_media_claims_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/storage/v2/media/{media_hash}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Storage V2 Media
+         * @description Hash-verify, fsync, rename, then publish one immutable media manifest.
+         */
+        put: operations["put_storage_v2_media_agents_storage_v2_media__media_hash__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        /** Head Storage V2 Media */
+        head: operations["head_storage_v2_media_agents_storage_v2_media__media_hash__head"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/storage/v2/media/{media_hash}/blob": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Storage V2 Media */
+        get: operations["get_storage_v2_media_agents_storage_v2_media__media_hash__blob_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/storage/v2/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Storage V2 Capabilities */
+        get: operations["storage_v2_capabilities_agents_storage_v2_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/storage/v2/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Storage V2 Sessions */
+        get: operations["list_storage_v2_sessions_agents_storage_v2_sessions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/storage/v2/sessions/{session_id}/raw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Storage V2 Session Raw */
+        get: operations["read_storage_v2_session_raw_agents_storage_v2_sessions__session_id__raw_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/storage/v2/sessions/{session_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Storage V2 Session Events */
+        get: operations["read_storage_v2_session_events_agents_storage_v2_sessions__session_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/storage/v2/envelopes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Commit Storage V2 Envelope */
+        post: operations["commit_storage_v2_envelope_agents_storage_v2_envelopes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/turns/slow": {
         parameters: {
             query?: never;
@@ -8216,23 +8359,6 @@ export interface components {
              */
             message: string;
         };
-        /**
-         * SessionMobileTailResponse
-         * @description Small bootstrap payload for mobile session reads.
-         */
-        SessionMobileTailResponse: {
-            /** @description Focused session metadata */
-            session: components["schemas"]["SessionResponse"];
-            /** @description Tail page of the stitched lineage projection */
-            projection: components["schemas"]["SessionProjectionResponse"];
-            /**
-             * Snapshot Event Id
-             * @description Latest durable event id used to anchor older-page fetches
-             */
-            snapshot_event_id?: number | null;
-            /** @description Durable viewport freshness revision */
-            workspace_revision: components["schemas"]["SessionWorkspaceRevisionResponse"];
-        };
         /** SessionNotificationWatchRequest */
         SessionNotificationWatchRequest: {
             /**
@@ -10490,6 +10616,15 @@ export interface components {
             /** Events */
             events: components["schemas"]["WorklogDayEvent"][];
             stats: components["schemas"]["WorklogDayStats"];
+            /**
+             * Projection Lag
+             * @default false
+             */
+            projection_lag: boolean;
+            /** Indexed Through */
+            indexed_through?: string | null;
+            /** Desired Through */
+            desired_through?: string | null;
         };
         /** WorklogDaySession */
         WorklogDaySession: {
@@ -14548,6 +14683,8 @@ export interface operations {
                 limit?: number;
                 /** @description Offset for pagination */
                 offset?: number;
+                /** @description Exclusive storage-v2 cursor for the next older page */
+                cursor?: string | null;
             };
             header?: never;
             path: {
@@ -14563,7 +14700,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EventsListResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -14590,6 +14727,8 @@ export interface operations {
                 limit?: number;
                 /** @description Offset within the stitched projection */
                 offset?: number;
+                /** @description Exclusive storage-v2 cursor for the next older page */
+                cursor?: string | null;
             };
             header?: never;
             path: {
@@ -14605,7 +14744,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SessionProjectionResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -14626,6 +14765,8 @@ export interface operations {
                 branch_mode?: string;
                 /** @description Max projected items */
                 limit?: number;
+                /** @description Exclusive storage-v2 cursor for the next older page */
+                cursor?: string | null;
                 /** @description User id who shared this link. When set, the response includes a ``sharer`` block with their display name for the 'Shared by' header pill. Ignored when the user no longer exists. */
                 shared_by?: number | null;
                 /** @description Signed share token. When valid, this supersedes unsigned shared_by attribution. */
@@ -14645,7 +14786,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SessionWorkspaceResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -14669,7 +14810,9 @@ export interface operations {
                 /** @description Items before the latest tail window */
                 offset?: number;
                 /** @description Previous snapshot marker for older-page drift detection */
-                snapshot_event_id?: number | null;
+                snapshot_event_id?: string | null;
+                /** @description Exclusive storage-v2 cursor for the next older page */
+                cursor?: string | null;
             };
             header?: never;
             path: {
@@ -14685,7 +14828,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SessionMobileTailResponse"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -16394,6 +16537,8 @@ export interface operations {
                 branch_mode?: string;
                 /** @description Max projected items */
                 limit?: number;
+                /** @description Exclusive storage-v2 cursor for the next older page */
+                cursor?: string | null;
             };
             header?: never;
             path: {
@@ -16409,7 +16554,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SessionWorkspaceResponse"];
+                    "application/json": components["schemas"]["SessionWorkspaceResponse"] | {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -16632,6 +16779,280 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_storage_v2_media_agents_storage_v2_media_claims_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    put_storage_v2_media_agents_storage_v2_media__media_hash__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                media_hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    head_storage_v2_media_agents_storage_v2_media__media_hash__head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                media_hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_storage_v2_media_agents_storage_v2_media__media_hash__blob_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                media_hash: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    storage_v2_capabilities_agents_storage_v2_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    list_storage_v2_sessions_agents_storage_v2_sessions_get: {
+        parameters: {
+            query?: {
+                before_last_activity_at?: string | null;
+                before_session_id?: string | null;
+                project?: string | null;
+                provider?: string | null;
+                include_test?: boolean;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_storage_v2_session_raw_agents_storage_v2_sessions__session_id__raw_get: {
+        parameters: {
+            query?: {
+                /** @description Exclusive source-ordered raw-object cursor */
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_storage_v2_session_events_agents_storage_v2_sessions__session_id__events_get: {
+        parameters: {
+            query?: {
+                /** @description Exclusive generation-qualified render cursor */
+                cursor?: string | null;
+                /** @description Page from the beginning or latest tail: start|tail */
+                anchor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    commit_storage_v2_envelope_agents_storage_v2_envelopes_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
