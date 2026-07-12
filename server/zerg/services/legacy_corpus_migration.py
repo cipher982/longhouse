@@ -779,7 +779,7 @@ class LegacyCorpusConverter:
         replace_existing_epochs: bool,
     ) -> None:
         session_id = UUID(str(session.id))
-        source_path = f"legacy-stream-events:{session_id}"
+        source_path = f"legacy-unmatched-events:{session_id}"
         epoch_plans: dict[str, tuple[UUID, UUID | None, int]] = {}
         last_timestamp: datetime | None = None
         last_id = 0
@@ -825,17 +825,12 @@ class LegacyCorpusConverter:
             for batch in _source_batches(source_records, event_groups):
                 plan = epoch_plans.get(batch.source_path)
                 if plan is None:
-                    legacy_fallback_path = f"legacy-unmatched-events:{session_id}"
-                    event_suffix = batch.source_path.removeprefix(f"{source_path}:event=")
-                    if event_suffix != batch.source_path:
-                        legacy_fallback_path = f"{legacy_fallback_path}:{event_suffix}"
                     epoch, predecessor = await self._stream_epoch_plan(
                         session_id,
                         batch.source_path,
                         "legacy_normalized_event",
                         watermark,
                         replace_existing_epochs=replace_existing_epochs,
-                        fallback_predecessor_path=legacy_fallback_path,
                     )
                     plan = (epoch, predecessor, 0)
                 epoch, predecessor, range_start = plan
@@ -884,7 +879,6 @@ class LegacyCorpusConverter:
         watermark: LegacyHighWatermark,
         *,
         replace_existing_epochs: bool,
-        fallback_predecessor_path: str | None = None,
     ) -> tuple[UUID, UUID | None]:
         original = _legacy_source_epoch(session_id, source_path, provenance_kind, watermark)
         if not replace_existing_epochs:
@@ -896,17 +890,7 @@ class LegacyCorpusConverter:
         )
         predecessor = original
         if manifest.get("found") is not True:
-            if fallback_predecessor_path is None:
-                return original, None
-            fallback = _legacy_source_epoch(session_id, fallback_predecessor_path, provenance_kind, watermark)
-            fallback_manifest = await self.catalog.call(
-                "storage.source_epoch.manifest.v2",
-                {"source_epoch": str(fallback), "after_position": None, "limit": 1},
-                timeout_seconds=5.0,
-            )
-            if fallback_manifest.get("found") is not True:
-                return original, None
-            predecessor = fallback
+            return original, None
         replacement = _stable_uuid(
             "source-replacement",
             MIGRATION_LAYOUT_REVISION,
