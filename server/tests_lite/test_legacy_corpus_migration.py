@@ -221,7 +221,7 @@ async def test_all_slim_high_row_session_streams_archive_and_events_in_bounded_b
     )
     try:
         with legacy_db() as db:
-            result = await converter.convert_session(db, session.id, watermark)
+            result = await converter.convert_session(db, session.id, watermark, source_expected=row_count)
     finally:
         sqlalchemy_event.remove(AgentEvent, "load", track_event_identity_map)
 
@@ -253,6 +253,7 @@ async def test_all_slim_high_row_session_streams_archive_and_events_in_bounded_b
             db,
             session.id,
             watermark,
+            source_expected=row_count,
             replace_existing_epochs=True,
         )
     retry_commits = [payload for method, payload in retry_catalog.calls if method == "storage.raw_object.commit.v2"]

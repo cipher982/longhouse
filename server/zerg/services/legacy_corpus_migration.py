@@ -330,6 +330,7 @@ class LegacyCorpusConverter:
                                 db,
                                 UUID(str(row["session_id"])),
                                 watermark,
+                                source_expected=int(row["source_expected"]),
                                 replace_existing_epochs=int(row["attempts"]) > 1,
                             )
                         await self._complete(run_id, claim_token, result)
@@ -358,14 +359,16 @@ class LegacyCorpusConverter:
         session_id: UUID,
         watermark: LegacyHighWatermark,
         *,
+        source_expected: int | None = None,
         replace_existing_epochs: bool = False,
     ) -> MigrationResult:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
-        if self._should_stream_archived_session(db, session_id, watermark):
+        if source_expected is not None and source_expected >= STREAMING_SOURCE_THRESHOLD:
             return await self._convert_streaming_archived(
                 db,
                 session,
                 watermark,
+                source_expected=source_expected,
                 replace_existing_epochs=replace_existing_epochs,
             )
         events = (
@@ -546,38 +549,13 @@ class LegacyCorpusConverter:
             media_hashes=tuple(sorted(media_hashes)),
         )
 
-    def _should_stream_archived_session(
-        self,
-        db: Session,
-        session_id: UUID,
-        watermark: LegacyHighWatermark,
-    ) -> bool:
-        connection = db.connection()
-        connection.exec_driver_sql("PRAGMA cache_size=-32768")
-        connection.exec_driver_sql("PRAGMA mmap_size=0")
-        cursor = connection.connection.cursor()
-        source_count = 0
-        try:
-            cursor.execute(
-                "SELECT raw_json_z, raw_json FROM source_lines WHERE session_id = ? AND id <= ?",
-                (str(session_id), watermark.source_line_id),
-            )
-            while rows := cursor.fetchmany(STREAMING_SQL_PAGE):
-                source_count += len(rows)
-                if any(raw_json_z is not None or bool(raw_json) for raw_json_z, raw_json in rows):
-                    return False
-                del rows
-                _return_free_heap_to_os()
-        finally:
-            cursor.close()
-        return source_count >= STREAMING_SOURCE_THRESHOLD
-
     async def _convert_streaming_archived(
         self,
         db: Session,
         session: AgentSession,
         watermark: LegacyHighWatermark,
         *,
+        source_expected: int,
         replace_existing_epochs: bool,
     ) -> MigrationResult:
         """Convert an all-slim giant session one archive/event page at a time."""
@@ -595,16 +573,11 @@ class LegacyCorpusConverter:
             db,
             session,
             watermark,
+            source_expected=source_expected,
             generation=generation,
             owner_id=owner_id,
             output_proof=output_proof,
             replace_existing_epochs=replace_existing_epochs,
-        )
-        source_expected = int(
-            db.execute(
-                text("SELECT COUNT(*) FROM source_lines WHERE session_id = :session_id AND id <= :high"),
-                {"session_id": str(session_id), "high": watermark.source_line_id},
-            ).scalar_one()
         )
         source_missing = max(0, source_expected - source_covered)
         await self._stream_normalized_events(
@@ -649,6 +622,7 @@ class LegacyCorpusConverter:
         session: AgentSession,
         watermark: LegacyHighWatermark,
         *,
+        source_expected: int,
         generation: UUID,
         owner_id: str,
         output_proof: _IncrementalProof,
@@ -681,24 +655,31 @@ class LegacyCorpusConverter:
                 "PRIMARY KEY(source_path, source_offset, line_hash)) WITHOUT ROWID"
             )
             source_cursor = connection.connection.cursor()
+            indexed_source_rows = 0
             try:
                 source_cursor.execute(
-                    "SELECT source_path, source_offset, line_hash FROM source_lines " "WHERE session_id = ? AND id <= ?",
+                    "SELECT source_path, source_offset, line_hash, raw_json_z, raw_json FROM source_lines "
+                    "WHERE session_id = ? AND id <= ?",
                     (str(session_id), watermark.source_line_id),
                 )
                 while rows := source_cursor.fetchmany(STREAMING_SQL_PAGE):
+                    indexed_source_rows += len(rows)
+                    if any(raw_json_z is not None or bool(raw_json) for _, _, _, raw_json_z, raw_json in rows):
+                        raise RuntimeError("large-session streaming requires archived slim source rows")
                     work_db.executemany(
                         "INSERT INTO migration_source_counts"
                         "(source_path, source_offset, line_hash, row_count, consumed) VALUES (?, ?, ?, 1, 0) "
                         "ON CONFLICT(source_path, source_offset, line_hash) "
                         "DO UPDATE SET row_count = row_count + 1",
-                        rows,
+                        ((path, offset, line_hash) for path, offset, line_hash, _, _ in rows),
                     )
                     work_db.commit()
                     del rows
                     _return_free_heap_to_os()
             finally:
                 source_cursor.close()
+            if indexed_source_rows != source_expected:
+                raise RuntimeError(f"frozen source count changed: expected {source_expected}, indexed {indexed_source_rows}")
 
             owner_ids = [UUID(value) for value in archive_owning_session_ids(db, session_id)]
             manifests = (
