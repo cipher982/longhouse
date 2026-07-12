@@ -555,22 +555,22 @@ class LegacyCorpusConverter:
         connection = db.connection()
         connection.exec_driver_sql("PRAGMA cache_size=-32768")
         connection.exec_driver_sql("PRAGMA mmap_size=0")
-        source_count = int(
-            db.execute(
-                text("SELECT COUNT(*) FROM source_lines WHERE session_id = :session_id AND id <= :high"),
-                {"session_id": str(session_id), "high": watermark.source_line_id},
-            ).scalar_one()
-        )
-        if source_count < STREAMING_SOURCE_THRESHOLD:
-            return False
-        inline_raw = db.execute(
-            text(
-                "SELECT 1 FROM source_lines WHERE session_id = :session_id AND id <= :high "
-                "AND (raw_json_z IS NOT NULL OR raw_json <> '') LIMIT 1"
-            ),
-            {"session_id": str(session_id), "high": watermark.source_line_id},
-        ).first()
-        return inline_raw is None
+        cursor = connection.connection.cursor()
+        source_count = 0
+        try:
+            cursor.execute(
+                "SELECT raw_json_z, raw_json FROM source_lines WHERE session_id = ? AND id <= ?",
+                (str(session_id), watermark.source_line_id),
+            )
+            while rows := cursor.fetchmany(STREAMING_SQL_PAGE):
+                source_count += len(rows)
+                if any(raw_json_z is not None or bool(raw_json) for raw_json_z, raw_json in rows):
+                    return False
+                del rows
+                _return_free_heap_to_os()
+        finally:
+            cursor.close()
+        return source_count >= STREAMING_SOURCE_THRESHOLD
 
     async def _convert_streaming_archived(
         self,
