@@ -7,6 +7,7 @@ import ctypes
 import functools
 import hashlib
 import json
+import sqlite3
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC
@@ -650,60 +651,84 @@ class LegacyCorpusConverter:
         connection = db.connection()
         connection.exec_driver_sql("PRAGMA cache_size=-32768")
         connection.exec_driver_sql("PRAGMA mmap_size=0")
-        connection.exec_driver_sql("PRAGMA temp_store=FILE")
-        connection.exec_driver_sql(
-            "CREATE TEMP TABLE IF NOT EXISTS migration_source_counts ("
-            "source_path TEXT NOT NULL, source_offset INTEGER NOT NULL, line_hash TEXT NOT NULL, "
-            "row_count INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, "
-            "PRIMARY KEY(source_path, source_offset, line_hash)) WITHOUT ROWID"
-        )
-        connection.exec_driver_sql("PRAGMA temp.cache_size=-32768")
-        connection.exec_driver_sql("DELETE FROM migration_source_counts")
-        source_cursor = connection.connection.cursor()
+        work_dir = self.object_root / ".migration-work"
+        work_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        work_path = work_dir / f"{session_id}.sqlite"
+        work_path.unlink(missing_ok=True)
+        work_db = sqlite3.connect(work_path)
         try:
-            source_cursor.execute(
-                "SELECT source_path, source_offset, line_hash FROM source_lines " "WHERE session_id = ? AND id <= ? ORDER BY id",
-                (str(session_id), watermark.source_line_id),
+            work_db.execute("PRAGMA journal_mode=OFF")
+            work_db.execute("PRAGMA synchronous=OFF")
+            work_db.execute("PRAGMA temp_store=FILE")
+            work_db.execute("PRAGMA cache_size=-32768")
+            work_db.execute(
+                "CREATE TABLE migration_source_counts ("
+                "source_path TEXT NOT NULL, source_offset INTEGER NOT NULL, line_hash TEXT NOT NULL, "
+                "row_count INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, "
+                "PRIMARY KEY(source_path, source_offset, line_hash)) WITHOUT ROWID"
             )
-            while rows := source_cursor.fetchmany(STREAMING_SQL_PAGE):
-                connection.exec_driver_sql(
-                    "INSERT INTO migration_source_counts"
-                    "(source_path, source_offset, line_hash, row_count, consumed) VALUES (?, ?, ?, 1, 0) "
-                    "ON CONFLICT(source_path, source_offset, line_hash) DO UPDATE SET row_count = row_count + 1",
-                    rows,
+            work_db.execute(
+                "CREATE TABLE migration_archive_page ("
+                "source_path TEXT NOT NULL, source_offset INTEGER NOT NULL, line_hash TEXT NOT NULL, "
+                "PRIMARY KEY(source_path, source_offset, line_hash)) WITHOUT ROWID"
+            )
+            source_cursor = connection.connection.cursor()
+            try:
+                source_cursor.execute(
+                    "SELECT source_path, source_offset, line_hash FROM source_lines " "WHERE session_id = ? AND id <= ? ORDER BY id",
+                    (str(session_id), watermark.source_line_id),
                 )
-                del rows
-                _return_free_heap_to_os()
-        finally:
-            source_cursor.close()
-        connection.exec_driver_sql(
-            "CREATE TEMP TABLE IF NOT EXISTS migration_archive_page ("
-            "source_path TEXT NOT NULL, source_offset INTEGER NOT NULL, line_hash TEXT NOT NULL, "
-            "PRIMARY KEY(source_path, source_offset, line_hash)) WITHOUT ROWID"
-        )
-        owner_ids = [UUID(value) for value in archive_owning_session_ids(db, session_id)]
-        manifests = (
-            db.query(ArchiveChunk.relative_path)
-            .filter(
-                ArchiveChunk.session_id.in_(owner_ids),
-                ArchiveChunk.stream == "source_lines",
-                ArchiveChunk.state == "sealed",
+                while rows := source_cursor.fetchmany(STREAMING_SQL_PAGE):
+                    work_db.executemany(
+                        "INSERT INTO migration_source_counts"
+                        "(source_path, source_offset, line_hash, row_count, consumed) VALUES (?, ?, ?, 1, 0) "
+                        "ON CONFLICT(source_path, source_offset, line_hash) "
+                        "DO UPDATE SET row_count = row_count + 1",
+                        rows,
+                    )
+                    work_db.commit()
+                    del rows
+                    _return_free_heap_to_os()
+            finally:
+                source_cursor.close()
+
+            owner_ids = [UUID(value) for value in archive_owning_session_ids(db, session_id)]
+            manifests = (
+                db.query(ArchiveChunk.relative_path)
+                .filter(
+                    ArchiveChunk.session_id.in_(owner_ids),
+                    ArchiveChunk.stream == "source_lines",
+                    ArchiveChunk.state == "sealed",
+                )
+                .order_by(ArchiveChunk.first_source_seq.asc(), ArchiveChunk.id.asc())
+                .yield_per(4)
             )
-            .order_by(ArchiveChunk.first_source_seq.asc(), ArchiveChunk.id.asc())
-            .yield_per(4)
-        )
-        covered = 0
-        source_plans: dict[str, tuple[UUID, UUID | None, int]] = {}
-        for (relative_path,) in manifests:
-            archive_page: dict[tuple[str, int, str], ArchiveRecord] = {}
-            for record in archive_store.iter_chunk_records(relative_path):
-                if record.source_path is None or record.source_offset is None:
-                    continue
-                raw_hash = hashlib.sha256(record.raw_bytes).hexdigest()
-                archive_page.setdefault((record.source_path, int(record.source_offset), raw_hash), record)
-                if len(archive_page) >= STREAMING_MATCH_PAGE:
+            covered = 0
+            source_plans: dict[str, tuple[UUID, UUID | None, int]] = {}
+            for (relative_path,) in manifests:
+                archive_page: dict[tuple[str, int, str], ArchiveRecord] = {}
+                for record in archive_store.iter_chunk_records(relative_path):
+                    if record.source_path is None or record.source_offset is None:
+                        continue
+                    raw_hash = hashlib.sha256(record.raw_bytes).hexdigest()
+                    archive_page.setdefault((record.source_path, int(record.source_offset), raw_hash), record)
+                    if len(archive_page) >= STREAMING_MATCH_PAGE:
+                        covered += await self._commit_archive_record_page(
+                            work_db,
+                            session,
+                            watermark,
+                            archive_page,
+                            source_plans=source_plans,
+                            generation=generation,
+                            owner_id=owner_id,
+                            output_proof=output_proof,
+                            replace_existing_epochs=replace_existing_epochs,
+                        )
+                        archive_page.clear()
+                        _return_free_heap_to_os()
+                if archive_page:
                     covered += await self._commit_archive_record_page(
-                        connection,
+                        work_db,
                         session,
                         watermark,
                         archive_page,
@@ -715,27 +740,14 @@ class LegacyCorpusConverter:
                     )
                     archive_page.clear()
                     _return_free_heap_to_os()
-            if archive_page:
-                covered += await self._commit_archive_record_page(
-                    connection,
-                    session,
-                    watermark,
-                    archive_page,
-                    source_plans=source_plans,
-                    generation=generation,
-                    owner_id=owner_id,
-                    output_proof=output_proof,
-                    replace_existing_epochs=replace_existing_epochs,
-                )
-                archive_page.clear()
-                _return_free_heap_to_os()
-        connection.exec_driver_sql("DROP TABLE migration_archive_page")
-        connection.exec_driver_sql("DROP TABLE migration_source_counts")
-        return covered
+            return covered
+        finally:
+            work_db.close()
+            work_path.unlink(missing_ok=True)
 
     async def _commit_archive_record_page(
         self,
-        connection: Any,
+        connection: sqlite3.Connection,
         session: AgentSession,
         watermark: LegacyHighWatermark,
         archive_page: dict[tuple[str, int, str], ArchiveRecord],
@@ -746,25 +758,24 @@ class LegacyCorpusConverter:
         output_proof: _IncrementalProof,
         replace_existing_epochs: bool,
     ) -> int:
-        connection.exec_driver_sql("DELETE FROM migration_archive_page")
-        connection.exec_driver_sql(
+        connection.execute("DELETE FROM migration_archive_page")
+        connection.executemany(
             "INSERT OR IGNORE INTO migration_archive_page VALUES (?, ?, ?)",
             list(archive_page),
         )
         matched = connection.execute(
-            text(
-                "SELECT c.source_path, c.source_offset, c.line_hash, c.row_count "
-                "FROM migration_archive_page p JOIN migration_source_counts c "
-                "USING(source_path, source_offset, line_hash) WHERE c.consumed = 0 "
-                "ORDER BY c.source_path, c.source_offset, c.line_hash"
-            ),
-        ).all()
-        connection.exec_driver_sql(
+            "SELECT c.source_path, c.source_offset, c.line_hash, c.row_count "
+            "FROM migration_archive_page p JOIN migration_source_counts c "
+            "USING(source_path, source_offset, line_hash) WHERE c.consumed = 0 "
+            "ORDER BY c.source_path, c.source_offset, c.line_hash"
+        ).fetchall()
+        connection.execute(
             "UPDATE migration_source_counts SET consumed = 1 WHERE consumed = 0 AND EXISTS ("
             "SELECT 1 FROM migration_archive_page p WHERE p.source_path = migration_source_counts.source_path "
             "AND p.source_offset = migration_source_counts.source_offset "
             "AND p.line_hash = migration_source_counts.line_hash)"
         )
+        connection.commit()
         covered = 0
         groups: dict[str, list[_SourceRecord]] = defaultdict(list)
         for path, offset, line_hash, row_count in matched:
