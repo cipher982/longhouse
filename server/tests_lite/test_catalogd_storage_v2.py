@@ -155,10 +155,25 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
         assert session["session"]["current_render_generation"] == str(generation_id)
         assert session["session"]["user_messages"] == 1
         assert session["session"]["first_user_message_preview"] == "Build it"
+        timeline = await client.call(
+            "storage.session.timeline.list.v2",
+            {
+                "owner_id": "42",
+                "before_last_activity_at": None,
+                "before_session_id": None,
+                "project": None,
+                "provider": None,
+                "include_test": False,
+                "limit": 10,
+            },
+        )
+        assert [row["session_id"] for row in timeline["sessions"]] == [str(session_id)]
+        assert timeline["has_more"] is False
         render = await client.call(
             "storage.session.render_manifest.v2",
             {
                 "session_id": str(session_id),
+                "owner_id": "42",
                 "generation_id": str(generation_id),
                 "after_order_key": None,
                 "limit": 100,
@@ -171,6 +186,7 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
             "storage.session.render_manifest.v2",
             {
                 "session_id": str(session_id),
+                "owner_id": "42",
                 "generation_id": str(generation_id),
                 "after_order_key": render["objects"][0]["last_order_key"],
                 "limit": 100,
@@ -182,6 +198,7 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
             "storage.session.render_manifest.v2",
             {
                 "session_id": str(session_id),
+                "owner_id": "42",
                 "generation_id": str(uuid4()),
                 "after_order_key": None,
                 "limit": 100,

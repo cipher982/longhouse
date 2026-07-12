@@ -651,6 +651,90 @@ def _render_event_wire(session_id: UUID, generation_id: UUID, decoded, record: R
     }
 
 
+@router.get("/sessions")
+async def list_storage_v2_sessions(
+    before_last_activity_at: datetime | None = Query(None),
+    before_session_id: UUID | None = Query(None),
+    project: str | None = Query(None, min_length=1, max_length=255),
+    provider: str | None = Query(None, min_length=1, max_length=32),
+    include_test: bool = Query(False),
+    limit: int = Query(50, ge=1, le=100),
+    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    if (before_last_activity_at is None) != (before_session_id is None):
+        raise _http_error(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "invalid_cursor",
+            "Timeline cursor fields must both be omitted or both be supplied.",
+        )
+    if before_last_activity_at is not None and before_last_activity_at.utcoffset() is None:
+        raise _http_error(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "invalid_cursor",
+            "Timeline cursor timestamp must include a UTC offset.",
+        )
+    owner_value = getattr(_auth, "owner_id", None)
+    if owner_value is None:
+        raise _http_error(status.HTTP_403_FORBIDDEN, "owner_required", "Storage-v2 reads require owner identity.")
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_unavailable",
+            "The session catalog is temporarily unavailable.",
+        )
+    try:
+        result = await catalogd.call(
+            "storage.session.timeline.list.v2",
+            {
+                "owner_id": str(owner_value),
+                "before_last_activity_at": (
+                    before_last_activity_at.astimezone(UTC).isoformat() if before_last_activity_at is not None else None
+                ),
+                "before_session_id": str(before_session_id) if before_session_id is not None else None,
+                "project": project,
+                "provider": provider,
+                "include_test": include_test,
+                "limit": limit,
+            },
+        )
+    except (CatalogUnavailable, CatalogRemoteError) as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_unavailable",
+            "The session catalog is temporarily unavailable.",
+        ) from exc
+    sessions = result.get("sessions")
+    if not isinstance(sessions, list):
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_response_invalid",
+            "The session catalog returned an invalid timeline page.",
+        )
+    next_cursor = None
+    if result.get("has_more") is True and sessions:
+        last = sessions[-1]
+        if not isinstance(last, dict):
+            raise _http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "catalog_response_invalid",
+                "The session catalog returned an invalid timeline row.",
+            )
+        next_cursor = {
+            "before_last_activity_at": last.get("last_activity_at"),
+            "before_session_id": last.get("session_id"),
+        }
+    return {
+        "v": 2,
+        "sessions": sessions,
+        "next_cursor": next_cursor,
+        "has_more": result.get("has_more") is True,
+        "commit_seq": result.get("commit_seq"),
+        "observed_at": result.get("observed_at"),
+    }
+
+
 @router.get("/sessions/{session_id}/events")
 async def read_storage_v2_session_events(
     session_id: UUID,
@@ -659,6 +743,10 @@ async def read_storage_v2_session_events(
     _auth: DeviceToken | object | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
+    owner_value = getattr(_auth, "owner_id", None)
+    if owner_value is None:
+        raise _http_error(status.HTTP_403_FORBIDDEN, "owner_required", "Storage-v2 reads require owner identity.")
+    owner_id = str(owner_value)
     after = None
     if cursor is not None:
         try:
@@ -685,6 +773,7 @@ async def read_storage_v2_session_events(
             "storage.session.render_manifest.v2",
             {
                 "session_id": str(session_id),
+                "owner_id": owner_id,
                 "generation_id": str(after.render_generation) if after is not None else None,
                 "after_order_key": after_order_key,
                 "limit": _RENDER_MANIFEST_LIMIT,

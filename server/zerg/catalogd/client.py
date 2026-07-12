@@ -70,6 +70,7 @@ _SAFE_RETRY_METHODS = {
     "storage.source_epoch.manifest.v2",
     "storage.raw_object.exists.batch.v2",
     "storage.session.read.v2",
+    "storage.session.timeline.list.v2",
     "storage.session.raw_manifest.v2",
     "storage.session.render_manifest.v2",
     "storage.media.commit.v2",

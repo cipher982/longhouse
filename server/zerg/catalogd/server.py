@@ -304,6 +304,8 @@ class CatalogDaemon:
             return await self._raw_objects_exist_batch(request)
         if request.method == "storage.session.read.v2":
             return await self._read_storage_session(request)
+        if request.method == "storage.session.timeline.list.v2":
+            return await self._list_storage_sessions(request)
         if request.method == "storage.session.raw_manifest.v2":
             return await self._read_storage_session_raw_manifest(request)
         if request.method == "storage.session.render_manifest.v2":
@@ -1500,6 +1502,53 @@ class CatalogDaemon:
         result = await self._run_store(self._store.read_storage_session, session_id=session_id)
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _list_storage_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "owner_id",
+            "before_last_activity_at",
+            "before_session_id",
+            "project",
+            "provider",
+            "include_test",
+            "limit",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "storage.session.timeline.list.v2 has invalid parameters")
+        owner_id = request.params["owner_id"]
+        if not _is_string(owner_id, maximum=64):
+            return self._error(request, "invalid_request", "owner_id must be a bounded non-empty string")
+        before_time = request.params["before_last_activity_at"]
+        before_id = request.params["before_session_id"]
+        if (before_time is None) != (before_id is None):
+            return self._error(request, "invalid_cursor", "timeline cursor fields must both be null or both be set")
+        try:
+            parsed_time = _parse_datetime(before_time, "before_last_activity_at") if before_time is not None else None
+            parsed_id = _canonical_uuid(before_id, "before_session_id") if before_id is not None else None
+        except ValueError as exc:
+            return self._error(request, "invalid_cursor", str(exc))
+        filters: dict[str, str | None] = {}
+        for field, maximum in (("project", 255), ("provider", 32)):
+            value = request.params[field]
+            if value is not None and not _is_string(value, maximum=maximum):
+                return self._error(request, "invalid_request", f"{field} must be null or a bounded non-empty string")
+            filters[field] = value
+        include_test = request.params["include_test"]
+        limit = request.params["limit"]
+        if type(include_test) is not bool or type(limit) is not int or not 1 <= limit <= 100:
+            return self._error(request, "invalid_request", "include_test/limit are invalid")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.list_storage_sessions,
+            owner_id=owner_id,
+            before_last_activity_at=parsed_time,
+            before_session_id=parsed_id,
+            project=filters["project"],
+            provider=filters["provider"],
+            include_test=include_test,
+            limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _read_storage_session_raw_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"session_id", "after_commit_seq", "limit"}:
             return self._error(request, "invalid_request", "storage.session.raw_manifest.v2 has invalid parameters")
@@ -1525,7 +1574,7 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session_render_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "generation_id", "after_order_key", "limit"}:
+        if set(request.params) != {"session_id", "owner_id", "generation_id", "after_order_key", "limit"}:
             return self._error(request, "invalid_request", "storage.session.render_manifest.v2 has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
@@ -1534,6 +1583,9 @@ class CatalogDaemon:
             )
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
+        owner_id = request.params["owner_id"]
+        if not _is_string(owner_id, maximum=64):
+            return self._error(request, "invalid_request", "owner_id must be a bounded non-empty string")
         after_order_key = request.params["after_order_key"]
         if after_order_key is not None:
             try:
@@ -1547,6 +1599,7 @@ class CatalogDaemon:
         result = await self._run_store(
             self._store.read_storage_session_render_manifest,
             session_id=session_id,
+            owner_id=owner_id,
             generation_id=generation_id,
             after_order_key=after_order_key,
             limit=limit,

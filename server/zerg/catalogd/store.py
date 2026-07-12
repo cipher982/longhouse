@@ -16,6 +16,7 @@ from uuid import UUID
 from uuid import uuid5
 
 from sqlalchemy import Engine
+from sqlalchemy import and_
 from sqlalchemy import func
 from sqlalchemy import insert
 from sqlalchemy import or_
@@ -3619,6 +3620,57 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def list_storage_sessions(
+        self,
+        *,
+        owner_id: str,
+        before_last_activity_at: datetime | None,
+        before_session_id: UUID | None,
+        project: str | None,
+        provider: str | None,
+        include_test: bool,
+        limit: int,
+    ) -> dict[str, Any]:
+        table = StorageSession.__table__
+        tombstone = LiveSessionTombstone.__table__
+        observed_at = datetime.now(UTC)
+        statement = select(table).where(
+            table.c.owner_id == owner_id,
+            table.c.hidden_from_default_timeline == 0,
+            table.c.user_state != "deleted",
+            ~select(tombstone.c.session_id).where(tombstone.c.session_id == table.c.session_id).exists(),
+        )
+        if project is not None:
+            statement = statement.where(table.c.project == project)
+        if provider is not None:
+            statement = statement.where(table.c.provider == provider)
+        if not include_test:
+            statement = statement.where(table.c.environment.notin_(("test", "e2e")))
+        if before_last_activity_at is not None and before_session_id is not None:
+            statement = statement.where(
+                or_(
+                    table.c.last_activity_at < before_last_activity_at,
+                    and_(
+                        table.c.last_activity_at == before_last_activity_at,
+                        table.c.session_id > str(before_session_id),
+                    ),
+                )
+            )
+        with _read_snapshot(self.engine) as connection:
+            rows = list(
+                connection.execute(statement.order_by(table.c.last_activity_at.desc(), table.c.session_id.asc()).limit(limit + 1))
+                .mappings()
+                .all()
+            )
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            return {
+                "sessions": [_storage_session_dto(row) for row in rows],
+                "has_more": has_more,
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
     def read_storage_session_raw_manifest(
         self,
         *,
@@ -3658,6 +3710,7 @@ class CatalogStore:
         self,
         *,
         session_id: UUID,
+        owner_id: str,
         generation_id: UUID | None,
         after_order_key: str | None,
         limit: int,
@@ -3672,7 +3725,16 @@ class CatalogStore:
             deleted = connection.execute(
                 select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
             ).scalar_one_or_none()
-            session_row = connection.execute(select(session_table).where(session_table.c.session_id == session_key)).mappings().first()
+            session_row = (
+                connection.execute(
+                    select(session_table).where(
+                        session_table.c.session_id == session_key,
+                        session_table.c.owner_id == owner_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
             current_generation = (
                 str(session_row["current_render_generation"])
                 if session_row is not None and session_row["current_render_generation"] is not None

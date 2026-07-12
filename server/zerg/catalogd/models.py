@@ -62,6 +62,14 @@ class StorageSession(CatalogBase):
 
     __table_args__ = (
         Index("ix_sessions_timeline", "user_state", "last_activity_at", "started_at", "session_id"),
+        Index(
+            "ix_sessions_owner_timeline",
+            "owner_id",
+            "hidden_from_default_timeline",
+            "user_state",
+            "last_activity_at",
+            "session_id",
+        ),
         Index("ix_sessions_project_provider", "project", "provider", "last_activity_at"),
     )
 

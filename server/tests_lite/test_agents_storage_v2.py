@@ -198,6 +198,11 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
             assert replay.status_code == 200
             assert replay.json() == receipt
 
+            timeline = await client.get("/agents/storage/v2/sessions")
+            assert timeline.status_code == 200, timeline.text
+            assert [row["session_id"] for row in timeline.json()["sessions"]] == [payload["session_id"]]
+            assert timeline.json()["sessions"][0]["raw_state"] == "durable"
+
             detail = await client.get(f"/agents/storage/v2/sessions/{payload['session_id']}/events?limit=1")
             assert detail.status_code == 200, detail.text
             page = detail.json()
