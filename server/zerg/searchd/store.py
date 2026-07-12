@@ -382,7 +382,18 @@ class SearchStore:
             raise
         return {"published": True, "projection_lag": False, "indexed_through": str(desired_revision)}
 
-    def search(self, *, owner_id: str, query: str, limit: int) -> dict[str, object]:
+    def search(
+        self,
+        *,
+        owner_id: str,
+        query: str,
+        project: str | None,
+        provider: str | None,
+        environment: str | None,
+        window_start_us: int | None,
+        window_end_us: int | None,
+        limit: int,
+    ) -> dict[str, object]:
         fts_query = _fts_query(query)
         if not fts_query:
             return {"results": []}
@@ -390,17 +401,38 @@ class SearchStore:
             """
             SELECT e.session_id, e.generation_id, e.source_object_id,
                    e.record_ordinal, e.event_id, e.order_time_us,
-                   e.role, e.content_text, e.tool_name, e.tool_output_text,
+                   e.role, e.tool_name,
+                   snippet(events_fts, 0, '', '', ' … ', 24) AS content_snippet,
+                   snippet(events_fts, 1, '', '', ' … ', 24) AS tool_output_snippet,
                    s.project, s.provider, s.environment, s.indexed_through,
                    bm25(events_fts) AS rank
             FROM events_fts
             JOIN events e ON e.id = events_fts.rowid
             JOIN session_index s ON s.session_id = e.session_id AND s.generation_id = e.generation_id
             WHERE events_fts MATCH ? AND s.owner_id = ?
+              AND (? IS NULL OR s.project = ?)
+              AND (? IS NULL OR s.provider = ?)
+              AND (? IS NULL OR s.environment = ?)
+              AND (? IS NULL OR e.order_time_us >= ?)
+              AND (? IS NULL OR e.order_time_us < ?)
             ORDER BY rank ASC, e.order_time_us DESC, e.event_key ASC
             LIMIT ?
             """,
-            (fts_query, owner_id, limit),
+            (
+                fts_query,
+                owner_id,
+                project,
+                project,
+                provider,
+                provider,
+                environment,
+                environment,
+                window_start_us,
+                window_start_us,
+                window_end_us,
+                window_end_us,
+                limit,
+            ),
         ).fetchall()
         return {"results": [dict(row) for row in rows]}
 

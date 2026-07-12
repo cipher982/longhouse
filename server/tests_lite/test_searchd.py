@@ -42,6 +42,19 @@ def _records(text: str) -> list[dict]:
     ]
 
 
+def _search_params(query: str) -> dict:
+    return {
+        "owner_id": "42",
+        "query": query,
+        "project": None,
+        "provider": None,
+        "environment": None,
+        "window_start_us": None,
+        "window_end_us": None,
+        "limit": 10,
+    }
+
+
 def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
     path = tmp_path / "search.db"
     connection = open_search_database(path)
@@ -118,13 +131,17 @@ async def test_searchd_publishes_only_complete_generations_and_serves_search_wor
             {**base_publish, "object_count": 1, "object_set_hash": hashlib.sha256(b"wrong-set").hexdigest()},
         )
         assert wrong_set["projection_lag"] is True
-        assert (await client.call("search.query.v2", {"owner_id": "42", "query": "speed", "limit": 10}))["results"] == []
+        assert (await client.call("search.query.v2", _search_params("speed")))["results"] == []
         published = await client.call("search.index.publish.v2", {**base_publish, "object_count": 1})
         assert published["published"] is True
-        search = await client.call("search.query.v2", {"owner_id": "42", "query": "speed", "limit": 10})
+        search = await client.call("search.query.v2", _search_params("speed"))
         assert search["results"][0]["session_id"] == session_id
         assert search["results"][0]["source_object_id"] == object_id
         assert search["results"][0]["record_ordinal"] == 0
+        assert "speed" in search["results"][0]["content_snippet"]
+        assert "content_text" not in search["results"][0]
+        filtered = await client.call("search.query.v2", {**_search_params("speed"), "provider": "claude"})
+        assert filtered["results"] == []
         worklog = await client.call(
             "worklog.day.v2",
             {

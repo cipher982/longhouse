@@ -346,12 +346,39 @@ def _publish_params(value: dict) -> dict:
 
 
 def _search_params(value: dict) -> dict:
-    _exact_keys(value, {"owner_id", "query", "limit"})
+    _exact_keys(
+        value,
+        {
+            "owner_id",
+            "query",
+            "project",
+            "provider",
+            "environment",
+            "window_start_us",
+            "window_end_us",
+            "limit",
+        },
+    )
     if type(value["limit"]) is not int or not 1 <= value["limit"] <= 200:
         raise ValueError("limit is invalid")
+    for field in ("window_start_us", "window_end_us"):
+        item = value[field]
+        if item is not None and (type(item) is not int or not -(1 << 63) <= item < 1 << 63):
+            raise ValueError(f"{field} is invalid")
+    if value["window_start_us"] is not None and value["window_end_us"] is not None:
+        if value["window_start_us"] >= value["window_end_us"]:
+            raise ValueError("search time window is empty")
+    provider = _text(value["provider"], "provider", 32, optional=True)
+    if provider is not None and _PROVIDER.fullmatch(provider) is None:
+        raise ValueError("provider is not canonical")
     return {
         "owner_id": _text(value["owner_id"], "owner_id", 64),
         "query": _text(value["query"], "query", 1_000),
+        "project": _text(value["project"], "project", 255, optional=True),
+        "provider": provider,
+        "environment": _text(value["environment"], "environment", 32, optional=True),
+        "window_start_us": value["window_start_us"],
+        "window_end_us": value["window_end_us"],
         "limit": value["limit"],
     }
 
