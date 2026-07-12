@@ -45,12 +45,17 @@ _SAFE_RETRY_METHODS = {
     "session.launch.outcome.apply.v2",
     "session.continue.intent.create.v2",
     "session.continue.outcome.apply.v2",
+    "interaction.register.v2",
+    "interaction.list.v2",
+    "interaction.resolve.v2",
+    "interaction.decision.read.v2",
     "session.input.queued.list.v2",
     "session.input.claim.v2",
     "session.input.finish.v2",
     "session.input.receipt.read.v2",
     "session.input.recent.list.v2",
     "session.read.v2",
+    "session.read.batch.v2",
     "session.timeline.list.v2",
 }
 

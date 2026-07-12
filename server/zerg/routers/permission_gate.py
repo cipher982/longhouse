@@ -27,6 +27,7 @@ from fastapi import HTTPException
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg import database as database_module
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -41,6 +42,13 @@ from zerg.utils.time import UTCBaseModel
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+def _no_permission_db():
+    yield None
+
+
+_permission_db_dependency = _no_permission_db if database_module.live_catalog_enabled() else get_db
 
 # Distinct source so answerable permission-gate requests are NOT hidden by the
 # legacy claude_hook placeholder filter in session_pause_requests.
@@ -110,14 +118,14 @@ def _coerce_session_uuid(session_id: str) -> UUID:
 @router.post("/permission-requests", response_model=PermissionRequestAck)
 async def register_permission_request(
     payload: PermissionRequestIn,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_permission_db_dependency),
     _token: object = Depends(verify_agents_token),
 ) -> PermissionRequestAck:
     """Register a held Claude permission request from a PreToolUse hook."""
 
     _enforce_session_scope(_token, payload.session_id)
     session_uuid = _coerce_session_uuid(payload.session_id)
-    if db.query(AgentSession.id).filter(AgentSession.id == session_uuid).first() is None:
+    if not database_module.live_catalog_enabled() and db.query(AgentSession.id).filter(AgentSession.id == session_uuid).first() is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
 
     # tool_use_id is the idempotency key: re-registering the same id (a hook
@@ -136,6 +144,52 @@ async def register_permission_request(
         provider_request_id=tool_use_id,
     )
     tool_name = (payload.tool_name or "").strip() or None
+
+    if database_module.live_catalog_enabled():
+        from zerg.catalogd.client import CatalogRemoteError
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable")
+        try:
+            result = await catalogd.call(
+                "interaction.register.v2",
+                {
+                    "interaction": {
+                        "session_id": str(session_uuid),
+                        "runtime_key": runtime_key,
+                        "provider": provider,
+                        "device_id": None,
+                        "source": PERMISSION_GATE_SOURCE,
+                        "reply_transport": REPLY_TRANSPORT_CLAUDE_PULL,
+                        "provider_request_id": tool_use_id,
+                        "request_key": request_key,
+                        "kind": PERMISSION_PROMPT_KIND,
+                        "tool_name": tool_name,
+                        "title": f"Permission: {tool_name}" if tool_name else "Tool permission",
+                        "summary": (f"Claude wants to use {tool_name}." if tool_name else "Claude is requesting tool permission."),
+                        "request_payload": {"tool_name": tool_name, "tool_input": payload.tool_input or {}},
+                        "can_respond": True,
+                        "occurred_at": occurred_at.isoformat(),
+                        "expires_at": None,
+                        "single_active": True,
+                    }
+                },
+                timeout_seconds=1.0,
+            )
+        except CatalogRemoteError as exc:
+            if exc.code == "conflict" and exc.details.get("reason") == "session_not_found":
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found") from exc
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction registration failed") from exc
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction registration failed") from exc
+        interaction = result["interaction"]
+        return PermissionRequestAck(
+            pause_request_id=str(interaction["id"]),
+            request_key=request_key,
+            status=str(interaction["status"]),
+        )
 
     row, _changed = upsert_pause_request(
         db,
@@ -163,7 +217,7 @@ async def get_permission_decision(
     tool_use_id: str,
     pause_request_id: Optional[str] = None,
     provider: str = "claude",
-    db: Session = Depends(get_db),
+    db: Session = Depends(_permission_db_dependency),
     _token: object = Depends(verify_agents_token),
 ) -> PermissionDecisionOut:
     """Return the resolved permission decision, or pending if not yet answered.
@@ -175,6 +229,47 @@ async def get_permission_decision(
 
     _enforce_session_scope(_token, session_id)
     session_uuid = _coerce_session_uuid(session_id)
+
+    if database_module.live_catalog_enabled():
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        interaction_id = None
+        request_key = None
+        if pause_request_id:
+            try:
+                interaction_id = str(UUID(pause_request_id))
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid pause_request_id: {pause_request_id}",
+                ) from exc
+        else:
+            normalized_provider = (provider or "claude").strip() or "claude"
+            request_key = make_pause_request_key(
+                provider=normalized_provider,
+                runtime_key=runtime_key_for_session(normalized_provider, session_id),
+                provider_request_id=tool_use_id,
+            )
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable")
+        try:
+            result = await catalogd.call(
+                "interaction.decision.read.v2",
+                {
+                    "session_id": str(session_uuid),
+                    "interaction_id": interaction_id,
+                    "request_key": request_key,
+                },
+                timeout_seconds=1.0,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction decision unavailable") from exc
+        return PermissionDecisionOut(
+            decision=result.get("decision"),
+            reason=result.get("reason"),
+            resolved=result.get("resolved") is True,
+        )
 
     # Import locally to avoid a router-import cycle through session_pause_requests.
     from zerg.models.agents import SessionPauseRequest

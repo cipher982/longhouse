@@ -16,7 +16,6 @@ from zerg import database as database_module
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
 from zerg.models.live_store import LiveRuntimeState
-from zerg.models.live_store import LiveTimelineCard
 from zerg.utils.time import normalize_utc
 
 PAUSE_KIND_STRUCTURED_QUESTION = "structured_question"
@@ -72,32 +71,37 @@ def load_hot_session_projection_map(session_ids: list[UUID]) -> dict[UUID, tuple
     """
     if not session_ids or not database_module.live_catalog_enabled():
         return {}
-    factory = database_module.get_catalog_session_factory()
-    with factory() as live_db:
-        runtime_rows = (
-            live_db.query(LiveRuntimeState)
-            .filter(LiveRuntimeState.session_id.in_(session_ids))
-            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
-            .all()
-        )
-        runtime_by_session: dict[UUID, LiveRuntimeState] = {}
-        for runtime in runtime_rows:
-            if runtime.session_id is not None:
-                runtime_by_session.setdefault(runtime.session_id, runtime)
-        cards = live_db.query(LiveTimelineCard).filter(LiveTimelineCard.session_id.in_([str(value) for value in session_ids])).all()
-        card_by_session = {UUID(str(card.session_id)): card for card in cards}
+    from zerg.services.catalog_read_gateway import CatalogReadError
+    from zerg.services.catalog_read_gateway import session_batch_snapshot
 
-        result: dict[UUID, tuple[dict[str, Any] | None, str]] = {}
-        for session_id in session_ids:
-            runtime = runtime_by_session.get(session_id)
-            card = card_by_session.get(session_id)
-            if runtime is None and card is None:
-                continue
-            result[session_id] = (
-                pending_interaction_from_live_runtime(runtime),
-                str(card.archive_state or "pending") if card is not None else "pending",
-            )
-        return result
+    try:
+        response = session_batch_snapshot([str(value) for value in session_ids])
+    except CatalogReadError:
+        return {}
+    result: dict[UUID, tuple[dict[str, Any] | None, str]] = {}
+    for facts in response.get("facts", []):
+        if not isinstance(facts, dict):
+            continue
+        catalog = facts.get("catalog")
+        if not isinstance(catalog, dict) or not catalog.get("session_id"):
+            continue
+        session_id = UUID(str(catalog["session_id"]))
+        runtime = facts.get("runtime")
+        projection = runtime.get("pending_interaction_projection_json") if isinstance(runtime, dict) else None
+        if isinstance(projection, dict):
+            projection = {**projection, "can_respond": bool(runtime.get("pending_interaction_can_respond"))}
+            for key in ("occurred_at", "created_at", "expires_at"):
+                if isinstance(projection.get(key), str):
+                    try:
+                        projection[key] = datetime.fromisoformat(projection[key].replace("Z", "+00:00"))
+                    except ValueError:
+                        projection[key] = None
+        else:
+            projection = None
+        card = facts.get("card")
+        archive_state = str(card.get("archive_state") or "pending") if isinstance(card, dict) else "pending"
+        result[session_id] = (projection, archive_state)
+    return result
 
 
 def reply_transport_for_row(row: "SessionPauseRequest") -> str | None:

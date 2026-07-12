@@ -34,6 +34,10 @@ def session_snapshot(session_id: str) -> dict[str, Any]:
     return _call("session.read.v2", {"session_id": session_id})
 
 
+def session_batch_snapshot(session_ids: list[str]) -> dict[str, Any]:
+    return _call("session.read.batch.v2", {"session_ids": session_ids})
+
+
 def resolve_session_prefix(prefix: str) -> dict[str, Any]:
     return _call("session.prefix.resolve.v2", {"prefix": prefix})
 
@@ -98,5 +102,6 @@ __all__ = [
     "machine_workspaces",
     "resolve_session_prefix",
     "session_snapshot",
+    "session_batch_snapshot",
     "timeline_snapshot",
 ]

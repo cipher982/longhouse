@@ -167,9 +167,25 @@ def test_live_control_grant_never_uses_stale_or_observe_only_run(tmp_path):
 
 @pytest.mark.asyncio
 async def test_hot_pause_request_is_answerable_before_archive_convergence(tmp_path, monkeypatch):
+    from zerg.catalogd.schema import initialize_catalog_schema
+    from zerg.catalogd.store import CatalogStore
+
     engine = make_live_engine(f"sqlite:///{tmp_path / 'live-pause.db'}")
     initialize_live_database(engine)
+    initialize_catalog_schema(engine)
     factory = make_sessionmaker(engine)
+    catalog_store = CatalogStore(engine)
+
+    class CatalogClient:
+        async def call(self, method, params, **_kwargs):
+            if method == "interaction.list.v2":
+                return catalog_store.list_interactions(**params)
+            if method == "interaction.resolve.v2":
+                payload = {**params, "resolved_at": datetime.fromisoformat(params["resolved_at"])}
+                return catalog_store.resolve_interaction(**payload)
+            raise AssertionError(method)
+
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: CatalogClient())
     pause_id = str(uuid4())
     request_key = "codex:runtime:request-1"
     with factory() as db:
@@ -208,7 +224,7 @@ async def test_hot_pause_request_is_answerable_before_archive_convergence(tmp_pa
 
         async def fake_answer(**kwargs):
             assert kwargs["request_key"] == request_key
-            return SimpleNamespace(ok=True, response_data={"status": "resolved"}, error=None)
+            return SimpleNamespace(ok=True, response_data={"status": "resolved"}, error=None, exit_code=0)
 
         monkeypatch.setattr("zerg.routers.session_chat.answer_pause_request_on_managed_local_session", fake_answer)
         response = await _respond_to_live_pause_request(
@@ -219,6 +235,7 @@ async def test_hot_pause_request_is_answerable_before_archive_convergence(tmp_pa
             db=db,
         )
         assert response.status == "resolved"
+        db.expire_all()
         state = db.query(LiveRuntimeState).one()
         assert state.pending_interaction_id is None
         assert state.pending_interaction_projection_json is None
@@ -269,7 +286,10 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
     monkeypatch.setattr(dispatcher, "dispatch_managed_control_command", fake_dispatch)
     monkeypatch.setattr(chat_impl, "_schedule_catalog_lock_release", lambda **_kwargs: None)
     monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
-    monkeypatch.setattr("zerg.services.catalog_read_gateway.session_snapshot", lambda value: catalog_store.read_session(session_id=value))
+    monkeypatch.setattr(
+        "zerg.services.catalog_read_gateway.session_snapshot",
+        lambda value: catalog_store.read_session(session_id=value),
+    )
 
     from zerg.services.live_control_catalog import load_live_control_session_snapshot
 

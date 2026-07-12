@@ -109,6 +109,7 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "live_archive_outbox",
         "live_control_leases",
         "live_heartbeat_stamps",
+        "live_interaction_requests",
         "live_launch_readiness",
         "live_machine_control_operations",
         "machine_presence",
@@ -308,6 +309,11 @@ def test_hot_interaction_and_archive_state_match_list_and_workspace_before_archi
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
     monkeypatch.setattr(database_module, "get_catalog_session_factory", lambda: live_factory)
     monkeypatch.setattr(database_module, "get_live_session_factory", lambda: live_factory)
+    catalog_store = CatalogStore(live_engine)
+    monkeypatch.setattr(
+        "zerg.services.catalog_read_gateway.session_batch_snapshot",
+        lambda session_ids: catalog_store.read_sessions(session_ids=session_ids),
+    )
 
     params = TimelineSessionListParams(
         project=None,
@@ -326,7 +332,7 @@ def test_hot_interaction_and_archive_state_match_list_and_workspace_before_archi
         include_automation=True,
     )
     timeline = project_catalog_timeline_snapshot(
-        CatalogStore(live_engine).list_session_timeline(
+        catalog_store.list_session_timeline(
             project=params.project,
             provider=params.provider,
             environment=params.environment,

@@ -36,7 +36,6 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
-from zerg.models.live_store import LiveRuntimeState
 from zerg.models.user import User
 from zerg.services.agents.kernel_writes import primary_thread_id_for_session
 from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
@@ -111,6 +110,7 @@ from zerg.services.session_launch_provenance import LAUNCH_SURFACE_WEB
 from zerg.services.session_launch_provenance import normalize_launch_surface
 from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_pause_requests import PENDING_STATUS as PAUSE_PENDING_STATUS
+from zerg.services.session_pause_requests import REPLY_TRANSPORT_CLAUDE_PULL
 from zerg.services.session_pause_requests import get_pause_request_for_session
 from zerg.services.session_pause_requests import is_pull_reply_transport
 from zerg.services.session_pause_requests import list_pause_requests_for_session
@@ -649,21 +649,88 @@ def _not_answerable_pause_request(row) -> HTTPException:
     )
 
 
-def _list_pause_requests_response(
+async def _catalog_interactions(*, session_id: uuid.UUID, status_filter: str | None) -> list[dict[str, Any]]:
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable")
+    try:
+        result = await catalogd.call(
+            "interaction.list.v2",
+            {"session_id": str(session_id), "status": status_filter, "limit": 20},
+            timeout_seconds=1.0,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable") from exc
+    return [item for item in result.get("interactions", []) if isinstance(item, dict)]
+
+
+def _interaction_projection(interaction: dict[str, Any]) -> dict[str, Any]:
+    projection = dict(interaction.get("projection") or {})
+    projection["status"] = interaction.get("status")
+    projection["can_respond"] = interaction.get("can_respond") is True
+    projection["resolved_at"] = interaction.get("resolved_at")
+    return projection
+
+
+async def _resolve_catalog_interaction(
+    *,
+    session_id: uuid.UUID,
+    interaction_id: str,
+    status_value: str,
+    response_payload: dict[str, Any],
+    response_text: str | None,
+) -> dict[str, Any]:
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction catalog unavailable")
+    resolved_at = datetime.now(timezone.utc)
+    try:
+        result = await catalogd.call(
+            "interaction.resolve.v2",
+            {
+                "session_id": str(session_id),
+                "interaction_id": interaction_id,
+                "status": status_value,
+                "response_payload": response_payload,
+                "response_text": response_text,
+                "resolved_at": resolved_at.isoformat(),
+            },
+            timeout_seconds=1.0,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="live interaction resolution failed") from exc
+    reason = result.get("reason")
+    if result.get("found") is not True:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="pause request not found for this session")
+    if result.get("resolved") is not True:
+        code = "pause_request_not_answerable" if reason == "not_answerable" else "pause_request_not_pending"
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": code,
+                "error_code": code,
+                "message": "Answer this request in the terminal."
+                if reason == "not_answerable"
+                else "This provider question has already resolved.",
+                "pause_request_id": interaction_id,
+            },
+        )
+    return result["interaction"]
+
+
+async def _list_pause_requests_response(
     *,
     source_session,
     status_filter: str | None,
     db: Session,
 ) -> PauseRequestListResponse:
     if database_module.live_catalog_enabled():
-        state = (
-            db.query(LiveRuntimeState)
-            .filter(LiveRuntimeState.session_id == source_session.id)
-            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
-            .first()
-        )
-        projection = state.pending_interaction_projection_json if state is not None else None
-        requests = [projection] if isinstance(projection, dict) and (status_filter in {None, PAUSE_PENDING_STATUS}) else []
+        interactions = await _catalog_interactions(session_id=source_session.id, status_filter=status_filter)
+        requests = [_interaction_projection(item) for item in interactions]
         return PauseRequestListResponse(requests=requests, total=len(requests))
     rows = list_pause_requests_for_session(
         db,
@@ -995,16 +1062,22 @@ async def _respond_to_live_pause_request(
     body: PauseRequestResponseRequest,
     db: Session,
 ) -> PauseRequestResponseResponse:
-    state = (
-        db.query(LiveRuntimeState)
-        .filter(LiveRuntimeState.session_id == source_session.id)
-        .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
-        .first()
-    )
-    projection = state.pending_interaction_projection_json if state is not None else None
-    if not isinstance(projection, dict) or str(projection.get("id") or "") != pause_request_id:
+    interactions = await _catalog_interactions(session_id=source_session.id, status_filter=None)
+    interaction = next((item for item in interactions if str(item.get("id") or "") == pause_request_id), None)
+    if interaction is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="pause request not found for this session")
-    if not bool(projection.get("can_respond")):
+    projection = _interaction_projection(interaction)
+    if interaction.get("status") != PAUSE_PENDING_STATUS:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "pause_request_not_pending",
+                "error_code": "pause_request_not_pending",
+                "message": "This provider question has already resolved.",
+                "pause_request_id": pause_request_id,
+            },
+        )
+    if not bool(interaction.get("can_respond")):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -1032,7 +1105,65 @@ async def _respond_to_live_pause_request(
             )
             or None
         )
-    request_key = str(projection.get("request_key") or state.pending_interaction_id or "").strip()
+    request_key = str(interaction.get("request_key") or "").strip()
+    status_value = "resolved" if decision == "answer" else "rejected"
+    if interaction.get("reply_transport") == REPLY_TRANSPORT_CLAUDE_PULL:
+        permission_decision = "allow" if decision == "answer" else "deny"
+        resolved = await _resolve_catalog_interaction(
+            session_id=source_session.id,
+            interaction_id=pause_request_id,
+            status_value=status_value,
+            response_payload={
+                "permissionDecision": permission_decision,
+                "permissionDecisionReason": message or f"Longhouse {permission_decision}",
+                "decision": decision,
+            },
+            response_text=message,
+        )
+        return PauseRequestResponseResponse(status=status_value, pause_request=_interaction_projection(resolved))
+
+    if interaction.get("source") == "opencode_bridge":
+        from zerg.cli import opencode_bridge
+
+        provider_request_id = str(interaction.get("provider_request_id") or "").strip()
+        if not provider_request_id:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="OpenCode request identity is unavailable")
+        bridge_decision = "allow" if decision == "answer" else "deny"
+        try:
+            await asyncio.to_thread(
+                opencode_bridge.permission_reply,
+                session_id=str(source_session.id),
+                request_id=provider_request_id,
+                decision=bridge_decision,
+                state_root=None,
+                config_dir=None,
+                wait_secs=0.0,
+            )
+        except (SystemExit, Exception) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "code": "opencode_permission_reply_failed",
+                    "error_code": "opencode_permission_reply_failed",
+                    "message": f"OpenCode permission reply failed: {exc}",
+                    "pause_request_id": pause_request_id,
+                    "retryable": True,
+                    "refetch_required": True,
+                },
+            ) from exc
+        resolved = await _resolve_catalog_interaction(
+            session_id=source_session.id,
+            interaction_id=pause_request_id,
+            status_value=status_value,
+            response_payload={
+                "permissionDecision": bridge_decision,
+                "decision": decision,
+                "transport": "opencode_bridge",
+            },
+            response_text=message,
+        )
+        return PauseRequestResponseResponse(status=status_value, pause_request=_interaction_projection(resolved))
+
     result = await answer_pause_request_on_managed_local_session(
         db=db,
         owner_id=owner_id,
@@ -1056,19 +1187,27 @@ async def _respond_to_live_pause_request(
                 "refetch_required": True,
             },
         )
-    resolved_at = datetime.now(timezone.utc)
-    status_value = "resolved" if decision == "answer" else "rejected"
-    terminal_projection = {**projection, "status": status_value, "resolved_at": resolved_at}
-    state.pending_interaction_id = None
-    state.pending_interaction_kind = None
-    state.pending_interaction_opened_at = None
-    state.pending_interaction_can_respond = 0
-    state.pending_interaction_projection_json = None
-    state.pending_interaction_updated_at = resolved_at
-    state.runtime_version = int(state.runtime_version or 0) + 1
-    state.updated_at = resolved_at
-    db.commit()
-    return PauseRequestResponseResponse(status=status_value, pause_request=terminal_projection)
+    bridge_response = dict(result.response_data or {})
+    response_payload = bridge_response.get("response_payload")
+    if not isinstance(response_payload, dict):
+        response_payload = {
+            "decision": decision,
+            "answers": answers,
+            "content": body.content,
+            "message": message,
+            "dispatch_ok": result.ok,
+            "exit_code": result.exit_code,
+            "bridge_response": bridge_response or None,
+        }
+    response_text = str(bridge_response.get("response_text") or message or "").strip() or None
+    resolved = await _resolve_catalog_interaction(
+        session_id=source_session.id,
+        interaction_id=pause_request_id,
+        status_value=status_value,
+        response_payload=response_payload,
+        response_text=response_text,
+    )
+    return PauseRequestResponseResponse(status=status_value, pause_request=_interaction_projection(resolved))
 
 
 def _pause_response_message(*, row, body: PauseRequestResponseRequest) -> str | None:
@@ -1116,13 +1255,9 @@ def _pause_question_labels(payload: dict[str, Any]) -> dict[str, str]:
 
 def _assert_no_answerable_pause_request_pending(*, db: Session, source_session) -> None:
     if database_module.live_catalog_enabled():
-        state = (
-            db.query(LiveRuntimeState)
-            .filter(LiveRuntimeState.session_id == source_session.id)
-            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
-            .first()
-        )
-        projection = state.pending_interaction_projection_json if state is not None else None
+        facts = getattr(source_session, "catalog_facts", None)
+        state = facts.get("runtime") if isinstance(facts, dict) else None
+        projection = state.get("pending_interaction_projection_json") if isinstance(state, dict) else None
         if isinstance(projection, dict) and bool(projection.get("can_respond")):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -1403,11 +1538,11 @@ async def terminate_live_session_agents(
 async def list_pause_requests_endpoint(
     session_id: str,
     status_filter: str | None = PAUSE_PENDING_STATUS,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     _current_user: User = Depends(get_current_browser_route_user),
 ) -> PauseRequestListResponse:
     source_session = _load_session_for_continuation(db, session_id)
-    return _list_pause_requests_response(
+    return await _list_pause_requests_response(
         source_session=source_session,
         status_filter=status_filter,
         db=db,
@@ -1419,7 +1554,7 @@ async def respond_to_pause_request_endpoint(
     session_id: str,
     pause_request_id: str,
     body: PauseRequestResponseRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> PauseRequestResponseResponse:
     source_session = _load_session_for_continuation(db, session_id)
@@ -1437,7 +1572,7 @@ async def list_pause_requests_agents(
     session_id: str,
     request: Request,
     status_filter: str | None = PAUSE_PENDING_STATUS,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> PauseRequestListResponse:
@@ -1450,7 +1585,7 @@ async def list_pause_requests_agents(
     )
     _resolve_agents_owner_id(db, resolved_device_token)
     source_session = _load_session_for_continuation(db, session_id)
-    return _list_pause_requests_response(
+    return await _list_pause_requests_response(
         source_session=source_session,
         status_filter=status_filter,
         db=db,
@@ -1463,7 +1598,7 @@ async def respond_to_pause_request_agents(
     pause_request_id: str,
     body: PauseRequestResponseRequest,
     request: Request,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> PauseRequestResponseResponse:

@@ -432,6 +432,36 @@ class LiveRuntimeState(LiveBase):
     )
 
 
+class LiveInteractionRequest(LiveBase):
+    """Bounded provider interaction state owned by catalogd."""
+
+    __tablename__ = "live_interaction_requests"
+
+    id = Column(String(36), primary_key=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    runtime_key = Column(String(255), nullable=False, index=True)
+    provider = Column(String(64), nullable=False, index=True)
+    request_key = Column(String(255), nullable=False, unique=True, index=True)
+    provider_request_id = Column(String(255), nullable=True, index=True)
+    source = Column(String(64), nullable=True)
+    reply_transport = Column(String(64), nullable=True)
+    kind = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, index=True)
+    can_respond = Column(Integer, nullable=False, server_default=text("0"))
+    request_payload_json = Column(JSON(), nullable=True)
+    projection_json = Column(JSON(), nullable=False)
+    response_payload_json = Column(JSON(), nullable=True)
+    response_text = Column(Text, nullable=True)
+    occurred_at = Column(DateTime(timezone=True), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (Index("ix_live_interactions_session_status_seen", "session_id", "status", "last_seen_at"),)
+
+
 class LiveControlLease(LiveBase):
     __tablename__ = "live_control_leases"
 

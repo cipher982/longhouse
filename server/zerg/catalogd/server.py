@@ -245,6 +245,14 @@ class CatalogDaemon:
             return await self._create_continue_intent(request)
         if request.method == "session.continue.outcome.apply.v2":
             return await self._apply_continue_outcome(request)
+        if request.method == "interaction.register.v2":
+            return await self._register_interaction(request)
+        if request.method == "interaction.list.v2":
+            return await self._list_interactions(request)
+        if request.method == "interaction.resolve.v2":
+            return await self._resolve_interaction(request)
+        if request.method == "interaction.decision.read.v2":
+            return await self._read_interaction_decision(request)
         if request.method == "session.input.queued.list.v2":
             return await self._list_queued_input_sessions(request)
         if request.method == "session.input.claim.v2":
@@ -263,6 +271,8 @@ class CatalogDaemon:
             return await self._list_session_timeline(request)
         if request.method == "session.read.v2":
             return await self._read_session(request)
+        if request.method == "session.read.batch.v2":
+            return await self._read_sessions(request)
         if request.method == "session.prefix.resolve.v2":
             return await self._resolve_session_prefix(request)
         if request.method == "machine.enrollment.list.v2":
@@ -848,6 +858,86 @@ class CatalogDaemon:
             )
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _register_interaction(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"interaction"}:
+            return self._error(request, "invalid_request", "interaction.register.v2 requires interaction")
+        try:
+            interaction = _validate_interaction_registration(request.params["interaction"])
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.register_interaction, interaction=interaction)
+        if result.get("found_session") is not True:
+            return self._error(
+                request,
+                "conflict",
+                "interaction session was not found",
+                details={"reason": "session_not_found"},
+            )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_interactions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "status", "limit"}:
+            return self._error(request, "invalid_request", "interaction.list.v2 has invalid parameters")
+        session_id = request.params["session_id"]
+        status_value = request.params["status"]
+        limit = request.params["limit"]
+        if not _is_canonical_uuid(session_id):
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        if status_value is not None and status_value not in {"pending", "resolved", "rejected", "failed", "expired"}:
+            return self._error(request, "invalid_request", "status is not recognized")
+        if type(limit) is not int or not 1 <= limit <= 20:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 20")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.list_interactions,
+            session_id=session_id,
+            status=status_value,
+            limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _resolve_interaction(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "interaction_id", "status", "response_payload", "response_text", "resolved_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "interaction.resolve.v2 has invalid parameters")
+        params = dict(request.params)
+        if not _is_canonical_uuid(params["session_id"]) or not _is_canonical_uuid(params["interaction_id"]):
+            return self._error(request, "invalid_request", "session_id and interaction_id must be canonical UUIDs")
+        if params["status"] not in {"resolved", "rejected", "failed", "expired"}:
+            return self._error(request, "invalid_request", "status must be terminal")
+        if not isinstance(params["response_payload"], dict):
+            return self._error(request, "invalid_request", "response_payload must be an object")
+        if len(str(params["response_payload"]).encode("utf-8")) > 512 * 1024:
+            return self._error(request, "invalid_request", "response_payload is too large")
+        if params["response_text"] is not None and (
+            not isinstance(params["response_text"], str) or len(params["response_text"].encode("utf-8")) > 64 * 1024
+        ):
+            return self._error(request, "invalid_request", "response_text must be null or at most 64 KiB")
+        try:
+            params["resolved_at"] = _parse_datetime(params["resolved_at"], "resolved_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.resolve_interaction, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_interaction_decision(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "interaction_id", "request_key"}:
+            return self._error(request, "invalid_request", "interaction.decision.read.v2 has invalid parameters")
+        params = dict(request.params)
+        if not _is_canonical_uuid(params["session_id"]):
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        if (params["interaction_id"] is None) == (params["request_key"] is None):
+            return self._error(request, "invalid_request", "provide exactly one interaction_id or request_key")
+        if params["interaction_id"] is not None and not _is_canonical_uuid(params["interaction_id"]):
+            return self._error(request, "invalid_request", "interaction_id must be a canonical UUID")
+        if params["request_key"] is not None and not _is_string(params["request_key"], maximum=255):
+            return self._error(request, "invalid_request", "request_key must contain 1 to 255 characters")
+        assert self._store is not None
+        result = await self._run_store(self._store.read_interaction_decision, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _list_queued_input_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"limit"}:
             return self._error(request, "invalid_request", "session.input.queued.list.v2 requires limit")
@@ -1010,6 +1100,18 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", "session_id must be a canonical UUID")
         assert self._store is not None
         result = await self._run_store(self._store.read_session, session_id=session_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_ids"}:
+            return self._error(request, "invalid_request", "session.read.batch.v2 requires session_ids")
+        session_ids = request.params["session_ids"]
+        if not isinstance(session_ids, list) or not 1 <= len(session_ids) <= 100:
+            return self._error(request, "invalid_request", "session_ids must contain 1 to 100 UUIDs")
+        if len(set(session_ids)) != len(session_ids) or any(not _is_canonical_uuid(value) for value in session_ids):
+            return self._error(request, "invalid_request", "session_ids must be unique canonical UUIDs")
+        assert self._store is not None
+        result = await self._run_store(self._store.read_sessions, session_ids=session_ids)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_session_prefix(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -1207,6 +1309,25 @@ _LOCAL_LAUNCH_PLAN_FIELDS = {
 }
 _CONTINUE_LAUNCH_FIELDS = _LAUNCH_FIELDS | {"mode", "launch_origin", "resume"}
 _CONTINUE_RESUME_FIELDS = {"thread_id", "thread_path"}
+_INTERACTION_REGISTRATION_FIELDS = {
+    "session_id",
+    "runtime_key",
+    "provider",
+    "device_id",
+    "source",
+    "reply_transport",
+    "provider_request_id",
+    "request_key",
+    "kind",
+    "tool_name",
+    "title",
+    "summary",
+    "request_payload",
+    "can_respond",
+    "occurred_at",
+    "expires_at",
+    "single_active",
+}
 _INPUT_RECEIPT_FIELDS = {
     "owner_id",
     "session_id",
@@ -1413,6 +1534,45 @@ def _validate_continue_outcome(value: object) -> dict:
         if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
             raise ValueError(f"continue outcome.{field} must be null or contain 1 to {maximum} characters")
         result[field] = raw
+    return result
+
+
+def _validate_interaction_registration(value: object) -> dict:
+    if not isinstance(value, dict) or set(value) != _INTERACTION_REGISTRATION_FIELDS:
+        raise ValueError("interaction has invalid fields")
+    result = dict(value)
+    if not _is_canonical_uuid(result["session_id"]):
+        raise ValueError("interaction.session_id must be a canonical UUID")
+    for field, maximum in (
+        ("runtime_key", 255),
+        ("provider", 64),
+        ("request_key", 255),
+        ("kind", 64),
+    ):
+        if not _is_string(result[field], maximum=maximum):
+            raise ValueError(f"interaction.{field} must contain 1 to {maximum} characters")
+    for field, maximum in (
+        ("device_id", 255),
+        ("source", 64),
+        ("reply_transport", 64),
+        ("provider_request_id", 255),
+        ("tool_name", 128),
+        ("title", 160),
+        ("summary", 256),
+    ):
+        raw = result[field]
+        if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
+            raise ValueError(f"interaction.{field} must be null or contain 1 to {maximum} characters")
+    if not isinstance(result["request_payload"], dict):
+        raise ValueError("interaction.request_payload must be an object")
+    if len(str(result["request_payload"]).encode("utf-8")) > 512 * 1024:
+        raise ValueError("interaction.request_payload is too large")
+    for field in ("can_respond", "single_active"):
+        if type(result[field]) is not bool:
+            raise ValueError(f"interaction.{field} must be a boolean")
+    result["occurred_at"] = _parse_datetime(result["occurred_at"], "interaction.occurred_at")
+    if result["expires_at"] is not None:
+        result["expires_at"] = _parse_datetime(result["expires_at"], "interaction.expires_at")
     return result
 
 

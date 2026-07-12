@@ -67,6 +67,10 @@ def _managed_local_action_available(db: Session, session: AgentSession, action: 
     import zerg.database as database_module
 
     if database_module.live_catalog_enabled():
+        if getattr(session, "catalog_facts", None) is not None:
+            from zerg.services.live_control_catalog import live_control_session_capability_available
+
+            return live_control_session_capability_available(session, capability=action)
         from zerg.services.live_control_catalog import live_control_capability_available
 
         return live_control_capability_available(db, session_id=session.id, capability=action)

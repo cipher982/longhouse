@@ -264,6 +264,8 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
             "ever_managed": True,
         }
         assert read["observed_at"].endswith("+00:00")
+        batch = await client.call("session.read.batch.v2", {"session_ids": [first_id, second_id]})
+        assert [item["catalog"]["session_id"] for item in batch["facts"]] == [first_id, second_id]
         pending = await client.call("session.read.v2", {"session_id": pending_id})
         assert pending["found"] is True
         assert pending["facts"]["catalog"]["session_id"] == pending_id

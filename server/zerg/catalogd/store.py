@@ -11,7 +11,9 @@ from datetime import datetime
 from datetime import timedelta
 from types import SimpleNamespace
 from typing import Any
+from uuid import NAMESPACE_URL
 from uuid import UUID
+from uuid import uuid5
 
 from sqlalchemy import Engine
 from sqlalchemy import func
@@ -25,6 +27,7 @@ from zerg.catalogd.schema import catalog_meta
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveDeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
+from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveMachineControlOperation
 from zerg.models.live_store import LiveRefreshSession
@@ -91,6 +94,156 @@ def _launch_view_dto(view: Any) -> dict[str, Any]:
         "created_at": _encode_datetime(view.created_at),
         "updated_at": _encode_datetime(view.updated_at),
     }
+
+
+def _interaction_id(request_key: str) -> str:
+    return str(uuid5(NAMESPACE_URL, f"longhouse-pause:{request_key}"))
+
+
+def _interaction_dto(row: LiveInteractionRequest) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "session_id": str(row.session_id),
+        "runtime_key": str(row.runtime_key),
+        "provider": str(row.provider),
+        "request_key": str(row.request_key),
+        "provider_request_id": row.provider_request_id,
+        "source": row.source,
+        "reply_transport": row.reply_transport,
+        "kind": str(row.kind),
+        "status": str(row.status),
+        "can_respond": bool(row.can_respond),
+        "projection": _bounded_pause_projection(row.projection_json, compact=False),
+        "response_payload": row.response_payload_json if isinstance(row.response_payload_json, dict) else None,
+        "response_text": row.response_text,
+        "occurred_at": _encode_datetime(row.occurred_at),
+        "last_seen_at": _encode_datetime(row.last_seen_at),
+        "resolved_at": _encode_datetime(row.resolved_at),
+        "expires_at": _encode_datetime(row.expires_at),
+    }
+
+
+def _runtime_interaction_dto(runtime: LiveRuntimeState) -> dict[str, Any] | None:
+    projection = _bounded_pause_projection(runtime.pending_interaction_projection_json, compact=False)
+    request_key = str(runtime.pending_interaction_id or "").strip()
+    if projection is None or not request_key:
+        return None
+    interaction_id = str(projection.get("id") or _interaction_id(request_key))
+    provider = str(runtime.provider)
+    kind = str(runtime.pending_interaction_kind or projection.get("kind") or "structured_question")
+    request_prefix = f"{provider}:{runtime.runtime_key}:"
+    provider_request_id = request_key[len(request_prefix) :] if request_key.startswith(request_prefix) else None
+    source = None
+    reply_transport = None
+    if kind == "permission_prompt" and provider == "claude":
+        source = "claude_permission_gate"
+        reply_transport = "claude_pretooluse_pull"
+    elif kind == "permission_prompt" and provider == "opencode":
+        source = "opencode_bridge"
+        reply_transport = "managed_push"
+    return {
+        "id": interaction_id,
+        "session_id": str(runtime.session_id),
+        "runtime_key": str(runtime.runtime_key),
+        "provider": provider,
+        "request_key": request_key,
+        "provider_request_id": provider_request_id,
+        "source": source,
+        "reply_transport": reply_transport,
+        "kind": kind,
+        "status": "pending",
+        "can_respond": bool(runtime.pending_interaction_can_respond),
+        "projection": projection,
+        "response_payload": None,
+        "response_text": None,
+        "occurred_at": _encode_datetime(runtime.pending_interaction_opened_at),
+        "last_seen_at": _encode_datetime(runtime.pending_interaction_updated_at or runtime.updated_at),
+        "resolved_at": None,
+        "expires_at": projection.get("expires_at"),
+    }
+
+
+def _apply_live_interaction_event(db: Session, event: Any) -> LiveInteractionRequest | None:
+    """Mirror one accepted runtime interaction event into bounded control facts."""
+
+    from zerg.services.session_pause_requests import build_pause_runtime_projection
+    from zerg.services.session_pause_requests import pause_runtime_request_key
+
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    request_key = pause_runtime_request_key(event)
+    observed_at = _as_aware_utc(event.occurred_at) or datetime.now(UTC)
+    if event.kind == "pause_resolution":
+        row = db.query(LiveInteractionRequest).filter(LiveInteractionRequest.request_key == request_key).one_or_none()
+        if row is None or row.status != "pending":
+            return row
+        if (_as_aware_utc(row.last_seen_at) or observed_at) > observed_at:
+            return row
+        terminal_status = str(payload.get("status") or "resolved")
+        row.status = terminal_status if terminal_status in {"resolved", "rejected", "failed", "expired"} else "resolved"
+        row.can_respond = 0
+        row.response_payload_json = dict(payload.get("response_payload") or payload.get("response_payload_json") or {}) or None
+        row.response_text = str(payload.get("response_text") or payload.get("message") or "").strip() or None
+        row.resolved_at = observed_at
+        row.last_seen_at = observed_at
+        row.updated_at = observed_at
+        db.add(row)
+        return row
+    if event.kind != "pause_request" or event.session_id is None:
+        return None
+    provider_ref = payload.get("provider_ref") or payload.get("provider_ref_json") or {}
+    provider_ref = provider_ref if isinstance(provider_ref, dict) else {}
+    row = db.query(LiveInteractionRequest).filter(LiveInteractionRequest.request_key == request_key).one_or_none()
+    if row is not None:
+        last_seen_at = _as_aware_utc(row.last_seen_at)
+        resolved_at = _as_aware_utc(row.resolved_at)
+        if (last_seen_at is not None and observed_at < last_seen_at) or (row.status == "pending" and last_seen_at == observed_at):
+            return row
+        if row.status != "pending" and resolved_at is not None and observed_at <= resolved_at:
+            return row
+    if bool(payload.get("single_active", True)):
+        db.query(LiveInteractionRequest).filter(
+            LiveInteractionRequest.runtime_key == str(event.runtime_key),
+            LiveInteractionRequest.request_key != request_key,
+            LiveInteractionRequest.status == "pending",
+        ).update(
+            {
+                "status": "expired",
+                "can_respond": 0,
+                "last_seen_at": observed_at,
+                "resolved_at": observed_at,
+                "updated_at": observed_at,
+            },
+            synchronize_session=False,
+        )
+    projection = build_pause_runtime_projection(event)
+    if row is None:
+        row = LiveInteractionRequest(
+            id=_interaction_id(request_key),
+            request_key=request_key,
+            created_at=observed_at,
+        )
+    row.session_id = str(event.session_id)
+    row.runtime_key = str(event.runtime_key)
+    row.provider = str(event.provider or "unknown")
+    row.provider_request_id = str(payload.get("provider_request_id") or payload.get("request_id") or "").strip() or None
+    row.source = str(provider_ref.get("source") or "").strip() or None
+    row.reply_transport = str(provider_ref.get("reply_transport") or "").strip() or None
+    row.kind = str(payload.get("kind") or "structured_question")
+    row.status = "pending"
+    row.can_respond = int(bool(payload.get("can_respond")))
+    request_payload = payload.get("request_payload") or payload.get("request_payload_json") or payload.get("payload") or {}
+    row.request_payload_json = dict(request_payload) if isinstance(request_payload, dict) else {}
+    row.projection_json = projection
+    row.response_payload_json = None
+    row.response_text = None
+    row.occurred_at = observed_at
+    row.last_seen_at = observed_at
+    row.resolved_at = None
+    expires_at = projection.get("expires_at")
+    row.expires_at = _as_aware_utc(datetime.fromisoformat(expires_at)) if isinstance(expires_at, str) else None
+    row.updated_at = observed_at
+    db.add(row)
+    return row
 
 
 def _live_control_session_dto(session: Any) -> dict[str, Any]:
@@ -967,6 +1120,9 @@ class CatalogStore:
                         synchronize_session=False,
                     )
                 archive_events = [event for event in events if not _is_bridge_live_transcript_event(event)]
+                for event in events:
+                    if event.runtime_key in updated_keys and event.kind in {"pause_request", "pause_resolution"}:
+                        _apply_live_interaction_event(orm, event)
                 enqueue_runtime_events_outbox(orm, archive_events)
                 orm.commit()
             except BaseException:
@@ -979,6 +1135,260 @@ class CatalogStore:
                 **result.model_dump(mode="json"),
                 "commit_seq": str(commit_seq),
             }
+
+    def register_interaction(self, *, interaction: dict[str, Any]) -> dict[str, Any]:
+        """Register one held interaction and queue the same canonical runtime event."""
+
+        from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
+        from zerg.services.session_runtime import RuntimeEventIngest
+        from zerg.services.session_runtime import ingest_live_runtime_events
+
+        event = RuntimeEventIngest(
+            runtime_key=interaction["runtime_key"],
+            session_id=UUID(interaction["session_id"]),
+            provider=interaction["provider"],
+            device_id=interaction.get("device_id"),
+            source=interaction["source"] or "interaction_api",
+            kind="pause_request",
+            tool_name=interaction.get("tool_name"),
+            occurred_at=interaction["occurred_at"],
+            dedupe_key=f"interaction:{interaction['request_key']}",
+            payload={
+                "request_key": interaction["request_key"],
+                "provider_request_id": interaction.get("provider_request_id"),
+                "provider_ref": {
+                    "source": interaction.get("source"),
+                    "reply_transport": interaction.get("reply_transport"),
+                },
+                "kind": interaction["kind"],
+                "tool_name": interaction.get("tool_name"),
+                "title": interaction.get("title"),
+                "summary": interaction.get("summary"),
+                "request_payload": interaction.get("request_payload") or {},
+                "can_respond": interaction["can_respond"],
+                "expires_at": _encode_datetime(interaction.get("expires_at")),
+                "single_active": interaction["single_active"],
+            },
+        )
+        observed_at = interaction["occurred_at"]
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                if orm.get(LiveSessionCatalog, interaction["session_id"]) is None:
+                    orm.rollback()
+                    return {
+                        "found_session": False,
+                        "interaction": None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                result = ingest_live_runtime_events(orm, [event])
+                row = _apply_live_interaction_event(orm, event)
+                enqueue_runtime_events_outbox(orm, [event])
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "found_session": True,
+                "interaction": _interaction_dto(row),
+                "accepted": result.accepted,
+                "duplicates": result.duplicates,
+                "commit_seq": str(commit_seq),
+            }
+
+    def list_interactions(self, *, session_id: str, status: str | None, limit: int) -> dict[str, Any]:
+        with _read_snapshot(self.engine) as connection:
+            orm = Session(bind=connection, expire_on_commit=False)
+            try:
+                query = orm.query(LiveInteractionRequest).filter(LiveInteractionRequest.session_id == session_id)
+                if status is not None:
+                    query = query.filter(LiveInteractionRequest.status == status)
+                rows = (
+                    query.order_by(
+                        LiveInteractionRequest.last_seen_at.desc(),
+                        LiveInteractionRequest.occurred_at.desc(),
+                        LiveInteractionRequest.id.desc(),
+                    )
+                    .limit(limit)
+                    .all()
+                )
+                result = [_interaction_dto(row) for row in rows]
+                if not result and status in {None, "pending"}:
+                    runtime = (
+                        orm.query(LiveRuntimeState)
+                        .filter(LiveRuntimeState.session_id == UUID(session_id))
+                        .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+                        .first()
+                    )
+                    fallback = _runtime_interaction_dto(runtime) if runtime is not None else None
+                    if fallback is not None:
+                        result = [fallback]
+            finally:
+                orm.close()
+            return {
+                "interactions": result,
+                "total": len(result),
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def resolve_interaction(
+        self,
+        *,
+        session_id: str,
+        interaction_id: str,
+        status: str,
+        response_payload: dict[str, Any],
+        response_text: str | None,
+        resolved_at: datetime,
+    ) -> dict[str, Any]:
+        """Resolve exactly one pending interaction and clear matching runtime truth."""
+
+        from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
+        from zerg.services.session_runtime import RuntimeEventIngest
+        from zerg.services.session_runtime import ingest_live_runtime_events
+
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                row = (
+                    orm.query(LiveInteractionRequest)
+                    .filter(
+                        LiveInteractionRequest.id == interaction_id,
+                        LiveInteractionRequest.session_id == session_id,
+                    )
+                    .one_or_none()
+                )
+                if row is None:
+                    runtime = (
+                        orm.query(LiveRuntimeState)
+                        .filter(LiveRuntimeState.session_id == UUID(session_id))
+                        .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+                        .first()
+                    )
+                    fallback = _runtime_interaction_dto(runtime) if runtime is not None else None
+                    if fallback is not None and fallback["id"] == interaction_id:
+                        row = LiveInteractionRequest(
+                            id=interaction_id,
+                            session_id=session_id,
+                            runtime_key=fallback["runtime_key"],
+                            provider=fallback["provider"],
+                            request_key=fallback["request_key"],
+                            provider_request_id=fallback["provider_request_id"],
+                            source=fallback["source"],
+                            reply_transport=fallback["reply_transport"],
+                            kind=fallback["kind"],
+                            status="pending",
+                            can_respond=int(fallback["can_respond"]),
+                            request_payload_json={},
+                            projection_json=fallback["projection"],
+                            occurred_at=_as_aware_utc(runtime.pending_interaction_opened_at) or resolved_at,
+                            last_seen_at=_as_aware_utc(runtime.pending_interaction_updated_at) or resolved_at,
+                            created_at=_as_aware_utc(runtime.pending_interaction_opened_at) or resolved_at,
+                            updated_at=_as_aware_utc(runtime.pending_interaction_updated_at) or resolved_at,
+                        )
+                        orm.add(row)
+                        orm.flush()
+                if row is None:
+                    orm.rollback()
+                    return {
+                        "found": False,
+                        "resolved": False,
+                        "reason": "not_found",
+                        "interaction": None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                if row.status != "pending":
+                    result = _interaction_dto(row)
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "resolved": False,
+                        "reason": "not_pending",
+                        "interaction": result,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                if not bool(row.can_respond):
+                    result = _interaction_dto(row)
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "resolved": False,
+                        "reason": "not_answerable",
+                        "interaction": result,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                event = RuntimeEventIngest(
+                    runtime_key=row.runtime_key,
+                    session_id=UUID(session_id),
+                    provider=row.provider,
+                    source="interaction_response",
+                    kind="pause_resolution",
+                    occurred_at=resolved_at,
+                    dedupe_key=f"interaction-resolution:{interaction_id}:{status}",
+                    payload={
+                        "request_key": row.request_key,
+                        "provider_request_id": row.provider_request_id,
+                        "status": status,
+                        "response_payload": response_payload,
+                        "response_text": response_text,
+                    },
+                )
+                ingest_live_runtime_events(orm, [event])
+                resolved = _apply_live_interaction_event(orm, event)
+                enqueue_runtime_events_outbox(orm, [event])
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, resolved_at)
+            return {
+                "found": True,
+                "resolved": True,
+                "reason": None,
+                "interaction": _interaction_dto(resolved),
+                "commit_seq": str(commit_seq),
+            }
+
+    def read_interaction_decision(
+        self,
+        *,
+        session_id: str,
+        interaction_id: str | None,
+        request_key: str | None,
+    ) -> dict[str, Any]:
+        with _read_snapshot(self.engine) as connection:
+            orm = Session(bind=connection, expire_on_commit=False)
+            try:
+                query = orm.query(LiveInteractionRequest).filter(
+                    LiveInteractionRequest.session_id == session_id,
+                    LiveInteractionRequest.kind == "permission_prompt",
+                    LiveInteractionRequest.source == "claude_permission_gate",
+                )
+                query = (
+                    query.filter(LiveInteractionRequest.id == interaction_id)
+                    if interaction_id is not None
+                    else query.filter(LiveInteractionRequest.request_key == request_key)
+                )
+                row = query.one_or_none()
+                if row is None or row.status == "pending":
+                    result = {"found": row is not None, "resolved": False, "decision": None, "reason": None}
+                else:
+                    response = row.response_payload_json if isinstance(row.response_payload_json, dict) else {}
+                    raw = str(response.get("permissionDecision") or "").strip().lower()
+                    result = {
+                        "found": True,
+                        "resolved": True,
+                        "decision": "allow" if raw == "allow" else "deny",
+                        "reason": response.get("permissionDecisionReason") or row.response_text,
+                    }
+            finally:
+                orm.close()
+            return {**result, "commit_seq": str(_current_commit_seq(connection))}
 
     def apply_control_command_result(
         self,
@@ -2048,6 +2458,21 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
                 "found": bool(facts),
                 "facts": facts[0] if facts else None,
+            }
+
+    def read_sessions(self, *, session_ids: list[str]) -> dict[str, Any]:
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            facts = _assemble_session_facts(
+                connection,
+                session_ids=session_ids,
+                observed_at=observed_at,
+                compact=False,
+            )
+            return {
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+                "facts": facts,
             }
 
     def resolve_session_prefix(self, *, prefix: str) -> dict[str, Any]:
