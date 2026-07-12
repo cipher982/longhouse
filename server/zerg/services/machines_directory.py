@@ -16,11 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
+from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from zerg.models.device_token import DeviceToken
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_provider_contracts import machine_control_launch_capability_by_provider
@@ -65,19 +62,16 @@ class MachineEntry:
         }
 
 
-def _enrolled_device_ids(db: Session, owner_id: int) -> dict[str, datetime | None]:
-    """Return enrolled, non-revoked device ids for the owner with last_used_at."""
-    stmt = (
-        select(DeviceToken.device_id, DeviceToken.last_used_at, DeviceToken.created_at)
-        .where(DeviceToken.owner_id == owner_id)
-        .where(DeviceToken.revoked_at.is_(None))
-    )
+def _enrolled_device_ids(enrollments: list[dict[str, Any]]) -> dict[str, datetime | None]:
+    """Normalize the catalogd enrollment snapshot for directory merging."""
+
     latest: dict[str, datetime | None] = {}
-    for device_id, last_used_at, created_at in db.execute(stmt).all():
+    for enrollment in enrollments:
+        device_id = enrollment.get("device_id")
         if not device_id:
             continue
         key = str(device_id)
-        best = last_used_at or created_at
+        best = _decode_datetime(enrollment.get("last_used_at") or enrollment.get("created_at"))
         existing = latest.get(key)
         if existing is None or (best is not None and best > existing):
             latest[key] = best
@@ -85,9 +79,9 @@ def _enrolled_device_ids(db: Session, owner_id: int) -> dict[str, datetime | Non
 
 
 def build_machines_directory(
-    db: Session,
     *,
     owner_id: int,
+    enrollments: list[dict[str, Any]],
     registry: MachineControlChannelRegistry | None = None,
 ) -> list[MachineEntry]:
     """Build the per-owner machines list.
@@ -134,7 +128,7 @@ def build_machines_directory(
 
     # Offline enrolled — fill in anything not already present from control
     # channel registry.
-    for device_id, last_used in _enrolled_device_ids(db, owner_id).items():
+    for device_id, last_used in _enrolled_device_ids(enrollments).items():
         if device_id in seen:
             continue
         seen[device_id] = MachineEntry(
@@ -167,3 +161,14 @@ def _as_utc(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def _decode_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return _as_utc(value)
+    if not isinstance(value, str):
+        raise ValueError("catalog enrollment datetime must be a string or null")
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return _as_utc(parsed)

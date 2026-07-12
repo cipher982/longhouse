@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections import defaultdict
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from time import monotonic
+from typing import Any
 from uuid import UUID
 
-from sqlalchemy import func
-from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy import DateTime
 
+from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
@@ -23,8 +21,10 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_capabilities_from_rows
+from zerg.services.catalog_read_gateway import session_snapshot
+from zerg.services.catalog_read_gateway import timeline_snapshot
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
-from zerg.services.live_launch_readiness import latest_live_launch_readiness_map
+from zerg.services.live_launch_readiness import project_live_launch_readiness
 from zerg.services.session_pause_requests import pending_interaction_from_live_runtime
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
@@ -44,6 +44,86 @@ from zerg.services.timeline_session_listing import TimelineSessionCardResponse
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
 from zerg.utils.time import normalize_utc
+
+
+def _decode_wire_datetime(value: object) -> object:
+    if not isinstance(value, str):
+        return value
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    return normalize_utc(parsed)
+
+
+def _hydrate_live_row(model, payload: dict[str, Any] | None):
+    """Build one detached read model from a catalogd raw-facts payload."""
+
+    if payload is None:
+        return None
+    values: dict[str, Any] = {}
+    for column in model.__table__.columns:
+        if column.name not in payload:
+            continue
+        value = payload[column.name]
+        if value is not None and isinstance(column.type, DateTime):
+            value = _decode_wire_datetime(value)
+        values[column.name] = value
+    return model(**values)
+
+
+def project_catalog_session_facts(
+    facts: dict[str, Any],
+    *,
+    observed_at: datetime,
+) -> SessionResponse:
+    """Project one catalogd snapshot through the canonical state projector."""
+
+    session = _hydrate_live_row(LiveSessionCatalog, facts.get("catalog"))
+    if session is None:
+        raise ValueError("catalog session facts are missing catalog")
+    card = _hydrate_live_row(LiveTimelineCard, facts.get("card"))
+    if card is None:
+        card = LiveTimelineCard(
+            session_id=session.session_id,
+            provider=session.provider,
+            environment=session.environment,
+            project=session.project,
+            device_id=session.device_id,
+            cwd=session.cwd,
+            started_at=session.started_at,
+            last_activity_at=session.last_activity_at,
+            summary_title=session.summary_title,
+            first_user_message_preview=session.first_user_message_preview,
+            user_messages=int(session.user_messages or 0),
+            assistant_messages=int(session.assistant_messages or 0),
+            tool_calls=int(session.tool_calls or 0),
+            transcript_revision=int(session.transcript_revision or 0),
+            archive_state="pending",
+        )
+    runtime = _hydrate_live_row(LiveRuntimeState, facts.get("runtime"))
+    readiness_row = _hydrate_live_row(LiveLaunchReadiness, facts.get("readiness"))
+    readiness = project_live_launch_readiness(readiness_row) if readiness_row is not None else None
+    thread = _hydrate_live_row(LiveSessionThread, facts.get("primary_thread"))
+    run = _hydrate_live_row(LiveSessionRun, facts.get("latest_run"))
+    connections = [
+        row for payload in facts.get("connections") or [] if (row := _hydrate_live_row(LiveSessionConnection, payload)) is not None
+    ]
+    capabilities = project_capabilities_from_rows(
+        session_id=str(session.session_id),
+        thread=thread,
+        latest_run=run,
+        connections=connections,
+        now=observed_at,
+    )
+    return _response_from_catalog(
+        session,
+        card,
+        readiness=readiness,
+        runtime=runtime,
+        capability_flags=capabilities,
+        now=observed_at,
+    )
 
 
 def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
@@ -120,7 +200,7 @@ def _pending_response_from_catalog(
             "assistant_messages": int(card.assistant_messages or 0),
             "tool_calls": int(card.tool_calls or 0),
             "last_activity_at": last_activity_at,
-            "timeline_anchor_at": normalize_utc(runtime.timeline_anchor_at) if runtime is not None else last_activity_at,
+            "timeline_anchor_at": (normalize_utc(runtime.timeline_anchor_at) if runtime is not None else last_activity_at),
             "runtime_phase": str(runtime.phase) if runtime is not None else None,
             "phase_started_at": normalize_utc(runtime.phase_started_at) if runtime is not None else None,
             "last_progress_at": normalize_utc(runtime.last_progress_at) if runtime is not None else None,
@@ -297,142 +377,41 @@ def _response_from_catalog(
     )
 
 
-def _live_capability_map(
-    db: Session,
-    *,
-    session_ids: list[str],
-    now: datetime,
-) -> dict[str, KernelSessionCapabilities]:
-    if not session_ids:
-        return {}
-
-    threads = (
-        db.query(LiveSessionThread)
-        .filter(LiveSessionThread.session_id.in_(session_ids), LiveSessionThread.is_primary == 1)
-        .order_by(LiveSessionThread.created_at.asc(), LiveSessionThread.id.asc())
-        .all()
-    )
-    thread_by_session: dict[str, LiveSessionThread] = {}
-    for thread in threads:
-        thread_by_session.setdefault(str(thread.session_id), thread)
-
-    thread_ids = [thread.id for thread in thread_by_session.values()]
-    runs_by_thread: dict[str, LiveSessionRun] = {}
-    if thread_ids:
-        runs = (
-            db.query(LiveSessionRun)
-            .filter(LiveSessionRun.thread_id.in_(thread_ids))
-            .order_by(LiveSessionRun.started_at.desc(), LiveSessionRun.id.desc())
-            .all()
-        )
-        for run in runs:
-            runs_by_thread.setdefault(str(run.thread_id), run)
-
-    run_ids = [run.id for run in runs_by_thread.values()]
-    connections_by_run: dict[str, list[LiveSessionConnection]] = defaultdict(list)
-    if run_ids:
-        connections = db.query(LiveSessionConnection).filter(LiveSessionConnection.run_id.in_(run_ids)).all()
-        for connection in connections:
-            connections_by_run[str(connection.run_id)].append(connection)
-
-    projections: dict[str, KernelSessionCapabilities] = {}
-    for session_id in session_ids:
-        thread = thread_by_session.get(session_id)
-        run = runs_by_thread.get(str(thread.id)) if thread is not None else None
-        connections = connections_by_run.get(str(run.id), []) if run is not None else []
-        projections[session_id] = project_capabilities_from_rows(
-            session_id=session_id,
-            thread=thread,
-            latest_run=run,
-            connections=connections,
-            now=now,
-        )
-    return projections
-
-
 def list_live_catalog_timeline(
-    db: Session,
     *,
     params: TimelineSessionListParams,
 ) -> TimelineSessionsListResponse:
-    """List timeline cards without opening the cold database."""
+    """List timeline cards from one catalogd-owned SQLite snapshot."""
 
     if params.query is not None or (params.mode or "lexical") != "lexical":
         raise ValueError("search_requires_archive")
-    now = datetime.now(timezone.utc)
-    since = now - timedelta(days=params.days_back)
-    query = db.query(LiveTimelineCard, LiveSessionCatalog).join(
-        LiveSessionCatalog,
-        LiveSessionCatalog.session_id == LiveTimelineCard.session_id,
+    snapshot = timeline_snapshot(
+        {
+            "project": params.project,
+            "provider": params.provider,
+            "environment": params.environment,
+            "include_test": params.include_test,
+            "hide_autonomous": params.hide_autonomous,
+            "include_automation": params.include_automation,
+            "device_id": params.device_id,
+            "days_back": params.days_back,
+            "limit": params.limit,
+            "offset": params.offset,
+        }
     )
-    if params.project:
-        query = query.filter(LiveTimelineCard.project == params.project)
-    if params.provider:
-        query = query.filter(LiveTimelineCard.provider == params.provider)
-    if params.environment:
-        query = query.filter(LiveTimelineCard.environment == params.environment)
-    elif not params.include_test:
-        query = query.filter(LiveTimelineCard.environment.notin_(("test", "e2e")))
-    if params.device_id:
-        query = query.filter(LiveTimelineCard.device_id == params.device_id)
-    query = query.filter(
-        func.coalesce(LiveTimelineCard.last_activity_at, LiveTimelineCard.started_at) >= since,
-    )
-    if params.hide_autonomous:
-        query = query.filter(
-            or_(
-                LiveTimelineCard.user_messages > 0,
-                LiveTimelineCard.archive_state == "pending",
-                LiveTimelineCard.launch_actor == "human_ui",
-                LiveTimelineCard.launch_surface.in_(("web", "ios", "api")),
-            )
-        )
-    if not params.include_automation:
-        query = query.filter(
-            or_(
-                LiveTimelineCard.origin_kind.is_(None),
-                LiveTimelineCard.origin_kind != "hatch_automation",
-            )
-        )
-    total = int(query.count())
-    rows = (
-        query.order_by(
-            func.coalesce(LiveTimelineCard.last_activity_at, LiveTimelineCard.started_at).desc(),
-            LiveTimelineCard.session_id.desc(),
-        )
-        .limit(params.limit)
-        .offset(params.offset)
-        .all()
-    )
-    session_id_strings = [str(card.session_id) for card, _session in rows]
-    session_ids = [UUID(session_id) for session_id in session_id_strings]
-    readiness = latest_live_launch_readiness_map(db, session_ids, now=now)
-    capabilities = _live_capability_map(db, session_ids=session_id_strings, now=now)
-    runtime_rows = (
-        db.query(LiveRuntimeState)
-        .filter(LiveRuntimeState.session_id.in_(session_ids))
-        .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
-        .all()
-        if session_ids
-        else []
-    )
-    runtime_by_session: dict[str, LiveRuntimeState] = {}
-    for runtime in runtime_rows:
-        if runtime.session_id is not None:
-            runtime_by_session.setdefault(str(runtime.session_id), runtime)
+    return project_catalog_timeline_snapshot(snapshot)
 
+
+def project_catalog_timeline_snapshot(snapshot: dict[str, Any]) -> TimelineSessionsListResponse:
+    """Project a raw catalogd timeline snapshot without any storage access."""
+
+    observed_at = _decode_wire_datetime(snapshot.get("observed_at"))
+    if not isinstance(observed_at, datetime):
+        raise ValueError("catalog timeline snapshot is missing observed_at")
     cards: list[TimelineSessionCardResponse] = []
-    for card, session in rows:
-        session_id = str(session.session_id)
-        projected = _response_from_catalog(
-            session,
-            card,
-            readiness=readiness.get(UUID(session_id)),
-            runtime=runtime_by_session.get(session_id),
-            capability_flags=capabilities[session_id],
-            now=now,
-        )
-        thread_id = str(session.primary_thread_id or session.session_id)
+    for row in snapshot.get("rows") or []:
+        projected = project_catalog_session_facts(row["facts"], observed_at=observed_at)
+        thread_id = str(row.get("thread_id") or projected.id)
         cards.append(
             TimelineSessionCardResponse(
                 thread_id=thread_id,
@@ -445,14 +424,37 @@ def list_live_catalog_timeline(
                 head_origin_label=projected.origin_label or projected.environment,
             )
         )
-    has_real = any((session.device_id or "") != "demo-mac" for _card, session in rows) or total == 0
-    return TimelineSessionsListResponse(sessions=cards, total=total, has_real_sessions=has_real)
+    return TimelineSessionsListResponse(
+        sessions=cards,
+        total=int(snapshot.get("total") or 0),
+        has_real_sessions=bool(snapshot.get("has_real_sessions")),
+    )
 
 
-def list_live_catalog_sessions(db: Session, *, params: TimelineSessionListParams) -> SessionsListResponse:
+def list_live_catalog_sessions(*, params: TimelineSessionListParams) -> SessionsListResponse:
     """Machine-facing flat session list from the same bounded card projection."""
 
-    timeline = list_live_catalog_timeline(db, params=params)
+    if params.query is not None or (params.mode or "lexical") != "lexical":
+        raise ValueError("search_requires_archive")
+    snapshot = timeline_snapshot(
+        {
+            "project": params.project,
+            "provider": params.provider,
+            "environment": params.environment,
+            "include_test": params.include_test,
+            "hide_autonomous": params.hide_autonomous,
+            "include_automation": params.include_automation,
+            "device_id": params.device_id,
+            "days_back": params.days_back,
+            "limit": params.limit,
+            "offset": params.offset,
+        }
+    )
+    return project_catalog_sessions_snapshot(snapshot)
+
+
+def project_catalog_sessions_snapshot(snapshot: dict[str, Any]) -> SessionsListResponse:
+    timeline = project_catalog_timeline_snapshot(snapshot)
     return SessionsListResponse(
         sessions=[card.head for card in timeline.sessions],
         total=timeline.total,
@@ -460,10 +462,25 @@ def list_live_catalog_sessions(db: Session, *, params: TimelineSessionListParams
     )
 
 
+def read_live_catalog_session(session_id: UUID) -> tuple[SessionResponse | None, str | None, str]:
+    """Read one session shell and its provider alias from one catalog snapshot."""
+
+    snapshot = session_snapshot(str(session_id))
+    commit_seq = str(snapshot.get("commit_seq") or "0")
+    if snapshot.get("found") is not True:
+        return None, None, commit_seq
+    observed_at = _decode_wire_datetime(snapshot.get("observed_at"))
+    facts = snapshot.get("facts")
+    if not isinstance(observed_at, datetime) or not isinstance(facts, dict):
+        raise ValueError("catalog session snapshot is incomplete")
+    projected = project_catalog_session_facts(facts, observed_at=observed_at)
+    provider_alias = facts.get("provider_alias")
+    return projected, str(provider_alias) if provider_alias else None, commit_seq
+
+
 async def stream_live_catalog_timeline(
     request,
     *,
-    session_factory,
     params: TimelineSessionListParams,
     skip_initial_replay: bool,
 ):
@@ -481,12 +498,7 @@ async def stream_live_catalog_timeline(
             if skip_initial_replay:
                 skip_initial_replay = False
             else:
-
-                def _load():
-                    with session_factory() as db:
-                        return list_live_catalog_timeline(db, params=params)
-
-                response = await asyncio.to_thread(_load)
+                response = await asyncio.to_thread(list_live_catalog_timeline, params=params)
                 current = {
                     card.thread_id: json.dumps(card.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
                     for card in response.sessions

@@ -1,5 +1,6 @@
 """Agents API — session CRUD, listing, and export endpoints."""
 
+import asyncio
 import logging
 from datetime import date as date_type
 from datetime import datetime
@@ -35,7 +36,9 @@ from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
+from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
+from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
@@ -130,6 +133,19 @@ _ACTIVE_LIVE_SESSION_CANDIDATE_MAX = 1000
 
 def _no_viewer_owner_id() -> int | None:
     return None
+
+
+def _session_detail_db():
+    """Open the legacy archive DB only when the catalog read path is disabled."""
+
+    if database_module.live_catalog_enabled():
+        yield None
+        return
+    with database_module.get_session_factory()() as db:
+        yield db
+
+
+session_detail_db_dependency = get_db if _catalog_db_dependency is get_db else _session_detail_db
 
 
 def _live_launch_placeholder_for_owner(
@@ -304,7 +320,10 @@ async def list_sessions(
         True,
         description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)",
     ),
-    include_automation: bool = Query(False, description="Include Hatch automation sessions in otherwise default-hidden lists"),
+    include_automation: bool = Query(
+        False,
+        description="Include Hatch automation sessions in otherwise default-hidden lists",
+    ),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
@@ -316,7 +335,7 @@ async def list_sessions(
     ),
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(session_detail_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionsListResponse:
@@ -339,7 +358,8 @@ async def list_sessions(
             context_mode=context_mode,
         )
         if database_module.live_catalog_enabled():
-            return list_live_catalog_sessions(db, params=params)
+            return await asyncio.to_thread(list_live_catalog_sessions, params=params)
+        assert db is not None
         owner_id = _owner_id_from_agents_auth(db, _auth)
         result = await list_agent_sessions(db=db, auth=_auth, params=params, owner_id=owner_id)
         if result.headers:
@@ -351,6 +371,11 @@ async def list_sessions(
         return result.response
     except SessionListingError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    except CatalogReadError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     except HTTPException:
         raise
     except Exception:
@@ -365,7 +390,10 @@ async def list_sessions(
 def list_archive_manifest(
     include_test: bool = Query(False, description="Include test/e2e sessions in archive enumeration"),
     hide_autonomous: bool = Query(False, description="Hide autonomous sessions from archive enumeration"),
-    include_automation: bool = Query(False, description="Include Hatch automation sessions in archive enumeration when hiding automation"),
+    include_automation: bool = Query(
+        False,
+        description="Include Hatch automation sessions in archive enumeration when hiding automation",
+    ),
     days_back: int = Query(90, ge=1, le=3650, description="Days to look back"),
     limit: int = Query(100, ge=1, le=200, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
@@ -482,7 +510,10 @@ def list_session_summaries(
         True,
         description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)",
     ),
-    include_automation: bool = Query(False, description="Include Hatch automation sessions in otherwise default-hidden summaries"),
+    include_automation: bool = Query(
+        False,
+        description="Include Hatch automation sessions in otherwise default-hidden summaries",
+    ),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -557,7 +588,14 @@ def wall_query(
     Schema-on-read: returns raw timestamps and facts. The consuming agent
     or UI decides what's relevant — no status bucketing, no pre-computed summaries.
     """
-    items = query_wall_sessions(db, repo=repo, project=project, days=days, limit=limit, include_automation=include_automation)
+    items = query_wall_sessions(
+        db,
+        repo=repo,
+        project=project,
+        days=days,
+        limit=limit,
+        include_automation=include_automation,
+    )
     return WallResponse(sessions=items, total=len(items))
 
 
@@ -961,12 +999,31 @@ async def set_session_notification_watch(
 def get_session(
     session_id: UUID,
     response: Response,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(session_detail_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
     owner_id: int | None = Depends(_no_viewer_owner_id),
 ) -> SessionResponse:
     """Get a single session by ID."""
+    if database_module.live_catalog_enabled():
+        try:
+            result, provider_session_id, commit_seq = read_live_catalog_session(session_id)
+        except CatalogReadError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": exc.code, "message": exc.message},
+            ) from exc
+        if result is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Session {session_id} not found",
+            )
+        response.headers["X-Catalog-Commit-Seq"] = commit_seq
+        if provider_session_id:
+            response.headers["X-Provider-Session-ID"] = provider_session_id
+        return result
+
+    assert db is not None
     store = AgentsStore(db)
     timing = ServerTimingRecorder()
 

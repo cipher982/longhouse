@@ -7,7 +7,8 @@ from uuid import uuid4
 
 import pytest
 
-from zerg.database import initialize_live_database
+from zerg.catalogd.schema import initialize_catalog_schema
+from zerg.catalogd.store import CatalogStore
 from zerg.database import make_live_engine
 from zerg.database import make_sessionmaker
 from zerg.models.live_store import LiveLaunchReadiness
@@ -17,8 +18,10 @@ from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
-from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import list_live_catalog_timeline
+from zerg.services.live_catalog_timeline import project_catalog_session_facts
+from zerg.services.live_catalog_timeline import project_catalog_sessions_snapshot
+from zerg.services.live_catalog_timeline import project_catalog_timeline_snapshot
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 
 
@@ -41,6 +44,21 @@ def _params(**overrides):
     }
     values.update(overrides)
     return TimelineSessionListParams(**values)
+
+
+def _snapshot(db, params: TimelineSessionListParams):
+    return CatalogStore(db.get_bind()).list_session_timeline(
+        project=params.project,
+        provider=params.provider,
+        environment=params.environment,
+        include_test=params.include_test,
+        hide_autonomous=params.hide_autonomous,
+        include_automation=params.include_automation,
+        device_id=params.device_id,
+        days_back=params.days_back,
+        limit=params.limit,
+        offset=params.offset,
+    )
 
 
 def _add_live_kernel(
@@ -97,7 +115,7 @@ def _add_live_kernel(
 
 def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
-    initialize_live_database(engine)
+    initialize_catalog_schema(engine)
     LiveSession = make_sessionmaker(engine)
     now = datetime.now(timezone.utc)
     session_id = uuid4()
@@ -163,7 +181,7 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
         _add_live_kernel(db, session_id=session_id, thread_id=thread_id, now=now)
         db.commit()
 
-        response = list_live_catalog_timeline(db, params=_params())
+        response = project_catalog_timeline_snapshot(_snapshot(db, _params()))
 
     assert response.total == 1
     assert response.has_real_sessions is True
@@ -183,7 +201,7 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
 
 def test_live_catalog_timeline_keeps_runtime_and_control_axes_independent(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'truth-table.db'}")
-    initialize_live_database(engine)
+    initialize_catalog_schema(engine)
     LiveSession = make_sessionmaker(engine)
     now = datetime.now(timezone.utc)
     cases = {
@@ -288,7 +306,7 @@ def test_live_catalog_timeline_keeps_runtime_and_control_axes_independent(tmp_pa
             )
         )
         db.commit()
-        response = list_live_catalog_timeline(db, params=_params())
+        response = project_catalog_timeline_snapshot(_snapshot(db, _params()))
 
     by_title = {card.head.timeline_title: card.head for card in response.sessions}
 
@@ -317,7 +335,7 @@ def test_live_catalog_timeline_keeps_runtime_and_control_axes_independent(tmp_pa
 
 def test_live_catalog_timeline_does_not_keep_stale_adopted_shell_working(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'stale-pending.db'}")
-    initialize_live_database(engine)
+    initialize_catalog_schema(engine)
     LiveSession = make_sessionmaker(engine)
     now = datetime.now(timezone.utc)
     stale_at = now - timedelta(days=1)
@@ -366,7 +384,7 @@ def test_live_catalog_timeline_does_not_keep_stale_adopted_shell_working(tmp_pat
             )
         )
         db.commit()
-        response = list_live_catalog_timeline(db, params=_params())
+        response = project_catalog_timeline_snapshot(_snapshot(db, _params()))
 
     [card] = response.sessions
     assert card.head.runtime_display.state is None
@@ -378,15 +396,14 @@ def test_live_catalog_timeline_does_not_keep_stale_adopted_shell_working(tmp_pat
 
 def test_live_catalog_timeline_returns_typed_archive_requirement_for_search(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
-    initialize_live_database(engine)
-    LiveSession = make_sessionmaker(engine)
-    with LiveSession() as db, pytest.raises(ValueError, match="search_requires_archive"):
-        list_live_catalog_timeline(db, params=_params(query="sqlite"))
+    initialize_catalog_schema(engine)
+    with pytest.raises(ValueError, match="search_requires_archive"):
+        list_live_catalog_timeline(params=_params(query="sqlite"))
 
 
 def test_live_catalog_machine_list_reuses_bounded_projection(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
-    initialize_live_database(engine)
+    initialize_catalog_schema(engine)
     LiveSession = make_sessionmaker(engine)
     now = datetime.now(timezone.utc)
     session_id = uuid4()
@@ -421,7 +438,48 @@ def test_live_catalog_machine_list_reuses_bounded_projection(tmp_path):
             )
         )
         db.commit()
-        response = list_live_catalog_sessions(db, params=_params())
+        response = project_catalog_sessions_snapshot(_snapshot(db, _params()))
 
-    assert response.total == 1
-    assert response.sessions[0].id == str(session_id)
+        assert response.total == 1
+        assert response.sessions[0].id == str(session_id)
+
+
+def test_catalog_only_pending_session_projects_without_a_timeline_card(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'pending.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    session_id = uuid4()
+    with LiveSession() as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=str(session_id),
+                provider="codex",
+                environment="production",
+                device_id="cinder",
+                started_at=now,
+            )
+        )
+        db.add(
+            LiveLaunchReadiness(
+                session_id=str(session_id),
+                owner_id="1",
+                provider="codex",
+                device_id="cinder",
+                execution_lifetime="live_control",
+                state="pending",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    snapshot = CatalogStore(engine).read_session(session_id=str(session_id))
+    response = project_catalog_session_facts(
+        snapshot["facts"],
+        observed_at=datetime.fromisoformat(snapshot["observed_at"]),
+    )
+
+    assert response.id == str(session_id)
+    assert response.launch_state == "launching"
+    assert response.user_messages == 0

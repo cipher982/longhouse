@@ -26,8 +26,14 @@ _SAFE_RETRY_METHODS = {
     "auth.device.create.v2",
     "auth.device.list.v2",
     "auth.device.validate.v2",
+    "auth.owner.get.v2",
+    "machine.enrollment.list.v2",
+    "machine.workspace.list.v2",
     "ping.v2",
     "schema.v2",
+    "session.prefix.resolve.v2",
+    "session.read.v2",
+    "session.timeline.list.v2",
 }
 
 

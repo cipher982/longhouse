@@ -20,15 +20,11 @@ from fastapi.testclient import TestClient
 import zerg.database as database_module
 from zerg.database import db_session
 from zerg.database import initialize_database
-from zerg.database import initialize_live_database
-from zerg.database import make_live_engine
-from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
-from zerg.models.live_store import LiveSessionCatalog
 
 initialize_database()
 
-from zerg.main import app
+from zerg.main import app  # noqa: E402
 
 
 def _seed_session() -> str:
@@ -75,22 +71,16 @@ def test_short_link_rejects_non_hex_prefix():
 
 
 def test_short_link_resolves_from_live_catalog_without_archive(tmp_path, monkeypatch):
-    engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
-    initialize_live_database(engine)
-    factory = make_sessionmaker(engine)
     session_id = uuid4()
-    with factory() as db:
-        db.add(
-            LiveSessionCatalog(
-                session_id=str(session_id),
-                provider="codex",
-                environment="production",
-                started_at=datetime.now(timezone.utc),
-            )
-        )
-        db.commit()
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: factory)
+    monkeypatch.setattr(
+        "zerg.services.catalog_read_gateway.resolve_session_prefix",
+        lambda _prefix: {
+            "status": "unique",
+            "session": {"session_id": str(session_id)},
+            "owner": None,
+        },
+    )
 
     response = TestClient(app, follow_redirects=False).get(f"/s/{str(session_id).split('-')[0]}")
 

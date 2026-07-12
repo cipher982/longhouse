@@ -92,6 +92,23 @@ def _seed_device_token(SessionLocal, device_id: str, *, owner_id: int = OWNER_ID
         db.commit()
 
 
+def _enrollments(SessionLocal, *, owner_id: int = OWNER_ID):
+    with SessionLocal() as db:
+        rows = (
+            db.query(DeviceToken)
+            .filter(DeviceToken.owner_id == owner_id, DeviceToken.revoked_at.is_(None))
+            .all()
+        )
+        return [
+            {
+                "device_id": row.device_id,
+                "last_used_at": row.last_used_at,
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ]
+
+
 class _FakeWebSocket:
     async def send_json(self, message):  # pragma: no cover — registration only
         pass
@@ -134,8 +151,7 @@ def test_directory_returns_online_machine_with_supports(tmp_path):
     registry = MachineControlChannelRegistry()
     _register(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.send", "codex.launch", "claude.launch"))
 
-    with SessionLocal() as db:
-        entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
+    entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert len(entries) == 1
     entry = entries[0]
@@ -159,8 +175,7 @@ def test_directory_surfaces_offline_enrolled_machine_with_empty_supports(tmp_pat
     _seed_device_token(SessionLocal, "homelab")
     registry = MachineControlChannelRegistry()
 
-    with SessionLocal() as db:
-        entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
+    entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert [(e.device_id, e.online, e.supports) for e in entries] == [("homelab", False, ())]
     assert entries[0].control_channel_status == "disconnected"
@@ -176,8 +191,7 @@ def test_directory_surfaces_online_machine_without_codex_launch_as_blocked(tmp_p
     registry = MachineControlChannelRegistry()
     _register(registry, owner_id=OWNER_ID, device_id="old-engine", supports=("codex.send",))
 
-    with SessionLocal() as db:
-        entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
+    entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert len(entries) == 1
     assert entries[0].online is True
@@ -194,8 +208,7 @@ def test_directory_does_not_block_claude_only_launchable_machine(tmp_path):
     registry = MachineControlChannelRegistry()
     _register(registry, owner_id=OWNER_ID, device_id="claude-host", supports=("claude.launch",))
 
-    with SessionLocal() as db:
-        entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
+    entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert len(entries) == 1
     assert entries[0].can_launch_codex is False
@@ -209,8 +222,7 @@ def test_directory_does_not_block_opencode_only_launchable_machine(tmp_path):
     registry = MachineControlChannelRegistry()
     _register(registry, owner_id=OWNER_ID, device_id="opencode-host", supports=("opencode.launch",))
 
-    with SessionLocal() as db:
-        entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
+    entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert len(entries) == 1
     assert entries[0].can_launch_codex is False
@@ -224,8 +236,7 @@ def test_directory_reports_antigravity_send_without_launchability(tmp_path):
     registry = MachineControlChannelRegistry()
     _register(registry, owner_id=OWNER_ID, device_id="antigravity-host", supports=("antigravity.send",))
 
-    with SessionLocal() as db:
-        entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
+    entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert len(entries) == 1
     assert entries[0].control_operations_by_provider == {"antigravity": ("send",)}
@@ -241,8 +252,7 @@ def test_directory_prefers_online_record_over_persisted_row(tmp_path):
     registry = MachineControlChannelRegistry()
     _register(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.launch",))
 
-    with SessionLocal() as db:
-        entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
+    entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert [e.device_id for e in entries] == ["cinder"]
     assert entries[0].online is True
@@ -258,8 +268,7 @@ def test_directory_excludes_other_owners_and_revoked_tokens(tmp_path):
     registry = MachineControlChannelRegistry()
     _register(registry, owner_id=OWNER_ID + 1, device_id="not-mine")
 
-    with SessionLocal() as db:
-        entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
+    entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert entries == []
 
@@ -272,8 +281,7 @@ def test_directory_sort_online_first_then_alpha(tmp_path):
     registry = MachineControlChannelRegistry()
     _register(registry, owner_id=OWNER_ID, device_id="m-online")
 
-    with SessionLocal() as db:
-        entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
+    entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
 
     assert [e.device_id for e in entries] == ["m-online", "a-offline", "z-offline"]
 

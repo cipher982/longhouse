@@ -21,6 +21,8 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 import zerg.database as database_module
 import zerg.services.session_views as session_views_module
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+from zerg.catalogd.schema import initialize_catalog_schema
+from zerg.catalogd.store import CatalogStore
 from zerg.database import Base
 from zerg.database import initialize_live_database
 from zerg.database import make_engine
@@ -58,6 +60,7 @@ from zerg.services.live_archive_outbox import enqueue_remote_launch_outbox
 from zerg.services.live_archive_outbox import enqueue_remote_launch_outcome_outbox
 from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
 from zerg.services.live_archive_outbox import enqueue_session_input_receipt_outbox
+from zerg.services.live_catalog_timeline import project_catalog_timeline_snapshot
 from zerg.services.live_launch_readiness import get_live_launch_readiness_by_client_request
 from zerg.services.live_launch_readiness import get_live_launch_readiness_by_session_id
 from zerg.services.live_launch_readiness import latest_live_launch_readiness_map
@@ -68,7 +71,6 @@ from zerg.services.live_session_inputs import upsert_live_input_receipt
 from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.live_session_state import mark_missing_live_sessions
 from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
-from zerg.services.live_catalog_timeline import list_live_catalog_timeline
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import upsert_live_control_leases
@@ -216,6 +218,7 @@ def test_hot_interaction_and_archive_state_match_list_and_workspace_before_archi
     archive_factory = sessionmaker(bind=archive_engine)
     live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
     initialize_live_database(live_engine)
+    initialize_catalog_schema(live_engine)
     live_factory = sessionmaker(bind=live_engine)
     session_id = uuid4()
     pause_id = str(uuid4())
@@ -306,26 +309,36 @@ def test_hot_interaction_and_archive_state_match_list_and_workspace_before_archi
     monkeypatch.setattr(database_module, "get_catalog_session_factory", lambda: live_factory)
     monkeypatch.setattr(database_module, "get_live_session_factory", lambda: live_factory)
 
-    with live_factory() as db:
-        timeline = list_live_catalog_timeline(
-            db,
-            params=TimelineSessionListParams(
-                project=None,
-                provider=None,
-                environment=None,
-                include_test=True,
-                hide_autonomous=False,
-                device_id=None,
-                days_back=30,
-                query=None,
-                limit=10,
-                offset=0,
-                sort=None,
-                mode="lexical",
-                context_mode="default",
-                include_automation=True,
-            ),
+    params = TimelineSessionListParams(
+        project=None,
+        provider=None,
+        environment=None,
+        include_test=True,
+        hide_autonomous=False,
+        device_id=None,
+        days_back=30,
+        query=None,
+        limit=10,
+        offset=0,
+        sort=None,
+        mode="lexical",
+        context_mode="default",
+        include_automation=True,
+    )
+    timeline = project_catalog_timeline_snapshot(
+        CatalogStore(live_engine).list_session_timeline(
+            project=params.project,
+            provider=params.provider,
+            environment=params.environment,
+            include_test=params.include_test,
+            hide_autonomous=params.hide_autonomous,
+            include_automation=params.include_automation,
+            device_id=params.device_id,
+            days_back=params.days_back,
+            limit=params.limit,
+            offset=params.offset,
         )
+    )
     with archive_factory() as db:
         workspace = build_session_workspace(db=db, session_id=session_id)
 

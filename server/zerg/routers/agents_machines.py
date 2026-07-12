@@ -20,7 +20,6 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
-from zerg.models.live_store import LiveSessionCatalog
 from zerg.schemas.machines import ArchiveBacklogControlRequest
 from zerg.schemas.machines import ArchiveBacklogControlResponse
 from zerg.schemas.machines import ArchiveBacklogResponse
@@ -35,6 +34,10 @@ from zerg.schemas.observability import MachineHealthListResponse
 from zerg.schemas.observability import MachineHealthStatus
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agent_heartbeat_health import list_machine_transport_health
+from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.catalog_read_gateway import active_owner_id
+from zerg.services.catalog_read_gateway import enrolled_machines
+from zerg.services.catalog_read_gateway import machine_workspaces
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.machine_control_operations import ActiveMachineControlOperationError
 from zerg.services.machine_control_operations import create_live_provider_live_proof_operation
@@ -59,6 +62,41 @@ ARCHIVE_BACKLOG_CONTROL_COMMAND_V2 = "archive.backlog_control.v2"
 PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS = 15
 
 
+def _legacy_machine_db():
+    if database_module.live_catalog_enabled():
+        yield None
+        return
+    with database_module.get_catalog_session_factory()() as db:
+        yield db
+
+
+_machine_read_db_dependency = get_db if _catalog_db_dependency is get_db else _legacy_machine_db
+
+
+def _request_owner_id(db: Session | None, device_token: DeviceToken | None) -> int:
+    owner_id = getattr(device_token, "owner_id", None)
+    if owner_id is not None:
+        return int(owner_id)
+    if db is not None:
+        return _resolve_agents_owner_id(db, device_token)
+    owner_id = active_owner_id()
+    if owner_id is None:
+        raise CatalogReadError("owner_unavailable", "No active Longhouse owner is configured.")
+    return owner_id
+
+
+def _legacy_enrollments(db: Session, owner_id: int) -> list[dict[str, object]]:
+    rows = db.query(DeviceToken).filter(DeviceToken.owner_id == owner_id, DeviceToken.revoked_at.is_(None)).all()
+    return [
+        {
+            "device_id": row.device_id,
+            "last_used_at": row.last_used_at,
+            "created_at": row.created_at,
+        }
+        for row in rows
+    ]
+
+
 def archive_backlog_control_command_type(mode: str) -> str:
     """Require lease-aware engines before enabling repair work."""
     return ARCHIVE_BACKLOG_CONTROL_COMMAND if mode == "paused" else ARCHIVE_BACKLOG_CONTROL_COMMAND_V2
@@ -66,13 +104,21 @@ def archive_backlog_control_command_type(mode: str) -> str:
 
 @router.get("", response_model=MachineDirectoryResponse)
 def list_machines(
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_machine_read_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> MachineDirectoryResponse:
     """List enrolled machines for this owner with live control-channel status."""
-    owner_id = _resolve_agents_owner_id(db, device_token)
-    entries = build_machines_directory(db, owner_id=owner_id)
+    try:
+        owner_id = _request_owner_id(db, device_token)
+        enrollments = (
+            enrolled_machines(owner_id).get("enrollments", [])
+            if database_module.live_catalog_enabled()
+            else _legacy_enrollments(db, owner_id)  # type: ignore[arg-type]
+        )
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+    entries = build_machines_directory(owner_id=owner_id, enrollments=enrollments)
     return MachineDirectoryResponse(machines=[MachineDirectoryEntry(**entry.to_response()) for entry in entries])
 
 
@@ -106,19 +152,33 @@ def list_machine_workspaces(
     device_id: str,
     limit: int = Query(12, ge=1, le=50, description="Max ranked workspaces to return"),
     days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_machine_read_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> WorkspaceSuggestionsResponse:
     """Frecency-ranked recent workspaces for the launch picker, scoped to one machine."""
-    owner_id = _resolve_agents_owner_id(db, device_token)
+    if database_module.live_catalog_enabled():
+        try:
+            owner_id = _request_owner_id(db, device_token)
+            payload = machine_workspaces(
+                owner_id=owner_id,
+                device_id=device_id,
+                limit=limit,
+                days_back=days_back,
+            )
+        except CatalogReadError as exc:
+            raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+        entries = [WorkspaceSuggestion(**item) for item in payload.get("workspaces", [])]
+        return WorkspaceSuggestionsResponse(device_id=device_id, workspaces=entries)
+
+    assert db is not None
+    owner_id = _request_owner_id(db, device_token)
     entries = build_workspace_suggestions(
         db,
         owner_id=owner_id,
         device_id=device_id,
         limit=limit,
         days_back=days_back,
-        session_model=LiveSessionCatalog if database_module.live_catalog_enabled() else None,
     )
     return WorkspaceSuggestionsResponse(
         device_id=device_id,

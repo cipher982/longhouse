@@ -53,7 +53,7 @@ def _owner_key(owner_id: int | str | None) -> str | None:
     return str(owner_id)
 
 
-def _project_live_launch_state(row: LiveLaunchReadiness) -> LiveLaunchReadinessView:
+def project_live_launch_readiness(row: LiveLaunchReadiness) -> LiveLaunchReadinessView:
     raw_state = str(row.state or "").strip()
     execution_lifetime = normalize_remote_execution_lifetime(row.execution_lifetime)
     if raw_state == "failed":
@@ -103,7 +103,7 @@ def get_live_launch_readiness_by_client_request(
     )
     if row is None:
         return None
-    return _project_live_launch_state(row)
+    return project_live_launch_readiness(row)
 
 
 def get_live_launch_readiness_by_session_id(
@@ -115,7 +115,7 @@ def get_live_launch_readiness_by_session_id(
     row = db.get(LiveLaunchReadiness, str(session_id))
     if row is None or _live_launch_readiness_expired(row, now=now):
         return None
-    return _project_live_launch_state(row)
+    return project_live_launch_readiness(row)
 
 
 def latest_live_launch_readiness_map(
@@ -133,7 +133,7 @@ def latest_live_launch_readiness_map(
         if _live_launch_readiness_expired(row, now=now):
             continue
         session_id = UUID(str(row.session_id))
-        result[session_id] = _project_live_launch_state(row)
+        result[session_id] = project_live_launch_readiness(row)
     return result
 
 

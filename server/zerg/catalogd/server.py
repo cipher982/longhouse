@@ -209,6 +209,8 @@ class CatalogDaemon:
             return await self._revoke_device(request)
         if request.method == "auth.user.get.v2":
             return await self._get_user(request)
+        if request.method == "auth.owner.get.v2":
+            return await self._get_active_owner(request)
         if request.method == "auth.user.resolve_cp.v2":
             return await self._resolve_cp_user(request)
         if request.method == "auth.user.resolve_local.v2":
@@ -221,6 +223,16 @@ class CatalogDaemon:
             return await self._rotate_refresh(request)
         if request.method == "auth.refresh.revoke_family.v2":
             return await self._revoke_refresh_family(request)
+        if request.method == "session.timeline.list.v2":
+            return await self._list_session_timeline(request)
+        if request.method == "session.read.v2":
+            return await self._read_session(request)
+        if request.method == "session.prefix.resolve.v2":
+            return await self._resolve_session_prefix(request)
+        if request.method == "machine.enrollment.list.v2":
+            return await self._list_machine_enrollments(request)
+        if request.method == "machine.workspace.list.v2":
+            return await self._list_machine_workspaces(request)
         if request.params:
             return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
         metadata = await self._run_store(read_catalog_meta, self._engine)
@@ -279,6 +291,15 @@ class CatalogDaemon:
         assert self._store is not None
         return CatalogRpcResponse(
             id=request.id, result=await self._run_store(self._store.get_user, user_id=user_id, touch_last_login=touch)
+        )
+
+    async def _get_active_owner(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if request.params:
+            return self._error(request, "invalid_request", "auth.owner.get.v2 accepts no parameters")
+        assert self._store is not None
+        return CatalogRpcResponse(
+            id=request.id,
+            result=await self._run_store(self._store.get_active_owner),
         )
 
     async def _resolve_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -545,6 +566,97 @@ class CatalogDaemon:
         )
         if result.get("limit_exceeded") is True:
             return self._error(request, "resource_exhausted", "device token list exceeds the catalog bound")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_session_timeline(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "project",
+            "provider",
+            "environment",
+            "include_test",
+            "hide_autonomous",
+            "include_automation",
+            "device_id",
+            "days_back",
+            "limit",
+            "offset",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "session.timeline.list.v2 has invalid parameters")
+        params = dict(request.params)
+        for field, maximum in (("project", 255), ("provider", 64), ("environment", 32), ("device_id", 255)):
+            value = params[field]
+            if value is not None and (not isinstance(value, str) or not value or len(value) > maximum):
+                return self._error(request, "invalid_request", f"{field} must be null or contain 1 to {maximum} characters")
+        for field in ("include_test", "hide_autonomous", "include_automation"):
+            if type(params[field]) is not bool:
+                return self._error(request, "invalid_request", f"{field} must be a boolean")
+        if type(params["days_back"]) is not int or not 1 <= params["days_back"] <= 90:
+            return self._error(request, "invalid_request", "days_back must be an integer from 1 through 90")
+        if type(params["limit"]) is not int or not 1 <= params["limit"] <= 100:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 100")
+        if type(params["offset"]) is not int or not 0 <= params["offset"] <= 1_000_000:
+            return self._error(request, "invalid_request", "offset must be an integer from 0 through 1000000")
+        assert self._store is not None
+        result = await self._run_store(self._store.list_session_timeline, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id"}:
+            return self._error(request, "invalid_request", "session.read.v2 requires session_id")
+        session_id = request.params["session_id"]
+        try:
+            parsed = uuid.UUID(session_id) if isinstance(session_id, str) else None
+        except ValueError:
+            parsed = None
+        if parsed is None or str(parsed) != session_id:
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        assert self._store is not None
+        result = await self._run_store(self._store.read_session, session_id=session_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _resolve_session_prefix(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"prefix"}:
+            return self._error(request, "invalid_request", "session.prefix.resolve.v2 requires prefix")
+        prefix = request.params["prefix"]
+        if (
+            not isinstance(prefix, str)
+            or not 1 <= len(prefix) <= 36
+            or prefix != prefix.strip().lower()
+            or any(character not in "0123456789abcdef-" for character in prefix)
+        ):
+            return self._error(request, "invalid_request", "prefix must be 1 to 36 lowercase UUID characters")
+        assert self._store is not None
+        result = await self._run_store(self._store.resolve_session_prefix, prefix=prefix)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_machine_enrollments(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id"}:
+            return self._error(request, "invalid_request", "machine.enrollment.list.v2 requires owner_id")
+        owner_id = request.params["owner_id"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        assert self._store is not None
+        result = await self._run_store(self._store.list_machine_enrollments, owner_id=owner_id)
+        if result.get("limit_exceeded") is True:
+            return self._error(request, "resource_exhausted", "machine enrollment list exceeds the catalog bound")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_machine_workspaces(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"owner_id", "device_id", "limit", "days_back"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "machine.workspace.list.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if not isinstance(params["device_id"], str) or not 1 <= len(params["device_id"]) <= 255:
+            return self._error(request, "invalid_request", "device_id must contain 1 to 255 characters")
+        if type(params["limit"]) is not int or not 1 <= params["limit"] <= 50:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 50")
+        if type(params["days_back"]) is not int or not 1 <= params["days_back"] <= 180:
+            return self._error(request, "invalid_request", "days_back must be an integer from 1 through 180")
+        assert self._store is not None
+        result = await self._run_store(self._store.list_machine_workspaces, **params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _run_store(self, operation, *args, **kwargs):

@@ -28,17 +28,12 @@ from fastapi.testclient import TestClient
 import zerg.database as database_module
 from zerg.database import db_session
 from zerg.database import initialize_database
-from zerg.database import initialize_live_database
-from zerg.database import make_live_engine
-from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
-from zerg.models.live_store import LiveSessionCatalog
-from zerg.models.live_store import LiveUser
 from zerg.models.user import User
 
 initialize_database()
 
-from zerg.main import app
+from zerg.main import app  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -214,24 +209,22 @@ def test_preview_works_when_no_user_is_configured():
 
 
 def test_preview_reads_public_metadata_from_live_catalog(tmp_path, monkeypatch):
-    engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
-    initialize_live_database(engine)
-    factory = make_sessionmaker(engine)
     session_id = uuid4()
-    with factory() as db:
-        db.add(LiveUser(id=1, email="david010@example.com", display_name="David Rose"))
-        db.add(
-            LiveSessionCatalog(
-                session_id=str(session_id),
-                provider="codex",
-                environment="production",
-                device_name="cinder",
-                started_at=datetime.now(timezone.utc),
-            )
-        )
-        db.commit()
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: factory)
+    monkeypatch.setattr(
+        "zerg.services.catalog_read_gateway.resolve_session_prefix",
+        lambda _prefix: {
+            "status": "unique",
+            "session": {
+                "session_id": str(session_id),
+                "provider": "codex",
+                "device_name": "cinder",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "ended_at": None,
+            },
+            "owner": {"display_name": "David Rose", "email_local": "david010"},
+        },
+    )
 
     response = TestClient(app).get(f"/s/{str(session_id).split('-')[0]}/preview")
 

@@ -21,7 +21,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
-from zerg.services.machines_directory import build_machines_directory
+from zerg.models.device_token import DeviceToken
 
 # Frecency: sum a recency weight per session in a cwd group. Frequent AND
 # recent directories dominate; a single stale session barely registers.
@@ -105,8 +105,16 @@ def build_workspace_suggestions(
     manual path entry instead of erroring.
     """
     session_model = session_model or AgentSession
-    enrolled = {entry.device_id for entry in build_machines_directory(db, owner_id=owner_id)}
-    if device_id not in enrolled:
+    enrolled = (
+        db.query(DeviceToken.id)
+        .filter(
+            DeviceToken.owner_id == owner_id,
+            DeviceToken.device_id == device_id,
+            DeviceToken.revoked_at.is_(None),
+        )
+        .first()
+    )
+    if enrolled is None:
         return []
 
     now = datetime.now(timezone.utc)
