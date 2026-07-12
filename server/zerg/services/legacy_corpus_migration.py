@@ -232,6 +232,7 @@ class LegacyCorpusConverter:
         self.object_root = object_root
         self.tenant_id = tenant_id
         self.archive_store = archive_store
+        self._cached_owner_id: str | None = None
 
     async def migrate_run(
         self,
@@ -298,13 +299,13 @@ class LegacyCorpusConverter:
         watermark: LegacyHighWatermark,
     ) -> MigrationResult:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
-        sources, source_covered, source_missing = self._load_sources(db, session_id, watermark)
         events = (
             db.query(AgentEvent)
             .filter(AgentEvent.session_id == session_id, AgentEvent.id <= watermark.event_id)
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .all()
         )
+        sources, source_covered, source_missing = self._load_sources(db, session_id, watermark, events)
         batches = _source_batches(sources)
         if not batches and not events and source_missing == 0:
             batches = [_SourceBatch("empty", "legacy_source_lines", 0, ())]
@@ -426,6 +427,7 @@ class LegacyCorpusConverter:
         db: Session,
         session_id: UUID,
         watermark: LegacyHighWatermark,
+        events: list[AgentEvent],
     ) -> tuple[list[_SourceRecord], int, int]:
         rows = (
             db.query(AgentSourceLine)
@@ -447,13 +449,9 @@ class LegacyCorpusConverter:
             # line is authoritative when present; event raw is only its bounded
             # recovery fallback after archive lookup failed.
             events_by_key: dict[tuple[str, int], list[AgentEvent]] = defaultdict(list)
-            for event in (
-                db.query(AgentEvent)
-                .filter(AgentEvent.session_id == session_id, AgentEvent.id <= watermark.event_id)
-                .filter(AgentEvent.source_path.isnot(None), AgentEvent.source_offset.isnot(None))
-                .order_by(AgentEvent.id.asc())
-            ):
-                events_by_key[(event.source_path, int(event.source_offset))].append(event)
+            for event in sorted(events, key=lambda item: item.id):
+                if event.source_path is not None and event.source_offset is not None:
+                    events_by_key[(event.source_path, int(event.source_offset))].append(event)
             records = []
             physical_keys: set[tuple[str, int, str]] = set()
             covered = 0
@@ -461,12 +459,15 @@ class LegacyCorpusConverter:
             for row in rows:
                 value = decode_raw_json(row)
                 provenance_kind = "legacy_source_lines"
+                validated_raw_hash: str | None = None
                 if value is None:
                     value = archive.get((row.source_path, int(row.source_offset), row.line_hash))
                 if value is not None:
                     data = value.encode("utf-8")
-                    if len(data) > MAX_RECORD_BYTES or hashlib.sha256(data).hexdigest() != row.line_hash:
+                    validated_raw_hash = hashlib.sha256(data).hexdigest()
+                    if len(data) > MAX_RECORD_BYTES or validated_raw_hash != row.line_hash:
                         value = None
+                        validated_raw_hash = None
                 matching_events = events_by_key.get((row.source_path, int(row.source_offset)), ())
                 if value is None:
                     value = next(
@@ -489,7 +490,7 @@ class LegacyCorpusConverter:
                 data = value.encode("utf-8")
                 if len(data) > MAX_RECORD_BYTES:
                     continue
-                raw_hash = hashlib.sha256(data).hexdigest()
+                raw_hash = validated_raw_hash or hashlib.sha256(data).hexdigest()
                 if provenance_kind != "legacy_normalized_event":
                     if raw_hash != row.line_hash:
                         derived = _normalized_event_source(matching_events)
@@ -516,12 +517,6 @@ class LegacyCorpusConverter:
                     )
             return records, covered, missing
 
-        events = (
-            db.query(AgentEvent)
-            .filter(AgentEvent.session_id == session_id, AgentEvent.id <= watermark.event_id)
-            .order_by(AgentEvent.id.asc())
-            .all()
-        )
         records = []
         physical_keys: set[tuple[str, int, str]] = set()
         covered = 0
@@ -556,10 +551,13 @@ class LegacyCorpusConverter:
         return records, covered, missing
 
     async def _active_owner_id(self) -> str:
+        if self._cached_owner_id is not None:
+            return self._cached_owner_id
         result = await self.catalog.call("auth.owner.get.v2", {}, timeout_seconds=5.0)
         if result.get("found") is not True or result.get("owner_id") is None:
             raise RuntimeError("storage-v2 migration requires an active catalog owner")
-        return str(result["owner_id"])
+        self._cached_owner_id = str(result["owner_id"])
+        return self._cached_owner_id
 
     async def _migrate_media(
         self,
