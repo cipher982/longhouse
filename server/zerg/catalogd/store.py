@@ -3989,6 +3989,85 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
             }
 
+    def list_storage_session_render_objects(
+        self,
+        *,
+        session_id: UUID,
+        generation_id: UUID | None,
+        snapshot_revision: int,
+        after_object_id: str | None,
+        limit: int,
+    ) -> dict[str, Any]:
+        """Page one immutable render-object set at a claimed projector revision."""
+
+        session_table = StorageSession.__table__
+        generation_table = RenderGeneration.__table__
+        object_table = RenderObject.__table__
+        tombstone = LiveSessionTombstone.__table__
+        session_key = str(session_id)
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            deleted = connection.execute(
+                select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
+            ).scalar_one_or_none()
+            session_row = connection.execute(select(session_table).where(session_table.c.session_id == session_key)).mappings().first()
+            current_generation = (
+                str(session_row["current_render_generation"])
+                if session_row is not None and session_row["current_render_generation"] is not None
+                else None
+            )
+            selected_generation = str(generation_id) if generation_id is not None else current_generation
+            generation_row = (
+                connection.execute(
+                    select(generation_table).where(
+                        generation_table.c.generation_id == selected_generation,
+                        generation_table.c.session_id == session_key,
+                    )
+                )
+                .mappings()
+                .first()
+                if selected_generation is not None
+                else None
+            )
+            base = (
+                object_table.c.session_id == session_key,
+                object_table.c.generation_id == selected_generation,
+                object_table.c.commit_seq <= snapshot_revision,
+                or_(
+                    object_table.c.retirement_revision.is_(None),
+                    object_table.c.retirement_revision > snapshot_revision,
+                ),
+            )
+            rows: list[Any] = []
+            snapshot_object_count = 0
+            snapshot_event_count = 0
+            if deleted is None and session_row is not None and generation_row is not None:
+                counts = connection.execute(select(func.count(), func.coalesce(func.sum(object_table.c.event_count), 0)).where(*base)).one()
+                snapshot_object_count = int(counts[0])
+                snapshot_event_count = int(counts[1])
+                statement = select(object_table).where(*base)
+                if after_object_id is not None:
+                    statement = statement.where(object_table.c.object_id > after_object_id)
+                rows = list(connection.execute(statement.order_by(object_table.c.object_id.asc()).limit(limit + 1)).mappings().all())
+            has_more = len(rows) > limit
+            rows = rows[:limit]
+            return {
+                "found": session_row is not None and deleted is None,
+                "deleted": deleted is not None,
+                "deletion_revision": str(deleted) if deleted is not None else None,
+                "snapshot_revision": str(snapshot_revision),
+                "current_generation_id": current_generation,
+                "generation_id": selected_generation,
+                "generation": _render_generation_dto(generation_row) if generation_row is not None else None,
+                "session": _storage_session_dto(session_row) if session_row is not None and deleted is None else None,
+                "snapshot_object_count": snapshot_object_count,
+                "snapshot_event_count": snapshot_event_count,
+                "objects": [_render_object_manifest_dto(row) for row in rows],
+                "has_more": has_more,
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
     def commit_media_object(
         self,
         *,
@@ -5339,6 +5418,7 @@ def _render_object_manifest_dto(row) -> dict[str, Any]:
         "commit_seq": str(row["commit_seq"]),
         "created_at": _encode_datetime(row["created_at"]),
         "retired_at": _encode_datetime(row["retired_at"]),
+        "retirement_revision": str(row["retirement_revision"]) if row["retirement_revision"] is not None else None,
     }
 
 

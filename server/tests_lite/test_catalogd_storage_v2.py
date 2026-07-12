@@ -115,9 +115,20 @@ def _raw_params(
     }
 
 
-def _render_manifest(generation_id: UUID) -> dict:
-    object_hash = hashlib.sha256(b"render-object").hexdigest()
-    first_key = '[1700000000000000,"cinder","codex","history.jsonl","018f0c3a-7b2d-7f10-8a11-123456789abc",0,0]'
+def _render_manifest(generation_id: UUID, *, seed: bytes = b"render-object", position: int = 0) -> dict:
+    object_hash = hashlib.sha256(seed).hexdigest()
+    first_key = json.dumps(
+        [
+            1_700_000_000_000_000 + position,
+            "cinder",
+            "codex",
+            "history.jsonl",
+            "018f0c3a-7b2d-7f10-8a11-123456789abc",
+            position,
+            0,
+        ],
+        separators=(",", ":"),
+    )
     return {
         "generation_id": str(generation_id),
         "parser_revision": "engine-parser-v2",
@@ -209,6 +220,75 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
         )
         assert stale["stale_generation"] is True
         assert stale["current_generation_id"] == str(generation_id)
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_render_object_projection_pages_are_frozen_at_claimed_revision(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = UUID("018f0c3a-7b2d-7f10-8a11-123456789abc")
+    session_id = uuid4()
+    generation_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        first = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"hello\n",), sealed_at=now)
+        first.update(render_state="ready", render_manifest=_render_manifest(generation_id, seed=b"first", position=0))
+        first_commit = await client.call("storage.raw_object.commit.v2", first)
+        first_revision = first_commit["receipt"]["commit_seq"]
+
+        second = _raw_params(epoch=epoch, session_id=session_id, start=6, end=12, records=(b"world\n",), sealed_at=now)
+        second.update(render_state="ready", render_manifest=_render_manifest(generation_id, seed=b"second", position=6))
+        second_commit = await client.call("storage.raw_object.commit.v2", second)
+        second_revision = second_commit["receipt"]["commit_seq"]
+
+        frozen = await client.call(
+            "storage.session.render_objects.list.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": None,
+                "snapshot_revision": int(first_revision),
+                "after_object_id": None,
+                "limit": 100,
+            },
+        )
+        assert frozen["generation_id"] == str(generation_id)
+        assert frozen["snapshot_object_count"] == 1
+        assert frozen["snapshot_event_count"] == 1
+        assert [row["source_envelope_id"] for row in frozen["objects"]] == [first["envelope_id"]]
+
+        first_page = await client.call(
+            "storage.session.render_objects.list.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(generation_id),
+                "snapshot_revision": int(second_revision),
+                "after_object_id": None,
+                "limit": 1,
+            },
+        )
+        assert first_page["snapshot_object_count"] == 2
+        assert first_page["snapshot_event_count"] == 2
+        assert first_page["has_more"] is True
+        second_page = await client.call(
+            "storage.session.render_objects.list.v2",
+            {
+                "session_id": str(session_id),
+                "generation_id": str(generation_id),
+                "snapshot_revision": int(second_revision),
+                "after_object_id": first_page["objects"][-1]["object_id"],
+                "limit": 1,
+            },
+        )
+        assert second_page["has_more"] is False
+        assert {first_page["objects"][0]["object_id"], second_page["objects"][0]["object_id"]} == {
+            first["render_manifest"]["object_id"],
+            second["render_manifest"]["object_id"],
+        }
     finally:
         await client.close()
         await daemon.close()

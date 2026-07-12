@@ -226,6 +226,7 @@ class RenderObject(CatalogBase):
     commit_seq = Column(BigInteger, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False)
     retired_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    retirement_revision = Column(BigInteger, nullable=True, index=True)
 
     __table_args__ = (
         UniqueConstraint("generation_id", "source_envelope_id", name="uq_render_object_generation_source"),

@@ -310,6 +310,8 @@ class CatalogDaemon:
             return await self._read_storage_session_raw_manifest(request)
         if request.method == "storage.session.render_manifest.v2":
             return await self._read_storage_session_render_manifest(request)
+        if request.method == "storage.session.render_objects.list.v2":
+            return await self._list_storage_session_render_objects(request)
         if request.method == "storage.media.commit.v2":
             return await self._commit_media_object(request)
         if request.method == "storage.media.read.v2":
@@ -1628,6 +1630,35 @@ class CatalogDaemon:
             owner_id=owner_id,
             generation_id=generation_id,
             after_order_key=after_order_key,
+            limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_storage_session_render_objects(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"session_id", "generation_id", "snapshot_revision", "after_object_id", "limit"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "storage.session.render_objects.list.v2 has invalid parameters")
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+            generation_id = (
+                _canonical_uuid(request.params["generation_id"], "generation_id") if request.params["generation_id"] is not None else None
+            )
+            snapshot_revision = _revision(request.params["snapshot_revision"], "snapshot_revision")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        after_object_id = request.params["after_object_id"]
+        if after_object_id is not None and not _is_hash(after_object_id):
+            return self._error(request, "invalid_request", "after_object_id must be lowercase SHA-256 hex or null")
+        limit = request.params["limit"]
+        if type(limit) is not int or not 1 <= limit <= 1_000:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.list_storage_session_render_objects,
+            session_id=session_id,
+            generation_id=generation_id,
+            snapshot_revision=snapshot_revision,
+            after_object_id=after_object_id,
             limit=limit,
         )
         return CatalogRpcResponse(id=request.id, result=result)
