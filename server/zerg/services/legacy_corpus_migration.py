@@ -647,6 +647,8 @@ class LegacyCorpusConverter:
         session_id = UUID(str(session.id))
         archive_store = self.archive_store or create_archive_store()
         connection = db.connection()
+        connection.exec_driver_sql("PRAGMA cache_size=-32768")
+        connection.exec_driver_sql("PRAGMA mmap_size=0")
         connection.exec_driver_sql("PRAGMA temp_store=FILE")
         connection.exec_driver_sql(
             "CREATE TEMP TABLE IF NOT EXISTS migration_source_counts ("
@@ -654,12 +656,14 @@ class LegacyCorpusConverter:
             "row_count INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, "
             "PRIMARY KEY(source_path, source_offset, line_hash)) WITHOUT ROWID"
         )
+        connection.exec_driver_sql("PRAGMA temp.cache_size=-32768")
         connection.exec_driver_sql("DELETE FROM migration_source_counts")
         connection.execute(
             text(
-                "INSERT INTO migration_source_counts(source_path, source_offset, line_hash, row_count) "
-                "SELECT source_path, source_offset, line_hash, COUNT(*) FROM source_lines "
-                "WHERE session_id = :session_id AND id <= :high GROUP BY source_path, source_offset, line_hash"
+                "INSERT INTO migration_source_counts(source_path, source_offset, line_hash, row_count, consumed) "
+                "SELECT source_path, source_offset, line_hash, 1, 0 FROM source_lines "
+                "WHERE session_id = :session_id AND id <= :high AND true "
+                "ON CONFLICT(source_path, source_offset, line_hash) DO UPDATE SET row_count = row_count + 1"
             ),
             {"session_id": str(session_id), "high": watermark.source_line_id},
         )
