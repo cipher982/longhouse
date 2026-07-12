@@ -285,3 +285,37 @@ def test_revoke_device_token_routes_write_through_serializer(tmp_path):
         assert stored.revoked_at is not None
 
     cleanup()
+
+
+def test_production_revoke_routes_mutation_through_catalogd(tmp_path):
+    factory, cleanup = _setup_app(tmp_path)
+    token_id = "00000000-0000-4000-8000-000000000001"
+    observed: dict = {}
+
+    class _CatalogClient:
+        async def call(self, method, params, *, timeout_seconds):
+            observed.update(method=method, params=params, timeout_seconds=timeout_seconds)
+            return {
+                "found": True,
+                "changed": True,
+                "token_id": token_id,
+                "revoked_at": datetime.now(UTC).isoformat(),
+                "commit_seq": "11",
+            }
+
+    with (
+        patch("zerg.routers.device_tokens.live_store_configured", return_value=True),
+        patch("zerg.routers.device_tokens.get_settings", return_value=SimpleNamespace(testing=False)),
+        patch("zerg.services.catalogd_supervisor.get_catalogd_client", return_value=_CatalogClient()),
+        patch("zerg.routers.device_tokens.get_write_serializer", side_effect=AssertionError("must not mutate in API")),
+    ):
+        client = TestClient(api_app)
+        response = client.delete(f"/devices/tokens/{token_id}")
+
+    assert response.status_code == 204, response.text
+    assert observed == {
+        "method": "auth.device.revoke.v2",
+        "params": {"owner_id": 1, "token_id": token_id},
+        "timeout_seconds": 1.0,
+    }
+    cleanup()

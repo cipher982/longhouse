@@ -24,8 +24,10 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
+from zerg.config import get_settings
 from zerg.database import archive_database_is_read_only
 from zerg.database import catalog_db_dependency
+from zerg.database import live_store_configured
 from zerg.dependencies.auth import get_current_user
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
@@ -434,6 +436,55 @@ async def revoke_device_token(
     A revoked token can no longer be used for authentication.
     This action cannot be undone.
     """
+    if live_store_configured() and not get_settings().testing:
+        from zerg.catalogd.client import CatalogRemoteError
+        from zerg.catalogd.client import CatalogUnavailable
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        client = get_catalogd_client()
+        if client is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+            )
+        try:
+            result = await client.call(
+                "auth.device.revoke.v2",
+                {
+                    "owner_id": int(current_user.id),
+                    "token_id": str(token_id),
+                },
+                timeout_seconds=1.0,
+            )
+        except CatalogUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+            ) from exc
+        except CatalogRemoteError as exc:
+            logger.warning("Catalog device-token revoke failed code=%s retryable=%s", exc.code, exc.retryable)
+            if exc.retryable:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+                ) from exc
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"code": "catalog_operation_failed", "message": "Catalog mutation failed."},
+            ) from exc
+        if result.get("found") is not True:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Token {token_id} not found",
+            )
+        logger.info(
+            "Revoked device token %s for user %s at catalog commit %s",
+            token_id,
+            current_user.id,
+            result.get("commit_seq"),
+        )
+        return
+
     ws = get_write_serializer()
 
     def _revoke_token(wdb: Session) -> None:
@@ -445,13 +496,8 @@ async def revoke_device_token(
                 detail=f"Token {token_id} not found",
             )
 
-        if token.revoked_at is not None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Token is already revoked",
-            )
-
-        token.revoked_at = datetime.now(timezone.utc)
+        if token.revoked_at is None:
+            token.revoked_at = datetime.now(timezone.utc)
 
     await ws.execute_or_direct(
         _revoke_token,

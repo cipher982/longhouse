@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import Engine
 from sqlalchemy import select
+from sqlalchemy import update
 
 from zerg.catalogd.schema import catalog_meta
 from zerg.models.live_store import LiveDeviceToken
@@ -48,6 +49,64 @@ class CatalogStore:
                     "last_used_at": _encode_datetime(row["last_used_at"]),
                     "revoked_at": None,
                 },
+            }
+
+    def revoke_device(self, *, owner_id: int, token_id: str) -> dict[str, Any]:
+        """Idempotently revoke one machine credential in a single commit.
+
+        A replay after a lost response returns the durable revocation without
+        allocating another commit sequence number. Its ``commit_seq`` is the
+        current catalog sequence, not necessarily the original revoke's seq.
+        """
+
+        token_table = LiveDeviceToken.__table__
+        now = datetime.now(UTC)
+        with self.engine.begin() as connection:
+            row = (
+                connection.execute(
+                    select(token_table.c.id, token_table.c.revoked_at).where(
+                        token_table.c.id == token_id,
+                        token_table.c.owner_id == owner_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                return {
+                    "found": False,
+                    "changed": False,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+
+            revoked_at = _as_aware_utc(row["revoked_at"])
+            if revoked_at is not None:
+                return {
+                    "found": True,
+                    "changed": False,
+                    "token_id": str(row["id"]),
+                    "revoked_at": _encode_datetime(revoked_at),
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+
+            connection.execute(
+                update(token_table).where(token_table.c.id == token_id, token_table.c.owner_id == owner_id).values(revoked_at=now)
+            )
+            commit_seq = connection.execute(
+                update(catalog_meta)
+                .where(catalog_meta.c.singleton == 1)
+                .values(
+                    commit_seq=catalog_meta.c.commit_seq + 1,
+                    updated_at=now.isoformat(),
+                )
+                .returning(catalog_meta.c.commit_seq)
+            ).scalar_one()
+            return {
+                "found": True,
+                "changed": True,
+                "token_id": str(row["id"]),
+                "revoked_at": now.isoformat(),
+                "commit_seq": str(commit_seq),
             }
 
     def checkpoint_passive(self) -> dict[str, int]:

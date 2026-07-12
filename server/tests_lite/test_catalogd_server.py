@@ -129,6 +129,133 @@ async def test_device_auth_rejects_malformed_params_without_touching_store(daemo
 
 
 @pytest.mark.asyncio
+async def test_device_revoke_is_atomic_idempotent_and_invalidates_auth(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    token_hash = "a" * 64
+    with engine.begin() as connection:
+        connection.execute(
+            LiveDeviceToken.__table__.insert().values(
+                id="token-1",
+                owner_id=7,
+                device_id="cinder",
+                token_hash=token_hash,
+                created_at=datetime.now(UTC),
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        first = await client.call("auth.device.revoke.v2", {"owner_id": 7, "token_id": "token-1"})
+        replay = await client.call("auth.device.revoke.v2", {"owner_id": 7, "token_id": "token-1"})
+        auth = await client.call("auth.device.validate.v2", {"token_hash": token_hash})
+        ping = await client.call("ping.v2")
+
+        assert first["found"] is True
+        assert first["changed"] is True
+        assert first["commit_seq"] == "1"
+        assert replay == {**first, "changed": False}
+        assert auth == {"valid": False, "commit_seq": "1"}
+        assert ping["commit_seq"] == "1"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_device_revoke_cannot_cross_owner_or_advance_commit_seq(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveDeviceToken.__table__.insert().values(
+                id="token-1",
+                owner_id=7,
+                device_id="cinder",
+                token_hash="a" * 64,
+                created_at=datetime.now(UTC),
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        result = await client.call("auth.device.revoke.v2", {"owner_id": 8, "token_id": "token-1"})
+        assert result == {"found": False, "changed": False, "commit_seq": "0"}
+        assert (await client.call("ping.v2"))["commit_seq"] == "0"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_device_revoke_survives_daemon_restart(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    token_hash = "a" * 64
+    with engine.begin() as connection:
+        connection.execute(
+            LiveDeviceToken.__table__.insert().values(
+                id="token-1",
+                owner_id=7,
+                device_id="cinder",
+                token_hash=token_hash,
+                created_at=datetime.now(UTC),
+            )
+        )
+    engine.dispose()
+
+    first_daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await first_daemon.start()
+    first_client = CatalogClient(socket_path)
+    result = await first_client.call("auth.device.revoke.v2", {"owner_id": 7, "token_id": "token-1"})
+    await first_client.close()
+    await first_daemon.close()
+    assert result["commit_seq"] == "1"
+
+    second_daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await second_daemon.start()
+    second_client = CatalogClient(socket_path)
+    try:
+        auth = await second_client.call("auth.device.validate.v2", {"token_hash": token_hash})
+        assert auth == {"valid": False, "commit_seq": "1"}
+        assert (await second_client.call("ping.v2"))["commit_seq"] == "1"
+    finally:
+        await second_client.close()
+        await second_daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_mutation_internal_error_is_not_marked_safe_to_retry(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    assert daemon._store is not None
+
+    def fail_revoke(**_kwargs):
+        raise RuntimeError("ambiguous mutation failure")
+
+    daemon._store.revoke_device = fail_revoke
+    client = CatalogClient(socket_path)
+    try:
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("auth.device.revoke.v2", {"owner_id": 7, "token_id": "token-1"})
+        assert exc_info.value.code == "internal"
+        assert exc_info.value.retryable is False
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_catalog_operations_run_off_the_socket_event_loop(daemon_paths):
     database_path, socket_path = daemon_paths
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)

@@ -174,7 +174,10 @@ class CatalogDaemon:
                         message,
                         "internal",
                         "catalog operation failed",
-                        retryable=True,
+                        # A mutation may have committed before its response was
+                        # lost. Callers must reconcile/replay idempotently, not
+                        # blindly retry an unknown operation.
+                        retryable=False,
                     )
                 await write_frame(writer, response)
         except (EOFError, asyncio.IncompleteReadError, ConnectionError, ProtocolError):
@@ -193,6 +196,8 @@ class CatalogDaemon:
             return self._error(request, "catalog_unavailable", "catalog is not ready", retryable=True)
         if request.method == "auth.device.validate.v2":
             return await self._authenticate_device(request)
+        if request.method == "auth.device.revoke.v2":
+            return await self._revoke_device(request)
         if request.params:
             return self._error(request, "invalid_request", "catalog metadata methods accept empty params")
         metadata = await self._run_store(read_catalog_meta, self._engine)
@@ -236,6 +241,27 @@ class CatalogDaemon:
         result = await self._run_store(
             self._store.authenticate_device,
             token_hash=token_hash,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _revoke_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "token_id"}:
+            return self._error(
+                request,
+                "invalid_request",
+                "auth.device.revoke.v2 requires owner_id and token_id",
+            )
+        owner_id = request.params["owner_id"]
+        token_id = request.params["token_id"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if not isinstance(token_id, str) or not token_id or len(token_id) > 255:
+            return self._error(request, "invalid_request", "token_id must be a non-empty string")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.revoke_device,
+            owner_id=owner_id,
+            token_id=token_id,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 
