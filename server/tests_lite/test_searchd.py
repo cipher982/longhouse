@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import threading
 from pathlib import Path
 from uuid import UUID
 from uuid import uuid4
@@ -75,6 +77,50 @@ def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
         assert rebuilt.execute("SELECT COUNT(*) FROM session_index").fetchone()[0] == 0
     finally:
         rebuilt.close()
+
+
+@pytest.mark.asyncio
+async def test_search_reads_remain_live_while_projection_writer_is_busy(tmp_path):
+    socket_parent = Path("/tmp") / f"lhs-{uuid4().hex[:8]}"
+    socket_parent.mkdir(mode=0o700)
+    socket_path = socket_parent / "s"
+    daemon = SearchDaemon(database_path=tmp_path / "search.db", socket_path=socket_path)
+    await daemon.start()
+    writer_started = threading.Event()
+    release_writer = threading.Event()
+
+    def block_writer():
+        writer_started.set()
+        release_writer.wait(timeout=2)
+
+    blocked = asyncio.create_task(daemon._run(block_writer))
+    client = CatalogClient(socket_path)
+    try:
+        assert await asyncio.to_thread(writer_started.wait, 1)
+        worklog = await asyncio.wait_for(
+            client.call(
+                "worklog.day.v2",
+                {
+                    "owner_id": "42",
+                    "window_start_us": 1_720_780_399_000_000,
+                    "window_end_us": 1_720_780_401_000_000,
+                    "include_test": False,
+                    "section": "sessions",
+                    "snapshot_id": None,
+                    "offset": 0,
+                    "limit": 100,
+                },
+            ),
+            timeout=0.2,
+        )
+        assert worklog["items"] == []
+        assert not blocked.done()
+    finally:
+        release_writer.set()
+        await blocked
+        await client.close()
+        await daemon.close()
+        socket_parent.rmdir()
 
 
 @pytest.mark.asyncio

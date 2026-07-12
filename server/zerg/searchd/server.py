@@ -35,8 +35,11 @@ class SearchDaemon:
         self.lock_path = self.database_path.with_suffix(f"{self.database_path.suffix}.searchd.lock")
         self._lock_handle = None
         self._connection = None
+        self._read_connection = None
         self._store: SearchStore | None = None
+        self._read_store: SearchStore | None = None
         self._executor: ThreadPoolExecutor | None = None
+        self._read_executor: ThreadPoolExecutor | None = None
         self._server: asyncio.AbstractServer | None = None
         self._published_inode: tuple[int, int] | None = None
 
@@ -52,6 +55,9 @@ class SearchDaemon:
             self._connection = open_search_database(self.database_path)
             self._store = SearchStore(self._connection)
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="searchd-sqlite")
+            self._read_connection = open_search_database(self.database_path)
+            self._read_store = SearchStore(self._read_connection)
+            self._read_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="searchd-read")
             self._prepare_socket()
             temporary = self.socket_path.with_name(f".{self.socket_path.name}.tmp.{os.getpid()}")
             if len(os.fsencode(temporary)) >= 104:
@@ -79,12 +85,19 @@ class SearchDaemon:
             self._server = None
         self._unlink_socket()
         self._store = None
+        self._read_store = None
         if self._executor is not None:
             self._executor.shutdown(wait=True, cancel_futures=True)
             self._executor = None
+        if self._read_executor is not None:
+            self._read_executor.shutdown(wait=True, cancel_futures=True)
+            self._read_executor = None
         if self._connection is not None:
             self._connection.close()
             self._connection = None
+        if self._read_connection is not None:
+            self._read_connection.close()
+            self._read_connection = None
         if self._lock_handle is not None:
             fcntl.flock(self._lock_handle.fileno(), fcntl.LOCK_UN)
             self._lock_handle.close()
@@ -140,11 +153,11 @@ class SearchDaemon:
     async def _dispatch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if time.monotonic_ns() > int(request.deadline_mono_ns):
             return self._error(request, "deadline_exceeded", "request deadline exceeded", retryable=True)
-        if self._store is None or self._executor is None:
+        if self._store is None or self._executor is None or self._read_store is None or self._read_executor is None:
             return self._error(request, "catalog_unavailable", "search index is not ready", retryable=True)
         try:
             if request.method == "search.ping.v2":
-                ping = await self._run(self._store.ping)
+                ping = await self._run_read(self._read_store.ping)
                 return self._result(request, {**ping, "pid": os.getpid()})
             if request.method == "search.index.object.v2":
                 params = _index_object_params(request.params)
@@ -154,16 +167,16 @@ class SearchDaemon:
                 return self._result(request, await self._run(self._store.publish_generation, **params))
             if request.method == "search.query.v2":
                 params = _search_params(request.params)
-                return self._result(request, await self._run(self._store.search, **params))
+                return self._result(request, await self._run_read(self._read_store.search, **params))
             if request.method == "worklog.day.v2":
                 params = _worklog_params(request.params)
-                return self._result(request, await self._run(self._store.worklog_day, **params))
+                return self._result(request, await self._run_read(self._read_store.worklog_day, **params))
             if request.method == "worklog.snapshot.release.v2":
                 _exact_keys(request.params, {"snapshot_id", "owner_id"})
                 return self._result(
                     request,
-                    await self._run(
-                        self._store.release_worklog_snapshot,
+                    await self._run_read(
+                        self._read_store.release_worklog_snapshot,
                         snapshot_id=_uuid(request.params["snapshot_id"], "snapshot_id"),
                         owner_id=_text(request.params["owner_id"], "owner_id", 64),
                     ),
@@ -187,6 +200,10 @@ class SearchDaemon:
     async def _run(self, function, **kwargs):
         assert self._executor is not None
         return await asyncio.get_running_loop().run_in_executor(self._executor, lambda: function(**kwargs))
+
+    async def _run_read(self, function, **kwargs):
+        assert self._read_executor is not None
+        return await asyncio.get_running_loop().run_in_executor(self._read_executor, lambda: function(**kwargs))
 
     @staticmethod
     def _result(request: CatalogRpcRequest, result: dict[str, object]) -> CatalogRpcResponse:

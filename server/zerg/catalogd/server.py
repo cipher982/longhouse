@@ -2059,7 +2059,7 @@ class CatalogDaemon:
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.list_projector_lag,
             projector=projector,
             after_session_id=after_session_id,

@@ -577,12 +577,18 @@ class SearchStore:
             if len(self._worklog_snapshots) >= _WORKLOG_SNAPSHOT_LIMIT:
                 raise WorklogSnapshotError("snapshot_capacity", "too many worklog snapshots are active")
             snapshot_id = str(uuid4())
-            snapshot = self._build_worklog_snapshot(
-                owner_id=owner_id,
-                window_start_us=window_start_us,
-                window_end_us=window_end_us,
-                include_test=include_test,
-            )
+            self.connection.execute("BEGIN")
+            try:
+                snapshot = self._build_worklog_snapshot(
+                    owner_id=owner_id,
+                    window_start_us=window_start_us,
+                    window_end_us=window_end_us,
+                    include_test=include_test,
+                )
+                self.connection.execute("COMMIT")
+            except BaseException:
+                self.connection.execute("ROLLBACK")
+                raise
             self._worklog_snapshots[snapshot_id] = snapshot
         else:
             snapshot = self._worklog_snapshots.get(snapshot_id)

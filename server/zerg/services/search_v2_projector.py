@@ -16,7 +16,7 @@ from zerg.catalogd.client import CatalogClient
 from zerg.searchd.store import object_set_hash
 from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
-from zerg.services.searchd_supervisor import get_searchd_client
+from zerg.services.searchd_supervisor import get_searchd_projector_client
 
 logger = logging.getLogger(__name__)
 
@@ -323,10 +323,10 @@ def start_search_v2_projector() -> bool:
     global _task
     if _task is not None and not _task.done():
         return True
-    from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.services.catalogd_supervisor import get_catalogd_projector_client
 
-    catalog = get_catalogd_client()
-    search = get_searchd_client()
+    catalog = get_catalogd_projector_client()
+    search = get_searchd_projector_client()
     if catalog is None or search is None:
         return False
     projector = SearchV2Projector(

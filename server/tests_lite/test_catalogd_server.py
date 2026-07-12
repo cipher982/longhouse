@@ -462,6 +462,14 @@ async def test_device_auth_reads_remain_live_while_mutation_executor_is_busy(dae
             timeout=0.2,
         )
         assert result == {"valid": False, "commit_seq": "0"}
+        lag = await asyncio.wait_for(
+            client.call(
+                "projector.state.list_lag.v2",
+                {"projector": "search-v2", "after_session_id": None, "limit": 1},
+            ),
+            timeout=0.2,
+        )
+        assert lag["lag_count"] == 0
         assert not blocked.done()
     finally:
         release_mutation.set()

@@ -46,6 +46,7 @@ class SearchdSupervisor:
         self.socket_path = socket_path
         self.status_path = socket_path.with_name("searchd-status.json")
         self.client = CatalogClient(socket_path)
+        self.projector_client = CatalogClient(socket_path)
         self._task: asyncio.Task | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._stopping = False
@@ -91,6 +92,7 @@ class SearchdSupervisor:
     async def stop(self) -> None:
         self._stopping = True
         await self.client.close()
+        await self.projector_client.close()
         await self._terminate_owned_process()
         if self._task is not None:
             if not self._task.done():
@@ -148,6 +150,7 @@ class SearchdSupervisor:
                 if self._process is not None and self._process.returncode is not None:
                     self._process = None
                 await self.client.close()
+                await self.projector_client.close()
             await asyncio.sleep(backoff)
             backoff = min(5.0, backoff * 2)
 
@@ -251,3 +254,7 @@ async def stop_searchd_supervisor() -> None:
 
 def get_searchd_client() -> CatalogClient | None:
     return _supervisor.client if _supervisor is not None else None
+
+
+def get_searchd_projector_client() -> CatalogClient | None:
+    return _supervisor.projector_client if _supervisor is not None else None
