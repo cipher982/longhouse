@@ -299,6 +299,8 @@ class CatalogDaemon:
             return await self._list_machine_enrollments(request)
         if request.method == "machine.workspace.list.v2":
             return await self._list_machine_workspaces(request)
+        if request.method == "backup.snapshot.create.v2":
+            return await self._create_backup_snapshot(request)
         if request.method == "storage.source_epoch.open.v2":
             return await self._open_source_epoch(request)
         if request.method == "storage.raw_object.commit.v2":
@@ -2096,6 +2098,43 @@ class CatalogDaemon:
             raise CatalogDaemonError("catalog executor is not ready")
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, lambda: operation(*args, **kwargs))
+
+    async def _create_backup_snapshot(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"output_dir", "data_root"}:
+            return self._error(request, "invalid_request", "backup.snapshot.create.v2 has invalid parameters")
+        values: dict[str, Path] = {}
+        for field in ("output_dir", "data_root"):
+            value = request.params[field]
+            if not isinstance(value, str) or not value or "\x00" in value or not Path(value).is_absolute():
+                return self._error(request, "invalid_request", f"{field} must be an absolute path")
+            values[field] = Path(value)
+        from zerg.catalogd.backup import BackupProofError
+        from zerg.catalogd.backup import create_catalog_snapshot
+        from zerg.catalogd.backup import publish_restore_point
+
+        assert self._engine is not None
+        try:
+            snapshot = await self._run_store(
+                create_catalog_snapshot,
+                engine=self._engine,
+                output_dir=values["output_dir"],
+            )
+            result = await self._run_read_store(publish_restore_point, snapshot=snapshot, data_root=values["data_root"])
+        except BackupProofError as exc:
+            return self._error(request, "backup_incomplete", str(exc), retryable=False)
+        catalog = result["catalog"]
+        objects = result["objects"]
+        return CatalogRpcResponse(
+            id=request.id,
+            result={
+                "manifest_path": result["manifest_path"],
+                "catalog_sha256": catalog["sha256"],
+                "schema_version": catalog["schema_version"],
+                "commit_seq": catalog["commit_seq"],
+                "object_count": len(objects),
+                "object_set_sha256": result["object_set_sha256"],
+            },
+        )
 
     async def _run_read_store(self, operation, *args, **kwargs):
         if self._read_executor is None:
