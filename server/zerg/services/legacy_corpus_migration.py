@@ -238,11 +238,13 @@ class LegacyCorpusConverter:
         run_id: UUID,
         *,
         workers: int = 2,
-        claim_limit: int = 10,
+        claim_limit: int = 1,
         worker_prefix: str = "legacy-migration",
     ) -> dict[str, Any]:
         if not 1 <= workers <= 32:
             raise ValueError("workers must be between 1 and 32")
+        if claim_limit != 1:
+            raise ValueError("migration workers claim exactly one session so leases cannot expire in a local queue")
         run = await self.catalog.call("migration.run.read.v2", {"run_id": str(run_id)}, timeout_seconds=5.0)
         watermark = LegacyHighWatermark.decode(str(run["run"]["legacy_high_watermark"]))
 

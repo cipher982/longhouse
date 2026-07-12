@@ -194,3 +194,73 @@ async def test_legacy_migration_ledger_is_resumable_bounded_and_proof_driven(dae
     finally:
         await client.close()
         await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_explicit_coverage_degradation_is_terminal_not_reclaimed(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    run_id, session_id, claim_token = str(uuid4()), str(uuid4()), str(uuid4())
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call(
+            "migration.run.create.v2",
+            {
+                "run_id": run_id,
+                "legacy_high_watermark": "frozen",
+                "expected_session_count": 1,
+                "created_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "migration.session.register.batch.v2",
+            {
+                "run_id": run_id,
+                "sessions": [{"session_id": session_id, "source_expected": 1, "media_expected": 0}],
+                "registered_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "migration.session.claim.v2",
+            {
+                "run_id": run_id,
+                "worker_id": "worker",
+                "claim_token": claim_token,
+                "now": now.isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        completed = await client.call(
+            "migration.session.complete.v2",
+            {
+                "run_id": run_id,
+                "session_id": session_id,
+                "claim_token": claim_token,
+                "source_covered": 0,
+                "source_missing": 1,
+                "media_covered": 0,
+                "media_missing": 0,
+                "output_proof_hash": "a" * 64,
+                "parity_proof_hash": "b" * 64,
+                "completed_at": now.isoformat(),
+            },
+        )
+        assert completed["session"]["state"] == "degraded"
+        reclaimed = await client.call(
+            "migration.session.claim.v2",
+            {
+                "run_id": run_id,
+                "worker_id": "other",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(days=1)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        assert reclaimed["claimed"] == []
+    finally:
+        await client.close()
+        await daemon.close()

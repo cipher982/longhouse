@@ -85,7 +85,6 @@ def inventory(
 def run(
     run_id: UUID = typer.Option(..., "--run-id"),
     workers: int = typer.Option(2, "--workers", min=1, max=32),
-    claim_limit: int = typer.Option(10, "--claim-limit", min=1, max=100),
     database_url: str | None = typer.Option(None, "--database-url"),
     object_root: Path | None = typer.Option(None, "--object-root"),
 ) -> None:
@@ -101,7 +100,7 @@ def run(
             tenant_id=settings.archive_primary_tenant_id,
         )
         try:
-            return await converter.migrate_run(run_id, workers=workers, claim_limit=claim_limit)
+            return await converter.migrate_run(run_id, workers=workers)
         finally:
             await catalog.close()
 

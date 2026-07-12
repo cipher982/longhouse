@@ -5136,9 +5136,11 @@ class CatalogStore:
                     select(rows)
                     .where(
                         rows.c.run_id == run_key,
-                        rows.c.state.in_(("pending", "migrating", "degraded")),
-                        or_(rows.c.lease_expires_at.is_(None), rows.c.lease_expires_at <= now),
-                        or_(rows.c.retry_at.is_(None), rows.c.retry_at <= now),
+                        or_(
+                            rows.c.state == "pending",
+                            and_(rows.c.state == "migrating", rows.c.lease_expires_at <= now),
+                            and_(rows.c.state == "degraded", rows.c.retry_at.is_not(None), rows.c.retry_at <= now),
+                        ),
                     )
                     .order_by(rows.c.updated_at.asc(), rows.c.session_id.asc())
                     .limit(limit)
