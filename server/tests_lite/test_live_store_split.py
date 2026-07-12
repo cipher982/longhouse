@@ -121,6 +121,11 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
     assert "sessions" not in tables
     assert "agent_heartbeats" not in tables
     assert "events" not in tables
+    catalog_only = {"source_epochs", "raw_objects", "session_tombstones"}
+    assert catalog_only.isdisjoint(tables)
+
+    initialize_catalog_schema(engine)
+    assert catalog_only.issubset(set(inspect(engine).get_table_names()))
 
 
 def test_live_session_state_upserts_and_marks_missing(tmp_path):

@@ -34,6 +34,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.schema import CreateColumn
 
+from zerg.catalogd.models import CatalogBase
 from zerg.models.live_store import LiveBase
 
 CATALOG_SCHEMA_VERSION = 1
@@ -83,7 +84,7 @@ def _schema_generation() -> str:
     """Fingerprint every catalog-owned table shape used for daemon adoption."""
 
     shape: list[dict[str, object]] = []
-    for metadata in (LiveBase.metadata, _catalog_metadata):
+    for metadata in (LiveBase.metadata, CatalogBase.metadata, _catalog_metadata):
         for table in metadata.sorted_tables:
             shape.append(
                 {
@@ -311,8 +312,10 @@ def initialize_catalog_schema(engine: Engine) -> CatalogMeta:
         raise CatalogSchemaMismatchError(f"PRAGMA user_version={user_version} is set but catalog_meta is missing")
 
     LiveBase.metadata.create_all(bind=engine)
+    CatalogBase.metadata.create_all(bind=engine)
     _catalog_metadata.create_all(bind=engine)
     _safe_additive_columns(engine, LiveBase.metadata)
+    _safe_additive_columns(engine, CatalogBase.metadata)
     _safe_additive_columns(engine, _catalog_metadata)
 
     if not has_meta_table:

@@ -23,6 +23,9 @@ from sqlalchemy import select
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.models import RawObject as LiveRawObject
+from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
+from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
 from zerg.catalogd.schema import catalog_meta
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
@@ -32,7 +35,6 @@ from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveMachineControlOperation
 from zerg.models.live_store import LiveNotificationClientPresence
-from zerg.models.live_store import LiveRawObject
 from zerg.models.live_store import LiveRefreshSession
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession
@@ -44,8 +46,6 @@ from zerg.models.live_store import LiveSessionLivePreview
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
-from zerg.models.live_store import LiveSessionTombstone
-from zerg.models.live_store import LiveSourceEpoch
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
 from zerg.storage_v2.contracts import DurableReceipt

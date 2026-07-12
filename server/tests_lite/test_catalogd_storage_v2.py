@@ -11,12 +11,12 @@ import pytest
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.models import CatalogBase
+from zerg.catalogd.models import RawObject as LiveRawObject
+from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
-from zerg.models.live_store import LiveRawObject
-from zerg.models.live_store import LiveSessionTombstone
-from zerg.models.live_store import LiveSourceEpoch
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id
 
@@ -125,6 +125,21 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         assert replay["exact_replay"] is True and replay["receipt"] == committed["receipt"]
         assert committed["receipt"]["raw_state"] == "durable"
 
+        derived_drift = {
+            **raw,
+            "object_path": f"compacted/{raw['object_hash']}.zst",
+            "render_state": "ready",
+            "media_state": "pending",
+        }
+        replay_after_drift = await client.call("storage.raw_object.commit.v2", derived_drift)
+        assert replay_after_drift["exact_replay"] is True
+        assert replay_after_drift["receipt"] == committed["receipt"]
+
+        identity_mismatch = {**raw, "envelope_id": "0" * 64}
+        with pytest.raises(CatalogRemoteError) as invalid_identity:
+            await client.call("storage.raw_object.commit.v2", identity_mismatch)
+        assert invalid_identity.value.code == "invalid_request"
+
         same_range_other_content = _raw_params(
             epoch=epoch,
             session_id=session_id,
@@ -169,7 +184,19 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         )
         assert old_manifest["source_epoch"]["state"] == "closed"
         assert old_manifest["source_epoch"]["replaced_by_source_epoch"] == str(next_epoch)
-        high_start = (1 << 63) + 5
+        closed_epoch_raw = _raw_params(
+            epoch=epoch,
+            session_id=session_id,
+            start=6,
+            end=7,
+            records=(b"c",),
+            sealed_at=now,
+        )
+        with pytest.raises(CatalogRemoteError) as closed_epoch:
+            await client.call("storage.raw_object.commit.v2", closed_epoch_raw)
+        assert closed_epoch.value.code == "source_epoch_conflict"
+
+        high_start = (1 << 64) - 2
         high_raw = _raw_params(
             epoch=next_epoch,
             session_id=session_id,
@@ -179,6 +206,23 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
             sealed_at=now,
         )
         assert (await client.call("storage.raw_object.commit.v2", high_raw))["receipt"]["commit_seq"] == "4"
+        out_of_order = _raw_params(
+            epoch=next_epoch,
+            session_id=session_id,
+            start=0,
+            end=1,
+            records=(b"o",),
+            sealed_at=now,
+        )
+        with pytest.raises(CatalogRemoteError) as out_of_order_error:
+            await client.call("storage.raw_object.commit.v2", out_of_order)
+        assert out_of_order_error.value.code == "source_epoch_conflict"
+
+        await client.close()
+        await daemon.close()
+        daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+        await daemon.start()
+        client = CatalogClient(socket_path)
         high_manifest = await client.call(
             "storage.source_epoch.manifest.v2",
             {"source_epoch": str(next_epoch), "after_position": high_start, "limit": 100},
@@ -267,7 +311,7 @@ def test_storage_v2_tables_are_catalog_schema_owned(daemon_paths):
     database_path, _socket_path = daemon_paths
     engine = create_catalog_engine(database_path)
     initialize_catalog_schema(engine)
-    assert {"source_epochs", "raw_objects", "session_tombstones"}.issubset(set(LiveSourceEpoch.metadata.tables))
+    assert {"source_epochs", "raw_objects", "session_tombstones"}.issubset(set(CatalogBase.metadata.tables))
     with engine.connect() as connection:
         table_names = {
             row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")
