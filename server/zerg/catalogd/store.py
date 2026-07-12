@@ -31,6 +31,7 @@ from zerg.models.live_store import LiveRefreshSession
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
@@ -77,6 +78,43 @@ def _launch_view_dto(view: Any) -> dict[str, Any]:
         "project": view.project,
         "created_at": _encode_datetime(view.created_at),
         "updated_at": _encode_datetime(view.updated_at),
+    }
+
+
+def _live_control_session_dto(session: Any) -> dict[str, Any]:
+    return {
+        "id": str(session.id),
+        "provider": session.provider,
+        "device_id": session.device_id,
+        "device_name": session.device_name,
+        "cwd": session.cwd,
+        "project": session.project,
+        "git_repo": session.git_repo,
+        "git_branch": session.git_branch,
+        "ended_at": _encode_datetime(session.ended_at),
+        "closed_at": _encode_datetime(session.closed_at),
+        "close_reason": session.close_reason,
+        "loop_mode": session.loop_mode,
+        "permission_mode": session.permission_mode,
+        "primary_thread_id": str(session.primary_thread_id) if session.primary_thread_id else None,
+    }
+
+
+def _input_receipt_dto(receipt: Any) -> dict[str, Any]:
+    return {
+        "id": receipt.id,
+        "owner_id": receipt.owner_id,
+        "session_id": receipt.session_id,
+        "provider": receipt.provider,
+        "text": receipt.text,
+        "intent": receipt.intent,
+        "status": receipt.status,
+        "client_request_id": receipt.client_request_id,
+        "archive_session_input_id": receipt.archive_session_input_id,
+        "delivery_request_id": receipt.delivery_request_id,
+        "error_json": receipt.error_json,
+        "created_at": _encode_datetime(receipt.created_at),
+        "updated_at": _encode_datetime(receipt.updated_at),
     }
 
 
@@ -1351,6 +1389,175 @@ class CatalogStore:
                 "found": True,
                 "changed": True,
                 "launch": _json_launch_result(result),
+                "commit_seq": str(commit_seq),
+            }
+
+    def list_queued_input_sessions(self, *, limit: int) -> dict[str, Any]:
+        """Return a bounded set of sessions with queued hot input."""
+
+        from zerg.services.live_session_inputs import list_session_ids_with_queued_live_receipts
+
+        with _read_snapshot(self.engine) as connection:
+            orm = Session(bind=connection, expire_on_commit=False)
+            try:
+                session_ids = list_session_ids_with_queued_live_receipts(orm, limit=limit)
+            finally:
+                orm.close()
+            return {
+                "session_ids": [str(session_id) for session_id in session_ids],
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def claim_queued_input(
+        self,
+        *,
+        session_id: str,
+        delivery_request_id: str,
+    ) -> dict[str, Any]:
+        """Check drainability and claim exactly one queued input receipt."""
+
+        from zerg.services.live_control_catalog import _QUEUE_DRAINABLE_PHASES
+        from zerg.services.live_control_catalog import load_live_control_session
+        from zerg.services.live_session_inputs import _snapshot
+        from zerg.services.live_session_inputs import claim_next_live_queued_receipt
+
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                session = load_live_control_session(orm, session_id)
+                if session is None:
+                    orm.rollback()
+                    return {
+                        "claimed": False,
+                        "reason": "session_not_found",
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                runtime = (
+                    orm.query(LiveRuntimeState)
+                    .filter(LiveRuntimeState.session_id == session.id)
+                    .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+                    .first()
+                )
+                if runtime is None or str(runtime.phase or "").strip() not in _QUEUE_DRAINABLE_PHASES:
+                    orm.rollback()
+                    return {
+                        "claimed": False,
+                        "reason": "runtime_not_drainable",
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                replay_row = (
+                    orm.query(LiveSessionInputReceipt)
+                    .filter(
+                        LiveSessionInputReceipt.session_id == session_id,
+                        LiveSessionInputReceipt.delivery_request_id == delivery_request_id,
+                        LiveSessionInputReceipt.status == "delivering",
+                    )
+                    .first()
+                )
+                if replay_row is not None:
+                    snapshot = _snapshot(replay_row)
+                    orm.rollback()
+                    return {
+                        "claimed": True,
+                        "exact_replay": True,
+                        "session": _live_control_session_dto(session),
+                        "receipt": _input_receipt_dto(snapshot),
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                receipt = claim_next_live_queued_receipt(
+                    orm,
+                    session_id=session_id,
+                    delivery_request_id=delivery_request_id,
+                )
+                if receipt is None:
+                    orm.rollback()
+                    return {
+                        "claimed": False,
+                        "reason": "queue_empty",
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "claimed": True,
+                "exact_replay": False,
+                "session": _live_control_session_dto(session),
+                "receipt": _input_receipt_dto(receipt),
+                "commit_seq": str(commit_seq),
+            }
+
+    def finish_queued_input(
+        self,
+        *,
+        receipt_id: str,
+        delivery_request_id: str,
+        status: str,
+        error: str | None,
+    ) -> dict[str, Any]:
+        """Apply the terminal delivery result and archive projection atomically."""
+
+        from zerg.services.live_session_inputs import _snapshot
+        from zerg.services.live_session_inputs import mark_live_receipt_delivered_with_projection
+        from zerg.services.live_session_inputs import mark_live_receipt_failed
+
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                row = orm.get(LiveSessionInputReceipt, receipt_id)
+                if row is None or str(row.delivery_request_id or "") != delivery_request_id:
+                    orm.rollback()
+                    return {
+                        "found": False,
+                        "changed": False,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                if str(row.status) == status:
+                    snapshot = _snapshot(row)
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "changed": False,
+                        "receipt": _input_receipt_dto(snapshot),
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                if str(row.status) != "delivering":
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "changed": False,
+                        "reason": "receipt_not_delivering",
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                if status == "delivered":
+                    snapshot = mark_live_receipt_delivered_with_projection(
+                        orm,
+                        receipt_id=receipt_id,
+                        delivery_request_id=delivery_request_id,
+                    )
+                else:
+                    snapshot = mark_live_receipt_failed(
+                        orm,
+                        receipt_id=receipt_id,
+                        error=error or "session input delivery failed",
+                    )
+                if snapshot is None:
+                    raise RuntimeError("claimed input receipt disappeared during finish")
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "found": True,
+                "changed": True,
+                "receipt": _input_receipt_dto(snapshot),
                 "commit_seq": str(commit_seq),
             }
 

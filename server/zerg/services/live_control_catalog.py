@@ -176,86 +176,89 @@ def live_session_closed_for_input(db: Session, session: LiveControlSession) -> b
 async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
     """Claim and dispatch one queued hot receipt after a terminal signal."""
 
-    import zerg.database as database_module
-    from zerg.services.live_session_inputs import claim_next_live_queued_receipt
-    from zerg.services.live_session_inputs import mark_live_receipt_delivered_with_projection
-    from zerg.services.live_session_inputs import mark_live_receipt_failed
+    from zerg.services.catalogd_supervisor import get_catalogd_client
     from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
     from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
     from zerg.services.session_kernel_projection import session_lock_scope_id
     from zerg.services.session_locks import session_lock_manager
-    from zerg.services.write_serializer import get_live_write_serializer
 
-    factory = database_module.get_live_session_factory()
-    live_ws = get_live_write_serializer()
-    if factory is None or not live_ws.is_configured:
-        return False
-    with factory() as read_db:
-        session = load_live_control_session(read_db, session_id)
-        runtime_state = (
-            read_db.query(LiveRuntimeState)
-            .filter(LiveRuntimeState.session_id == session.id)
-            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
-            .first()
-            if session is not None
-            else None
-        )
-    if session is None:
-        return False
-    if runtime_state is None or str(runtime_state.phase or "").strip() not in _QUEUE_DRAINABLE_PHASES:
+    catalogd = get_catalogd_client()
+    if catalogd is None:
         return False
 
     request_id = uuid4().hex
-    lock_scope_id = session_lock_scope_id(session.id)
+    lock_scope_id = session_lock_scope_id(session_id)
     if not await session_lock_manager.acquire(session_id=lock_scope_id, holder=request_id, ttl_seconds=300):
         return False
-    receipt = await live_ws.execute(
-        lambda live_db: claim_next_live_queued_receipt(
-            live_db,
-            session_id=session.id,
-            delivery_request_id=request_id,
-        ),
-        auto_commit=False,
-        label="live-input-queue-claim",
-    )
-    if receipt is None:
+    try:
+        claimed = await catalogd.call(
+            "session.input.claim.v2",
+            {"session_id": str(session_id), "delivery_request_id": request_id},
+            timeout_seconds=1.0,
+        )
+    except Exception:
+        logger.warning("Failed to claim queued catalog input for session %s", session_id, exc_info=True)
         await session_lock_manager.release(lock_scope_id, request_id)
         return False
+    session_payload = claimed.get("session")
+    receipt = claimed.get("receipt")
+    if claimed.get("claimed") is not True or not isinstance(session_payload, dict) or not isinstance(receipt, dict):
+        await session_lock_manager.release(lock_scope_id, request_id)
+        return False
+    session = LiveControlSession(
+        id=UUID(str(session_payload["id"])),
+        provider=str(session_payload["provider"]),
+        device_id=session_payload.get("device_id"),
+        device_name=session_payload.get("device_name"),
+        cwd=session_payload.get("cwd"),
+        project=session_payload.get("project"),
+        git_repo=session_payload.get("git_repo"),
+        git_branch=session_payload.get("git_branch"),
+        ended_at=session_payload.get("ended_at"),
+        closed_at=session_payload.get("closed_at"),
+        close_reason=session_payload.get("close_reason"),
+        loop_mode=str(session_payload.get("loop_mode") or "assist"),
+        permission_mode=str(session_payload.get("permission_mode") or "bypass"),
+        primary_thread_id=(UUID(str(session_payload["primary_thread_id"])) if session_payload.get("primary_thread_id") else None),
+    )
 
     dispatched_at = datetime.now(timezone.utc)
-    with factory() as dispatch_db:
-        result = await dispatch_managed_control_command(
-            db=dispatch_db,
-            owner_id=receipt.owner_id,
-            session=session,
-            timeout_secs=15,
-            command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
-            payload={"text": receipt.text},
-            request_id=request_id,
-            run_id=None,
-        )
+    result = await dispatch_managed_control_command(
+        db=None,  # type: ignore[arg-type] -- catalog mode validates through catalogd.
+        owner_id=int(receipt["owner_id"]),
+        session=session,  # type: ignore[arg-type] -- bounded DTO matches the dispatcher contract.
+        timeout_secs=15,
+        command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+        payload={"text": str(receipt.get("text") or "")},
+        request_id=request_id,
+        run_id=None,
+    )
     data = dict(result.data or {})
     if not result.ok or int(data.get("exit_code", 1)) != 0:
-        await live_ws.execute(
-            lambda live_db: mark_live_receipt_failed(
-                live_db,
-                receipt_id=receipt.id,
-                error=str(result.error or data.get("stderr") or "queued send failed"),
-            ),
-            auto_commit=False,
-            label="live-input-queue-failed",
-        )
-        await session_lock_manager.release(lock_scope_id, request_id)
+        try:
+            await catalogd.call(
+                "session.input.finish.v2",
+                {
+                    "receipt_id": str(receipt["id"]),
+                    "delivery_request_id": request_id,
+                    "status": "failed",
+                    "error": str(result.error or data.get("stderr") or "queued send failed")[:500],
+                },
+                timeout_seconds=1.0,
+            )
+        finally:
+            await session_lock_manager.release(lock_scope_id, request_id)
         return False
 
-    await live_ws.execute(
-        lambda live_db: mark_live_receipt_delivered_with_projection(
-            live_db,
-            receipt_id=receipt.id,
-            delivery_request_id=request_id,
-        ),
-        auto_commit=False,
-        label="live-input-queue-delivered",
+    await catalogd.call(
+        "session.input.finish.v2",
+        {
+            "receipt_id": str(receipt["id"]),
+            "delivery_request_id": request_id,
+            "status": "delivered",
+            "error": None,
+        },
+        timeout_seconds=1.0,
     )
     from zerg.services.session_chat_impl import _schedule_catalog_lock_release
 
@@ -271,20 +274,17 @@ async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:
 async def run_live_catalog_input_recovery_loop() -> None:
     """Recover queued hot receipts without ever opening the cold database."""
 
-    from zerg.services.live_session_inputs import list_session_ids_with_queued_live_receipts
+    from zerg.services.catalogd_supervisor import get_catalogd_client
 
     interval = 5.0
     while True:
         try:
             await asyncio.sleep(interval)
-            import zerg.database as database_module
-
-            factory = database_module.get_live_session_factory()
-            if factory is None:
+            catalogd = get_catalogd_client()
+            if catalogd is None:
                 continue
-            with factory() as live_db:
-                session_ids = list_session_ids_with_queued_live_receipts(live_db, limit=100)
-            for session_id in session_ids:
+            queued = await catalogd.call("session.input.queued.list.v2", {"limit": 100}, timeout_seconds=1.0)
+            for session_id in queued.get("session_ids", []):
                 await wake_next_live_catalog_input(session_id)
         except asyncio.CancelledError:
             raise

@@ -239,6 +239,12 @@ class CatalogDaemon:
             return await self._create_launch_intent(request)
         if request.method == "session.launch.outcome.apply.v2":
             return await self._apply_launch_outcome(request)
+        if request.method == "session.input.queued.list.v2":
+            return await self._list_queued_input_sessions(request)
+        if request.method == "session.input.claim.v2":
+            return await self._claim_queued_input(request)
+        if request.method == "session.input.finish.v2":
+            return await self._finish_queued_input(request)
         if request.method == "session.timeline.list.v2":
             return await self._list_session_timeline(request)
         if request.method == "session.read.v2":
@@ -781,6 +787,66 @@ class CatalogDaemon:
                 "launch intent was not found",
                 details={"reason": "launch_not_found"},
             )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_queued_input_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"limit"}:
+            return self._error(request, "invalid_request", "session.input.queued.list.v2 requires limit")
+        limit = request.params["limit"]
+        if type(limit) is not int or not 1 <= limit <= 100:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 100")
+        assert self._store is not None
+        result = await self._run_store(self._store.list_queued_input_sessions, limit=limit)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _claim_queued_input(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "delivery_request_id"}:
+            return self._error(request, "invalid_request", "session.input.claim.v2 has invalid parameters")
+        session_id = request.params["session_id"]
+        try:
+            parsed = uuid.UUID(session_id) if isinstance(session_id, str) else None
+        except ValueError:
+            parsed = None
+        if parsed is None or str(parsed) != session_id:
+            return self._error(request, "invalid_request", "session_id must be a canonical UUID")
+        delivery_request_id = request.params["delivery_request_id"]
+        if not _is_string(delivery_request_id, maximum=64):
+            return self._error(request, "invalid_request", "delivery_request_id must contain 1 to 64 characters")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.claim_queued_input,
+            session_id=session_id,
+            delivery_request_id=delivery_request_id,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _finish_queued_input(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"receipt_id", "delivery_request_id", "status", "error"}:
+            return self._error(request, "invalid_request", "session.input.finish.v2 has invalid parameters")
+        receipt_id = request.params["receipt_id"]
+        try:
+            parsed = uuid.UUID(receipt_id) if isinstance(receipt_id, str) else None
+        except ValueError:
+            parsed = None
+        if parsed is None or str(parsed) != receipt_id:
+            return self._error(request, "invalid_request", "receipt_id must be a canonical UUID")
+        delivery_request_id = request.params["delivery_request_id"]
+        if not _is_string(delivery_request_id, maximum=64):
+            return self._error(request, "invalid_request", "delivery_request_id must contain 1 to 64 characters")
+        status = request.params["status"]
+        if status not in {"delivered", "failed"}:
+            return self._error(request, "invalid_request", "status must be delivered or failed")
+        error = request.params["error"]
+        if error is not None and (not isinstance(error, str) or not error or len(error) > 500):
+            return self._error(request, "invalid_request", "error must be null or contain 1 to 500 characters")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.finish_queued_input,
+            receipt_id=receipt_id,
+            delivery_request_id=delivery_request_id,
+            status=status,
+            error=error,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_session_timeline(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

@@ -23,8 +23,8 @@ from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
-from zerg.routers.session_chat import SessionInputRequest
 from zerg.routers.session_chat import PauseRequestResponseRequest
+from zerg.routers.session_chat import SessionInputRequest
 from zerg.routers.session_chat import _create_session_input_response
 from zerg.routers.session_chat import _respond_to_live_pause_request
 from zerg.services.live_control_catalog import live_control_capability_available
@@ -278,8 +278,12 @@ async def test_catalog_input_dispatches_and_projects_live_receipt_only(tmp_path,
 
 @pytest.mark.asyncio
 async def test_catalog_terminal_wake_dispatches_next_live_receipt(tmp_path, monkeypatch):
+    from zerg.catalogd.schema import initialize_catalog_schema
+    from zerg.catalogd.store import CatalogStore
+
     engine = make_live_engine(f"sqlite:///{tmp_path / 'live.db'}")
     initialize_live_database(engine)
+    initialize_catalog_schema(engine)
     factory = make_sessionmaker(engine)
     with factory() as db:
         session_id = _seed_live_control(db)
@@ -309,13 +313,18 @@ async def test_catalog_terminal_wake_dispatches_next_live_receipt(tmp_path, monk
         )
         db.commit()
 
-    serializer = WriteSerializer(name="catalog-queue-test")
-    serializer.configure(factory)
-    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: factory)
+    catalog_store = CatalogStore(engine)
+
+    class _CatalogClient:
+        async def call(self, method, params, **_kwargs):
+            if method == "session.input.claim.v2":
+                return catalog_store.claim_queued_input(**params)
+            if method == "session.input.finish.v2":
+                return catalog_store.finish_queued_input(**params)
+            raise AssertionError(method)
 
     import zerg.services.managed_control_dispatcher as dispatcher
     import zerg.services.session_chat_impl as chat_impl
-    import zerg.services.write_serializer as serializer_module
 
     async def fake_dispatch(**_kwargs):
         return ManagedControlDispatchResult(
@@ -325,7 +334,7 @@ async def test_catalog_terminal_wake_dispatches_next_live_receipt(tmp_path, monk
         )
 
     monkeypatch.setattr(dispatcher, "dispatch_managed_control_command", fake_dispatch)
-    monkeypatch.setattr(serializer_module, "get_live_write_serializer", lambda: serializer)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
     monkeypatch.setattr(chat_impl, "_schedule_catalog_lock_release", lambda **_kwargs: None)
 
     assert await wake_next_live_catalog_input(session_id) is True
