@@ -77,6 +77,21 @@ def machine_workspaces(
     )
 
 
+def machine_operation(*, owner_id: int, operation_id: str) -> dict[str, Any]:
+    return _call(
+        "machine.operation.read.v2",
+        {"owner_id": owner_id, "operation_id": operation_id},
+    )
+
+
+def recent_visible_web_presence(*, owner_id: int, threshold: str) -> bool:
+    result = _call(
+        "notification.presence.visible.read.v2",
+        {"owner_id": owner_id, "threshold": threshold},
+    )
+    return result.get("visible") is True
+
+
 def _call(method: str, params: dict[str, Any]) -> dict[str, Any]:
     try:
         _database_path, socket_path = catalogd_paths()
@@ -107,7 +122,9 @@ __all__ = [
     "CatalogReadError",
     "active_owner_id",
     "enrolled_machines",
+    "machine_operation",
     "machine_workspaces",
+    "recent_visible_web_presence",
     "resolve_session_prefix",
     "session_snapshot",
     "session_batch_snapshot",

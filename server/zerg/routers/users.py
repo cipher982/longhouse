@@ -21,8 +21,8 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
+import zerg.database as database_module
 from zerg.auth.catalog_gateway import update_user
-from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 
 # Auth guard ---------------------------------------------------------------
@@ -45,7 +45,13 @@ from zerg.services.write_serializer import get_catalog_write_serializer
 from zerg.utils.time import UTCBaseModel
 
 router = APIRouter(tags=["users"], dependencies=[Depends(get_current_user)])
-_catalog_db_dependency = catalog_db_dependency()
+
+
+def _no_client_presence_db():
+    yield None
+
+
+_client_presence_db_dependency = _no_client_presence_db if database_module.live_catalog_enabled() else get_db
 
 
 class UserNotificationSettingsResponse(BaseModel):
@@ -194,13 +200,36 @@ async def update_current_user_notification_settings(
 @router.post("/users/me/client-presence", response_model=UserClientPresenceResponse)
 async def update_current_user_client_presence(
     heartbeat: UserClientPresenceHeartbeat,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_client_presence_db_dependency),
     current_user=Depends(get_current_user),
 ) -> UserClientPresenceResponse:
     """Record whether a browser client is actively watching Longhouse."""
 
     owner_id = int(current_user.id)
     now = datetime.now(timezone.utc)
+
+    if database_module.live_catalog_enabled():
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise HTTPException(status_code=503, detail="Live notification presence catalog is unavailable")
+        result = await catalogd.call(
+            "notification.presence.upsert.v2",
+            {
+                "owner_id": owner_id,
+                "client_id": heartbeat.client_id,
+                "client_type": heartbeat.client_type,
+                "visible": heartbeat.visible,
+                "route": heartbeat.route,
+                "session_id": heartbeat.session_id,
+                "observed_at": now.isoformat(),
+            },
+            timeout_seconds=1.0,
+        )
+        return UserClientPresenceResponse(**result["presence"])
+
+    assert db is not None
 
     def _upsert_client_presence(write_db: Session) -> UserClientPresenceResponse:
         row = (

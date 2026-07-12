@@ -7,6 +7,7 @@ from uuid import UUID
 import zerg.database as database_module
 from zerg.routers import agents_sessions
 from zerg.services.managed_control_state import _load_live_managed_control_state_map
+from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_views import latest_live_launch_readiness
 
@@ -50,12 +51,25 @@ def test_hot_fact_consumers_use_catalog_batch_without_sqlite(monkeypatch):
                 "state": "attached",
                 "sequence": 9,
                 "heartbeat_at": now.isoformat(),
-                "payload_json": (
-                    '{"bridge_status":"ready","thread_subscription_status":"subscribed","lease_ttl_ms":900000}'
-                ),
+                "payload_json": ('{"bridge_status":"ready","thread_subscription_status":"subscribed","lease_ttl_ms":900000}'),
                 "updated_at": now.isoformat(),
             }
         ],
+        "live_preview": {
+            "session_id": session_id,
+            "thread_id": "thread-1",
+            "turn_key": "codex-live-turn-1",
+            "seq": 12,
+            "preview_text": "Streaming output",
+            "provisional_cursor": "codex-live-turn-1:12",
+            "provisional_complete": 0,
+            "event_origin": "live_provisional",
+            "preview_observed_at": now.isoformat(),
+            "preview_updated_at": now.isoformat(),
+            "source": "codex_bridge_live",
+            "last_observation_id": "observation-12",
+            "superseded_at": None,
+        },
     }
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
@@ -65,10 +79,12 @@ def test_hot_fact_consumers_use_catalog_batch_without_sqlite(monkeypatch):
     runtime = load_runtime_state_map(None, [UUID(session_id)])
     controls = _load_live_managed_control_state_map([UUID(session_id)])
     readiness = latest_live_launch_readiness([UUID(session_id)], now=now)
+    previews = load_active_provisional_preview_map(None, [UUID(session_id)])
 
     assert runtime[session_id].phase == "quiescent"
     assert controls[UUID(session_id)].control_state == "online"
     assert readiness[UUID(session_id)].launch_state == "live"
+    assert previews[session_id].text == "Streaming output"
 
 
 def test_active_candidate_ids_use_catalog_rpc_without_sqlite(monkeypatch):

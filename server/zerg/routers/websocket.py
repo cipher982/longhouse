@@ -16,14 +16,6 @@ from fastapi import APIRouter
 from fastapi import WebSocket
 from fastapi import WebSocketDisconnect
 
-# ---------------------------------------------------------------------------
-# DB helpers
-# ---------------------------------------------------------------------------
-from sqlalchemy.orm import Session
-from sqlalchemy.orm import sessionmaker
-
-from zerg.database import catalog_db_session
-from zerg.database import get_catalog_session_factory
 from zerg.database import reset_test_worker_id
 from zerg.database import set_test_worker_id
 
@@ -36,21 +28,6 @@ from zerg.websocket.manager import topic_manager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-def get_websocket_session(session_factory: Optional[sessionmaker] = None) -> Session:
-    """Create a new database session for WebSocket handlers.
-
-    DEPRECATED: Use db_session() context manager instead.
-
-    Args:
-        session_factory: Optional custom session factory to use
-
-    Returns:
-        A SQLAlchemy Session object that must be closed by the caller
-    """
-    factory = session_factory or get_catalog_session_factory()
-    return factory()
 
 
 @router.websocket("/ws")
@@ -105,21 +82,20 @@ async def websocket_endpoint(
 
     try:
         await websocket.accept()
-        await topic_manager.connect(client_id, websocket, user_id, auto_system=True)
+        await topic_manager.connect(client_id, websocket, user_id, auto_system=True, principal=user)
         logger.info(f"WebSocket connection established for client {client_id}")
 
         # Handle initial topic subscriptions if provided
         if initial_topics:
-            with catalog_db_session() as db:
-                topics = [t.strip() for t in initial_topics.split(",")]
-                msg_id = f"auto-subscribe-{uuid.uuid4()}"
-                subscribe_envelope = Envelope.create(
-                    message_type="subscribe",
-                    topic="system",
-                    data={"topics": topics, "message_id": msg_id},
-                    req_id=msg_id,
-                )
-                await dispatch_message(client_id, subscribe_envelope.model_dump(), db)
+            topics = [t.strip() for t in initial_topics.split(",")]
+            msg_id = f"auto-subscribe-{uuid.uuid4()}"
+            subscribe_envelope = Envelope.create(
+                message_type="subscribe",
+                topic="system",
+                data={"topics": topics, "message_id": msg_id},
+                req_id=msg_id,
+            )
+            await dispatch_message(client_id, subscribe_envelope.model_dump(), None)
 
         # Main message loop
         while True:
@@ -127,9 +103,7 @@ async def websocket_endpoint(
                 # Receive outside db_session - WebSocket close shouldn't trigger DB rollback log
                 raw_data = await websocket.receive_text()
                 data = json.loads(raw_data)
-                # Get a fresh DB session only for message processing
-                with catalog_db_session() as db:
-                    await dispatch_message(client_id, data, db)
+                await dispatch_message(client_id, data, None)
 
             except json.JSONDecodeError as e:
                 logger.warning(f"Invalid JSON from client {client_id}: {e}")

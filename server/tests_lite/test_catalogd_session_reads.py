@@ -8,7 +8,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.protocol import HEADER_BYTES
@@ -26,6 +25,7 @@ from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionLivePreview
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
@@ -188,6 +188,22 @@ def _seed_session(connection, *, session_id: str, device_id: str, now: datetime,
             updated_at=now,
         )
     )
+    connection.execute(
+        LiveSessionLivePreview.__table__.insert().values(
+            session_id=session_id,
+            thread_id=thread_id,
+            turn_key=f"turn:{session_id}",
+            seq=7,
+            preview_text="Streaming output",
+            provisional_cursor=f"turn:{session_id}:7",
+            provisional_complete=0,
+            event_origin="live_provisional",
+            preview_observed_at=now,
+            preview_updated_at=now,
+            source="codex_bridge_live",
+            last_observation_id=f"observation:{session_id}:7",
+        )
+    )
 
 
 def test_catalog_gateway_normalizes_missing_file_backing(monkeypatch):
@@ -290,6 +306,7 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
         assert read["found"] is True
         assert read["facts"]["catalog"]["session_id"] == first_id
         assert read["facts"]["control_leases"][0]["sequence"] == 9
+        assert read["facts"]["live_preview"]["preview_text"] == "Streaming output"
         assert read["facts"]["provider_alias"] == f"provider-{first_id}"
         assert read["facts"]["resume"] == {
             "provider_session_id": f"provider-{first_id}",
@@ -480,9 +497,7 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
                             "id": oversized,
                             "header": oversized,
                             "question": oversized,
-                            "options": [
-                                {"label": oversized, "description": oversized, "value": oversized} for _ in range(20)
-                            ],
+                            "options": [{"label": oversized, "description": oversized, "value": oversized} for _ in range(20)],
                         }
                         for _ in range(20)
                     ],
@@ -490,9 +505,12 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
             )
         )
         connection.execute(
-            LiveLaunchReadiness.__table__.update()
-            .where(LiveLaunchReadiness.session_id == session_id)
-            .values(error_message=oversized)
+            LiveLaunchReadiness.__table__.update().where(LiveLaunchReadiness.session_id == session_id).values(error_message=oversized)
+        )
+        connection.execute(
+            LiveSessionLivePreview.__table__.update()
+            .where(LiveSessionLivePreview.session_id == session_id)
+            .values(preview_text=oversized, provisional_cursor=oversized)
         )
         thread_id = connection.execute(
             LiveSessionCatalog.__table__.select()
@@ -500,9 +518,7 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
             .where(LiveSessionCatalog.session_id == session_id)
         ).scalar_one()
         run_id = connection.execute(
-            LiveSessionRun.__table__.select()
-            .with_only_columns(LiveSessionRun.id)
-            .where(LiveSessionRun.thread_id == thread_id)
+            LiveSessionRun.__table__.select().with_only_columns(LiveSessionRun.id).where(LiveSessionRun.thread_id == thread_id)
         ).scalar_one()
         for connection_index in range(7):
             connection.execute(
@@ -538,9 +554,7 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
     result["rows"] *= 100
     result["total"] = 100
     response = CatalogRpcResponse(id="0" * 32, result=result)
-    payload_bytes = len(
-        json.dumps(response.to_wire(), ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
-    )
+    payload_bytes = len(json.dumps(response.to_wire(), ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8"))
     batch_response = CatalogRpcResponse(
         id="1" * 32,
         result={

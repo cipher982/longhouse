@@ -121,19 +121,19 @@ def session_notifications_muted(session: AgentSession | None) -> bool:
 
 def recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at: datetime) -> bool:
     threshold = occurred_at - WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW
-    presence_db = db
-    owned_presence_db = None
-    from zerg.database import get_live_session_factory
     from zerg.database import live_catalog_enabled
 
     if live_catalog_enabled():
-        live_factory = get_live_session_factory()
-        if live_factory is not None:
-            owned_presence_db = live_factory()
-            presence_db = owned_presence_db
+        from zerg.services.catalog_read_gateway import CatalogReadError
+        from zerg.services.catalog_read_gateway import recent_visible_web_presence
+
+        try:
+            return recent_visible_web_presence(owner_id=owner_id, threshold=threshold.isoformat())
+        except CatalogReadError:
+            return False
     try:
         return (
-            presence_db.query(NotificationClientPresence.id)
+            db.query(NotificationClientPresence.id)
             .filter(
                 NotificationClientPresence.owner_id == owner_id,
                 NotificationClientPresence.client_type == "web",
@@ -145,9 +145,6 @@ def recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at:
         )
     except OperationalError:
         return False
-    finally:
-        if owned_presence_db is not None:
-            owned_presence_db.close()
 
 
 def evaluate_tier1_delivery(

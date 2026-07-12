@@ -31,6 +31,7 @@ from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveMachineControlOperation
+from zerg.models.live_store import LiveNotificationClientPresence
 from zerg.models.live_store import LiveRefreshSession
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession
@@ -38,6 +39,7 @@ from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
+from zerg.models.live_store import LiveSessionLivePreview
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
@@ -285,6 +287,15 @@ def _input_receipt_dto(receipt: Any) -> dict[str, Any]:
     }
 
 
+def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, Any]:
+    from zerg.services.machine_control_operations import machine_control_operation_to_response
+
+    payload = machine_control_operation_to_response(operation)
+    for field in ("created_at", "started_at", "finished_at"):
+        payload[field] = _encode_datetime(payload[field])
+    return payload
+
+
 class CatalogStore:
     """Small product operations over the bounded catalog.
 
@@ -355,6 +366,99 @@ class CatalogStore:
             return {
                 "found": owner_id is not None,
                 "owner_id": int(owner_id) if owner_id is not None else None,
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def upsert_notification_presence(
+        self,
+        *,
+        owner_id: int,
+        client_id: str,
+        client_type: str,
+        visible: bool,
+        route: str | None,
+        session_id: str | None,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        table = LiveNotificationClientPresence.__table__
+        with _write_transaction(self.engine) as connection:
+            row = connection.execute(select(table).where(table.c.owner_id == owner_id, table.c.client_id == client_id)).mappings().first()
+            if row is not None:
+                durable_observed_at = _as_aware_utc(row["last_seen_at"]) or observed_at
+                same_payload = (
+                    str(row["client_type"]) == client_type
+                    and bool(row["visible"]) == visible
+                    and row["route"] == route
+                    and row["session_id"] == session_id
+                )
+                if observed_at == durable_observed_at and not same_payload:
+                    return {
+                        "idempotency_conflict": True,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                if observed_at <= durable_observed_at:
+                    return {
+                        "idempotency_conflict": False,
+                        "stale": observed_at < durable_observed_at,
+                        "presence": {
+                            "client_id": str(row["client_id"]),
+                            "client_type": str(row["client_type"]),
+                            "visible": bool(row["visible"]),
+                            "route": row["route"],
+                            "session_id": row["session_id"],
+                            "last_seen_at": durable_observed_at.isoformat(),
+                        },
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+            values = {
+                "client_type": client_type,
+                "visible": visible,
+                "route": route,
+                "session_id": session_id,
+                "last_seen_at": observed_at,
+                "updated_at": observed_at,
+            }
+            if row is None:
+                connection.execute(
+                    insert(table).values(
+                        owner_id=owner_id,
+                        client_id=client_id,
+                        created_at=observed_at,
+                        **values,
+                    )
+                )
+            else:
+                connection.execute(update(table).where(table.c.owner_id == owner_id, table.c.client_id == client_id).values(**values))
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "idempotency_conflict": False,
+                "stale": False,
+                "presence": {
+                    "client_id": client_id,
+                    "client_type": client_type,
+                    "visible": visible,
+                    "route": route,
+                    "session_id": session_id,
+                    "last_seen_at": observed_at.isoformat(),
+                },
+                "commit_seq": str(commit_seq),
+            }
+
+    def recent_visible_web_presence(self, *, owner_id: int, threshold: datetime) -> dict[str, Any]:
+        table = LiveNotificationClientPresence.__table__
+        with _read_snapshot(self.engine) as connection:
+            found = connection.execute(
+                select(table.c.id)
+                .where(
+                    table.c.owner_id == owner_id,
+                    table.c.client_type == "web",
+                    table.c.visible.is_(True),
+                    table.c.last_seen_at >= threshold,
+                )
+                .limit(1)
+            ).first()
+            return {
+                "visible": found is not None,
                 "commit_seq": str(_current_commit_seq(connection)),
             }
 
@@ -1611,6 +1715,180 @@ class CatalogStore:
             commit_seq = _advance_commit_seq(connection, observed_at) if changed else _current_commit_seq(connection)
             return {"found": True, "changed": changed, "commit_seq": str(commit_seq)}
 
+    def prepare_machine_operation(
+        self,
+        *,
+        operation_id: str,
+        owner_id: int,
+        device_id: str,
+        provider: str,
+        command_type: str,
+        command_id: str,
+        request_payload: dict[str, Any],
+        timeout_secs: int,
+    ) -> dict[str, Any]:
+        """Reserve one machine-scoped operation without opening SQLite in the API."""
+
+        from zerg.services.machine_control_operations import MACHINE_OPERATION_TIMEOUT_GRACE_SECS
+        from zerg.services.machine_control_operations import NONTERMINAL_OPERATION_STATUSES
+
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                stale = (
+                    orm.query(LiveMachineControlOperation)
+                    .filter(
+                        LiveMachineControlOperation.status.in_(NONTERMINAL_OPERATION_STATUSES),
+                        LiveMachineControlOperation.expires_at.is_not(None),
+                        LiveMachineControlOperation.expires_at <= observed_at,
+                    )
+                    .all()
+                )
+                for row in stale:
+                    row.status = "timed_out"
+                    row.error_json = json.dumps(
+                        {
+                            "code": "machine_control_operation_timeout",
+                            "message": "Machine Agent did not report back before the operation lease expired",
+                        },
+                        sort_keys=True,
+                    )
+                    row.finished_at = _as_aware_utc(row.expires_at) or observed_at
+                    row.updated_at = observed_at
+                    row.expires_at = None
+
+                existing = orm.query(LiveMachineControlOperation).filter(LiveMachineControlOperation.command_id == command_id).one_or_none()
+                if existing is not None:
+                    exact_replay = (
+                        str(existing.id) == operation_id
+                        and existing.owner_id == owner_id
+                        and str(existing.device_id) == device_id
+                        and str(existing.provider or "") == provider
+                        and str(existing.command_type) == command_type
+                        and int(existing.timeout_secs) == timeout_secs
+                        and _decode_json_object(existing.request_json) == request_payload
+                    )
+                    orm.commit() if stale else orm.rollback()
+                    commit_seq = _advance_commit_seq(connection, observed_at) if stale else _current_commit_seq(connection)
+                    return {
+                        "created": False,
+                        "exact_replay": exact_replay,
+                        "active_conflict": not exact_replay,
+                        "operation": _machine_operation_dto(existing) if exact_replay else None,
+                        "commit_seq": str(commit_seq),
+                    }
+
+                active = (
+                    orm.query(LiveMachineControlOperation)
+                    .filter(
+                        LiveMachineControlOperation.owner_id == owner_id,
+                        LiveMachineControlOperation.device_id == device_id,
+                        LiveMachineControlOperation.provider == provider,
+                        LiveMachineControlOperation.command_type == command_type,
+                        LiveMachineControlOperation.status.in_(NONTERMINAL_OPERATION_STATUSES),
+                    )
+                    .order_by(LiveMachineControlOperation.created_at.desc())
+                    .first()
+                )
+                if active is not None:
+                    orm.commit() if stale else orm.rollback()
+                    commit_seq = _advance_commit_seq(connection, observed_at) if stale else _current_commit_seq(connection)
+                    return {
+                        "created": False,
+                        "exact_replay": False,
+                        "active_conflict": True,
+                        "operation": _machine_operation_dto(active),
+                        "commit_seq": str(commit_seq),
+                    }
+
+                operation = LiveMachineControlOperation(
+                    id=operation_id,
+                    owner_id=owner_id,
+                    device_id=device_id,
+                    provider=provider,
+                    command_type=command_type,
+                    command_id=command_id,
+                    status="running",
+                    request_json=json.dumps(request_payload, sort_keys=True, separators=(",", ":")),
+                    timeout_secs=timeout_secs,
+                    started_at=observed_at,
+                    created_at=observed_at,
+                    updated_at=observed_at,
+                    expires_at=observed_at + timedelta(seconds=timeout_secs + MACHINE_OPERATION_TIMEOUT_GRACE_SECS),
+                )
+                orm.add(operation)
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "created": True,
+                "exact_replay": False,
+                "active_conflict": False,
+                "operation": _machine_operation_dto(operation),
+                "commit_seq": str(commit_seq),
+            }
+
+    def read_machine_operation(self, *, owner_id: int, operation_id: str) -> dict[str, Any]:
+        """Read one owner-scoped operation and materialize timeout if required."""
+
+        from zerg.services.machine_control_operations import NONTERMINAL_OPERATION_STATUSES
+
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            changed = False
+            try:
+                operation = (
+                    orm.query(LiveMachineControlOperation)
+                    .filter(
+                        LiveMachineControlOperation.id == operation_id,
+                        LiveMachineControlOperation.owner_id == owner_id,
+                    )
+                    .one_or_none()
+                )
+                if operation is None:
+                    orm.rollback()
+                    return {
+                        "found": False,
+                        "operation": None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                expires_at = _as_aware_utc(operation.expires_at)
+                if str(operation.status) in NONTERMINAL_OPERATION_STATUSES and expires_at is not None and expires_at <= observed_at:
+                    operation.status = "timed_out"
+                    operation.error_json = json.dumps(
+                        {
+                            "code": "machine_control_operation_timeout",
+                            "message": "Machine Agent did not report back before the operation lease expired",
+                        },
+                        sort_keys=True,
+                    )
+                    operation.finished_at = expires_at
+                    operation.updated_at = observed_at
+                    operation.expires_at = None
+                    changed = True
+                    orm.commit()
+                    operation_payload = _machine_operation_dto(operation)
+                else:
+                    operation_payload = _machine_operation_dto(operation)
+                    orm.rollback()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at) if changed else _current_commit_seq(connection)
+            return {
+                "found": True,
+                "operation": operation_payload,
+                "commit_seq": str(commit_seq),
+            }
+
     def read_launch_idempotency(
         self,
         *,
@@ -2760,6 +3038,7 @@ def _assemble_session_facts(
     run_table = LiveSessionRun.__table__
     connection_table = LiveSessionConnection.__table__
     control_lease_table = LiveControlLease.__table__
+    live_preview_table = LiveSessionLivePreview.__table__
     alias_table = LiveSessionThreadAlias.__table__
 
     catalogs = {
@@ -2823,6 +3102,7 @@ def _assemble_session_facts(
             connections_by_run.setdefault(str(row["run_id"]), []).append(row)
 
     control_leases_by_session: dict[str, list[Any]] = {}
+    live_preview_by_session: dict[str, Any] = {}
     if not compact:
         ranked_control_leases = (
             select(
@@ -2847,6 +3127,15 @@ def _assemble_session_facts(
             )
         ).mappings():
             control_leases_by_session.setdefault(str(row["session_id"]), []).append(row)
+        live_preview_by_session = {
+            str(row["session_id"]): row
+            for row in connection.execute(
+                select(live_preview_table).where(
+                    live_preview_table.c.session_id.in_(session_ids),
+                    live_preview_table.c.superseded_at.is_(None),
+                )
+            ).mappings()
+        }
 
     provider_alias_by_thread: dict[str, Any] = {}
     source_alias_by_thread: dict[str, Any] = {}
@@ -2903,7 +3192,12 @@ def _assemble_session_facts(
                         "control_leases": [
                             _row_dto(row, fields=_CONTROL_LEASE_FIELDS, text_limits=_CONTROL_LEASE_TEXT_LIMITS)
                             for row in control_leases_by_session.get(session_id, [])
-                        ]
+                        ],
+                        "live_preview": _row_dto(
+                            live_preview_by_session.get(session_id),
+                            fields=_LIVE_PREVIEW_FIELDS,
+                            text_limits=_LIVE_PREVIEW_TEXT_LIMITS,
+                        ),
                     }
                     if not compact
                     else {}
@@ -3122,6 +3416,23 @@ _CONTROL_LEASE_FIELDS = frozenset(
         "updated_at",
     }
 )
+_LIVE_PREVIEW_FIELDS = frozenset(
+    {
+        "session_id",
+        "thread_id",
+        "turn_key",
+        "seq",
+        "preview_text",
+        "provisional_cursor",
+        "provisional_complete",
+        "event_origin",
+        "preview_observed_at",
+        "preview_updated_at",
+        "source",
+        "last_observation_id",
+        "superseded_at",
+    }
+)
 _RUNTIME_TEXT_LIMITS = {
     "runtime_key": 255,
     "provider": 64,
@@ -3155,6 +3466,15 @@ _CONTROL_LEASE_TEXT_LIMITS = {
     "machine_id": 255,
     "state": 32,
     "payload_json": 2048,
+}
+_LIVE_PREVIEW_TEXT_LIMITS = {
+    "thread_id": 255,
+    "turn_key": 512,
+    "preview_text": 8_192,
+    "provisional_cursor": 512,
+    "event_origin": 32,
+    "source": 128,
+    "last_observation_id": 512,
 }
 
 

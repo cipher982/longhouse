@@ -8,8 +8,8 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy.orm import Session
-
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
@@ -171,6 +171,62 @@ async def test_catalogd_control_prepare_fails_closed_without_current_grant(daemo
         )
         assert result["allowed"] is False
         assert result["reason"] == "control_unavailable"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_catalogd_owns_provider_live_operation_lifecycle(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    operation_id = str(uuid4())
+    params = {
+        "operation_id": operation_id,
+        "owner_id": 7,
+        "device_id": "cinder",
+        "provider": "claude",
+        "command_type": "provider.live_proof",
+        "command_id": f"machine-op:{operation_id}",
+        "request_payload": {"provider": "claude", "publish": True},
+        "timeout_secs": 135,
+    }
+    try:
+        prepared = await client.call("machine.operation.prepare.v2", params)
+        assert prepared["created"] is True
+        assert prepared["operation"]["status"] == "running"
+        replay = await client.call("machine.operation.prepare.v2", params)
+        assert replay["exact_replay"] is True
+        assert replay["commit_seq"] == prepared["commit_seq"]
+
+        conflicting = {**params, "operation_id": str(uuid4())}
+        conflicting["command_id"] = f"machine-op:{conflicting['operation_id']}"
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("machine.operation.prepare.v2", conflicting)
+        assert exc_info.value.code == "conflict"
+
+        running = await client.call(
+            "machine.operation.read.v2",
+            {"owner_id": 7, "operation_id": operation_id},
+        )
+        assert running["operation"]["request"]["provider"] == "claude"
+        await client.call(
+            "control.operation.finish.v2",
+            {
+                "operation_id": operation_id,
+                "status": "failed",
+                "result": None,
+                "error": {"code": "proof_failed", "message": "no proof"},
+            },
+        )
+        failed = await client.call(
+            "machine.operation.read.v2",
+            {"owner_id": 7, "operation_id": operation_id},
+        )
+        assert failed["operation"]["status"] == "failed"
+        assert failed["operation"]["error"]["code"] == "proof_failed"
     finally:
         await client.close()
         await daemon.close()

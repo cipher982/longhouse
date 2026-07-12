@@ -67,6 +67,19 @@ def load_active_provisional_preview_map(db: Session, session_ids: list[UUID]) ->
     if not database_module.live_store_configured():
         # Standalone unit-test databases have no split-store topology.
         return load_session_live_preview_map(db, session_ids)
+    if database_module.live_catalog_enabled():
+        from zerg.models.live_store import LiveSessionLivePreview
+        from zerg.services.catalog_facts import hydrate_catalog_row
+        from zerg.services.catalog_facts import session_facts_map
+        from zerg.services.session_live_previews import preview_map_from_rows
+
+        facts_by_session = session_facts_map([str(session_id) for session_id in session_ids])
+        rows = [
+            row
+            for facts in facts_by_session.values()
+            if (row := hydrate_catalog_row(LiveSessionLivePreview, facts.get("live_preview"))) is not None
+        ]
+        return preview_map_from_rows(rows)
     live_session_factory = database_module.get_live_session_factory()
     if live_session_factory is None:
         raise RuntimeError("Live preview store is unavailable")

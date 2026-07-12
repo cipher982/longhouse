@@ -179,7 +179,7 @@ def load_session_live_preview_map(db: Session, session_ids: list[UUID]) -> dict[
         .filter(SessionLivePreview.superseded_at.is_(None))
         .all()
     )
-    return _preview_map_from_rows(rows)
+    return preview_map_from_rows(rows)
 
 
 def load_live_session_live_preview_map(db: Session, session_ids: list[UUID]) -> dict[str, TranscriptPreview]:
@@ -192,10 +192,10 @@ def load_live_session_live_preview_map(db: Session, session_ids: list[UUID]) -> 
         .filter(LiveSessionLivePreview.superseded_at.is_(None))
         .all()
     )
-    return _preview_map_from_rows(rows)
+    return preview_map_from_rows(rows)
 
 
-def _preview_map_from_rows(rows) -> dict[str, TranscriptPreview]:
+def preview_map_from_rows(rows) -> dict[str, TranscriptPreview]:
     previews: dict[str, TranscriptPreview] = {}
     for row in rows:
         text = str(row.preview_text or "").strip()

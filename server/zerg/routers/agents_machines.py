@@ -8,6 +8,9 @@ operator dashboards.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from uuid import uuid4
+
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
@@ -37,6 +40,7 @@ from zerg.services.agent_heartbeat_health import list_machine_transport_health
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import active_owner_id
 from zerg.services.catalog_read_gateway import enrolled_machines
+from zerg.services.catalog_read_gateway import machine_operation
 from zerg.services.catalog_read_gateway import machine_workspaces
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.machine_control_operations import ActiveMachineControlOperationError
@@ -210,11 +214,11 @@ def get_machine_archive_backlog(
 async def control_machine_archive_backlog(
     device_id: str,
     request: ArchiveBacklogControlRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_machine_read_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> ArchiveBacklogControlResponse:
-    owner_id = _resolve_agents_owner_id(db, device_token)
+    owner_id = _request_owner_id(db, device_token)
     registry = get_machine_control_channel_registry()
     info = registry.info(owner_id=owner_id, device_id=device_id)
     if info is None:
@@ -252,16 +256,24 @@ async def control_machine_archive_backlog(
 @router.get("/operations/{operation_id}", response_model=MachineControlOperationResponse)
 def get_machine_control_operation(
     operation_id: str,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_machine_read_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> MachineControlOperationResponse:
-    owner_id = _resolve_agents_owner_id(db, device_token)
+    owner_id = _request_owner_id(db, device_token)
+    if database_module.live_catalog_enabled():
+        try:
+            payload = machine_operation(owner_id=owner_id, operation_id=operation_id)
+        except CatalogReadError as exc:
+            raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+        operation_payload = payload.get("operation")
+        if payload.get("found") is not True or not isinstance(operation_payload, dict):
+            raise HTTPException(status_code=404, detail="Machine control operation not found")
+        return MachineControlOperationResponse(**operation_payload)
     operation = _get_live_machine_control_operation(owner_id=owner_id, operation_id=operation_id)
     if operation is not None:
         return MachineControlOperationResponse(**machine_control_operation_to_response(operation))
-    if database_module.live_catalog_enabled():
-        raise HTTPException(status_code=404, detail="Machine control operation not found")
+    assert db is not None
     operation = get_machine_control_operation_for_owner(db, owner_id=owner_id, operation_id=operation_id)
     if operation is None:
         raise HTTPException(status_code=404, detail="Machine control operation not found")
@@ -272,12 +284,12 @@ def get_machine_control_operation(
 async def run_provider_live_proof(
     device_id: str,
     request: ProviderLiveProofRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_machine_read_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> ProviderLiveProofAcceptedResponse:
     """Run a typed provider-live proof on a connected provider-capable machine."""
-    owner_id = _resolve_agents_owner_id(db, device_token)
+    owner_id = _request_owner_id(db, device_token)
     registry = get_machine_control_channel_registry()
     info = registry.info(owner_id=owner_id, device_id=device_id)
     if info is None:
@@ -358,7 +370,7 @@ def _get_live_machine_control_operation(*, owner_id: int, operation_id: str):
 
 
 async def _create_provider_live_proof_operation(
-    db: Session,
+    db: Session | None,
     *,
     owner_id: int,
     device_id: str,
@@ -366,6 +378,38 @@ async def _create_provider_live_proof_operation(
     request_payload: dict,
     timeout_secs: int,
 ):
+    if database_module.live_catalog_enabled():
+        from zerg.catalogd.client import CatalogRemoteError
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise RuntimeError("Live machine operation catalog is unavailable")
+        operation_id = str(uuid4())
+        command_id = f"machine-op:{operation_id}"
+        try:
+            result = await catalogd.call(
+                "machine.operation.prepare.v2",
+                {
+                    "operation_id": operation_id,
+                    "owner_id": owner_id,
+                    "device_id": device_id,
+                    "provider": provider,
+                    "command_type": PROVIDER_LIVE_PROOF_COMMAND,
+                    "command_id": command_id,
+                    "request_payload": request_payload,
+                    "timeout_secs": timeout_secs,
+                },
+                timeout_seconds=1.0,
+            )
+        except CatalogRemoteError as exc:
+            if exc.code == "conflict":
+                raise ActiveMachineControlOperationError("provider live proof already in flight") from exc
+            raise
+        operation = result.get("operation")
+        if not isinstance(operation, dict):
+            raise RuntimeError("Live machine operation catalog returned an invalid operation")
+        return SimpleNamespace(id=operation["operation_id"], command_id=operation["command_id"])
     if database_module.live_store_configured():
         live_ws = get_live_write_serializer()
         if live_ws.is_configured:
@@ -381,6 +425,7 @@ async def _create_provider_live_proof_operation(
                 auto_commit=False,
                 label="live-machine-control-operation",
             )
+    assert db is not None
     return create_provider_live_proof_operation(
         db,
         owner_id=owner_id,
@@ -392,12 +437,29 @@ async def _create_provider_live_proof_operation(
 
 
 async def _fail_provider_live_proof_operation(
-    db: Session,
+    db: Session | None,
     operation,
     *,
     code: str,
     message: str,
 ) -> None:
+    if database_module.live_catalog_enabled():
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            return
+        await catalogd.call(
+            "control.operation.finish.v2",
+            {
+                "operation_id": str(operation.id),
+                "status": "failed",
+                "result": None,
+                "error": {"code": code, "message": message},
+            },
+            timeout_seconds=1.0,
+        )
+        return
     if operation.__class__.__name__ == "LiveMachineControlOperation":
         live_ws = get_live_write_serializer()
         if live_ws.is_configured:
@@ -412,4 +474,5 @@ async def _fail_provider_live_proof_operation(
                 label="live-machine-control-fail",
             )
             return
+    assert db is not None
     fail_machine_control_operation(db, operation, code=code, message=message)

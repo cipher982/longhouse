@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import json
 import logging
 import os
 import stat
@@ -225,6 +226,14 @@ class CatalogDaemon:
             return await self._revoke_refresh_family(request)
         if request.method == "machine.heartbeat.apply.v2":
             return await self._apply_machine_heartbeat(request)
+        if request.method == "machine.operation.prepare.v2":
+            return await self._prepare_machine_operation(request)
+        if request.method == "machine.operation.read.v2":
+            return await self._read_machine_operation(request)
+        if request.method == "notification.presence.upsert.v2":
+            return await self._upsert_notification_presence(request)
+        if request.method == "notification.presence.visible.read.v2":
+            return await self._read_visible_notification_presence(request)
         if request.method == "session.runtime.apply.v2":
             return await self._apply_session_runtime(request)
         if request.method == "control.command_result.apply.v2":
@@ -654,6 +663,112 @@ class CatalogDaemon:
                 "heartbeat idempotency identity was reused with different content",
                 details={"reason": "idempotency_conflict"},
             )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _prepare_machine_operation(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "operation_id",
+            "owner_id",
+            "device_id",
+            "provider",
+            "command_type",
+            "command_id",
+            "request_payload",
+            "timeout_secs",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "machine.operation.prepare.v2 has invalid parameters")
+        params = dict(request.params)
+        if not _is_canonical_uuid(params["operation_id"]):
+            return self._error(request, "invalid_request", "operation_id must be a canonical UUID")
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        for field, maximum in (("device_id", 255), ("provider", 64), ("command_id", 96)):
+            if not _is_string(params[field], maximum=maximum):
+                return self._error(request, "invalid_request", f"{field} must contain 1 to {maximum} characters")
+        if params["command_type"] != "provider.live_proof":
+            return self._error(request, "invalid_request", "command_type is not recognized")
+        if not isinstance(params["request_payload"], dict):
+            return self._error(request, "invalid_request", "request_payload must be an object")
+        if len(json.dumps(params["request_payload"], sort_keys=True).encode("utf-8")) > 512 * 1024:
+            return self._error(request, "invalid_request", "request_payload is too large")
+        if type(params["timeout_secs"]) is not int or not 1 <= params["timeout_secs"] <= 1_200:
+            return self._error(request, "invalid_request", "timeout_secs must be an integer from 1 through 1200")
+        assert self._store is not None
+        result = await self._run_store(self._store.prepare_machine_operation, **params)
+        if result.get("active_conflict") is True:
+            return self._error(
+                request,
+                "conflict",
+                "provider live proof already in flight",
+                details={"reason": "active_operation"},
+            )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_machine_operation(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "operation_id"}:
+            return self._error(request, "invalid_request", "machine.operation.read.v2 has invalid parameters")
+        owner_id = request.params["owner_id"]
+        operation_id = request.params["operation_id"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if not _is_canonical_uuid(operation_id):
+            return self._error(request, "invalid_request", "operation_id must be a canonical UUID")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.read_machine_operation,
+            owner_id=owner_id,
+            operation_id=operation_id,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _upsert_notification_presence(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"owner_id", "client_id", "client_type", "visible", "route", "session_id", "observed_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "notification.presence.upsert.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if not isinstance(params["client_id"], str) or not 8 <= len(params["client_id"]) <= 128:
+            return self._error(request, "invalid_request", "client_id must contain 8 to 128 characters")
+        if params["client_type"] != "web":
+            return self._error(request, "invalid_request", "client_type is not recognized")
+        if type(params["visible"]) is not bool:
+            return self._error(request, "invalid_request", "visible must be a boolean")
+        for field, maximum in (("route", 512), ("session_id", 80)):
+            value = params[field]
+            if value is not None and (not isinstance(value, str) or len(value) > maximum):
+                return self._error(request, "invalid_request", f"{field} must be null or at most {maximum} characters")
+        try:
+            params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.upsert_notification_presence, **params)
+        if result.get("idempotency_conflict") is True:
+            return self._error(request, "conflict", "presence identity was reused with different content")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_visible_notification_presence(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "threshold"}:
+            return self._error(
+                request,
+                "invalid_request",
+                "notification.presence.visible.read.v2 has invalid parameters",
+            )
+        owner_id = request.params["owner_id"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        try:
+            threshold = _parse_datetime(request.params["threshold"], "threshold")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.recent_visible_web_presence,
+            owner_id=owner_id,
+            threshold=threshold,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _apply_session_runtime(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

@@ -354,15 +354,23 @@ async def _wake_live_session_input_queue(
 ) -> QueueWakeResult | None:
     if not database_module.live_store_configured():
         return None
-    live_session_factory = database_module.get_live_session_factory()
-    if live_session_factory is None:
-        return None
-    try:
-        with live_session_factory() as live_db:
-            receipts = list_recent_live_input_receipts(live_db, session_id=session_id)
-    except Exception:
-        logger.warning("Live queue wake could not read receipts for session %s", session_id, exc_info=True)
-        return None
+    if database_module.live_catalog_enabled():
+        from zerg.services.live_session_inputs import list_recent_live_input_receipts_catalog
+
+        state = await list_recent_live_input_receipts_catalog(session_id=session_id)
+        if state is None:
+            return None
+        receipts = state[0]
+    else:
+        live_session_factory = database_module.get_live_session_factory()
+        if live_session_factory is None:
+            return None
+        try:
+            with live_session_factory() as live_db:
+                receipts = list_recent_live_input_receipts(live_db, session_id=session_id)
+        except Exception:
+            logger.warning("Live queue wake could not read receipts for session %s", session_id, exc_info=True)
+            return None
 
     queued = next((receipt for receipt in receipts if receipt.status == INPUT_STATUS_QUEUED), None)
     if queued is None:

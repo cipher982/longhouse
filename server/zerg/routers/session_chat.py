@@ -369,9 +369,7 @@ class RemoteSessionContinueRequest(BaseModel):
     )
     execution_lifetime: RemoteExecutionLifetime | None = Field(
         None,
-        description=(
-            "Continuation execution lifetime: one_shot|live_control. " "Message-bearing browser/iOS requests default to one_shot."
-        ),
+        description=("Continuation execution lifetime: one_shot|live_control. Message-bearing browser/iOS requests default to one_shot."),
     )
     client_request_id: str = Field(
         ...,
@@ -409,7 +407,7 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     permission_mode: str = Field(
         "bypass",
         description=(
-            "Managed permission policy: 'bypass' (autonomous, default) or " "'remote_approve' (answer permission prompts via Longhouse)"
+            "Managed permission policy: 'bypass' (autonomous, default) or 'remote_approve' (answer permission prompts via Longhouse)"
         ),
     )
     launch_actor: str | None = Field(None, description="Positive launch actor provenance when known")
@@ -1894,11 +1892,15 @@ async def _catalog_recent_input_summaries(session_id) -> tuple[list[QueuedInputS
 
 
 def _live_input_store_available() -> bool:
+    if database_module.live_catalog_enabled():
+        return database_module.live_store_configured()
     return bool(database_module.live_store_configured() and database_module.get_live_session_factory() is not None)
 
 
 def _list_recent_live_input_summaries(source_session) -> list[QueuedInputSummary] | None:
     if not _live_input_store_available():
+        return None
+    if database_module.live_catalog_enabled():
         return None
     session_factory = database_module.get_live_session_factory()
     if session_factory is None:
@@ -1913,6 +1915,8 @@ def _list_recent_live_input_summaries(source_session) -> list[QueuedInputSummary
 
 
 def _recent_input_summaries(source_session, db: Session) -> list[QueuedInputSummary]:
+    if database_module.live_catalog_enabled():
+        return []
     live_rows = _list_recent_live_input_summaries(source_session)
     if live_rows is not None:
         return live_rows
@@ -1923,6 +1927,8 @@ def _recent_input_summaries(source_session, db: Session) -> list[QueuedInputSumm
 
 def _count_active_live_inputs(source_session) -> int | None:
     if not _live_input_store_available():
+        return None
+    if database_module.live_catalog_enabled():
         return None
     session_factory = database_module.get_live_session_factory()
     if session_factory is None:

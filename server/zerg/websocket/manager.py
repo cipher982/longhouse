@@ -45,6 +45,8 @@ class TopicConnectionManager:
         self.client_topics: Dict[str, Set[str]] = {}
         # Map client_id -> authenticated user_id (optional, guarded by `_lock`)
         self.client_users: Dict[str, int | None] = {}
+        # Authenticated principal snapshot; avoids reopening catalog SQLite for subscriptions.
+        self.client_principals: Dict[str, Any] = {}
 
         # Track last *pong* we received from each client.  Used by the
         # heartbeat watchdog to drop zombie connections (4408 close code).
@@ -98,6 +100,7 @@ class TopicConnectionManager:
         user_id: int | None = None,
         *,
         auto_system: bool = False,
+        principal: Any | None = None,
     ) -> None:
         """Register a new client connection.
 
@@ -111,6 +114,8 @@ class TopicConnectionManager:
             self.active_connections[client_id] = websocket
             self.client_topics[client_id] = set()
             self.client_users[client_id] = user_id
+            if principal is not None:
+                self.client_principals[client_id] = principal
             # Initialise last-pong timestamp so the watchdog countdown starts
             # from *now* (client gets one full interval before needing to
             # reply).
@@ -192,6 +197,7 @@ class TopicConnectionManager:
             if client_id in self.active_connections:
                 # Clean user mapping
                 self.client_users.pop(client_id, None)
+                self.client_principals.pop(client_id, None)
                 # Remove from active connections
                 del self.active_connections[client_id]
 

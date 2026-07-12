@@ -70,7 +70,7 @@ async def send_error(
             pass
 
 
-async def handle_user_subscription(client_id: str, user_id: int, message_id: str, db: Session) -> None:
+async def handle_user_subscription(client_id: str, user_id: int, message_id: str, db: Session | None) -> None:
     """Subscribe to user profile updates."""
     topic = f"user:{user_id}"
     if user_id <= 0:
@@ -78,7 +78,10 @@ async def handle_user_subscription(client_id: str, user_id: int, message_id: str
         await send_subscribe_ack(client_id, message_id, [topic], send_to_client)
         return
 
-    user = get_user(db, user_id)
+    principal = topic_manager.client_principals.get(client_id)
+    user = principal if principal is not None and getattr(principal, "id", None) == user_id else None
+    if user is None and db is not None:
+        user = get_user(db, user_id)
     if not user:
         await send_subscribe_error(client_id, message_id, f"User {user_id} not found", [topic], send_to_client, "NOT_FOUND")
         return
@@ -92,7 +95,7 @@ async def handle_user_subscription(client_id: str, user_id: int, message_id: str
     await subscribe_and_send_state(client_id, topic, message_id, user_data, "user_update", send_to_client)
 
 
-async def handle_ops_subscription(client_id: str, message_id: str, db: Session) -> None:
+async def handle_ops_subscription(client_id: str, message_id: str, db: Session | None) -> None:
     """Subscribe to ops events (admin-only)."""
     topic = "ops:events"
     user_id = topic_manager.client_users.get(client_id)
@@ -100,7 +103,9 @@ async def handle_ops_subscription(client_id: str, message_id: str, db: Session) 
         await send_subscribe_error(client_id, message_id, "Unauthorized", [topic], send_to_client, "UNAUTHORIZED")
         return
 
-    user = get_user(db, int(user_id))
+    user = topic_manager.client_principals.get(client_id)
+    if user is None and db is not None:
+        user = get_user(db, int(user_id))
     if not user or getattr(user, "role", "USER") != "ADMIN":
         await send_subscribe_error(client_id, message_id, "Admin privileges required", [topic], send_to_client, "FORBIDDEN")
         return
@@ -109,7 +114,7 @@ async def handle_ops_subscription(client_id: str, message_id: str, db: Session) 
     await send_subscribe_ack(client_id, message_id, [topic], send_to_client)
 
 
-async def handle_ping(client_id: str, envelope: Envelope, _: Session) -> None:
+async def handle_ping(client_id: str, envelope: Envelope, _: Session | None) -> None:
     """Handle ping messages to keep connection alive."""
     try:
         ping_data = PingData.model_validate(envelope.data)
@@ -126,7 +131,7 @@ async def handle_ping(client_id: str, envelope: Envelope, _: Session) -> None:
         await send_error(client_id, "Failed to process ping")
 
 
-async def handle_pong(client_id: str, envelope: Envelope, _: Session) -> None:
+async def handle_pong(client_id: str, envelope: Envelope, _: Session | None) -> None:
     """Handle pong frames sent by clients."""
     _ = envelope
     try:
@@ -135,7 +140,7 @@ async def handle_pong(client_id: str, envelope: Envelope, _: Session) -> None:
         logger.debug("Failed to record pong from %s: %s", client_id, exc)
 
 
-async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> None:
+async def handle_subscribe(client_id: str, envelope: Envelope, db: Session | None) -> None:
     """Handle topic subscription requests."""
     try:
         subscribe_data = SubscribeData.model_validate(envelope.data)
@@ -165,7 +170,7 @@ async def handle_subscribe(client_id: str, envelope: Envelope, db: Session) -> N
         await send_error(client_id, "Failed to process subscription", envelope.req_id)
 
 
-async def handle_unsubscribe(client_id: str, envelope: Envelope, _: Session) -> None:
+async def handle_unsubscribe(client_id: str, envelope: Envelope, _: Session | None) -> None:
     """Handle topic unsubscription requests."""
     try:
         unsub_data = UnsubscribeData.model_validate(envelope.data)
@@ -199,7 +204,7 @@ _INBOUND_SCHEMA_MAP: dict[str, type[BaseModel]] = {
 }
 
 
-async def dispatch_message(client_id: str, message: dict[str, Any], db: Session) -> None:
+async def dispatch_message(client_id: str, message: dict[str, Any], db: Session | None) -> None:
     """Dispatch an envelope-format message to the appropriate handler."""
     try:
         try:
