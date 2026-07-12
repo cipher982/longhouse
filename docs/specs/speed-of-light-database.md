@@ -264,6 +264,20 @@ SHA-256(
 )
 ```
 
+The byte contract is frozen by
+`schemas/storage-v2-contract-vectors.json`. Its preimage is the ASCII domain
+`longhouse-envelope-v2\0`, followed by u32-big-endian-length-prefixed NFC UTF-8
+tenant, machine, lowercase-ASCII provider, and opaque source identity; the
+16-byte source-epoch UUID; u8 range kind (`1=byte_offset`,
+`2=record_ordinal`); u64 big-endian half-open range; u32
+record count; and ordered 32-byte SHA-256 record hashes. Exact provider framing
+bytes, including JSONL newlines, participate in each record hash. Producers
+reject non-NFC strings instead of silently normalizing them. Parser revision,
+session membership, clocks, retry time, compression, and object path never
+participate. Provider is exactly `[a-z0-9][a-z0-9_-]{0,31}`. An empty range has
+zero records; a non-empty range has at least one. Python and Rust must consume
+the same fixture vectors.
+
 Within one source epoch, accepted ranges are non-overlapping and monotonic apart
 from an exact retry. `catalogd` enforces one content identity for a given source
 range. The same range with different record hashes, or a conflicting partial
@@ -338,6 +352,15 @@ Every detail/search/worklog cursor carries `render_generation`. Parser upgrades
 write new render objects and atomically switch the current generation through
 `catalogd`; old cursors return `stale_generation` rather than silently changing
 meaning. Migration parity compares the same parser and ordering revision.
+
+The frozen render-detail cursor is unpadded base64url over: ASCII `LHC2`; u8
+kind `1`; u8 payload version `1`; zero u16 reserved; 16-byte session UUID;
+16-byte render-generation UUID; i64 big-endian Unix microseconds; u16-length
+machine UTF-8; u16-length provider ASCII; u32-length opaque-source UTF-8;
+16-byte source-epoch UUID; u64 source position; and u32 event subordinal. It is
+an exclusive “after this key” position. Search and worklog use future cursor
+kinds rather than silently extending this payload. The exact example bytes live
+in `schemas/storage-v2-contract-vectors.json`.
 
 Raw durability does not depend on rendering. If parsing fails, the Runtime Host
 may acknowledge exact raw record content with
@@ -454,13 +477,18 @@ catalogd transaction
 ACK + canonical UI event
 ```
 
-The acknowledgement is a typed receipt:
+The acknowledgement is a typed receipt. Its JSON wire form is exact:
 
 ```text
-(envelope_id, commit_seq, raw_state=durable,
- render_state=ready|pending|failed,
- media_state=complete|pending|missing, missing_media_hashes[])
+{ v: 2, envelope_id, object_hash, commit_seq: "<u64 decimal string>",
+  raw_state: "durable", render_state: "ready|pending|failed",
+  media_state: "complete|pending|missing", missing_media_hashes: [] }
 ```
+
+Hashes are lowercase SHA-256 hex; missing media hashes are unique and sorted.
+`complete` has no missing hashes and `missing` names at least one. Catalog media
+membership may use `present`; that internal enum does not rename the receipt's
+wire-level `complete`. Exact retry returns the original receipt unchanged.
 
 The raw/render worker pools perform CPU/native compression and filesystem I/O.
 They do not import the web application and do not open `catalog.db`. Bounded

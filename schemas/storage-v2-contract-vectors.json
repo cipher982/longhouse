@@ -1,0 +1,89 @@
+{
+  "contract": "longhouse-storage-v2",
+  "fixture_version": 1,
+  "envelope_identity": {
+    "domain_hex": "6c6f6e67686f7573652d656e76656c6f70652d763200",
+    "vectors": [
+      {
+        "name": "one-jsonl-record",
+        "tenant_id": "42",
+        "machine_id": "cinder",
+        "provider": "codex",
+        "opaque_source_id": "/Users/david/.codex/sessions/a.jsonl",
+        "source_epoch": "018f0c3a-7b2d-7f10-8a11-123456789abc",
+        "range_kind": "byte_offset",
+        "range_start": 0,
+        "range_end": 6,
+        "record_bytes_hex": [
+          "68656c6c6f0a"
+        ],
+        "record_hashes": [
+          "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+        ],
+        "preimage_hex": "6c6f6e67686f7573652d656e76656c6f70652d7632000000000234320000000663696e64657200000005636f646578000000242f55736572732f64617669642f2e636f6465782f73657373696f6e732f612e6a736f6e6c018f0c3a7b2d7f108a11123456789abc0100000000000000000000000000000006000000015891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+        "envelope_id": "801d193966fb353837857774d7d7040491b0efa694a43e123fcd5c1a5f709a5c"
+      },
+      {
+        "name": "empty-byte-range",
+        "tenant_id": "tenant-a",
+        "machine_id": "mac-01",
+        "provider": "claude",
+        "opaque_source_id": "history.jsonl",
+        "source_epoch": "550e8400-e29b-41d4-a716-446655440000",
+        "range_kind": "byte_offset",
+        "range_start": 0,
+        "range_end": 0,
+        "record_bytes_hex": [],
+        "record_hashes": [],
+        "preimage_hex": "6c6f6e67686f7573652d656e76656c6f70652d7632000000000874656e616e742d61000000066d61632d303100000006636c617564650000000d686973746f72792e6a736f6e6c550e8400e29b41d4a716446655440000010000000000000000000000000000000000000000",
+        "envelope_id": "a0c42fe0fe6fac9777eddaca0ccc606c8f1200c9b0adfa9bf4bf5c93e1e5b5a4"
+      },
+      {
+        "name": "record-ordinal-range",
+        "tenant_id": "tenant-a",
+        "machine_id": "mac-01",
+        "provider": "claude",
+        "opaque_source_id": "history.jsonl",
+        "source_epoch": "550e8400-e29b-41d4-a716-446655440000",
+        "range_kind": "record_ordinal",
+        "range_start": 5,
+        "range_end": 7,
+        "record_bytes_hex": [
+          "7b2261223a317d0a",
+          "7b2262223a327d0a"
+        ],
+        "record_hashes": [
+          "e346432021b04179518d9614f3560ccd71354a4ee101ddcb893d6959a9d6301c",
+          "651b5768de252a9f4d2083046d83f81c31369beb73d14411492b20ea8fd1fcf5"
+        ],
+        "preimage_hex": "6c6f6e67686f7573652d656e76656c6f70652d7632000000000874656e616e742d61000000066d61632d303100000006636c617564650000000d686973746f72792e6a736f6e6c550e8400e29b41d4a716446655440000020000000000000005000000000000000700000002e346432021b04179518d9614f3560ccd71354a4ee101ddcb893d6959a9d6301c651b5768de252a9f4d2083046d83f81c31369beb73d14411492b20ea8fd1fcf5",
+        "envelope_id": "1e87f841296cae4482b3749c41285c4656331c7012f68e420eef18865a85ed81"
+      }
+    ]
+  },
+  "receipt": {
+    "v": 2,
+    "envelope_id": "801d193966fb353837857774d7d7040491b0efa694a43e123fcd5c1a5f709a5c",
+    "object_hash": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+    "commit_seq": "42",
+    "raw_state": "durable",
+    "render_state": "pending",
+    "media_state": "missing",
+    "missing_media_hashes": [
+      "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    ]
+  },
+  "render_detail_cursor": {
+    "session_id": "729be19a-17e3-47e7-a483-7ac48196f063",
+    "render_generation": "019f51d0-861d-77b2-860d-1478077f723b",
+    "order_time_us": 1783824000123456,
+    "machine_id": "cinder",
+    "provider": "codex",
+    "opaque_source_id": "/Users/david/.codex/sessions/a.jsonl",
+    "source_epoch": "018f0c3a-7b2d-7f10-8a11-123456789abc",
+    "source_position": 42,
+    "event_subordinal": 3,
+    "bytes_hex": "4c48433201010000729be19a17e347e7a4837ac48196f063019f51d0861d77b2860d1478077f723b00065660e3de8240000663696e6465720005636f646578000000242f55736572732f64617669642f2e636f6465782f73657373696f6e732f612e6a736f6e6c018f0c3a7b2d7f108a11123456789abc000000000000002a00000003",
+    "base64url": "TEhDMgEBAABym-GaF-NH56SDesSBlvBjAZ9R0IYdd7KGDRR4B39yOwAGVmDj3oJAAAZjaW5kZXIABWNvZGV4AAAAJC9Vc2Vycy9kYXZpZC8uY29kZXgvc2Vzc2lvbnMvYS5qc29ubAGPDDp7LX8QihESNFZ4mrwAAAAAAAAAKgAAAAM"
+  }
+}

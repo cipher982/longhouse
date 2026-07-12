@@ -245,6 +245,7 @@ desktop/LonghouseMenuBarHarness/.build/
 !engine/tests/fixtures/**/antigravity_legacy_json/**
 !server/tests/integration/fixtures/antigravity_legacy_*.json
 server/.qa-home/
+.qa-home/
 
 # Vibetest results
 vibetest-results/
