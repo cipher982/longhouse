@@ -2198,7 +2198,7 @@ def _validate_raw_object_commit(params: dict) -> None:
         value = params[field]
         if type(value) is not int or not 0 <= value <= maximum:
             raise ValueError(f"{field} exceeds its storage-v2 bound")
-    if params["provenance_kind"] not in {"native", "legacy_fallback"}:
+    if params["provenance_kind"] not in {"native", "legacy_source_lines", "legacy_fallback"}:
         raise ValueError("provenance_kind is invalid")
     if params["render_state"] not in {"ready", "pending", "failed"}:
         raise ValueError("render_state is invalid")

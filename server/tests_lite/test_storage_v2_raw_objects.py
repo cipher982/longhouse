@@ -112,3 +112,10 @@ def test_record_ordinal_round_trip_and_identity_excludes_session_membership(tmp_
     assert first.envelope_id == relinked.envelope_id
     assert first.payload_hash != relinked.payload_hash
     assert read_raw_object(tmp_path / "first", first.object_path, expected_object_hash=first.object_hash).spec == spec
+
+
+def test_legacy_source_line_provenance_round_trips(tmp_path):
+    spec = replace(_spec(), provenance_kind="legacy_source_lines")
+    sealed = seal_raw_object(tmp_path, spec)
+    decoded = read_raw_object(tmp_path, sealed.object_path, expected_object_hash=sealed.object_hash)
+    assert decoded.spec.provenance_kind == "legacy_source_lines"
