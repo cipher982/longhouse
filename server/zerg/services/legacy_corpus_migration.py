@@ -552,17 +552,25 @@ class LegacyCorpusConverter:
         session_id: UUID,
         watermark: LegacyHighWatermark,
     ) -> bool:
-        counts = db.execute(
+        connection = db.connection()
+        connection.exec_driver_sql("PRAGMA cache_size=-32768")
+        connection.exec_driver_sql("PRAGMA mmap_size=0")
+        source_count = int(
+            db.execute(
+                text("SELECT COUNT(*) FROM source_lines WHERE session_id = :session_id AND id <= :high"),
+                {"session_id": str(session_id), "high": watermark.source_line_id},
+            ).scalar_one()
+        )
+        if source_count < STREAMING_SOURCE_THRESHOLD:
+            return False
+        inline_raw = db.execute(
             text(
-                "SELECT COUNT(*), "
-                "SUM(CASE WHEN raw_json_z IS NOT NULL OR COALESCE(raw_json, '') <> '' THEN 1 ELSE 0 END) "
-                "FROM source_lines WHERE session_id = :session_id AND id <= :high"
+                "SELECT 1 FROM source_lines WHERE session_id = :session_id AND id <= :high "
+                "AND (raw_json_z IS NOT NULL OR raw_json <> '') LIMIT 1"
             ),
             {"session_id": str(session_id), "high": watermark.source_line_id},
-        ).one()
-        source_count = int(counts[0] or 0)
-        rows_with_inline_raw = int(counts[1] or 0)
-        return source_count >= STREAMING_SOURCE_THRESHOLD and rows_with_inline_raw == 0
+        ).first()
+        return inline_raw is None
 
     async def _convert_streaming_archived(
         self,
