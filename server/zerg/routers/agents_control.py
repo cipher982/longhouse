@@ -13,10 +13,13 @@ from fastapi import WebSocketDisconnect
 from sqlalchemy.orm import Session
 
 import zerg.database as database_module
+from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.database import get_catalog_session_factory
 from zerg.dependencies.agents_auth import _validate_device_token_for_request
 from zerg.models.device_token import DeviceToken
+from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.machine_control_operations import reconcile_live_machine_control_operation_from_command_result
 from zerg.services.machine_control_operations import reconcile_machine_control_operation_from_command_result
@@ -46,12 +49,33 @@ def _validate_websocket_device_token(websocket: WebSocket) -> DeviceToken | None
 
 
 async def _reconcile_machine_control_operation_result(
-    db: Session,
+    db: Session | None,
     message: dict[str, Any],
     *,
     owner_id: int,
     device_id: str,
 ) -> bool:
+    if database_module.live_catalog_enabled():
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise CatalogUnavailable("catalogd is not supervised")
+        result = await catalogd.call(
+            "control.command_result.apply.v2",
+            {
+                "owner_id": owner_id,
+                "device_id": device_id,
+                "message": message,
+            },
+            timeout_seconds=2.0,
+        )
+        if (
+            type(result.get("matched")) is not bool
+            or result.get("match_kind") not in {None, "operation", "launch"}
+            or not isinstance(result.get("commit_seq"), str)
+            or not result["commit_seq"].isdecimal()
+        ):
+            raise CatalogUnavailable("catalog returned an invalid command result")
+        return result["matched"]
     if database_module.live_store_configured():
         live_ws = get_live_write_serializer()
         if live_ws.is_configured:
@@ -69,6 +93,7 @@ async def _reconcile_machine_control_operation_result(
                 return True
     if database_module.live_catalog_enabled():
         return False
+    assert db is not None
     return await get_write_serializer().execute_or_direct(
         lambda write_db: reconcile_machine_control_operation_from_command_result(
             write_db,
@@ -82,9 +107,10 @@ async def _reconcile_machine_control_operation_result(
     )
 
 
-async def _reconcile_late_launch_result(db: Session, message: dict[str, Any]) -> bool:
+async def _reconcile_late_launch_result(db: Session | None, message: dict[str, Any]) -> bool:
     if database_module.live_catalog_enabled():
-        return reconcile_launch_from_command_result(db, message)
+        return False
+    assert db is not None
     return await get_write_serializer().execute_or_direct(
         lambda write_db: reconcile_launch_from_command_result(write_db, message),
         db,
@@ -103,7 +129,7 @@ async def _close_control_ws(websocket: WebSocket, *, code: int = 1008, reason: s
 @router.websocket("/ws")
 async def machine_control_websocket(websocket: WebSocket) -> None:
     settings = get_settings()
-    db = get_catalog_session_factory()()
+    db = None if database_module.live_catalog_enabled() else get_catalog_session_factory()()
     registry = get_machine_control_channel_registry()
     owner_id: int | None = None
     device_id: str | None = None
@@ -185,8 +211,14 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
                             owner_id=owner_id,
                             device_id=device_id,
                         )
+                    except (CatalogUnavailable, CatalogRemoteError):
+                        logger.exception(
+                            "Catalog unavailable reconciling machine operation command_id=%s",
+                            message.get("command_id"),
+                        )
                     except Exception:  # noqa: BLE001
-                        db.rollback()
+                        if db is not None:
+                            db.rollback()
                         logger.exception(
                             "Failed to reconcile machine operation result command_id=%s",
                             message.get("command_id"),
@@ -197,7 +229,8 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
                     try:
                         await _reconcile_late_launch_result(db, message)
                     except Exception:  # noqa: BLE001
-                        db.rollback()
+                        if db is not None:
+                            db.rollback()
                         logger.exception(
                             "Failed to reconcile late launch result command_id=%s",
                             message.get("command_id"),
@@ -205,6 +238,7 @@ async def machine_control_websocket(websocket: WebSocket) -> None:
             else:
                 logger.warning("Unknown machine control message type from %s: %s", device_id, message_type)
     finally:
-        db.close()
+        if db is not None:
+            db.close()
         if owner_id is not None and device_id is not None:
             await registry.unregister(owner_id=owner_id, device_id=device_id, websocket=websocket)

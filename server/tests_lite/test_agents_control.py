@@ -91,6 +91,41 @@ async def test_machine_control_result_reconcile_prefers_live_serializer(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_machine_control_result_reconcile_uses_catalogd_without_db(monkeypatch):
+    calls = []
+
+    class CatalogClient:
+        async def call(self, method, params, *, timeout_seconds):
+            calls.append((method, params, timeout_seconds))
+            return {"matched": True, "match_kind": "operation", "commit_seq": "9"}
+
+    def fail_serializer():  # pragma: no cover - assertion is the behavior
+        raise AssertionError("catalog control reconciliation must not resolve a SQLite serializer")
+
+    monkeypatch.setattr("zerg.routers.agents_control.database_module.live_catalog_enabled", lambda: True)
+    monkeypatch.setattr("zerg.routers.agents_control.get_catalogd_client", lambda: CatalogClient())
+    monkeypatch.setattr("zerg.routers.agents_control.get_live_write_serializer", fail_serializer)
+    monkeypatch.setattr("zerg.routers.agents_control.get_write_serializer", fail_serializer)
+
+    message = {"type": "command_result", "command_id": "machine-op:test", "ok": True, "result": {}}
+    matched = await _reconcile_machine_control_operation_result(
+        None,
+        message,
+        owner_id=7,
+        device_id="cinder",
+    )
+
+    assert matched is True
+    assert calls == [
+        (
+            "control.command_result.apply.v2",
+            {"owner_id": 7, "device_id": "cinder", "message": message},
+            2.0,
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_late_launch_result_reconcile_uses_write_serializer(monkeypatch):
     calls = []
 
