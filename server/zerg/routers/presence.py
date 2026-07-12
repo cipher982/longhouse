@@ -27,6 +27,7 @@ Authentication: same X-Agents-Token / device token as ingest.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime
 from datetime import timezone
@@ -42,6 +43,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
+from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -91,6 +93,20 @@ _HOT_PRESENCE_QUEUE_TIMEOUT_SECONDS = 2.0
 _AUTO_RESUME_STATES = {"thinking", "running"}
 
 
+def _no_presence_db():
+    """Hosted presence is a runtime RPC and must not open SQLite in the API."""
+
+    yield None
+
+
+_settings = get_settings()
+_presence_db_dependency = (
+    _catalog_db_dependency
+    if _settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"} or not live_store_configured()
+    else _no_presence_db
+)
+
+
 def _source_for_provider_hook(provider: str | None) -> str:
     normalized = re.sub(r"[^a-z0-9_]+", "_", (provider or "claude").strip().lower()).strip("_")
     if not normalized:
@@ -114,7 +130,7 @@ class PresenceIn(UTCBaseModel):
 async def upsert_presence(
     payload: PresenceIn,
     request: Request,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_presence_db_dependency),
     _token: object = Depends(verify_agents_token),
 ) -> Response:
     """Upsert real-time presence state for a session."""
@@ -177,6 +193,7 @@ async def upsert_presence(
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT, headers=dict(runtime_response.headers))
 
+    assert db is not None
     owner_id = resolve_session_message_owner_id(db, _token)
 
     def _do_presence_writes(write_db: Session):

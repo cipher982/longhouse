@@ -103,7 +103,9 @@ def _no_heartbeat_db():
 
 _settings = get_settings()
 _heartbeat_db_dependency = (
-    _catalog_db_dependency if _settings.testing or os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV else _no_heartbeat_db
+    _catalog_db_dependency
+    if _settings.testing or os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV or not live_store_configured()
+    else _no_heartbeat_db
 )
 
 

@@ -30,6 +30,70 @@ from zerg.services.live_archive_outbox import RUNTIME_EVENT_KIND
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 
 
+def test_catalog_runtime_batch_uses_one_rpc_without_opening_sqlite(monkeypatch):
+    import zerg.routers.runtime as runtime_router
+
+    async def run_test():
+        calls = []
+
+        class CatalogClient:
+            async def call(self, method, params, *, timeout_seconds):
+                calls.append((method, params, timeout_seconds))
+                return {
+                    "accepted": 1,
+                    "duplicates": 0,
+                    "updated_runtime_keys": ["codex:catalog-runtime"],
+                    "commit_seq": "12",
+                }
+
+        def fail_serializer():  # pragma: no cover - assertion is the behavior
+            raise AssertionError("catalog runtime ingest must not resolve a Runtime Host SQLite serializer")
+
+        monkeypatch.setattr(runtime_router, "live_catalog_enabled", lambda: True)
+        monkeypatch.setattr(runtime_router, "get_catalogd_client", lambda: CatalogClient())
+        monkeypatch.setattr(runtime_router, "get_write_serializer", fail_serializer)
+        monkeypatch.setattr(runtime_router, "get_live_write_serializer", fail_serializer)
+
+        payload = RuntimeEventBatchIngest(
+            events=[
+                {
+                    "runtime_key": "codex:catalog-runtime",
+                    "provider": "codex",
+                    "device_id": "cinder",
+                    "source": "codex_bridge",
+                    "kind": "phase_signal",
+                    "phase": "running",
+                    "tool_name": "Shell",
+                    "occurred_at": "2026-07-12T07:00:00Z",
+                    "freshness_ms": 60_000,
+                    "dedupe_key": "catalog-runtime-1",
+                    "payload": {},
+                }
+            ]
+        )
+        response = Response()
+        result = await runtime_router.ingest_runtime_observation_batch(
+            payload,
+            response,
+            None,
+            SimpleNamespace(device_id="cinder", id="token-1", owner_id=1),
+            None,
+        )
+
+        assert result.accepted == 1
+        assert result.updated_runtime_keys == ["codex:catalog-runtime"]
+        assert response.headers["X-Catalog-Commit-Seq"] == "12"
+        assert response.headers["X-Runtime-Label"] == "catalogd-runtime-state"
+        assert len(calls) == 1
+        method, params, timeout = calls[0]
+        assert method == "session.runtime.apply.v2"
+        assert timeout == runtime_router._HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS
+        assert params["events"][0]["runtime_key"] == "codex:catalog-runtime"
+        assert params["events"][0]["occurred_at"] == "2026-07-12T07:00:00Z"
+
+    asyncio.run(run_test())
+
+
 def test_runtime_batch_releases_request_db_before_serialized_write(tmp_path, monkeypatch):
     engine = make_engine(f"sqlite:///{tmp_path}/runtime_release.db", pool_size=1, max_overflow=0)
     Base.metadata.create_all(bind=engine)

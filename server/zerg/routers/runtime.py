@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import contextmanager
 from datetime import datetime
 from datetime import timezone
@@ -15,6 +16,9 @@ from fastapi import Response
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogUnavailable
+from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import live_catalog_enabled
 from zerg.database import live_store_configured
@@ -32,6 +36,7 @@ from zerg.services.apns_sender import prepare_session_live_activity_pushes
 from zerg.services.apns_sender import prepare_session_needs_answer_push
 from zerg.services.apns_sender import prepare_widget_timeline_push
 from zerg.services.apns_sender import send_presence_pushes
+from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
@@ -60,6 +65,20 @@ _HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS = 2.0
 _AUTO_RESUME_PHASES = {"thinking", "running"}
 
 
+def _no_runtime_db():
+    """The hosted Runtime Host delegates runtime-state storage to catalogd."""
+
+    yield None
+
+
+_settings = get_settings()
+_runtime_db_dependency = (
+    _catalog_db_dependency
+    if _settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"} or not live_store_configured()
+    else _no_runtime_db
+)
+
+
 def _resume_live_snoozed_sessions(live_db: Session, push_contexts: list[dict], *, occurred_at: datetime) -> int:
     session_ids = [str(item["session_id"]) for item in push_contexts if item.get("auto_resume")]
     if not session_ids:
@@ -81,13 +100,14 @@ def _resume_live_snoozed_sessions(live_db: Session, push_contexts: list[dict], *
 async def ingest_runtime_observation_batch(
     payload: RuntimeEventBatchIngest,
     response: Response,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runtime_db_dependency),
     _token: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> RuntimeEventBatchResult:
     """Ingest normalized runtime observations and materialize runtime state."""
     try:
-        ws = get_write_serializer()
+        catalog_mode = live_catalog_enabled()
+        ws = None if catalog_mode else get_write_serializer()
         events = payload.events
 
         # Observation age at ingest: occurred_at (engine) -> now (server receive).
@@ -122,7 +142,7 @@ async def ingest_runtime_observation_batch(
 
         if live_transcript_only:
             _publish_live_transcript_previews(events, now=now_utc)
-        owner_id = resolve_session_message_owner_id(db, _token)
+        owner_id = None if catalog_mode else resolve_session_message_owner_id(db, _token)
 
         def _do_runtime_state(wdb: Session):
             ingest_result = ingest_runtime_events(wdb, events)
@@ -385,6 +405,52 @@ async def ingest_runtime_observation_batch(
                 except Exception:
                     logging.getLogger(__name__).exception("APNs dispatch failed for session %s; continuing batch", sid)
 
+        if catalog_mode:
+            catalogd = get_catalogd_client()
+            if catalogd is None:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+                )
+            try:
+                raw_result = await catalogd.call(
+                    "session.runtime.apply.v2",
+                    {"events": [event.model_dump(mode="json") for event in events]},
+                    timeout_seconds=_HOT_RUNTIME_QUEUE_TIMEOUT_SECONDS,
+                )
+            except CatalogUnavailable as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+                ) from exc
+            except CatalogRemoteError as exc:
+                raise HTTPException(
+                    status_code=(status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_500_INTERNAL_SERVER_ERROR),
+                    detail={
+                        "code": "catalog_unavailable" if exc.retryable else "catalog_operation_failed",
+                        "message": (
+                            "Catalog mutation is temporarily unavailable." if exc.retryable else "Catalog runtime mutation failed."
+                        ),
+                    },
+                ) from exc
+            commit_seq = raw_result.pop("commit_seq", None)
+            if not isinstance(commit_seq, str) or not commit_seq.isdecimal():
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"code": "catalog_protocol_error", "message": "Catalog returned an invalid runtime result."},
+                )
+            try:
+                result = RuntimeEventBatchResult.model_validate(raw_result)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"code": "catalog_protocol_error", "message": "Catalog returned an invalid runtime result."},
+                ) from exc
+            response.headers["X-Catalog-Commit-Seq"] = commit_seq
+            response.headers["X-Runtime-Label"] = "catalogd-runtime-state"
+            _publish_runtime_updates(result)
+            return result
+
         if live_store_configured():
             live_ws = get_live_write_serializer()
             if not live_ws.is_configured:
@@ -407,7 +473,8 @@ async def ingest_runtime_observation_batch(
                 return result
 
             try:
-                db.close()
+                if db is not None:
+                    db.close()
                 result = await live_ws.execute(
                     _do_live_runtime_state,
                     label="runtime-live-state",
@@ -440,6 +507,8 @@ async def ingest_runtime_observation_batch(
             return result
 
         try:
+            assert ws is not None
+            assert db is not None
             result, push_contexts = await ws.execute_after_closing_request_session(
                 _do_runtime_state,
                 db,
@@ -466,7 +535,8 @@ async def ingest_runtime_observation_batch(
         raise
     except Exception as exc:
         try:
-            db.rollback()
+            if db is not None:
+                db.rollback()
         except Exception:
             pass
         raise HTTPException(
