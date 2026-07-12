@@ -353,8 +353,23 @@ class CatalogStore:
                 ).rowcount
                 or 0
             )
-            commit_seq = _advance_commit_seq(connection, observed_at) if deleted or completed else _current_commit_seq(connection)
-            return {"deleted": int(deleted), "completed": int(completed), "commit_seq": str(commit_seq)}
+            pruned = (
+                connection.execute(
+                    delete(table).where(
+                        table.c.kind.in_(launch_kinds),
+                        table.c.drained_at.isnot(None),
+                        table.c.drained_at < observed_at - timedelta(days=30),
+                    )
+                ).rowcount
+                or 0
+            )
+            commit_seq = _advance_commit_seq(connection, observed_at) if deleted or completed or pruned else _current_commit_seq(connection)
+            return {
+                "deleted": int(deleted),
+                "completed": int(completed),
+                "pruned": int(pruned),
+                "commit_seq": str(commit_seq),
+            }
 
     """Small product operations over the bounded catalog.
 

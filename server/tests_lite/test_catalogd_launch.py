@@ -37,6 +37,35 @@ def daemon_paths():
 
 
 @pytest.mark.asyncio
+async def test_catalogd_startup_prunes_completed_launch_receipts_after_retention(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    old = datetime.now(UTC) - timedelta(days=31)
+    with Session(engine) as db:
+        db.add(
+            LiveArchiveOutbox(
+                idempotency_key="remote_launch.v1:old",
+                kind=REMOTE_LAUNCH_KIND,
+                payload_json="{}",
+                created_at=old,
+                drained_at=old,
+            )
+        )
+        db.commit()
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with Session(engine) as db:
+        assert db.query(LiveArchiveOutbox).count() == 0
+    engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_catalogd_owns_launch_intent_idempotency_and_outcome(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

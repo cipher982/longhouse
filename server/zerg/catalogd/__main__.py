@@ -73,6 +73,11 @@ def _operator_parser() -> argparse.ArgumentParser:
     restore.add_argument("--manifest", type=Path, required=True)
     restore.add_argument("--source-data-root", type=Path, required=True)
     restore.add_argument("--destination", type=Path, required=True)
+    restore.add_argument(
+        "--catalog-destination",
+        type=Path,
+        help="deployed catalog database path inside --destination (for example /data/longhouse-live.db)",
+    )
     return parser
 
 
@@ -91,6 +96,7 @@ def main() -> int:
                 manifest_path=args.manifest,
                 source_data_root=args.source_data_root,
                 destination_root=args.destination,
+                catalog_destination=args.catalog_destination,
             )
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0

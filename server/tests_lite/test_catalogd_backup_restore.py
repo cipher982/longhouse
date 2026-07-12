@@ -15,6 +15,8 @@ from zerg.catalogd.backup import restore_rehearsal
 from zerg.catalogd.backup import verify_restore_point
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.server import CatalogDaemon
+from zerg.config import resolve_live_database_url
+from zerg.config import sqlite_file_path
 from zerg.storage_v2.media_objects import MediaObjectSpec
 from zerg.storage_v2.media_objects import seal_media_object
 from zerg.storage_v2.raw_objects import RawObjectSpec
@@ -152,15 +154,48 @@ async def test_exact_backup_verify_and_blank_root_restore_without_monolith(backu
     assert proof["ok"] is True and proof["object_count"] == 2
 
     restored = tmp_path / "blank-root"
+    deployed_catalog = sqlite_file_path(resolve_live_database_url(f"sqlite:///{restored / 'longhouse.db'}"))
+    assert deployed_catalog is not None
     rehearsal = restore_rehearsal(
         manifest_path=manifest_path,
         source_data_root=data_root,
         destination_root=restored,
+        catalog_destination=deployed_catalog,
     )
     assert rehearsal["ok"] is True
-    assert (restored / "catalog.db").is_file()
+    assert deployed_catalog.is_file()
+    assert not (restored / "catalog.db").exists()
     assert not (restored / "longhouse.db").exists()
     assert not (restored / "search.db").exists()
+
+    restored_daemon = CatalogDaemon(database_path=deployed_catalog, socket_path=restored / "catalogd.sock")
+    await restored_daemon.start()
+    restored_client = CatalogClient(restored / "catalogd.sock")
+    try:
+        assert (await restored_client.call("ping.v2"))["ready"] is True
+        timeline = await restored_client.call(
+            "storage.session.timeline.list.v2",
+            {
+                "owner_id": "42",
+                "before_last_activity_at": None,
+                "before_session_id": None,
+                "project": None,
+                "provider": None,
+                "include_test": False,
+                "limit": 10,
+            },
+        )
+        assert [row["session_id"] for row in timeline["sessions"]] == [str(session_id)]
+        detail = await restored_client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert detail["found"] is True
+        raw_manifest = await restored_client.call(
+            "storage.session.raw_manifest.v2",
+            {"session_id": str(session_id), "owner_id": "42", "after_source_key": None, "limit": 10},
+        )
+        assert raw_manifest["objects"][0]["object_hash"] == sealed_raw.object_hash
+    finally:
+        await restored_client.close()
+        await restored_daemon.close()
 
     raw_path = data_root / sealed_raw.object_path
     original = raw_path.read_bytes()

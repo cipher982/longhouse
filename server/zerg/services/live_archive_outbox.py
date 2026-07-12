@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from typing import Any
 from uuid import UUID
@@ -56,6 +57,8 @@ ONE_SHOT_CONTROL_PLANE_BY_PROVIDER = {
     "codex": "codex_exec",
     "cursor": "cursor_acp",
 }
+_LAUNCH_RECEIPT_RETENTION = timedelta(days=30)
+_LAUNCH_RECEIPT_KINDS = (MANAGED_LOCAL_LAUNCH_KIND, REMOTE_LAUNCH_KIND, REMOTE_LAUNCH_OUTCOME_KIND)
 
 
 @dataclass(frozen=True)
@@ -155,6 +158,14 @@ def managed_local_launch_idempotency_key(*, session_id: UUID | str) -> str:
     return f"{MANAGED_LOCAL_LAUNCH_KIND}:{str(session_id).strip()}"
 
 
+def _prune_completed_launch_receipts(db: Session, *, now: datetime) -> None:
+    db.query(LiveArchiveOutbox).filter(
+        LiveArchiveOutbox.kind.in_(_LAUNCH_RECEIPT_KINDS),
+        LiveArchiveOutbox.drained_at.isnot(None),
+        LiveArchiveOutbox.drained_at < now - _LAUNCH_RECEIPT_RETENTION,
+    ).delete(synchronize_session=False)
+
+
 def enqueue_managed_local_launch_outbox(
     db: Session,
     *,
@@ -168,6 +179,7 @@ def enqueue_managed_local_launch_outbox(
 ) -> bool:
     """Persist managed-local launch idempotency evidence."""
 
+    _prune_completed_launch_receipts(db, now=datetime.now(timezone.utc))
     key = idempotency_key or managed_local_launch_idempotency_key(session_id=plan.session_id)
     existing = db.query(LiveArchiveOutbox.id).filter(LiveArchiveOutbox.idempotency_key == key).first()
     if existing is not None:
@@ -274,6 +286,8 @@ def _enqueue_json_outbox(
     payload: dict[str, Any],
     completed: bool,
 ) -> bool:
+    now = datetime.now(timezone.utc)
+    _prune_completed_launch_receipts(db, now=now)
     existing = db.query(LiveArchiveOutbox.id).filter(LiveArchiveOutbox.idempotency_key == idempotency_key).first()
     if existing is not None:
         return False
@@ -282,7 +296,7 @@ def _enqueue_json_outbox(
             idempotency_key=idempotency_key,
             kind=kind,
             payload_json=json.dumps(payload, sort_keys=True),
-            drained_at=datetime.now(timezone.utc) if completed else None,
+            drained_at=now if completed else None,
         )
     )
     return True

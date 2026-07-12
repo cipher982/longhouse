@@ -195,7 +195,13 @@ def load_manifest(path: Path) -> dict[str, object]:
     return value
 
 
-def verify_restore_point(*, manifest_path: Path, catalog_root: Path | None = None, data_root: Path) -> dict[str, object]:
+def verify_restore_point(
+    *,
+    manifest_path: Path,
+    catalog_root: Path | None = None,
+    catalog_path: Path | None = None,
+    data_root: Path,
+) -> dict[str, object]:
     manifest_path = manifest_path.expanduser().resolve()
     manifest = load_manifest(manifest_path)
     catalog = manifest.get("catalog")
@@ -204,8 +210,10 @@ def verify_restore_point(*, manifest_path: Path, catalog_root: Path | None = Non
         raise BackupProofError("restore manifest catalog/object set is invalid")
     if manifest.get("object_set_sha256") != _object_set_hash(objects):
         raise BackupProofError("restore manifest object-set hash mismatch")
+    if catalog_root is not None and catalog_path is not None:
+        raise BackupProofError("provide catalog_root or catalog_path, not both")
     catalog_base = manifest_path.parent if catalog_root is None else catalog_root.expanduser().resolve()
-    snapshot = catalog_base / _safe_relative_path(catalog.get("path"))
+    snapshot = catalog_path.expanduser().resolve() if catalog_path is not None else catalog_base / _safe_relative_path(catalog.get("path"))
     expected_catalog_hash = _canonical_hash(catalog.get("sha256"), "catalog sha256")
     if not snapshot.is_file() or snapshot.stat().st_size != int(catalog.get("size", -1)):
         raise BackupProofError("catalog snapshot is missing or has the wrong size")
@@ -235,7 +243,13 @@ def verify_restore_point(*, manifest_path: Path, catalog_root: Path | None = Non
     }
 
 
-def restore_rehearsal(*, manifest_path: Path, source_data_root: Path, destination_root: Path) -> dict[str, object]:
+def restore_rehearsal(
+    *,
+    manifest_path: Path,
+    source_data_root: Path,
+    destination_root: Path,
+    catalog_destination: Path | None = None,
+) -> dict[str, object]:
     manifest_path = manifest_path.expanduser().resolve()
     destination = destination_root.expanduser().resolve()
     if destination.exists() and any(destination.iterdir()):
@@ -246,7 +260,13 @@ def restore_rehearsal(*, manifest_path: Path, source_data_root: Path, destinatio
     objects = manifest["objects"]
     assert isinstance(catalog, dict) and isinstance(objects, list)
     snapshot_relative = _safe_relative_path(catalog["path"])
-    shutil.copy2(manifest_path.parent / snapshot_relative, destination / snapshot_relative)
+    catalog_target = destination / snapshot_relative if catalog_destination is None else catalog_destination.expanduser().resolve()
+    try:
+        catalog_target.relative_to(destination)
+    except ValueError as exc:
+        raise BackupProofError("catalog restore destination must be inside the blank root") from exc
+    catalog_target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    shutil.copy2(manifest_path.parent / snapshot_relative, catalog_target)
     source_root = source_data_root.expanduser().resolve()
     for item in objects:
         assert isinstance(item, dict)
@@ -256,7 +276,7 @@ def restore_rehearsal(*, manifest_path: Path, source_data_root: Path, destinatio
         shutil.copy2(source_root / relative, target)
     if (destination / "longhouse.db").exists():
         raise BackupProofError("restore rehearsal unexpectedly copied longhouse.db")
-    proof = verify_restore_point(manifest_path=manifest_path, catalog_root=destination, data_root=destination)
+    proof = verify_restore_point(manifest_path=manifest_path, catalog_path=catalog_target, data_root=destination)
     return {**proof, "destination_root": str(destination)}
 
 
