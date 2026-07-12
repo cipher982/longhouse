@@ -237,6 +237,8 @@ class CatalogDaemon:
             return await self._read_launch_idempotency(request)
         if request.method == "session.launch.intent.create.v2":
             return await self._create_launch_intent(request)
+        if request.method == "session.launch.local.create.v2":
+            return await self._create_local_launch(request)
         if request.method == "session.launch.outcome.apply.v2":
             return await self._apply_launch_outcome(request)
         if request.method == "session.input.queued.list.v2":
@@ -778,6 +780,19 @@ class CatalogDaemon:
             return self._error(request, "conflict", "launch command identity was reused with different attributes")
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _create_local_launch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"launch"}:
+            return self._error(request, "invalid_request", "session.launch.local.create.v2 requires launch")
+        try:
+            launch = _validate_local_launch_rpc(request.params["launch"])
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.create_local_launch, launch=launch)
+        if result.get("idempotency_conflict") is True:
+            return self._error(request, "conflict", "local launch identity was reused with different attributes")
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _apply_launch_outcome(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"launch", "outcome"}:
             return self._error(request, "invalid_request", "session.launch.outcome.apply.v2 has invalid parameters")
@@ -1129,6 +1144,31 @@ _LAUNCH_FIELDS = {
     "launch_actor",
     "launch_surface",
 }
+_LOCAL_LAUNCH_FIELDS = {
+    "owner_id",
+    "git_repo",
+    "git_branch",
+    "started_at",
+    "expires_at",
+    "plan",
+}
+_LOCAL_LAUNCH_PLAN_FIELDS = {
+    "session_id",
+    "provider",
+    "provider_session_id",
+    "source_name",
+    "source_runner_id",
+    "cwd",
+    "project",
+    "display_name",
+    "managed_session_name",
+    "loop_mode",
+    "permission_mode",
+    "launch_actor",
+    "launch_surface",
+    "managed_transport",
+    "attach_command",
+}
 _INPUT_RECEIPT_FIELDS = {
     "owner_id",
     "session_id",
@@ -1239,6 +1279,51 @@ def _validate_launch_rpc(value: object) -> dict:
     result["expires_at"] = _parse_datetime(result["expires_at"], "launch.expires_at")
     if result["expires_at"] <= result["started_at"]:
         raise ValueError("launch.expires_at must be later than started_at")
+    return result
+
+
+def _validate_local_launch_rpc(value: object) -> dict:
+    if not isinstance(value, dict) or set(value) != _LOCAL_LAUNCH_FIELDS:
+        raise ValueError("local launch has invalid fields")
+    result = dict(value)
+    if type(result["owner_id"]) is not int or result["owner_id"] <= 0:
+        raise ValueError("local launch.owner_id must be a positive integer")
+    for field, maximum in (("git_repo", 500), ("git_branch", 255)):
+        raw = result[field]
+        if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
+            raise ValueError(f"local launch.{field} must be null or contain 1 to {maximum} characters")
+    result["started_at"] = _parse_datetime(result["started_at"], "local launch.started_at")
+    result["expires_at"] = _parse_datetime(result["expires_at"], "local launch.expires_at")
+    if result["expires_at"] <= result["started_at"]:
+        raise ValueError("local launch.expires_at must be later than started_at")
+    plan = result["plan"]
+    if not isinstance(plan, dict) or set(plan) != _LOCAL_LAUNCH_PLAN_FIELDS:
+        raise ValueError("local launch.plan has invalid fields")
+    plan = dict(plan)
+    if not _is_canonical_uuid(plan["session_id"]):
+        raise ValueError("local launch.plan.session_id must be a canonical UUID")
+    for field, maximum in (
+        ("provider", 64),
+        ("source_name", 255),
+        ("cwd", 4096),
+        ("project", 255),
+        ("display_name", 255),
+        ("managed_session_name", 255),
+        ("loop_mode", 32),
+        ("permission_mode", 32),
+        ("managed_transport", 64),
+        ("attach_command", 4096),
+    ):
+        if not _is_string(plan[field], maximum=maximum):
+            raise ValueError(f"local launch.plan.{field} must contain 1 to {maximum} characters")
+    for field, maximum in (("provider_session_id", 512), ("launch_actor", 32), ("launch_surface", 32)):
+        raw = plan[field]
+        if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
+            raise ValueError(f"local launch.plan.{field} must be null or contain 1 to {maximum} characters")
+    runner_id = plan["source_runner_id"]
+    if runner_id is not None and (type(runner_id) is not int or runner_id <= 0):
+        raise ValueError("local launch.plan.source_runner_id must be a positive integer or null")
+    result["plan"] = plan
     return result
 
 

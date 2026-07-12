@@ -222,6 +222,50 @@ async def _write_hot_managed_local_launch_readiness(
     git_repo: str | None,
     git_branch: str | None,
 ) -> None:
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS)
+    if database_module.live_catalog_enabled():
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise ManagedLocalLaunchError(
+                "Managed local launch is blocked because catalogd is unavailable; retry shortly.",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        launch = {
+            "owner_id": int(owner_id),
+            "git_repo": git_repo,
+            "git_branch": git_branch,
+            "started_at": now.isoformat(),
+            "expires_at": expires_at.isoformat(),
+            "plan": {
+                "session_id": str(plan.session_id),
+                "provider": plan.provider,
+                "provider_session_id": plan.provider_session_id,
+                "source_name": plan.source_name,
+                "source_runner_id": plan.source_runner_id,
+                "cwd": plan.cwd,
+                "project": plan.project,
+                "display_name": plan.display_name,
+                "managed_session_name": plan.managed_session_name,
+                "loop_mode": plan.loop_mode,
+                "permission_mode": plan.permission_mode,
+                "launch_actor": plan.launch_actor,
+                "launch_surface": plan.launch_surface,
+                "managed_transport": plan.managed_transport,
+                "attach_command": plan.attach_command,
+            },
+        }
+        try:
+            await catalogd.call("session.launch.local.create.v2", {"launch": launch})
+            return
+        except Exception as exc:
+            logger.exception("Managed local catalog launch transaction failed")
+            raise ManagedLocalLaunchError(
+                "Managed local launch is blocked because catalogd could not persist launch state; retry shortly.",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
     if not database_module.live_store_configured():
         raise ManagedLocalLaunchError(
             "Managed local launch is blocked because Live Store is unavailable; retry shortly.",
@@ -233,8 +277,6 @@ async def _write_hot_managed_local_launch_readiness(
             "Managed local launch is blocked because Live Store writer is unavailable; retry shortly.",
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
-    now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(seconds=_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS)
 
     def _write(live_db: Session):
         command_id = f"managed-local-{plan.session_id}"
@@ -1486,7 +1528,7 @@ async def continue_remote_session_agents(
 @router.post("/managed-local/this-device", response_model=ManagedLocalSessionLaunchResponse)
 async def launch_managed_local_this_device(
     body: ManagedLocalThisDeviceLaunchRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ):
@@ -1525,10 +1567,12 @@ async def launch_managed_local_this_device(
         # readiness first; the archive row converges through LiveArchiveOutbox.
         result, launch_response = await _launch_managed_local_session_serialized(db, params)
     except ManagedLocalLaunchError as exc:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
     except Exception:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         logger.exception("Managed local launch for this device failed unexpectedly")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1550,7 +1594,7 @@ async def launch_managed_local_this_device(
 @router.post("/launch", response_model=RemoteSessionLaunchResponse)
 async def launch_remote_session_endpoint(
     body: RemoteSessionLaunchRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> RemoteSessionLaunchResponse:
     """Start a session on a user-owned machine via the Machine Agent control channel.
@@ -1587,10 +1631,12 @@ async def launch_remote_session_endpoint(
             ),
         )
     except RemoteLaunchError as exc:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.detail}) from exc
     except Exception:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         logger.exception("Remote session launch failed unexpectedly")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Remote session launch failed")
 

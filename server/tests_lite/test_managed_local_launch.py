@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -459,7 +460,7 @@ def test_this_device_launch_returns_hot_readiness_when_archive_writer_is_stale(m
 
     result, response = asyncio.run(
         session_chat._launch_managed_local_session_serialized(
-            SimpleNamespace(),
+            None,
             ManagedLocalLaunchParams(
                 owner_id=42,
                 runner_target="cinder",
@@ -489,27 +490,33 @@ def test_this_device_launch_returns_hot_readiness_when_archive_writer_is_stale(m
 
 def test_this_device_launch_materializes_live_catalog_without_archive_db(monkeypatch, tmp_path):
     import zerg.database as database_module
+    from zerg.catalogd.schema import initialize_catalog_schema
+    from zerg.catalogd.store import CatalogStore
     from zerg.routers import session_chat
 
     live_url = f"sqlite:///{tmp_path / 'managed-launch-catalog.db'}"
     live_engine = make_live_engine(live_url)
-    live_write_engine = make_live_write_engine(live_url)
     initialize_live_database(live_engine)
+    initialize_catalog_schema(live_engine)
     LiveSession = make_sessionmaker(live_engine)
-    LiveWriteSession = make_sessionmaker(live_write_engine)
+    catalog_store = CatalogStore(live_engine)
 
-    class LiveSerializer:
-        is_configured = True
-
-        async def execute(self, fn, **_kwargs):
-            with LiveWriteSession() as live_db:
-                result = fn(live_db)
-                live_db.commit()
-                return result
+    class CatalogClient:
+        async def call(self, method, params, **_kwargs):
+            assert method == "session.launch.local.create.v2"
+            launch = dict(params["launch"])
+            launch["started_at"] = datetime.fromisoformat(launch["started_at"])
+            launch["expires_at"] = datetime.fromisoformat(launch["expires_at"])
+            return catalog_store.create_local_launch(launch=launch)
 
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(session_chat, "get_live_write_serializer", lambda: LiveSerializer())
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: CatalogClient())
+    monkeypatch.setattr(
+        session_chat,
+        "get_live_write_serializer",
+        lambda: (_ for _ in ()).throw(AssertionError("catalog launch must not use the API live serializer")),
+    )
 
     _result, response = asyncio.run(
         session_chat._launch_managed_local_session_serialized(

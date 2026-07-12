@@ -176,6 +176,42 @@ def _verify_device_owned_by(db: Session, *, owner_id: int, device_id: str) -> No
         )
 
 
+async def _verify_device_owned_by_runtime(db: Session | None, *, owner_id: int, device_id: str) -> None:
+    if not database_module.live_catalog_enabled():
+        _verify_device_owned_by(db, owner_id=owner_id, device_id=device_id)
+        return
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise RemoteLaunchError(
+            "Remote launch is blocked because catalogd is unavailable; retry shortly.",
+            code="launch_timeout",
+            status_code=503,
+        )
+    try:
+        result = await catalogd.call("machine.enrollment.list.v2", {"owner_id": owner_id})
+    except Exception as exc:
+        raise RemoteLaunchError(
+            "Remote launch is blocked because machine enrollment could not be verified; retry shortly.",
+            code="launch_timeout",
+            status_code=503,
+        ) from exc
+    if result.get("limit_exceeded") is True:
+        raise RemoteLaunchError(
+            "Remote launch is blocked because machine enrollment exceeded the catalog bound.",
+            code="launch_timeout",
+            status_code=503,
+        )
+    enrolled = {str(row.get("device_id") or "") for row in result.get("enrollments", []) if isinstance(row, dict)}
+    if device_id not in enrolled:
+        raise RemoteLaunchError(
+            f"Device {device_id!r} is not enrolled for this user",
+            code="device_not_enrolled",
+            status_code=404,
+        )
+
+
 def _project_for(cwd: str, project: str | None) -> str:
     if project and project.strip():
         return project.strip()
@@ -1306,7 +1342,7 @@ async def _continue_remote_session_hot(
 
 
 async def launch_remote_session(
-    db: Session,
+    db: Session | None,
     params: RemoteLaunchParams,
     *,
     registry: MachineControlChannelRegistry | None = None,
@@ -1349,7 +1385,7 @@ async def launch_remote_session(
             status_code=400,
         )
 
-    _verify_device_owned_by(db, owner_id=params.owner_id, device_id=device_id)
+    await _verify_device_owned_by_runtime(db, owner_id=params.owner_id, device_id=device_id)
 
     client_request_id = (params.client_request_id or "").strip() or None
     if not database_module.live_catalog_enabled():

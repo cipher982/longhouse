@@ -1307,6 +1307,141 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
+    def create_local_launch(self, *, launch: dict[str, Any]) -> dict[str, Any]:
+        """Atomically create a Helm launch shell, control attachment, and outbox row."""
+
+        from zerg.services.agents.session_graph_writes import primary_thread_id_for_session
+        from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
+        from zerg.services.live_archive_outbox import managed_local_launch_idempotency_key
+        from zerg.services.live_catalog_launch import attach_live_catalog_control
+        from zerg.services.live_catalog_launch import create_live_launch_catalog_shell
+        from zerg.services.live_catalog_launch import live_launch_result
+        from zerg.services.live_launch_readiness import upsert_live_launch_readiness
+        from zerg.services.managed_local_launcher import managed_local_run_id_for_session
+        from zerg.services.managed_local_launcher import managed_provider_has_lease_observer
+
+        plan_payload = dict(launch["plan"])
+        session_id = UUID(plan_payload["session_id"])
+        plan = SimpleNamespace(**{**plan_payload, "session_id": session_id})
+        command_id = f"managed-local-{session_id}"
+        observed_at = launch["started_at"]
+        thread_id = primary_thread_id_for_session(session_id)
+        run_id = managed_local_run_id_for_session(session_id)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                existing = orm.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == command_id).one_or_none()
+                if existing is not None:
+                    catalog = orm.get(LiveSessionCatalog, str(session_id))
+                    outbox = (
+                        orm.query(LiveArchiveOutbox)
+                        .filter(LiveArchiveOutbox.idempotency_key == managed_local_launch_idempotency_key(session_id=session_id))
+                        .one_or_none()
+                    )
+                    stored_launch = json.loads(outbox.payload_json or "{}").get("launch", {}) if outbox is not None else {}
+                    expected_plan = {**plan_payload, "session_id": str(session_id)}
+                    exact_replay = (
+                        str(existing.session_id) == str(session_id)
+                        and str(existing.thread_id or "") == str(thread_id)
+                        and existing.owner_id == launch["owner_id"]
+                        and str(existing.provider) == plan.provider
+                        and str(existing.host_id or "") == plan.source_name
+                        and _as_aware_utc(existing.expires_at) == _as_aware_utc(launch["expires_at"])
+                        and catalog is not None
+                        and str(catalog.cwd or "") == plan.cwd
+                        and str(catalog.project or "") == plan.project
+                        and str(catalog.git_repo or "") == str(launch.get("git_repo") or "")
+                        and str(catalog.git_branch or "") == str(launch.get("git_branch") or "")
+                        and str(catalog.loop_mode or "") == plan.loop_mode
+                        and str(catalog.permission_mode or "") == plan.permission_mode
+                        and stored_launch.get("owner_id") == launch["owner_id"]
+                        and stored_launch.get("git_repo") == launch.get("git_repo")
+                        and stored_launch.get("git_branch") == launch.get("git_branch")
+                        and stored_launch.get("started_at") == {"__longhouse_datetime__": observed_at.isoformat()}
+                        and stored_launch.get("plan") == expected_plan
+                    )
+                    result = live_launch_result(existing) if exact_replay else None
+                    orm.rollback()
+                    return {
+                        "created": False,
+                        "exact_replay": exact_replay,
+                        "idempotency_conflict": not exact_replay,
+                        "launch": _json_launch_result(result) if result is not None else None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                attempt = create_live_launch_catalog_shell(
+                    orm,
+                    session_id=session_id,
+                    thread_id=thread_id,
+                    run_id=None,
+                    owner_id=launch["owner_id"],
+                    provider=plan.provider,
+                    device_id=plan.source_name,
+                    device_name=plan.source_name,
+                    cwd=plan.cwd,
+                    project=plan.project,
+                    git_repo=launch.get("git_repo"),
+                    git_branch=launch.get("git_branch"),
+                    display_name=plan.display_name,
+                    initial_prompt=None,
+                    execution_lifetime="live_control",
+                    client_request_id=None,
+                    command_id=command_id,
+                    started_at=observed_at,
+                    expires_at=launch["expires_at"],
+                    launch_actor=plan.launch_actor,
+                    launch_surface=plan.launch_surface,
+                )
+                attach_live_catalog_control(
+                    orm,
+                    session_id=session_id,
+                    provider=plan.provider,
+                    device_id=plan.source_name,
+                    state="detached" if managed_provider_has_lease_observer(plan.provider) else "attached",
+                    external_name=plan.managed_session_name,
+                    run_id=run_id,
+                    provider_session_id=plan.provider_session_id,
+                    observed_at=observed_at,
+                )
+                upsert_live_launch_readiness(
+                    orm,
+                    session_id=session_id,
+                    owner_id=launch["owner_id"],
+                    device_id=plan.source_name,
+                    provider=plan.provider,
+                    execution_lifetime="live_control",
+                    state="pending",
+                    command_id=command_id,
+                    client_request_id=None,
+                    machine_id=plan.source_name,
+                    project=plan.project,
+                    expires_at=launch["expires_at"],
+                    now=observed_at,
+                )
+                enqueue_managed_local_launch_outbox(
+                    orm,
+                    plan=plan,
+                    owner_id=launch["owner_id"],
+                    git_repo=launch.get("git_repo"),
+                    git_branch=launch.get("git_branch"),
+                    started_at=observed_at,
+                )
+                result = live_launch_result(attempt)
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "created": True,
+                "exact_replay": False,
+                "idempotency_conflict": False,
+                "launch": _json_launch_result(result),
+                "commit_seq": str(commit_seq),
+            }
+
     def apply_launch_outcome(
         self,
         *,

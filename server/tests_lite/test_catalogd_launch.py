@@ -10,13 +10,17 @@ import pytest
 from sqlalchemy.orm import Session
 
 from zerg.catalogd.client import CatalogClient
+from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionLaunchAttempt
+from zerg.models.live_store import LiveSessionThreadAlias
+from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
 from zerg.services.live_archive_outbox import REMOTE_LAUNCH_KIND
 from zerg.services.live_archive_outbox import REMOTE_LAUNCH_OUTCOME_KIND
 
@@ -116,4 +120,63 @@ async def test_catalogd_owns_launch_intent_idempotency_and_outcome(daemon_paths)
         assert attempt.state == "adopted"
         kinds = [row.kind for row in db.query(LiveArchiveOutbox).order_by(LiveArchiveOutbox.id)]
         assert kinds == [REMOTE_LAUNCH_KIND, REMOTE_LAUNCH_OUTCOME_KIND, REMOTE_LAUNCH_OUTCOME_KIND]
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    launch = {
+        "owner_id": 7,
+        "git_repo": "cipher982/longhouse",
+        "git_branch": "main",
+        "started_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=5)).isoformat(),
+        "plan": {
+            "session_id": str(session_id),
+            "provider": "claude",
+            "provider_session_id": "claude-thread-1",
+            "source_name": "cinder",
+            "source_runner_id": None,
+            "cwd": "/workspace/longhouse",
+            "project": "longhouse",
+            "display_name": "Managed local",
+            "managed_session_name": "claude-managed-1",
+            "loop_mode": "assist",
+            "permission_mode": "bypass",
+            "launch_actor": "human_ui",
+            "launch_surface": "cli",
+            "managed_transport": "claude_channel",
+            "attach_command": "longhouse claude --resume claude-thread-1",
+        },
+    }
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        created = await client.call("session.launch.local.create.v2", {"launch": launch})
+        assert created["created"] is True
+        replay = await client.call("session.launch.local.create.v2", {"launch": launch})
+        assert replay["exact_replay"] is True
+        conflicting = {**launch, "plan": {**launch["plan"], "cwd": "/different"}}
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("session.launch.local.create.v2", {"launch": conflicting})
+        assert exc_info.value.code == "conflict"
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        assert db.get(LiveSessionCatalog, str(session_id)) is not None
+        connection = db.query(LiveSessionConnection).one()
+        assert connection.state == "detached"
+        alias = db.query(LiveSessionThreadAlias).filter_by(alias_kind="provider_session_id").one()
+        assert alias.alias_value == "claude-thread-1"
+        assert db.get(LiveLaunchReadiness, str(session_id)).state == "pending"
+        outbox = db.query(LiveArchiveOutbox).one()
+        assert outbox.kind == MANAGED_LOCAL_LAUNCH_KIND
     engine.dispose()

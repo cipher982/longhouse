@@ -1260,6 +1260,8 @@ def test_live_catalog_launch_dispatches_without_opening_archive_then_projects(tm
 
     class _CatalogClient:
         async def call(self, method, params, **_kwargs):
+            if method == "machine.enrollment.list.v2":
+                return catalog_store.list_machine_enrollments(**params)
             if method == "session.launch.idempotency.v2":
                 return catalog_store.read_launch_idempotency(**params)
             launch = dict(params["launch"])
@@ -1282,20 +1284,19 @@ def test_live_catalog_launch_dispatches_without_opening_archive_then_projects(tm
     )
 
     try:
-        with LiveSession() as catalog_db:
-            result = asyncio.run(
-                launch_remote_session(
-                    catalog_db,
-                    RemoteLaunchParams(
-                        owner_id=OWNER_ID,
-                        device_id="cinder",
-                        provider="codex",
-                        cwd="/Users/me/repo",
-                        client_request_id="catalog-request-1",
-                    ),
-                    registry=registry,
-                )
+        result = asyncio.run(
+            launch_remote_session(
+                None,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="codex",
+                    cwd="/Users/me/repo",
+                    client_request_id="catalog-request-1",
+                ),
+                registry=registry,
             )
+        )
 
         assert result.launch_state == "launching_unknown"
         with LiveSession() as live_db:
