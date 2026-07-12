@@ -146,6 +146,7 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             predecessor_epoch TEXT,
             start_reason TEXT NOT NULL,
             max_observed_len INTEGER NOT NULL,
+            source_revision TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             ended_at TEXT,
@@ -187,6 +188,14 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             "ALTER TABLE unmanaged_process_binding_state
              ADD COLUMN process_start_time_key TEXT NOT NULL DEFAULT '';",
         )?;
+    }
+
+    let source_epoch_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(source_epoch_registry)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !source_epoch_columns.contains("source_revision") {
+        conn.execute_batch("ALTER TABLE source_epoch_registry ADD COLUMN source_revision TEXT;")?;
     }
 
     // Old builds could create duplicate pending pointers for the same file/range.
@@ -351,5 +360,38 @@ mod tests {
             err.is_err(),
             "unique pending range index should reject duplicates"
         );
+    }
+
+    #[test]
+    fn test_open_db_adds_source_revision_to_existing_epoch_registry() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = Connection::open(tmp.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE source_epoch_registry (
+                source_epoch TEXT PRIMARY KEY,
+                provider TEXT NOT NULL,
+                opaque_source_id TEXT NOT NULL,
+                file_incarnation TEXT NOT NULL,
+                predecessor_epoch TEXT,
+                start_reason TEXT NOT NULL,
+                max_observed_len INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                ended_at TEXT,
+                end_reason TEXT
+            );",
+        )
+        .unwrap();
+        drop(conn);
+
+        let conn = open_db(Some(tmp.path())).unwrap();
+        let columns: std::collections::HashSet<String> = conn
+            .prepare("PRAGMA table_info(source_epoch_registry)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert!(columns.contains("source_revision"));
     }
 }
