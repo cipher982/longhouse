@@ -1489,7 +1489,7 @@ async def respond_to_pause_request_agents(
 async def continue_remote_session_agents(
     session_id: uuid.UUID,
     body: RemoteSessionContinueRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> RemoteSessionLaunchResponse:
@@ -1509,10 +1509,12 @@ async def continue_remote_session_agents(
             ),
         )
     except RemoteLaunchError as exc:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.detail}) from exc
     except Exception:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         logger.exception("Machine-facing remote session continue failed unexpectedly")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Remote session continue failed")
 
@@ -1653,7 +1655,7 @@ async def launch_remote_session_endpoint(
 async def continue_remote_session_endpoint(
     session_id: uuid.UUID,
     body: RemoteSessionContinueRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session = Depends(_catalog_control_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> RemoteSessionLaunchResponse:
     """Continue an existing durable session on a user-owned machine."""
@@ -1672,10 +1674,12 @@ async def continue_remote_session_endpoint(
             ),
         )
     except RemoteLaunchError as exc:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.detail}) from exc
     except Exception:
-        db.rollback()
+        if db is not None:
+            db.rollback()
         logger.exception("Remote session continue failed unexpectedly")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Remote session continue failed")
 

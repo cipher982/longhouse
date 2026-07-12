@@ -19,6 +19,7 @@ from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionLaunchAttempt
+from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
 from zerg.services.live_archive_outbox import REMOTE_LAUNCH_KIND
@@ -155,6 +156,7 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
     daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
     await daemon.start()
     client = CatalogClient(socket_path)
+    continue_run_id = uuid4()
     try:
         created = await client.call("session.launch.local.create.v2", {"launch": launch})
         assert created["created"] is True
@@ -164,6 +166,50 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
         with pytest.raises(CatalogRemoteError) as exc_info:
             await client.call("session.launch.local.create.v2", {"launch": conflicting})
         assert exc_info.value.code == "conflict"
+        from zerg.services.agents.session_graph_writes import primary_thread_id_for_session
+
+        continue_launch = {
+            "session_id": str(session_id),
+            "primary_thread_id": str(primary_thread_id_for_session(session_id)),
+            "run_id": str(continue_run_id),
+            "owner_id": 7,
+            "device_id": "cinder",
+            "machine_id": "cinder",
+            "provider": "claude",
+            "cwd": "/workspace/longhouse",
+            "git_repo": "cipher982/longhouse",
+            "git_branch": "main",
+            "project": "longhouse",
+            "display_name": "Managed local",
+            "initial_prompt": None,
+            "execution_lifetime": "live_control",
+            "client_request_id": "continue-1",
+            "command_id": f"continue-{uuid4()}",
+            "started_at": (now + timedelta(seconds=1)).isoformat(),
+            "expires_at": (now + timedelta(minutes=6)).isoformat(),
+            "launch_actor": None,
+            "launch_surface": None,
+            "mode": "continue",
+            "launch_origin": "longhouse_continued",
+            "resume": {"thread_id": "claude-thread-1", "thread_path": None},
+        }
+        intent = await client.call("session.continue.intent.create.v2", {"launch": continue_launch})
+        assert intent["created"] is True
+        adopted = await client.call(
+            "session.continue.outcome.apply.v2",
+            {
+                "launch": continue_launch,
+                "outcome": {
+                    "state": "adopted",
+                    "error_code": None,
+                    "error_message": None,
+                    "provider_thread_id": "claude-thread-2",
+                    "thread_path": None,
+                    "external_name": "cinder",
+                },
+            },
+        )
+        assert adopted["launch"]["launch_state"] == "live"
     finally:
         await client.close()
         await daemon.close()
@@ -172,11 +218,20 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
     initialize_catalog_schema(engine)
     with Session(engine) as db:
         assert db.get(LiveSessionCatalog, str(session_id)) is not None
-        connection = db.query(LiveSessionConnection).one()
-        assert connection.state == "detached"
-        alias = db.query(LiveSessionThreadAlias).filter_by(alias_kind="provider_session_id").one()
-        assert alias.alias_value == "claude-thread-1"
-        assert db.get(LiveLaunchReadiness, str(session_id)).state == "pending"
-        outbox = db.query(LiveArchiveOutbox).one()
-        assert outbox.kind == MANAGED_LOCAL_LAUNCH_KIND
+        connections = db.query(LiveSessionConnection).order_by(LiveSessionConnection.acquired_at).all()
+        assert [row.state for row in connections] == ["released", "attached"]
+        aliases = db.query(LiveSessionThreadAlias).filter_by(alias_kind="provider_session_id").all()
+        assert {row.alias_value for row in aliases} == {"claude-thread-1", "claude-thread-2"}
+        runs = db.query(LiveSessionRun).order_by(LiveSessionRun.started_at).all()
+        assert len(runs) == 2
+        assert runs[0].ended_at is not None
+        assert runs[1].id == str(continue_run_id)
+        assert runs[1].ended_at is None
+        assert db.get(LiveLaunchReadiness, str(session_id)).state == "adopted"
+        outbox = db.query(LiveArchiveOutbox).order_by(LiveArchiveOutbox.id).all()
+        assert [row.kind for row in outbox] == [
+            MANAGED_LOCAL_LAUNCH_KIND,
+            REMOTE_LAUNCH_KIND,
+            REMOTE_LAUNCH_OUTCOME_KIND,
+        ]
     engine.dispose()

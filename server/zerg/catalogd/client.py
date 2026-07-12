@@ -43,6 +43,8 @@ _SAFE_RETRY_METHODS = {
     "session.launch.intent.create.v2",
     "session.launch.local.create.v2",
     "session.launch.outcome.apply.v2",
+    "session.continue.intent.create.v2",
+    "session.continue.outcome.apply.v2",
     "session.input.queued.list.v2",
     "session.input.claim.v2",
     "session.input.finish.v2",

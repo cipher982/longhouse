@@ -120,6 +120,16 @@ def _seed_session(connection, *, session_id: str, device_id: str, now: datetime,
         )
     )
     connection.execute(
+        LiveSessionThreadAlias.__table__.insert().values(
+            thread_id=thread_id,
+            provider="codex",
+            alias_kind="source_path",
+            alias_value=f"/sessions/{session_id}.jsonl",
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+    )
+    connection.execute(
         LiveRuntimeState.__table__.insert().values(
             runtime_key=f"codex:{session_id}",
             session_id=session_id,
@@ -241,12 +251,18 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
         assert facts["latest_run"]["thread_id"] == facts["primary_thread"]["id"]
         assert facts["connections"][0]["can_send_input"] == 1
         assert facts["provider_alias"] is None
+        assert facts["resume"] is None
         assert "display_phase" not in facts and "status" not in facts
 
         read = await client.call("session.read.v2", {"session_id": first_id})
         assert read["found"] is True
         assert read["facts"]["catalog"]["session_id"] == first_id
         assert read["facts"]["provider_alias"] == f"provider-{first_id}"
+        assert read["facts"]["resume"] == {
+            "provider_session_id": f"provider-{first_id}",
+            "source_path": f"/sessions/{first_id}.jsonl",
+            "ever_managed": True,
+        }
         assert read["observed_at"].endswith("+00:00")
         pending = await client.call("session.read.v2", {"session_id": pending_id})
         assert pending["found"] is True

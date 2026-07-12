@@ -241,6 +241,10 @@ class CatalogDaemon:
             return await self._create_local_launch(request)
         if request.method == "session.launch.outcome.apply.v2":
             return await self._apply_launch_outcome(request)
+        if request.method == "session.continue.intent.create.v2":
+            return await self._create_continue_intent(request)
+        if request.method == "session.continue.outcome.apply.v2":
+            return await self._apply_continue_outcome(request)
         if request.method == "session.input.queued.list.v2":
             return await self._list_queued_input_sessions(request)
         if request.method == "session.input.claim.v2":
@@ -812,6 +816,38 @@ class CatalogDaemon:
             )
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _create_continue_intent(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"launch"}:
+            return self._error(request, "invalid_request", "session.continue.intent.create.v2 requires launch")
+        try:
+            launch = _validate_continue_launch_rpc(request.params["launch"])
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.create_continue_intent, launch=launch)
+        if result.get("idempotency_conflict") is True:
+            return self._error(request, "conflict", "continue command identity was reused with different attributes")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _apply_continue_outcome(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"launch", "outcome"}:
+            return self._error(request, "invalid_request", "session.continue.outcome.apply.v2 has invalid parameters")
+        try:
+            launch = _validate_continue_launch_rpc(request.params["launch"])
+            outcome = _validate_continue_outcome(request.params["outcome"])
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.apply_launch_outcome, launch=launch, outcome=outcome)
+        if result.get("found") is not True:
+            return self._error(
+                request,
+                "conflict",
+                "continue intent was not found",
+                details={"reason": "launch_not_found"},
+            )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _list_queued_input_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"limit"}:
             return self._error(request, "invalid_request", "session.input.queued.list.v2 requires limit")
@@ -1169,6 +1205,8 @@ _LOCAL_LAUNCH_PLAN_FIELDS = {
     "managed_transport",
     "attach_command",
 }
+_CONTINUE_LAUNCH_FIELDS = _LAUNCH_FIELDS | {"mode", "launch_origin", "resume"}
+_CONTINUE_RESUME_FIELDS = {"thread_id", "thread_path"}
 _INPUT_RECEIPT_FIELDS = {
     "owner_id",
     "session_id",
@@ -1327,6 +1365,24 @@ def _validate_local_launch_rpc(value: object) -> dict:
     return result
 
 
+def _validate_continue_launch_rpc(value: object) -> dict:
+    if not isinstance(value, dict) or set(value) != _CONTINUE_LAUNCH_FIELDS:
+        raise ValueError("continue launch has invalid fields")
+    result = _validate_launch_rpc({field: value[field] for field in _LAUNCH_FIELDS})
+    if value["mode"] != "continue" or value["launch_origin"] != "longhouse_continued":
+        raise ValueError("continue launch mode or origin is invalid")
+    resume = value["resume"]
+    if not isinstance(resume, dict) or set(resume) != _CONTINUE_RESUME_FIELDS:
+        raise ValueError("continue launch.resume has invalid fields")
+    if not _is_string(resume["thread_id"], maximum=512):
+        raise ValueError("continue launch.resume.thread_id must contain 1 to 512 characters")
+    thread_path = resume["thread_path"]
+    if thread_path is not None and (not isinstance(thread_path, str) or not thread_path or len(thread_path) > 4096):
+        raise ValueError("continue launch.resume.thread_path must be null or contain 1 to 4096 characters")
+    result.update(mode="continue", launch_origin="longhouse_continued", resume=dict(resume))
+    return result
+
+
 def _validate_launch_outcome(value: object) -> dict:
     if not isinstance(value, dict) or set(value) != {"state", "error_code", "error_message"}:
         raise ValueError("outcome has invalid fields")
@@ -1337,6 +1393,26 @@ def _validate_launch_outcome(value: object) -> dict:
         raw = result[field]
         if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
             raise ValueError(f"outcome.{field} must be null or contain 1 to {maximum} characters")
+    return result
+
+
+def _validate_continue_outcome(value: object) -> dict:
+    fields = {
+        "state",
+        "error_code",
+        "error_message",
+        "provider_thread_id",
+        "thread_path",
+        "external_name",
+    }
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError("continue outcome has invalid fields")
+    result = _validate_launch_outcome({field: value[field] for field in ("state", "error_code", "error_message")})
+    for field, maximum in (("provider_thread_id", 512), ("thread_path", 4096), ("external_name", 255)):
+        raw = value[field]
+        if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):
+            raise ValueError(f"continue outcome.{field} must be null or contain 1 to {maximum} characters")
+        result[field] = raw
     return result
 
 

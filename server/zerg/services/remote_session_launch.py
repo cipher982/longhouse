@@ -37,11 +37,7 @@ from zerg.models.agents import SessionThread
 from zerg.models.device_token import DeviceToken
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveLaunchReadiness
-from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionLaunchAttempt
-from zerg.models.live_store import LiveSessionRun
-from zerg.models.live_store import LiveSessionThread
-from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.agents.kernel_writes import ensure_open_run_for_session
 from zerg.services.agents.kernel_writes import ensure_primary_thread
@@ -484,6 +480,21 @@ async def _call_catalog_launch(method: str, params: dict[str, object]) -> dict:
             code="launch_timeout",
             status_code=503,
         ) from exc
+
+
+async def _apply_catalog_continue_outcome(*, launch: dict[str, object], outcome: dict[str, object]) -> dict:
+    normalized = {
+        "state": outcome["state"],
+        "error_code": outcome.get("error_code"),
+        "error_message": outcome.get("error_message"),
+        "provider_thread_id": outcome.get("provider_thread_id"),
+        "thread_path": outcome.get("thread_path"),
+        "external_name": outcome.get("external_name"),
+    }
+    return await _call_catalog_launch(
+        "session.continue.outcome.apply.v2",
+        {"launch": _catalog_launch_wire_payload(launch), "outcome": normalized},
+    )
 
 
 def _control_plane_for_provider(provider: str | None) -> str:
@@ -1130,6 +1141,7 @@ async def _continue_remote_session_hot(
     lease_until = now + timedelta(seconds=LAUNCH_LEASE_SECS)
     launch_payload = {
         "session_id": str(session_uuid),
+        "primary_thread_id": str(session.primary_thread_id),
         "owner_id": int(params.owner_id),
         "device_id": device_id,
         "machine_id": info.machine_name or device_id,
@@ -1154,34 +1166,40 @@ async def _continue_remote_session_hot(
     }
     launch_payload["run_id"] = str(run_uuid)
 
-    await _execute_live_launch_write(
-        lambda live_db: (
-            upsert_live_launch_readiness(
-                live_db,
-                session_id=session_uuid,
-                owner_id=params.owner_id,
-                device_id=device_id,
-                provider=provider,
-                execution_lifetime=execution_lifetime,
-                state="pending",
-                command_id=command_id,
-                client_request_id=client_request_id,
-                machine_id=info.machine_name or device_id,
-                project=project,
-                expires_at=lease_until,
-                now=now,
-            ),
-            enqueue_remote_launch_outbox(
-                live_db,
-                launch=launch_payload,
-                idempotency_key=_remote_continue_outbox_key(
+    if database_module.live_catalog_enabled():
+        await _call_catalog_launch(
+            "session.continue.intent.create.v2",
+            {"launch": _catalog_launch_wire_payload(launch_payload)},
+        )
+    else:
+        await _execute_live_launch_write(
+            lambda live_db: (
+                upsert_live_launch_readiness(
+                    live_db,
                     session_id=session_uuid,
+                    owner_id=params.owner_id,
+                    device_id=device_id,
+                    provider=provider,
+                    execution_lifetime=execution_lifetime,
+                    state="pending",
+                    command_id=command_id,
                     client_request_id=client_request_id,
+                    machine_id=info.machine_name or device_id,
+                    project=project,
+                    expires_at=lease_until,
+                    now=now,
+                ),
+                enqueue_remote_launch_outbox(
+                    live_db,
+                    launch=launch_payload,
+                    idempotency_key=_remote_continue_outbox_key(
+                        session_id=session_uuid,
+                        client_request_id=client_request_id,
+                    ),
                 ),
             ),
-        ),
-        label="remote-continue-intent",
-    )
+            label="remote-continue-intent",
+        )
 
     payload = {
         "provider": provider,
@@ -1215,26 +1233,29 @@ async def _continue_remote_session_hot(
     if not response.transport_ok:
         error_message = response.error or "control channel transport failed"
         outcome = {"state": "dispatched", "error_message": error_message}
-        await _write_live_launch_readiness(
-            lambda live_db: (
-                update_live_launch_readiness_state(
-                    live_db,
-                    session_id=session_uuid,
-                    state="dispatched",
-                    error_message=error_message,
-                ),
-                enqueue_remote_launch_outcome_outbox(
-                    live_db,
-                    launch=launch_payload,
-                    outcome=outcome,
-                    idempotency_key=_remote_continue_outcome_outbox_key(
+        if database_module.live_catalog_enabled():
+            await _apply_catalog_continue_outcome(launch=launch_payload, outcome=outcome)
+        else:
+            await _write_live_launch_readiness(
+                lambda live_db: (
+                    update_live_launch_readiness_state(
+                        live_db,
                         session_id=session_uuid,
-                        client_request_id=client_request_id,
                         state="dispatched",
+                        error_message=error_message,
                     ),
-                ),
+                    enqueue_remote_launch_outcome_outbox(
+                        live_db,
+                        launch=launch_payload,
+                        outcome=outcome,
+                        idempotency_key=_remote_continue_outcome_outbox_key(
+                            session_id=session_uuid,
+                            client_request_id=client_request_id,
+                            state="dispatched",
+                        ),
+                    ),
+                )
             )
-        )
         return RemoteLaunchResult(
             session_id=session_uuid,
             launch_state="launching_unknown",
@@ -1252,39 +1273,29 @@ async def _continue_remote_session_hot(
             "external_name": info.machine_name or device_id,
         }
 
-        def _record_continue_adopted(live_db: Session):
-            update_live_launch_readiness_state(
-                live_db,
-                session_id=session_uuid,
-                state="adopted",
-                clear_expires=True,
-            )
-            if database_module.live_catalog_enabled() and execution_lifetime == "live_control":
-                attach_live_catalog_control(
+        if database_module.live_catalog_enabled():
+            await _apply_catalog_continue_outcome(launch=launch_payload, outcome=outcome)
+        else:
+
+            def _record_continue_adopted(live_db: Session):
+                update_live_launch_readiness_state(
                     live_db,
                     session_id=session_uuid,
-                    provider=provider,
-                    device_id=device_id,
-                    state="attached",
-                    external_name=info.machine_name or device_id,
-                    run_id=run_uuid,
-                    provider_session_id=outcome.get("provider_thread_id"),
-                    source_path=outcome.get("thread_path"),
-                    launch_origin="longhouse_continued",
-                    force_new_run=True,
-                )
-            enqueue_remote_launch_outcome_outbox(
-                live_db,
-                launch=launch_payload,
-                outcome=outcome,
-                idempotency_key=_remote_continue_outcome_outbox_key(
-                    session_id=session_uuid,
-                    client_request_id=client_request_id,
                     state="adopted",
-                ),
-            )
+                    clear_expires=True,
+                )
+                enqueue_remote_launch_outcome_outbox(
+                    live_db,
+                    launch=launch_payload,
+                    outcome=outcome,
+                    idempotency_key=_remote_continue_outcome_outbox_key(
+                        session_id=session_uuid,
+                        client_request_id=client_request_id,
+                        state="adopted",
+                    ),
+                )
 
-        await _write_live_launch_readiness(_record_continue_adopted)
+            await _write_live_launch_readiness(_record_continue_adopted)
         elapsed_ms = int((datetime.now(timezone.utc) - now).total_seconds() * 1000)
         logger.info(
             "remote_continue session=%s device=%s provider=%s state=live duration_ms=%s",
@@ -1303,28 +1314,31 @@ async def _continue_remote_session_hot(
     code = normalize_remote_launch_error_code(error.get("code"))
     err_msg = str(error.get("message") or "unknown error")
     outcome = {"state": "failed", "error_code": code, "error_message": err_msg}
-    await _write_live_launch_readiness(
-        lambda live_db: (
-            update_live_launch_readiness_state(
-                live_db,
-                session_id=session_uuid,
-                state="failed",
-                error_code=code,
-                error_message=err_msg,
-                clear_expires=True,
-            ),
-            enqueue_remote_launch_outcome_outbox(
-                live_db,
-                launch=launch_payload,
-                outcome=outcome,
-                idempotency_key=_remote_continue_outcome_outbox_key(
+    if database_module.live_catalog_enabled():
+        await _apply_catalog_continue_outcome(launch=launch_payload, outcome=outcome)
+    else:
+        await _write_live_launch_readiness(
+            lambda live_db: (
+                update_live_launch_readiness_state(
+                    live_db,
                     session_id=session_uuid,
-                    client_request_id=client_request_id,
                     state="failed",
+                    error_code=code,
+                    error_message=err_msg,
+                    clear_expires=True,
                 ),
-            ),
+                enqueue_remote_launch_outcome_outbox(
+                    live_db,
+                    launch=launch_payload,
+                    outcome=outcome,
+                    idempotency_key=_remote_continue_outcome_outbox_key(
+                        session_id=session_uuid,
+                        client_request_id=client_request_id,
+                        state="failed",
+                    ),
+                ),
+            )
         )
-    )
     logger.warning(
         "remote_continue session=%s device=%s provider=%s state=launch_failed code=%s",
         session_uuid,
@@ -1651,33 +1665,18 @@ async def launch_remote_session(
     return _launch_result_for_attempt(launch_attempt)
 
 
-def _latest_live_thread_alias(db: Session, *, thread_id: str, provider: str, kind: str) -> str:
-    value = (
-        db.query(LiveSessionThreadAlias.alias_value)
-        .filter(
-            LiveSessionThreadAlias.thread_id == thread_id,
-            LiveSessionThreadAlias.provider == provider,
-            LiveSessionThreadAlias.alias_kind == kind,
-        )
-        .order_by(LiveSessionThreadAlias.last_seen_at.desc(), LiveSessionThreadAlias.id.desc())
-        .limit(1)
-        .scalar()
-    )
-    return str(value or "").strip()
-
-
 async def _continue_remote_session_live_catalog(
-    db: Session,
+    db: Session | None,
     params: RemoteContinueParams,
     *,
     registry: MachineControlChannelRegistry | None,
 ) -> RemoteLaunchResult:
     """Continue from bounded live identity/aliases without opening the archive."""
 
-    from zerg.services.live_control_catalog import live_control_capability_available
-    from zerg.services.live_control_catalog import load_live_control_session
+    from zerg.services.live_control_catalog import live_control_session_capability_available
+    from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
-    session = load_live_control_session(db, params.session_id)
+    session = load_live_control_session_snapshot(params.session_id)
     if session is None:
         raise RemoteLaunchError(
             f"Session {params.session_id} was not found in the live catalog",
@@ -1707,9 +1706,9 @@ async def _continue_remote_session_live_catalog(
             code="provider_unsupported",
             status_code=400,
         )
-    _verify_device_owned_by(db, owner_id=params.owner_id, device_id=device_id)
-    if session.device_id:
-        _verify_device_owned_by(db, owner_id=params.owner_id, device_id=session.device_id)
+    await _verify_device_owned_by_runtime(db, owner_id=params.owner_id, device_id=device_id)
+    if session.device_id and session.device_id != device_id:
+        await _verify_device_owned_by_runtime(db, owner_id=params.owner_id, device_id=session.device_id)
     client_request_id = (params.client_request_id or "").strip()
     if not client_request_id:
         raise RemoteLaunchError(
@@ -1717,7 +1716,7 @@ async def _continue_remote_session_live_catalog(
             code="invalid_request",
             status_code=400,
         )
-    if live_control_capability_available(db, session_id=session.id, capability="send"):
+    if live_control_session_capability_available(session, capability="send"):
         if execution_lifetime == "live_control":
             return RemoteLaunchResult(
                 session_id=session.id,
@@ -1730,41 +1729,19 @@ async def _continue_remote_session_live_catalog(
             status_code=409,
         )
 
-    thread = (
-        db.query(LiveSessionThread)
-        .filter(LiveSessionThread.session_id == str(session.id), LiveSessionThread.is_primary == 1)
-        .order_by(LiveSessionThread.created_at.asc(), LiveSessionThread.id.asc())
-        .first()
-    )
-    if thread is None:
+    facts = session.catalog_facts if isinstance(session.catalog_facts, dict) else {}
+    thread = facts.get("primary_thread")
+    if not isinstance(thread, dict):
         raise RemoteLaunchError(
             "Continue needs live thread identity; the archive is currently unavailable",
             code="transcript_not_found",
             status_code=503,
         )
-    provider_thread_id = _latest_live_thread_alias(
-        db,
-        thread_id=str(thread.id),
-        provider=provider,
-        kind="provider_session_id",
-    )
-    thread_path = (
-        _latest_live_thread_alias(
-            db,
-            thread_id=str(thread.id),
-            provider=provider,
-            kind="source_path",
-        )
-        or None
-    )
-    ever_managed = (
-        db.query(LiveSessionConnection.id)
-        .join(LiveSessionRun, LiveSessionRun.id == LiveSessionConnection.run_id)
-        .filter(LiveSessionRun.thread_id == str(thread.id))
-        .limit(1)
-        .first()
-        is not None
-    )
+    resume = facts.get("resume")
+    resume = resume if isinstance(resume, dict) else {}
+    provider_thread_id = str(resume.get("provider_session_id") or "").strip()
+    thread_path = str(resume.get("source_path") or "").strip() or None
+    ever_managed = resume.get("ever_managed") is True
     if (
         not provider_thread_id
         or (provider == "codex" and not thread_path)

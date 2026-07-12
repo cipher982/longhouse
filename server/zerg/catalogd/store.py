@@ -64,6 +64,18 @@ def _json_launch_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _canonical_outbox_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return {"__longhouse_datetime__": (_as_aware_utc(value) or value).isoformat()}
+    if isinstance(value, UUID):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _canonical_outbox_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_canonical_outbox_value(item) for item in value]
+    return value
+
+
 def _launch_view_dto(view: Any) -> dict[str, Any]:
     return {
         "session_id": str(view.session_id),
@@ -1221,6 +1233,7 @@ class CatalogStore:
         """Atomically create a launch shell, readiness fact, and archive outbox row."""
 
         from zerg.services.live_archive_outbox import enqueue_remote_launch_outbox
+        from zerg.services.live_archive_outbox import remote_launch_idempotency_key
         from zerg.services.live_catalog_launch import create_live_launch_catalog_shell
         from zerg.services.live_catalog_launch import live_launch_result
         from zerg.services.live_launch_readiness import upsert_live_launch_readiness
@@ -1233,6 +1246,12 @@ class CatalogStore:
                     orm.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == launch["command_id"]).one_or_none()
                 )
                 if existing is not None:
+                    outbox = (
+                        orm.query(LiveArchiveOutbox)
+                        .filter(LiveArchiveOutbox.idempotency_key == remote_launch_idempotency_key(session_id=launch["session_id"]))
+                        .one_or_none()
+                    )
+                    stored_launch = json.loads(outbox.payload_json or "{}").get("launch") if outbox is not None else None
                     exact_replay = (
                         str(existing.session_id) == launch["session_id"]
                         and str(existing.thread_id or "") == launch["primary_thread_id"]
@@ -1242,6 +1261,7 @@ class CatalogStore:
                         and str(existing.host_id or "") == launch["device_id"]
                         and str(existing.execution_lifetime) == launch["execution_lifetime"]
                         and str(existing.client_request_id or "") == str(launch.get("client_request_id") or "")
+                        and stored_launch == _canonical_outbox_value(launch)
                     )
                     result = live_launch_result(existing) if exact_replay else None
                     orm.rollback()
@@ -1442,6 +1462,103 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
+    def create_continue_intent(self, *, launch: dict[str, Any]) -> dict[str, Any]:
+        """Reserve a continuation run without materializing it before adoption."""
+
+        from zerg.services.live_archive_outbox import enqueue_remote_launch_outbox
+        from zerg.services.live_archive_outbox import remote_launch_idempotency_key
+        from zerg.services.live_catalog_launch import live_launch_result
+        from zerg.services.live_launch_readiness import upsert_live_launch_readiness
+
+        observed_at = launch["started_at"]
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                existing = (
+                    orm.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == launch["command_id"]).one_or_none()
+                )
+                if existing is not None:
+                    outbox = (
+                        orm.query(LiveArchiveOutbox)
+                        .filter(LiveArchiveOutbox.idempotency_key == remote_launch_idempotency_key(session_id=launch["session_id"]))
+                        .one_or_none()
+                    )
+                    stored_launch = json.loads(outbox.payload_json or "{}").get("launch") if outbox is not None else None
+                    exact_replay = (
+                        str(existing.session_id) == launch["session_id"]
+                        and str(existing.thread_id or "") == launch["primary_thread_id"]
+                        and str(existing.run_id or "") == launch["run_id"]
+                        and existing.owner_id == launch["owner_id"]
+                        and stored_launch == _canonical_outbox_value(launch)
+                    )
+                    result = live_launch_result(existing) if exact_replay else None
+                    orm.rollback()
+                    return {
+                        "created": False,
+                        "exact_replay": exact_replay,
+                        "idempotency_conflict": not exact_replay,
+                        "launch": _json_launch_result(result) if result is not None else None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                catalog = orm.get(LiveSessionCatalog, launch["session_id"])
+                if catalog is None or str(catalog.primary_thread_id or "") != launch["primary_thread_id"]:
+                    orm.rollback()
+                    return {
+                        "created": False,
+                        "exact_replay": False,
+                        "idempotency_conflict": True,
+                        "launch": None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                attempt = LiveSessionLaunchAttempt(
+                    session_id=launch["session_id"],
+                    thread_id=launch["primary_thread_id"],
+                    run_id=launch["run_id"],
+                    provider=launch["provider"],
+                    host_id=launch["device_id"],
+                    owner_id=launch["owner_id"],
+                    execution_lifetime=launch["execution_lifetime"],
+                    client_request_id=launch.get("client_request_id"),
+                    command_id=launch["command_id"],
+                    state="pending",
+                    expires_at=launch["expires_at"],
+                    created_at=observed_at,
+                    updated_at=observed_at,
+                )
+                orm.add(attempt)
+                upsert_live_launch_readiness(
+                    orm,
+                    session_id=UUID(launch["session_id"]),
+                    owner_id=launch["owner_id"],
+                    device_id=launch["device_id"],
+                    provider=launch["provider"],
+                    execution_lifetime=launch["execution_lifetime"],
+                    state="pending",
+                    command_id=launch["command_id"],
+                    client_request_id=launch.get("client_request_id"),
+                    machine_id=launch["machine_id"],
+                    project=launch["project"],
+                    expires_at=launch["expires_at"],
+                    now=observed_at,
+                )
+                enqueue_remote_launch_outbox(orm, launch=launch)
+                orm.flush()
+                result = live_launch_result(attempt)
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "created": True,
+                "exact_replay": False,
+                "idempotency_conflict": False,
+                "launch": _json_launch_result(result),
+                "commit_seq": str(commit_seq),
+            }
+
     def apply_launch_outcome(
         self,
         *,
@@ -1451,6 +1568,8 @@ class CatalogStore:
         """Atomically project transport outcome and queue its archive record."""
 
         from zerg.services.live_archive_outbox import enqueue_remote_launch_outcome_outbox
+        from zerg.services.live_archive_outbox import remote_launch_outcome_idempotency_key
+        from zerg.services.live_catalog_launch import attach_live_catalog_control
         from zerg.services.live_catalog_launch import live_launch_result
         from zerg.services.live_catalog_launch import update_live_launch_catalog_outcome
         from zerg.services.live_launch_readiness import update_live_launch_readiness_state
@@ -1470,10 +1589,14 @@ class CatalogStore:
                         "launch": None,
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
+                outcome_key = f"{remote_launch_outcome_idempotency_key(session_id=launch['session_id'])}:{outcome['state']}"
+                outcome_outbox = orm.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.idempotency_key == outcome_key).one_or_none()
+                stored_outcome = json.loads(outcome_outbox.payload_json or "{}").get("outcome") if outcome_outbox is not None else None
                 exact_replay = (
                     str(existing.state) == outcome["state"]
                     and str(existing.error_code or "") == str(outcome.get("error_code") or "")
                     and str(existing.error_message or "") == str(outcome.get("error_message") or "")
+                    and stored_outcome == _canonical_outbox_value(outcome)
                 )
                 if exact_replay:
                     result = live_launch_result(existing)
@@ -1508,9 +1631,25 @@ class CatalogStore:
                     state=outcome["state"],
                     error_code=outcome.get("error_code"),
                     error_message=outcome.get("error_message"),
-                    clear_expires=outcome["state"] == "failed",
+                    clear_expires=outcome["state"] in {"adopted", "failed", "abandoned"},
                     now=observed_at,
                 )
+                if launch.get("mode") == "continue" and outcome["state"] == "adopted":
+                    resume = launch["resume"]
+                    attach_live_catalog_control(
+                        orm,
+                        session_id=UUID(launch["session_id"]),
+                        provider=launch["provider"],
+                        device_id=launch["device_id"],
+                        state="attached",
+                        external_name=outcome.get("external_name") or launch.get("machine_id"),
+                        run_id=UUID(launch["run_id"]),
+                        provider_session_id=outcome.get("provider_thread_id") or resume["thread_id"],
+                        source_path=outcome.get("thread_path") or resume.get("thread_path"),
+                        launch_origin="longhouse_continued",
+                        force_new_run=True,
+                        observed_at=observed_at,
+                    )
                 enqueue_remote_launch_outcome_outbox(orm, launch=launch, outcome=outcome)
                 result = live_launch_result(attempt)
                 orm.commit()
@@ -2176,16 +2315,28 @@ def _assemble_session_facts(
             connections_by_run.setdefault(str(row["run_id"]), []).append(row)
 
     provider_alias_by_thread: dict[str, Any] = {}
+    source_alias_by_thread: dict[str, Any] = {}
     if thread_ids:
         for row in connection.execute(
             select(alias_table)
-            .where(
-                alias_table.c.thread_id.in_(thread_ids),
-                alias_table.c.alias_kind == "provider_session_id",
-            )
+            .where(alias_table.c.thread_id.in_(thread_ids))
             .order_by(alias_table.c.last_seen_at.desc(), alias_table.c.id.desc())
         ).mappings():
-            provider_alias_by_thread.setdefault(str(row["thread_id"]), row)
+            target = provider_alias_by_thread if row["alias_kind"] == "provider_session_id" else source_alias_by_thread
+            if row["alias_kind"] in {"provider_session_id", "source_path"}:
+                target.setdefault(str(row["thread_id"]), row)
+
+    ever_managed_threads: set[str] = set()
+    if thread_ids:
+        ever_managed_threads = {
+            str(row[0])
+            for row in connection.execute(
+                select(run_table.c.thread_id)
+                .join(connection_table, connection_table.c.run_id == run_table.c.id)
+                .where(run_table.c.thread_id.in_(thread_ids))
+                .distinct()
+            )
+        }
 
     result: list[dict[str, Any]] = []
     for session_id in session_ids:
@@ -2216,6 +2367,23 @@ def _assemble_session_facts(
                 "provider_alias": (
                     _truncate_utf8(str(provider_alias_by_thread[thread_id]["alias_value"]), 512)
                     if not compact and thread_id in provider_alias_by_thread
+                    else None
+                ),
+                "resume": (
+                    {
+                        "provider_session_id": (
+                            _truncate_utf8(str(provider_alias_by_thread[thread_id]["alias_value"]), 512)
+                            if thread_id in provider_alias_by_thread
+                            else None
+                        ),
+                        "source_path": (
+                            _truncate_utf8(str(source_alias_by_thread[thread_id]["alias_value"]), 4096)
+                            if thread_id in source_alias_by_thread
+                            else None
+                        ),
+                        "ever_managed": thread_id in ever_managed_threads,
+                    }
+                    if thread_id is not None and not compact
                     else None
                 ),
             }

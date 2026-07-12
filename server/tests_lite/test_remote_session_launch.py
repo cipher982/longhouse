@@ -1351,6 +1351,96 @@ def test_live_catalog_launch_dispatches_without_opening_archive_then_projects(tm
         live_engine.dispose()
 
 
+def test_live_catalog_continue_uses_snapshot_and_catalog_transactions_only(tmp_path, monkeypatch):
+    from zerg.catalogd.schema import initialize_catalog_schema
+    from zerg.catalogd.store import CatalogStore
+    from zerg.services.live_catalog_projection import sync_live_catalog_session
+
+    ArchiveSession = _make_db(tmp_path)
+    _seed_user_and_device(ArchiveSession)
+    with ArchiveSession() as archive_db:
+        session_id = _seed_continuable_codex_session(archive_db)
+
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-catalog-continue.db")
+    initialize_live_database(live_engine)
+    initialize_catalog_schema(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    with ArchiveSession() as archive_db, LiveSession() as live_db:
+        assert sync_live_catalog_session(archive_db, live_db, session_id=session_id) is True
+        catalog = live_db.get(LiveSessionCatalog, str(session_id))
+        live_db.add(
+            LiveSessionThreadAlias(
+                thread_id=catalog.primary_thread_id,
+                provider="codex",
+                alias_kind="source_path",
+                alias_value="/Users/me/.codex/sessions/thread-abc.jsonl",
+                first_seen_at=datetime.now(timezone.utc),
+                last_seen_at=datetime.now(timezone.utc),
+            )
+        )
+        live_db.add(User(id=OWNER_ID, email=f"u{OWNER_ID}@ex.com", role="ADMIN"))
+        live_db.add(DeviceToken(owner_id=OWNER_ID, device_id="cinder", token_hash=f"hash-cinder-{OWNER_ID}"))
+        live_db.commit()
+
+    catalog_store = CatalogStore(live_engine)
+
+    class _CatalogClient:
+        async def call(self, method, params, **_kwargs):
+            if method == "machine.enrollment.list.v2":
+                return catalog_store.list_machine_enrollments(**params)
+            if method == "session.launch.idempotency.v2":
+                return catalog_store.read_launch_idempotency(**params)
+            launch = dict(params["launch"])
+            launch["started_at"] = datetime.fromisoformat(launch["started_at"])
+            launch["expires_at"] = datetime.fromisoformat(launch["expires_at"])
+            if method == "session.continue.intent.create.v2":
+                return catalog_store.create_continue_intent(launch=launch)
+            if method == "session.continue.outcome.apply.v2":
+                return catalog_store.apply_launch_outcome(launch=launch, outcome=params["outcome"])
+            raise AssertionError(method)
+
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+    monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(remote_launch_module.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
+    monkeypatch.setattr(
+        "zerg.services.catalog_read_gateway.session_snapshot",
+        lambda value: catalog_store.read_session(session_id=value),
+    )
+    monkeypatch.setattr(
+        remote_launch_module,
+        "get_live_write_serializer",
+        lambda: (_ for _ in ()).throw(AssertionError("catalog continue must not use the API live serializer")),
+    )
+
+    try:
+        result = asyncio.run(
+            continue_remote_session(
+                None,
+                RemoteContinueParams(
+                    owner_id=OWNER_ID,
+                    session_id=session_id,
+                    client_request_id="catalog-continue-1",
+                ),
+                registry=registry,
+            )
+        )
+        assert result.launch_state == "live"
+        assert registry.sent[0]["payload"]["resume"] == {
+            "thread_id": "thread-abc",
+            "thread_path": "/Users/me/.codex/sessions/thread-abc.jsonl",
+        }
+        with LiveSession() as live_db:
+            attempts = live_db.query(LiveSessionLaunchAttempt).filter_by(session_id=str(session_id)).all()
+            assert attempts[-1].state == "adopted"
+            assert live_db.query(LiveSessionConnection).filter_by(state="attached").count() == 1
+            outbox = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.drained_at.is_(None)).all()
+            assert [row.kind for row in outbox] == ["remote_launch.v1", "remote_launch_outcome.v1"]
+    finally:
+        live_engine.dispose()
+
+
 def test_live_launch_detail_uses_durable_shell_before_archive_drain(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
