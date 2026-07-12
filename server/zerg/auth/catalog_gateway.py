@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import time
 from datetime import datetime
 from typing import Any
 
@@ -182,14 +183,21 @@ def update_user(
 
 def _call(method: str, params: dict) -> dict:
     _database_path, socket_path = catalogd_paths()
-    try:
-        return call_catalogd_sync(socket_path, method, params=params, timeout_seconds=0.15)
-    except CatalogRemoteError as exc:
-        if exc.code != "conflict":
-            raise _unavailable() from exc
-        raise
-    except CatalogUnavailable as exc:
-        raise _unavailable() from exc
+    deadline = time.monotonic() + 0.5
+    last_unavailable: CatalogUnavailable | None = None
+    for _attempt in range(2):
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            return call_catalogd_sync(socket_path, method, params=params, timeout_seconds=min(0.25, remaining))
+        except CatalogRemoteError as exc:
+            if exc.code != "conflict":
+                raise _unavailable() from exc
+            raise
+        except CatalogUnavailable as exc:
+            last_unavailable = exc
+    raise _unavailable() from last_unavailable
 
 
 def _principal(payload: object) -> AuthenticatedUser:

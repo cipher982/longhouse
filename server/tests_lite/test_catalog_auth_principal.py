@@ -92,10 +92,11 @@ def test_auth_disabled_production_resolves_local_principal_through_catalog(monke
 
 def test_catalog_pause_maps_to_typed_503(monkeypatch):
     monkeypatch.setattr(catalog_gateway, "catalogd_paths", lambda: (None, "/tmp/catalog.sock"))
+    attempts = []
     monkeypatch.setattr(
         catalog_gateway,
         "call_catalogd_sync",
-        lambda *args, **kwargs: (_ for _ in ()).throw(CatalogUnavailable("paused")),
+        lambda *args, **kwargs: attempts.append((args, kwargs)) or (_ for _ in ()).throw(CatalogUnavailable("paused")),
     )
 
     with pytest.raises(HTTPException) as exc:
@@ -106,3 +107,5 @@ def test_catalog_pause_maps_to_typed_503(monkeypatch):
         "code": "catalog_unavailable",
         "message": "Catalog authentication is temporarily unavailable.",
     }
+    assert len(attempts) == 2
+    assert attempts[0][1]["params"] == attempts[1][1]["params"]
