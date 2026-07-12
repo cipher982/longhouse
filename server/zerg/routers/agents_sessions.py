@@ -112,12 +112,14 @@ from zerg.services.session_views import latest_launch_attempts
 from zerg.services.session_views import latest_live_launch_readiness
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_workspace import build_session_workspace
+from zerg.services.session_workspace import get_legacy_workspace_session_factory
 from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_DAYS_BACK
 from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_LIMIT
 from zerg.services.startup_context import STARTUP_CONTEXT_MAX_DAYS_BACK
 from zerg.services.startup_context import STARTUP_CONTEXT_MAX_LIMIT
 from zerg.services.startup_context import load_startup_context_items
 from zerg.services.startup_context import render_startup_context
+from zerg.services.storage_v2_workspace import build_storage_v2_workspace
 from zerg.services.worklog_day_export import WorklogDayExportResponse
 from zerg.services.worklog_day_export import WorklogV2Error
 from zerg.services.worklog_day_export import build_worklog_day_export
@@ -1519,28 +1521,46 @@ def get_session_projection(
     return result
 
 
-@router.get("/sessions/{session_id}/workspace", response_model=SessionWorkspaceResponse)
-def get_session_workspace(
+@router.get("/sessions/{session_id}/workspace")
+async def get_session_workspace(
     session_id: UUID,
     response: Response,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
-    db: Session = Depends(get_db),
+    cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
+    legacy_session_factory=Depends(get_legacy_workspace_session_factory),
     _auth: DeviceToken | ManagedLocalHookToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
-) -> SessionWorkspaceResponse:
+) -> SessionWorkspaceResponse | dict[str, object]:
     """Get the focused session, its thread, and the first projection page in one round trip."""
     timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "no-store"
-    owner_id = _resolve_agents_owner_id(db, _auth if isinstance(_auth, DeviceToken) else None)
-    result = build_session_workspace(
-        db=db,
-        session_id=session_id,
-        branch_mode=branch_mode,
-        limit=limit,
-        timing=timing,
-        owner_id=owner_id,
-    )
+    owner_value = getattr(_auth, "owner_id", None)
+    if owner_value is not None:
+        storage_workspace = await build_storage_v2_workspace(
+            session_id=session_id,
+            owner_id=int(owner_value),
+            branch_mode=branch_mode,
+            limit=limit,
+            cursor=cursor,
+        )
+        if storage_workspace is not None:
+            timing.apply(response)
+            return storage_workspace
+
+    def build_legacy_workspace() -> SessionWorkspaceResponse:
+        with legacy_session_factory() as db:
+            owner_id = _resolve_agents_owner_id(db, _auth if isinstance(_auth, DeviceToken) else None)
+            return build_session_workspace(
+                db=db,
+                session_id=session_id,
+                branch_mode=branch_mode,
+                limit=limit,
+                timing=timing,
+                owner_id=owner_id,
+            )
+
+    result = await asyncio.to_thread(build_legacy_workspace)
     timing.apply(response)
     return result
 

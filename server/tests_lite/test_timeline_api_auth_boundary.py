@@ -40,6 +40,7 @@ from zerg.models.agents import SessionTurn
 from zerg.services.agents.store import AgentsStore
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_turns import hash_user_text
+from zerg.services.session_workspace import get_legacy_workspace_session_factory
 
 
 def _make_db(tmp_path):
@@ -120,6 +121,7 @@ def _make_client(session_local) -> TestClient:
             yield db
 
     api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[get_legacy_workspace_session_factory] = lambda: session_local
     api_app.dependency_overrides[require_single_tenant] = lambda: None
     return TestClient(api_app)
 

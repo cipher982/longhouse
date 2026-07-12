@@ -82,8 +82,10 @@ from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_workspace import build_session_mobile_tail
 from zerg.services.session_workspace import build_session_workspace
+from zerg.services.session_workspace import get_legacy_workspace_session_factory
 from zerg.services.session_workspace import resolve_session_sharer
 from zerg.services.session_workspace_revision import load_session_workspace_revision
+from zerg.services.storage_v2_workspace import build_storage_v2_workspace
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
 from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
@@ -769,12 +771,13 @@ def get_timeline_session_projection(
     )
 
 
-@router.get("/sessions/{session_id}/workspace", response_model=SessionWorkspaceResponse)
-def get_timeline_session_workspace(
+@router.get("/sessions/{session_id}/workspace")
+async def get_timeline_session_workspace(
     session_id: UUID,
     response: Response,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
+    cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
     shared_by: Optional[int] = Query(
         None,
         ge=1,
@@ -788,39 +791,52 @@ def get_timeline_session_workspace(
         None,
         description="Signed share token. When valid, this supersedes unsigned shared_by attribution.",
     ),
-    db: Session = Depends(get_db),
+    legacy_session_factory=Depends(get_legacy_workspace_session_factory),
     current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "no-store"
-    sharer = None
-    if share_token:
-        try:
-            resolved_share = resolve_session_share(
-                db,
-                token=share_token,
-                actor_user_id=int(current_user.id),
-                expected_session_id=session_id,
-                record_access=False,
-            )
-        except SessionShareError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-        sharer = resolved_share.sharer
-    elif shared_by is not None:
-        sharer = resolve_session_sharer(db, shared_by)
-    # If the sharer resolves to the current viewer, hide the attribution
-    # (their own copy of their own link does not need a "Shared by" pill).
-    if sharer is not None and int(current_user.id) == sharer.id:
-        sharer = None
-    result = build_session_workspace(
-        db=db,
+    storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
+        owner_id=int(current_user.id),
         branch_mode=branch_mode,
         limit=limit,
-        timing=timing,
-        owner_id=int(current_user.id),
-        sharer=sharer,
+        cursor=cursor,
     )
+    if storage_workspace is not None:
+        timing.apply(response)
+        return storage_workspace
+
+    def build_legacy_workspace() -> SessionWorkspaceResponse:
+        with legacy_session_factory() as db:
+            sharer = None
+            if share_token:
+                try:
+                    resolved_share = resolve_session_share(
+                        db,
+                        token=share_token,
+                        actor_user_id=int(current_user.id),
+                        expected_session_id=session_id,
+                        record_access=False,
+                    )
+                except SessionShareError as exc:
+                    raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+                sharer = resolved_share.sharer
+            elif shared_by is not None:
+                sharer = resolve_session_sharer(db, shared_by)
+            if sharer is not None and int(current_user.id) == sharer.id:
+                sharer = None
+            return build_session_workspace(
+                db=db,
+                session_id=session_id,
+                branch_mode=branch_mode,
+                limit=limit,
+                timing=timing,
+                owner_id=int(current_user.id),
+                sharer=sharer,
+            )
+
+    result = await asyncio.to_thread(build_legacy_workspace)
     timing.apply(response)
     return result
 

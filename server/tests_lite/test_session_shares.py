@@ -36,6 +36,7 @@ from zerg.models.session_share import SessionShare
 from zerg.models.session_share import SessionShareEvent
 from zerg.services.session_shares import SessionShareMisconfigured
 from zerg.services.session_shares import create_session_share
+from zerg.services.session_workspace import get_legacy_workspace_session_factory
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 # Share-token signing reads this legacy export; keep it immune to local .env values.
@@ -111,6 +112,7 @@ def _make_client(session_local) -> "TestClient":
             yield db
 
     api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[get_legacy_workspace_session_factory] = lambda: session_local
     api_app.dependency_overrides[require_single_tenant] = lambda: None
     return TestClient(api_app)
 

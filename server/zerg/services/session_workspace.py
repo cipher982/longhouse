@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.database import get_session_factory
 from zerg.models.user import User
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
@@ -56,6 +57,12 @@ def resolve_session_sharer(db: Session, user_id: int) -> SessionSharerResponse |
         return None
     display_name = (getattr(user, "display_name", None) or "").strip() or None
     return SessionSharerResponse(id=int(user.id), display_name=display_name)
+
+
+def get_legacy_workspace_session_factory():
+    """Inject the legacy DB factory without opening it on storage-v2 reads."""
+
+    return get_session_factory()
 
 
 def build_session_workspace(
