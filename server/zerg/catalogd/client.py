@@ -51,6 +51,11 @@ _SAFE_RETRY_METHODS = {
     "session.timeline.list.v2",
 }
 
+# speed-of-light-database.md separates the 250 ms p95 performance target from
+# the 1 s hard-failure budget. The default client deadline is the hard bound;
+# health probes and other callers that need a tighter bound pass one explicitly.
+DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS = 1.0
+
 
 class CatalogUnavailable(RuntimeError):
     pass
@@ -66,7 +71,12 @@ class CatalogRemoteError(RuntimeError):
 
 
 class CatalogClient:
-    def __init__(self, socket_path: Path, *, default_timeout_seconds: float = 0.25) -> None:
+    def __init__(
+        self,
+        socket_path: Path,
+        *,
+        default_timeout_seconds: float = DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS,
+    ) -> None:
         self.socket_path = socket_path
         self.default_timeout_seconds = default_timeout_seconds
         self._reader: asyncio.StreamReader | None = None
@@ -144,7 +154,7 @@ def call_catalogd_sync(
     method: str,
     *,
     params: dict[str, Any] | None = None,
-    timeout_seconds: float = 0.25,
+    timeout_seconds: float = DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """One-shot RPC for synchronous health/readiness handlers."""
 

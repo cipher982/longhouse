@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+from zerg.catalogd.client import DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
@@ -24,6 +25,12 @@ def socket_path():
     path = Path(tempfile.gettempdir()) / f"lhc-{uuid4().hex}.sock"
     yield path
     path.unlink(missing_ok=True)
+
+
+def test_default_deadline_uses_hard_failure_budget(socket_path):
+    client = CatalogClient(socket_path)
+    assert DEFAULT_CATALOG_RPC_TIMEOUT_SECONDS == 1.0
+    assert client.default_timeout_seconds == 1.0
 
 
 @pytest.mark.asyncio
