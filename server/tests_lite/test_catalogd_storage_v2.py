@@ -8,7 +8,6 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
-
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.models import CatalogBase
@@ -134,6 +133,24 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         replay_after_drift = await client.call("storage.raw_object.commit.v2", derived_drift)
         assert replay_after_drift["exact_replay"] is True
         assert replay_after_drift["receipt"] == committed["receipt"]
+
+        representation_drift = {
+            **raw,
+            "session_id": str(uuid4()),
+            "object_hash": "f" * 64,
+            "payload_hash": "e" * 64,
+            "compressed_hash": "f" * 64,
+            "object_path": f"raw/v2/ff/{'f' * 64}.zst",
+            "uncompressed_size": raw["uncompressed_size"] + 10,
+            "compressed_size": raw["compressed_size"] + 10,
+            "sealed_at": (now.replace(microsecond=1)).isoformat(),
+        }
+        replay_after_representation_drift = await client.call(
+            "storage.raw_object.commit.v2",
+            representation_drift,
+        )
+        assert replay_after_representation_drift["exact_replay"] is True
+        assert replay_after_representation_drift["receipt"] == committed["receipt"]
 
         existence = await client.call(
             "storage.raw_object.exists.batch.v2",
@@ -342,9 +359,7 @@ def test_storage_v2_tables_are_catalog_schema_owned(daemon_paths):
         "projector_state",
     }.issubset(set(CatalogBase.metadata.tables))
     with engine.connect() as connection:
-        table_names = {
-            row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")
-        }
+        table_names = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
     engine.dispose()
     assert set(CatalogBase.metadata.tables).issubset(table_names)
 
@@ -359,9 +374,7 @@ def test_existing_v1_catalog_additively_creates_storage_v2_tables(daemon_paths):
 
     metadata = initialize_catalog_schema(engine)
     with engine.connect() as connection:
-        table_names = {
-            row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")
-        }
+        table_names = {row[0] for row in connection.exec_driver_sql("SELECT name FROM sqlite_master WHERE type='table'")}
     engine.dispose()
 
     assert metadata.schema_version == 1

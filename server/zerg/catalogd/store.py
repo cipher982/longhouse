@@ -3199,10 +3199,24 @@ class CatalogStore:
             "missing_media_hashes_json": missing_json,
             "sealed_at": sealed_at,
         }
+        # Envelope identity deliberately excludes session membership, clocks,
+        # compression, and object placement. A retry after relinking or a
+        # codec upgrade must return the original durable receipt instead of
+        # inventing a conflicting second representation.
         replay_identity = {
-            key: value
-            for key, value in immutable.items()
-            if key not in {"object_path", "render_state", "media_state", "missing_media_hashes_json"}
+            key: immutable[key]
+            for key in (
+                "tenant_id",
+                "machine_id",
+                "provider",
+                "opaque_source_id",
+                "source_epoch",
+                "range_kind",
+                "range_start",
+                "range_end",
+                "record_count",
+                "record_hashes_hash",
+            )
         }
         with _write_transaction(self.engine) as connection:
             deleted = connection.execute(
