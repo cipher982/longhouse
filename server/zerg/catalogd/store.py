@@ -3742,7 +3742,8 @@ class CatalogStore:
         self,
         *,
         session_id: UUID,
-        after_commit_seq: int | None,
+        owner_id: str,
+        after_source_key: str | None,
         limit: int,
     ) -> dict[str, Any]:
         session_table = StorageSession.__table__
@@ -3754,21 +3755,56 @@ class CatalogStore:
             deleted = connection.execute(
                 select(tombstone.c.deletion_revision).where(tombstone.c.session_id == session_key)
             ).scalar_one_or_none()
-            session_row = connection.execute(select(session_table).where(session_table.c.session_id == session_key)).mappings().first()
+            session_row = (
+                connection.execute(
+                    select(session_table).where(
+                        session_table.c.session_id == session_key,
+                        session_table.c.owner_id == owner_id,
+                    )
+                )
+                .mappings()
+                .first()
+            )
             statement = select(raw).where(raw.c.session_id == session_key, raw.c.retired_at.is_(None))
-            if after_commit_seq is not None:
-                statement = statement.where(raw.c.commit_seq > after_commit_seq)
+            if after_source_key is not None:
+                statement = statement.where(
+                    tuple_(
+                        raw.c.machine_id,
+                        raw.c.provider,
+                        raw.c.opaque_source_id,
+                        raw.c.source_epoch,
+                        raw.c.range_start,
+                        raw.c.envelope_id,
+                    )
+                    > tuple(json.loads(after_source_key))
+                )
             rows = (
-                connection.execute(statement.order_by(raw.c.commit_seq.asc(), raw.c.envelope_id.asc()).limit(limit)).mappings().all()
-                if deleted is None
+                list(
+                    connection.execute(
+                        statement.order_by(
+                            raw.c.machine_id.asc(),
+                            raw.c.provider.asc(),
+                            raw.c.opaque_source_id.asc(),
+                            raw.c.source_epoch.asc(),
+                            raw.c.range_start.asc(),
+                            raw.c.envelope_id.asc(),
+                        ).limit(limit + 1)
+                    )
+                    .mappings()
+                    .all()
+                )
+                if deleted is None and session_row is not None
                 else []
             )
+            objects_truncated = len(rows) > limit
+            rows = rows[:limit]
             return {
                 "found": session_row is not None and deleted is None,
                 "deleted": deleted is not None,
                 "deletion_revision": str(deleted) if deleted is not None else None,
                 "session": _storage_session_dto(session_row) if session_row is not None and deleted is None else None,
                 "objects": [_raw_object_manifest_dto(row) for row in rows],
+                "objects_truncated": objects_truncated,
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
             }

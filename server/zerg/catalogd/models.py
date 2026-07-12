@@ -152,6 +152,16 @@ class RawObject(CatalogBase):
             unique=True,
         ),
         Index("ix_raw_objects_source_identity", "tenant_id", "machine_id", "provider", "opaque_source_id"),
+        Index(
+            "ix_raw_objects_session_source_order",
+            "session_id",
+            "machine_id",
+            "provider",
+            "opaque_source_id",
+            "source_epoch",
+            "range_start",
+            "envelope_id",
+        ),
     )
 
 

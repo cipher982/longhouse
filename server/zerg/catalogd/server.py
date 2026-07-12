@@ -1552,17 +1552,34 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_storage_session_raw_manifest(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id", "after_commit_seq", "limit"}:
+        if set(request.params) != {"session_id", "owner_id", "after_source_key", "limit"}:
             return self._error(request, "invalid_request", "storage.session.raw_manifest.v2 has invalid parameters")
         try:
             session_id = _canonical_uuid(request.params["session_id"], "session_id")
         except ValueError as exc:
             return self._error(request, "invalid_request", str(exc))
-        after_commit_seq = request.params["after_commit_seq"]
-        if after_commit_seq is not None and (
-            not isinstance(after_commit_seq, str) or not after_commit_seq.isdecimal() or int(after_commit_seq) >= 1 << 64
-        ):
-            return self._error(request, "invalid_request", "after_commit_seq must be a u64 decimal string or null")
+        owner_id = request.params["owner_id"]
+        if not _is_string(owner_id, maximum=64):
+            return self._error(request, "invalid_request", "owner_id must be a bounded non-empty string")
+        after_source_key = request.params["after_source_key"]
+        if after_source_key is not None:
+            try:
+                decoded_key = json.loads(after_source_key)
+            except (TypeError, json.JSONDecodeError):
+                return self._error(request, "invalid_cursor", "after_source_key must be canonical JSON or null")
+            if (
+                not isinstance(decoded_key, list)
+                or len(decoded_key) != 6
+                or any(not isinstance(value, str) or not value for value in decoded_key)
+                or not _is_canonical_uuid(decoded_key[3])
+                or len(decoded_key[4]) != 20
+                or not decoded_key[4].isdecimal()
+                or not _is_hash(decoded_key[5])
+            ):
+                return self._error(request, "invalid_cursor", "after_source_key is invalid")
+            canonical = json.dumps(decoded_key, separators=(",", ":"))
+            if canonical != after_source_key:
+                return self._error(request, "invalid_cursor", "after_source_key is not canonical")
         limit = request.params["limit"]
         if type(limit) is not int or not 1 <= limit <= 1_000:
             return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
@@ -1570,7 +1587,8 @@ class CatalogDaemon:
         result = await self._run_store(
             self._store.read_storage_session_raw_manifest,
             session_id=session_id,
-            after_commit_seq=int(after_commit_seq) if after_commit_seq is not None else None,
+            owner_id=owner_id,
+            after_source_key=after_source_key,
             limit=limit,
         )
         return CatalogRpcResponse(id=request.id, result=result)

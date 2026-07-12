@@ -37,13 +37,17 @@ from zerg.services.render_object_workers import RenderObjectWorkerPool
 from zerg.services.render_object_workers import get_render_object_worker_pool
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
+from zerg.storage_v2.contracts import RawExportCursor
 from zerg.storage_v2.contracts import RenderDetailCursor
+from zerg.storage_v2.contracts import decode_raw_export_cursor_token
 from zerg.storage_v2.contracts import decode_render_detail_cursor_token
 from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
+from zerg.storage_v2.contracts import raw_export_cursor_token
 from zerg.storage_v2.contracts import render_detail_cursor_token
 from zerg.storage_v2.raw_objects import MAX_RECORD_BYTES
 from zerg.storage_v2.raw_objects import MAX_RECORDS
+from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawObjectValidationError
 from zerg.storage_v2.raw_objects import RawRecord
@@ -721,6 +725,138 @@ async def list_storage_v2_sessions(
         "has_more": result.get("has_more") is True,
         "commit_seq": result.get("commit_seq"),
         "observed_at": result.get("observed_at"),
+    }
+
+
+@router.get("/sessions/{session_id}/raw")
+async def read_storage_v2_session_raw(
+    session_id: UUID,
+    cursor: str | None = Query(None, description="Exclusive source-ordered raw-object cursor"),
+    _auth: DeviceToken | object | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    owner_value = getattr(_auth, "owner_id", None)
+    if owner_value is None:
+        raise _http_error(status.HTTP_403_FORBIDDEN, "owner_required", "Storage-v2 reads require owner identity.")
+    after = None
+    if cursor is not None:
+        try:
+            after = decode_raw_export_cursor_token(cursor)
+        except ValueError as exc:
+            raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_cursor", str(exc)) from exc
+        if after.session_id != session_id:
+            raise _http_error(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "invalid_cursor",
+                "Raw cursor belongs to a different session.",
+            )
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_unavailable",
+            "The session catalog is temporarily unavailable.",
+        )
+    after_source_key = None
+    if after is not None:
+        after_source_key = json.dumps(
+            [
+                after.machine_id,
+                after.provider,
+                after.opaque_source_id,
+                str(after.source_epoch),
+                f"{after.range_start:020d}",
+                after.envelope_id,
+            ],
+            separators=(",", ":"),
+        )
+    try:
+        manifest = await catalogd.call(
+            "storage.session.raw_manifest.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": str(owner_value),
+                "after_source_key": after_source_key,
+                "limit": 1,
+            },
+        )
+    except (CatalogUnavailable, CatalogRemoteError) as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_unavailable",
+            "The session catalog is temporarily unavailable.",
+        ) from exc
+    if manifest.get("deleted") is True or manifest.get("found") is not True:
+        raise _http_error(status.HTTP_404_NOT_FOUND, "session_not_found", "Session was not found.")
+    objects = manifest.get("objects")
+    if not isinstance(objects, list):
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "raw_manifest_invalid",
+            "The catalog returned an invalid raw manifest.",
+        )
+    if not objects:
+        return {
+            "v": 2,
+            "session_id": str(session_id),
+            "object": None,
+            "records": [],
+            "next_cursor": None,
+            "has_more": False,
+        }
+    item = objects[0]
+    if not isinstance(item, dict):
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "raw_manifest_invalid",
+            "The catalog returned an invalid raw-object row.",
+        )
+    workers = get_raw_object_worker_pool()
+    try:
+        decoded = await workers.read(str(item["object_path"]), str(item["object_hash"]))
+        spec = decoded.spec
+        if (
+            spec.session_id != session_id
+            or decoded.envelope_id != item.get("envelope_id")
+            or decoded.object_hash != item.get("object_hash")
+        ):
+            raise ValueError("raw object does not match its catalog manifest")
+        object_cursor = RawExportCursor(
+            session_id=session_id,
+            machine_id=spec.machine_id,
+            provider=spec.provider,
+            opaque_source_id=spec.opaque_source_id,
+            source_epoch=spec.source_epoch,
+            range_start=spec.range_start,
+            envelope_id=decoded.envelope_id,
+        )
+    except (KeyError, TypeError, ValueError, RawObjectCorruptError, RawObjectWorkerError) as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "raw_read_failed",
+            "The immutable raw object could not be verified.",
+        ) from exc
+    has_more = manifest.get("objects_truncated") is True
+    return {
+        "v": 2,
+        "session_id": str(session_id),
+        "object": {
+            "envelope_id": decoded.envelope_id,
+            "machine_id": spec.machine_id,
+            "provider": spec.provider,
+            "opaque_source_id": spec.opaque_source_id,
+            "source_epoch": str(spec.source_epoch),
+            "range_kind": spec.range_kind,
+            "range_start": spec.range_start,
+            "range_end": spec.range_end,
+            "provenance_kind": spec.provenance_kind,
+        },
+        "records": [
+            {"source_position": record.source_position, "data_b64": base64.b64encode(record.data).decode("ascii")}
+            for record in spec.records
+        ],
+        "next_cursor": raw_export_cursor_token(object_cursor) if has_more else None,
+        "has_more": has_more,
     }
 
 

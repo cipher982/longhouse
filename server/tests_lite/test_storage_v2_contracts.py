@@ -9,12 +9,15 @@ import pytest
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import RenderDetailCursor
+from zerg.storage_v2.contracts import RawExportCursor
+from zerg.storage_v2.contracts import decode_raw_export_cursor_token
 from zerg.storage_v2.contracts import decode_render_detail_cursor_token
 from zerg.storage_v2.contracts import encode_envelope_preimage
 from zerg.storage_v2.contracts import encode_render_detail_cursor
 from zerg.storage_v2.contracts import envelope_id
 from zerg.storage_v2.contracts import hash_records
 from zerg.storage_v2.contracts import render_detail_cursor_token
+from zerg.storage_v2.contracts import raw_export_cursor_token
 
 _VECTORS = Path(__file__).parents[2] / "schemas" / "storage-v2-contract-vectors.json"
 
@@ -66,6 +69,20 @@ def test_render_detail_cursor_matches_frozen_vector():
 def test_render_detail_cursor_rejects_noncanonical_or_truncated_tokens(token):
     with pytest.raises(ValueError):
         decode_render_detail_cursor_token(token)
+
+
+def test_raw_export_cursor_round_trips_canonical_source_order():
+    cursor = RawExportCursor(
+        session_id=UUID("018f0c3a-7b2d-7f10-8a11-123456789abc"),
+        machine_id="cinder",
+        provider="opencode",
+        opaque_source_id="path-sha256:" + "a" * 64,
+        source_epoch=UUID("018f0c3a-7b2d-7f10-8a11-223456789abc"),
+        range_start=(1 << 64) - 1,
+        envelope_id="b" * 64,
+    )
+    token = raw_export_cursor_token(cursor)
+    assert decode_raw_export_cursor_token(token) == cursor
 
 
 def test_durable_receipt_matches_frozen_wire_example():

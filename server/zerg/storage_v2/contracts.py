@@ -134,6 +134,17 @@ class RenderDetailCursor:
     event_subordinal: int
 
 
+@dataclass(frozen=True)
+class RawExportCursor:
+    session_id: UUID
+    machine_id: str
+    provider: str
+    opaque_source_id: str
+    source_epoch: UUID
+    range_start: int
+    envelope_id: str
+
+
 def encode_render_detail_cursor(cursor: RenderDetailCursor) -> bytes:
     provider = cursor.provider.encode("ascii", errors="strict")
     if not _PROVIDER_PATTERN.fullmatch(cursor.provider):
@@ -224,4 +235,89 @@ def decode_render_detail_cursor_token(token: str) -> RenderDetailCursor:
     )
     if encode_render_detail_cursor(cursor) != encoded:
         raise ValueError("render cursor is not canonical")
+    return cursor
+
+
+def encode_raw_export_cursor(cursor: RawExportCursor) -> bytes:
+    provider = cursor.provider.encode("ascii", errors="strict")
+    if not _PROVIDER_PATTERN.fullmatch(cursor.provider):
+        raise ValueError("provider must be canonical lowercase ASCII")
+    if not 0 <= cursor.range_start < 1 << 64:
+        raise ValueError("range_start exceeds u64")
+    if not _SHA256_HEX_PATTERN.fullmatch(cursor.envelope_id):
+        raise ValueError("envelope_id must be lowercase SHA-256 hex")
+    encoded = bytearray(_CURSOR_MAGIC)
+    encoded.extend(struct.pack(">BBH", 2, 1, 0))
+    encoded.extend(cursor.session_id.bytes)
+    encoded.extend(_length_prefixed(_canonical_utf8(cursor.machine_id, field="machine_id"), width=2))
+    encoded.extend(_length_prefixed(provider, width=2))
+    encoded.extend(_length_prefixed(_canonical_utf8(cursor.opaque_source_id, field="opaque_source_id"), width=4))
+    encoded.extend(cursor.source_epoch.bytes)
+    encoded.extend(struct.pack(">Q", cursor.range_start))
+    encoded.extend(bytes.fromhex(cursor.envelope_id))
+    return bytes(encoded)
+
+
+def raw_export_cursor_token(cursor: RawExportCursor) -> str:
+    return base64.urlsafe_b64encode(encode_raw_export_cursor(cursor)).rstrip(b"=").decode("ascii")
+
+
+def decode_raw_export_cursor_token(token: str) -> RawExportCursor:
+    if not isinstance(token, str) or not token or len(token) > 8_192 or not _BASE64URL_PATTERN.fullmatch(token):
+        raise ValueError("raw cursor must be a bounded base64url token")
+    try:
+        padding = "=" * (-len(token) % 4)
+        encoded = base64.b64decode(token + padding, altchars=b"-_", validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("raw cursor is not valid base64url") from exc
+    minimum = 4 + 4 + 16 + 2 + 2 + 4 + 16 + 8 + 32
+    if len(encoded) < minimum or encoded[:4] != _CURSOR_MAGIC:
+        raise ValueError("raw cursor has an invalid header")
+    kind, version, reserved = struct.unpack_from(">BBH", encoded, 4)
+    if (kind, version, reserved) != (2, 1, 0):
+        raise ValueError("raw cursor version is unsupported")
+    offset = 8
+    session_id = UUID(bytes=encoded[offset : offset + 16])
+    offset += 16
+
+    def read_text(width: int, field: str) -> str:
+        nonlocal offset
+        if offset + width > len(encoded):
+            raise ValueError("raw cursor is truncated")
+        length = int.from_bytes(encoded[offset : offset + width], "big")
+        offset += width
+        if offset + length > len(encoded):
+            raise ValueError("raw cursor is truncated")
+        try:
+            value = encoded[offset : offset + length].decode("utf-8", errors="strict")
+        except UnicodeDecodeError as exc:
+            raise ValueError(f"raw cursor {field} is not UTF-8") from exc
+        offset += length
+        if not value or unicodedata.normalize("NFC", value) != value:
+            raise ValueError(f"raw cursor {field} is not canonical")
+        return value
+
+    machine_id = read_text(2, "machine_id")
+    provider = read_text(2, "provider")
+    if not _PROVIDER_PATTERN.fullmatch(provider):
+        raise ValueError("raw cursor provider is not canonical")
+    opaque_source_id = read_text(4, "opaque_source_id")
+    if offset + 56 != len(encoded):
+        raise ValueError("raw cursor has trailing or truncated fields")
+    source_epoch = UUID(bytes=encoded[offset : offset + 16])
+    offset += 16
+    (range_start,) = struct.unpack_from(">Q", encoded, offset)
+    offset += 8
+    envelope_id = encoded[offset : offset + 32].hex()
+    cursor = RawExportCursor(
+        session_id=session_id,
+        machine_id=machine_id,
+        provider=provider,
+        opaque_source_id=opaque_source_id,
+        source_epoch=source_epoch,
+        range_start=range_start,
+        envelope_id=envelope_id,
+    )
+    if encode_raw_export_cursor(cursor) != encoded:
+        raise ValueError("raw cursor is not canonical")
     return cursor

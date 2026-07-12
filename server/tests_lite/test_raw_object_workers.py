@@ -10,7 +10,6 @@ from zerg.services.raw_object_workers import RawObjectWorkerBusy
 from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawRecord
-from zerg.storage_v2.raw_objects import read_raw_object
 
 
 def _spec() -> RawObjectSpec:
@@ -41,7 +40,7 @@ async def test_process_pool_seals_live_and_repair_objects_without_sharing_capaci
         assert live.object_hash == repair.object_hash
         replay = await pool.seal(spec, lane="live")
         assert replay.reused is True
-        decoded = read_raw_object(tmp_path, live.object_path, expected_object_hash=live.object_hash)
+        decoded = await pool.read(live.object_path, live.object_hash)
         assert decoded.spec == spec
     finally:
         await pool.close()

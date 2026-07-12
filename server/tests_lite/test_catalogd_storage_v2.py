@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -251,11 +252,33 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
 
         session_manifest = await client.call(
             "storage.session.raw_manifest.v2",
-            {"session_id": str(session_id), "after_commit_seq": None, "limit": 100},
+            {"session_id": str(session_id), "owner_id": "42", "after_source_key": None, "limit": 100},
         )
         assert session_manifest["found"] is True
         assert session_manifest["objects"][0]["object_path"] == raw["object_path"]
         assert session_manifest["objects"][0]["source_epoch"] == str(epoch)
+        raw_row = session_manifest["objects"][0]
+        after_source_key = json.dumps(
+            [
+                raw_row["machine_id"],
+                raw_row["provider"],
+                raw_row["opaque_source_id"],
+                raw_row["source_epoch"],
+                f"{int(raw_row['range_start']):020d}",
+                raw_row["envelope_id"],
+            ],
+            separators=(",", ":"),
+        )
+        exhausted_raw = await client.call(
+            "storage.session.raw_manifest.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": "42",
+                "after_source_key": after_source_key,
+                "limit": 100,
+            },
+        )
+        assert exhausted_raw["objects"] == []
 
         projector_lag = await client.call(
             "projector.state.list_lag.v2",
