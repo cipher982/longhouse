@@ -39,6 +39,7 @@ from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.agents.kernel_backfill import backfill_subagent_child_threads
 from zerg.services.session_graph_projection import build_session_graph_projection
+from zerg.services.session_workspace import get_legacy_workspace_session_factory
 
 PARENT_ID = UUID("f6a553e2-8aca-49c4-9823-3b3d8690fd2e")
 CHILD_ID = UUID("ddb1a69b-628e-5677-bba7-3fb76ba6ffc2")
@@ -978,6 +979,7 @@ def test_session_graph_projection_surfaces_child_fork_and_unknown_edges(tmp_path
             db.close()
 
     api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[get_legacy_workspace_session_factory] = lambda: factory
     api_app.dependency_overrides[verify_agents_token] = lambda: None
     api_app.dependency_overrides[require_single_tenant] = lambda: None
     try:
@@ -1141,6 +1143,7 @@ def test_timeline_sessions_api_collapses_parent_with_children(tmp_path):
             db.close()
 
     api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[get_legacy_workspace_session_factory] = lambda: factory
     api_app.dependency_overrides[get_current_browser_user] = lambda: SimpleNamespace(id=1, email="david010@example.com")
     api_app.dependency_overrides[require_single_tenant] = lambda: None
     try:
