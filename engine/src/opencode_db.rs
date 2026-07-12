@@ -37,8 +37,16 @@ pub struct OpenCodeSessionCandidate {
     pub fingerprint: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct OpenCodeRawSnapshot {
+    pub source_revision: String,
+    pub records: Vec<Vec<u8>>,
+    pub part_record_start: u64,
+}
+
 #[derive(Debug)]
 struct OpenCodeSessionRow {
+    project_id: Option<String>,
     parent_id: Option<String>,
     agent: Option<String>,
     project_worktree: Option<String>,
@@ -48,12 +56,14 @@ struct OpenCodeSessionRow {
     title: Option<String>,
     version: Option<String>,
     time_created: i64,
+    time_updated: i64,
 }
 
 #[derive(Debug)]
 struct OpenCodeMessageRow {
     id: String,
     time_created: i64,
+    time_updated: i64,
     data: String,
 }
 
@@ -113,20 +123,53 @@ pub fn managed_longhouse_session_id_for_opencode(provider_session_id: &str) -> O
 }
 
 pub fn list_opencode_sessions(db_path: &Path) -> Result<Vec<OpenCodeSessionCandidate>> {
+    list_opencode_sessions_inner(db_path, None)
+}
+
+pub fn list_recent_opencode_sessions(
+    db_path: &Path,
+    limit: usize,
+) -> Result<Vec<OpenCodeSessionCandidate>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    list_opencode_sessions_inner(db_path, Some(limit))
+}
+
+fn list_opencode_sessions_inner(
+    db_path: &Path,
+    limit: Option<usize>,
+) -> Result<Vec<OpenCodeSessionCandidate>> {
     let conn = open_readonly(db_path)?;
     let has_agent_column = sqlite_column_exists(&conn, "session", "agent")?;
-    let mut stmt = conn.prepare(
+    let sql = format!(
         r#"
         SELECT s.id,
-               MAX(MAX(s.time_updated, COALESCE(m.time_updated, 0), COALESCE(p.time_updated, 0))) AS version_ms
+               MAX(
+                   s.time_updated,
+                   COALESCE((SELECT MAX(m.time_updated) FROM message m WHERE m.session_id = s.id), 0),
+                   COALESCE((SELECT MAX(p.time_updated) FROM part p WHERE p.session_id = s.id), 0)
+        ) AS version_ms
         FROM session s
-        LEFT JOIN message m ON m.session_id = s.id
-        LEFT JOIN part p ON p.session_id = s.id
-        GROUP BY s.id
+        {}
         ORDER BY version_ms DESC, s.id ASC
+        {}
         "#,
-    )?;
-    let rows = stmt.query_map([], |row| {
+        if limit.is_some() {
+            r#"WHERE s.id IN (
+                SELECT id FROM (SELECT id FROM session ORDER BY time_updated DESC, id ASC LIMIT ?1)
+                UNION
+                SELECT session_id FROM (SELECT session_id FROM message ORDER BY time_updated DESC, id ASC LIMIT ?1)
+                UNION
+                SELECT session_id FROM (SELECT session_id FROM part ORDER BY time_updated DESC, id ASC LIMIT ?1)
+            )"#
+        } else {
+            ""
+        },
+        if limit.is_some() { "LIMIT ?1" } else { "" }
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<OpenCodeSessionCandidate> {
         let provider_session_id: String = row.get(0)?;
         let version_ms: i64 = row.get(1)?;
         Ok(OpenCodeSessionCandidate {
@@ -135,11 +178,15 @@ pub fn list_opencode_sessions(db_path: &Path) -> Result<Vec<OpenCodeSessionCandi
             version: version_from_ms(version_ms),
             fingerprint: String::new(),
         })
-    })?;
+    };
+    let mut rows = match limit {
+        Some(limit) => stmt.query(params![i64::try_from(limit).unwrap_or(i64::MAX)])?,
+        None => stmt.query([])?,
+    };
 
     let mut sessions = Vec::new();
-    for row in rows {
-        let mut candidate = row?;
+    while let Some(row) = rows.next()? {
+        let mut candidate = map_row(row)?;
         candidate.fingerprint =
             session_fingerprint(&conn, &candidate.provider_session_id, has_agent_column)?;
         sessions.push(candidate);
@@ -405,6 +452,65 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
     })
 }
 
+pub fn opencode_raw_snapshot(db_path: &Path, provider_session_id: &str) -> Result<OpenCodeRawSnapshot> {
+    let conn = open_readonly(db_path)?;
+    let mut session = load_session(&conn, provider_session_id)?;
+    session.agent = load_session_agent(&conn, provider_session_id)?;
+    let messages = load_messages(&conn, provider_session_id)?;
+    let parts = load_parts(&conn, provider_session_id)?;
+    let mut records = Vec::with_capacity(messages.len() + parts.len() + 1);
+    records.push(serde_json::to_vec(&json!({
+        "kind": "session",
+        "provider": "opencode",
+        "provider_session_id": provider_session_id,
+        "project_id": session.project_id,
+        "parent_id": session.parent_id,
+        "agent": session.agent,
+        "project_worktree": session.project_worktree,
+        "project_name": session.project_name,
+        "directory": session.directory,
+        "path": session.path,
+        "title": session.title,
+        "version": session.version,
+        "time_created": session.time_created,
+        "time_updated": session.time_updated,
+    }))?);
+    for message in &messages {
+        records.push(serde_json::to_vec(&json!({
+            "kind": "message",
+            "provider": "opencode",
+            "provider_session_id": provider_session_id,
+            "message_id": message.id,
+            "message_time_created": message.time_created,
+            "message_time_updated": message.time_updated,
+            "message_data": message.data,
+        }))?);
+    }
+    let part_record_start = u64::try_from(records.len()).context("OpenCode raw record count exceeds u64")?;
+    for part in parts {
+        records.push(serde_json::to_vec(&json!({
+            "kind": "part",
+            "provider": "opencode",
+            "provider_session_id": provider_session_id,
+            "message_id": part.message_id,
+            "part_id": part.id,
+            "part_time_created": part.time_created,
+            "part_time_updated": part.time_updated,
+            "part_data": part.data,
+        }))?);
+    }
+    let mut revision = Sha256::new();
+    for record in &records {
+        revision.update((record.len() as u64).to_be_bytes());
+        revision.update(record);
+    }
+    Ok(OpenCodeRawSnapshot {
+        source_revision: format!("{:x}", revision.finalize()),
+        records,
+        part_record_start,
+    })
+}
+
 fn open_readonly(path: &Path) -> Result<Connection> {
     let uri = sqlite_readonly_uri(path);
     let conn = Connection::open_with_flags(
@@ -442,7 +548,8 @@ fn load_session(conn: &Connection, provider_session_id: &str) -> Result<OpenCode
                 // project_id. The join tolerates missing project rows; older
                 // schemas fall back to directory/path below.
                 r#"
-                SELECT s.parent_id, p.worktree, p.name, s.directory, s.path, s.title, s.version, s.time_created
+                SELECT s.project_id, s.parent_id, p.worktree, p.name, s.directory, s.path,
+                       s.title, s.version, s.time_created, s.time_updated
                 FROM session s
                 LEFT JOIN project p ON p.id = s.project_id
                 WHERE s.id = ?1
@@ -450,15 +557,17 @@ fn load_session(conn: &Connection, provider_session_id: &str) -> Result<OpenCode
                 params![provider_session_id],
                 |row| {
                     Ok(OpenCodeSessionRow {
-                        parent_id: row.get(0)?,
+                        project_id: row.get(0)?,
+                        parent_id: row.get(1)?,
                         agent: None,
-                        project_worktree: row.get(1)?,
-                        project_name: row.get(2)?,
-                        directory: row.get(3)?,
-                        path: row.get(4)?,
-                        title: row.get(5)?,
-                        version: row.get(6)?,
-                        time_created: row.get(7)?,
+                        project_worktree: row.get(2)?,
+                        project_name: row.get(3)?,
+                        directory: row.get(4)?,
+                        path: row.get(5)?,
+                        title: row.get(6)?,
+                        version: row.get(7)?,
+                        time_created: row.get(8)?,
+                        time_updated: row.get(9)?,
                     })
                 },
             )
@@ -467,13 +576,14 @@ fn load_session(conn: &Connection, provider_session_id: &str) -> Result<OpenCode
 
     conn.query_row(
         r#"
-        SELECT parent_id, directory, path, title, version, time_created
+        SELECT parent_id, directory, path, title, version, time_created, time_updated
         FROM session
         WHERE id = ?1
         "#,
         params![provider_session_id],
         |row| {
             Ok(OpenCodeSessionRow {
+                project_id: None,
                 parent_id: row.get(0)?,
                 agent: None,
                 project_worktree: None,
@@ -483,6 +593,7 @@ fn load_session(conn: &Connection, provider_session_id: &str) -> Result<OpenCode
                 title: row.get(3)?,
                 version: row.get(4)?,
                 time_created: row.get(5)?,
+                time_updated: row.get(6)?,
             })
         },
     )
@@ -532,7 +643,7 @@ fn sqlite_column_exists(conn: &Connection, table: &str, column: &str) -> Result<
 fn load_messages(conn: &Connection, provider_session_id: &str) -> Result<Vec<OpenCodeMessageRow>> {
     let mut stmt = conn.prepare(
         r#"
-        SELECT id, time_created, data
+        SELECT id, time_created, time_updated, data
         FROM message
         WHERE session_id = ?1
         ORDER BY time_created ASC, id ASC
@@ -542,7 +653,8 @@ fn load_messages(conn: &Connection, provider_session_id: &str) -> Result<Vec<Ope
         Ok(OpenCodeMessageRow {
             id: row.get(0)?,
             time_created: row.get(1)?,
-            data: row.get(2)?,
+            time_updated: row.get(2)?,
+            data: row.get(3)?,
         })
     })?;
     let mut messages = Vec::new();
@@ -1189,7 +1301,7 @@ fn version_from_ms(ms: i64) -> u64 {
 fn timestamp_from_ms(ms: i64) -> DateTime<Utc> {
     Utc.timestamp_millis_opt(ms)
         .single()
-        .unwrap_or_else(Utc::now)
+        .unwrap_or(DateTime::UNIX_EPOCH)
 }
 
 #[cfg(test)]
@@ -1349,6 +1461,23 @@ mod tests {
     }
 
     #[test]
+    fn raw_snapshot_preserves_exact_database_strings_in_stable_record_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        create_fixture_db(&db_path);
+        let first = opencode_raw_snapshot(&db_path, "ses_test").unwrap();
+        let second = opencode_raw_snapshot(&db_path, "ses_test").unwrap();
+        assert_eq!(first.source_revision, second.source_revision);
+        assert_eq!(first.records, second.records);
+        assert!(String::from_utf8(first.records[0].clone())
+            .unwrap()
+            .contains("\"kind\":\"session\""));
+        assert!(first.records.iter().skip(1).any(|record| {
+            String::from_utf8_lossy(record).contains("{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"hello OpenCode\\\"}")
+        }));
+    }
+
+    #[test]
     fn parse_opencode_session_projects_sqlite_rows_into_events() {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("opencode.db");
@@ -1390,6 +1519,7 @@ mod tests {
     #[test]
     fn project_label_prefers_worktree_over_generic_opencode_path() {
         let session = OpenCodeSessionRow {
+            project_id: None,
             parent_id: None,
             agent: None,
             project_worktree: Some("/Users/davidrose/git/zerg/longhouse".to_string()),
@@ -1399,6 +1529,7 @@ mod tests {
             title: Some("OpenCode work".to_string()),
             version: None,
             time_created: 1_779_000_000_000_i64,
+            time_updated: 1_779_000_000_000_i64,
         };
 
         assert_eq!(project_label(&session).as_deref(), Some("longhouse"));
@@ -1407,6 +1538,7 @@ mod tests {
     #[test]
     fn project_label_prefers_worktree_over_project_name() {
         let session = OpenCodeSessionRow {
+            project_id: None,
             parent_id: None,
             agent: None,
             project_worktree: Some("/Users/davidrose/git/sauron/jobs".to_string()),
@@ -1416,6 +1548,7 @@ mod tests {
             title: Some("OpenCode work".to_string()),
             version: None,
             time_created: 1_779_000_000_000_i64,
+            time_updated: 1_779_000_000_000_i64,
         };
 
         assert_eq!(project_label(&session).as_deref(), Some("jobs"));

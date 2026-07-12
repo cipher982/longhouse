@@ -2973,16 +2973,6 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     }
 
     if let Some(capabilities) = task_context.storage_v2.as_deref() {
-        if is_opencode_database_job(&result.job) {
-            if task_context.tracker.record_error() {
-                tracing::error!(
-                    path = %result.job.path.display(),
-                    "Storage-v2 cutover does not yet support OpenCode SQLite record-ordinal sources"
-                );
-            }
-            result.local_retry_after = Some(local_retry_delay(result.job.priority));
-            return finish_path_task(result, task_started);
-        }
         let lane = if result.job.priority == WorkPriority::Live {
             "live"
         } else {
@@ -2993,18 +2983,30 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         } else {
             Duration::from_secs(75)
         };
-        match crate::storage_v2_shipper::ship_next_envelope(
-            &mut conn,
-            &task_context.client,
-            capabilities,
-            &result.job.path,
-            result.job.provider,
-            result.job.observation.session_id.as_deref(),
-            lane,
-            timeout,
-        )
-        .await
-        {
+        let ship_result = if is_opencode_database_job(&result.job) {
+            crate::storage_v2_shipper::ship_next_opencode_envelope(
+                &mut conn,
+                &task_context.client,
+                capabilities,
+                &result.job.path,
+                lane,
+                timeout,
+            )
+            .await
+        } else {
+            crate::storage_v2_shipper::ship_next_envelope(
+                &mut conn,
+                &task_context.client,
+                capabilities,
+                &result.job.path,
+                result.job.provider,
+                result.job.observation.session_id.as_deref(),
+                lane,
+                timeout,
+            )
+            .await
+        };
+        match ship_result {
             Ok(Some(outcome)) => {
                 result.events_shipped = outcome.events_shipped;
                 if outcome.has_more {
