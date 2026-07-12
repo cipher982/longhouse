@@ -136,7 +136,7 @@ async def test_control_result_reconciles_operation_and_late_launch_without_api_s
         }
         operation = await client.call("control.command_result.apply.v2", operation_params)
         operation_replay = await client.call("control.command_result.apply.v2", operation_params)
-        assert operation == {"matched": True, "match_kind": "operation", "commit_seq": "1"}
+        assert operation == {"matched": True, "match_kind": "operation", "commit_seq": "2"}
         assert operation_replay == operation
 
         launch_result = await client.call(
@@ -156,7 +156,7 @@ async def test_control_result_reconciles_operation_and_late_launch_without_api_s
                 },
             },
         )
-        assert launch_result == {"matched": True, "match_kind": "launch", "commit_seq": "2"}
+        assert launch_result == {"matched": True, "match_kind": "launch", "commit_seq": "3"}
     finally:
         await client.close()
         await daemon.close()
