@@ -552,11 +552,24 @@ def _runtime_state_newer_than(candidate: Any, existing: Any | None) -> bool:
 
 
 def _load_live_runtime_state_map(session_ids: list[UUID]) -> dict[str, LiveRuntimeState]:
-    from zerg.database import get_live_session_factory
+    from zerg.database import live_catalog_enabled
     from zerg.database import live_store_configured
 
     if not live_store_configured():
         return {}
+    if live_catalog_enabled():
+        from zerg.services.catalog_facts import hydrate_catalog_row
+        from zerg.services.catalog_facts import session_facts_map
+
+        facts_by_session = session_facts_map([str(session_id) for session_id in session_ids])
+        result: dict[str, LiveRuntimeState] = {}
+        for session_id, facts in facts_by_session.items():
+            row = hydrate_catalog_row(LiveRuntimeState, facts.get("runtime"))
+            if row is not None:
+                result[session_id] = row
+        return result
+    from zerg.database import get_live_session_factory
+
     live_session_factory = get_live_session_factory()
     if live_session_factory is None:
         return {}

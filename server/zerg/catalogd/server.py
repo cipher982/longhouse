@@ -275,6 +275,8 @@ class CatalogDaemon:
             return await self._read_sessions(request)
         if request.method == "session.preferences.update.v2":
             return await self._update_session_preferences(request)
+        if request.method == "session.active.list.v2":
+            return await self._list_active_sessions(request)
         if request.method == "session.prefix.resolve.v2":
             return await self._resolve_session_prefix(request)
         if request.method == "machine.enrollment.list.v2":
@@ -1108,8 +1110,8 @@ class CatalogDaemon:
         if set(request.params) != {"session_ids"}:
             return self._error(request, "invalid_request", "session.read.batch.v2 requires session_ids")
         session_ids = request.params["session_ids"]
-        if not isinstance(session_ids, list) or not 1 <= len(session_ids) <= 100:
-            return self._error(request, "invalid_request", "session_ids must contain 1 to 100 UUIDs")
+        if not isinstance(session_ids, list) or not 1 <= len(session_ids) <= 20:
+            return self._error(request, "invalid_request", "session_ids must contain 1 to 20 UUIDs")
         if len(set(session_ids)) != len(session_ids) or any(not _is_canonical_uuid(value) for value in session_ids):
             return self._error(request, "invalid_request", "session_ids must be unique canonical UUIDs")
         assert self._store is not None
@@ -1142,6 +1144,28 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.update_session_preferences, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_active_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"limit", "days_back", "observed_at"}:
+            return self._error(request, "invalid_request", "session.active.list.v2 has invalid parameters")
+        limit = request.params["limit"]
+        days_back = request.params["days_back"]
+        if type(limit) is not int or not 1 <= limit <= 1_000:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 1000")
+        if type(days_back) is not int or not 1 <= days_back <= 90:
+            return self._error(request, "invalid_request", "days_back must be an integer from 1 through 90")
+        try:
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.list_active_session_ids,
+            limit=limit,
+            days_back=days_back,
+            observed_at=observed_at,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_session_prefix(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

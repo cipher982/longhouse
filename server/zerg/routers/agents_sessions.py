@@ -198,6 +198,15 @@ def export_worklog_day(
 def _active_live_session_candidates(*, limit: int, days_back: int, now: datetime) -> list[UUID] | None:
     if not live_store_configured():
         return None
+    if database_module.live_catalog_enabled():
+        from zerg.services.catalog_read_gateway import active_session_ids
+
+        result = active_session_ids(
+            limit=min(_ACTIVE_LIVE_SESSION_CANDIDATE_MAX, max(limit, limit * _ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER)),
+            days_back=days_back,
+            observed_at=now.isoformat(),
+        )
+        return [UUID(value) for value in result.get("session_ids", [])]
     LiveSessionFactory = get_live_session_factory()
     if LiveSessionFactory is None:
         return None

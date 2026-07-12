@@ -19,9 +19,11 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.catalogd.store import CatalogStore
+from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveDeviceToken
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
+from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
@@ -59,6 +61,17 @@ def _seed_session(connection, *, session_id: str, device_id: str, now: datetime,
             started_at=now - timedelta(hours=2),
             last_activity_at=now - timedelta(minutes=2),
             primary_thread_id=thread_id,
+        )
+    )
+    connection.execute(
+        LiveSession.__table__.insert().values(
+            session_id=session_id,
+            provider="codex",
+            device_id=device_id,
+            state="attached",
+            started_at=now - timedelta(hours=2),
+            last_seen_at=now,
+            updated_at=now,
         )
     )
     connection.execute(
@@ -107,6 +120,25 @@ def _seed_session(connection, *, session_id: str, device_id: str, now: datetime,
             can_send_input=1,
             acquired_at=now - timedelta(hours=1),
             last_health_at=now,
+        )
+    )
+    connection.execute(
+        LiveControlLease.__table__.insert().values(
+            session_id=session_id,
+            provider="codex",
+            device_id=device_id,
+            machine_id=device_id,
+            state="attached",
+            sequence=9,
+            heartbeat_at=now,
+            payload_json=json.dumps(
+                {
+                    "bridge_status": "ready",
+                    "thread_subscription_status": "subscribed",
+                    "lease_ttl_ms": 900000,
+                }
+            ),
+            updated_at=now,
         )
     )
     connection.execute(
@@ -257,6 +289,7 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
         read = await client.call("session.read.v2", {"session_id": first_id})
         assert read["found"] is True
         assert read["facts"]["catalog"]["session_id"] == first_id
+        assert read["facts"]["control_leases"][0]["sequence"] == 9
         assert read["facts"]["provider_alias"] == f"provider-{first_id}"
         assert read["facts"]["resume"] == {
             "provider_session_id": f"provider-{first_id}",
@@ -266,6 +299,11 @@ async def test_session_timeline_and_read_return_assembled_snapshot_facts(daemon_
         assert read["observed_at"].endswith("+00:00")
         batch = await client.call("session.read.batch.v2", {"session_ids": [first_id, second_id]})
         assert [item["catalog"]["session_id"] for item in batch["facts"]] == [first_id, second_id]
+        active = await client.call(
+            "session.active.list.v2",
+            {"limit": 10, "days_back": 7, "observed_at": now.isoformat()},
+        )
+        assert active["session_ids"] == [first_id, second_id]
         pending = await client.call("session.read.v2", {"session_id": pending_id})
         assert pending["found"] is True
         assert pending["facts"]["catalog"]["session_id"] == pending_id
@@ -503,11 +541,23 @@ def test_maximum_timeline_page_fits_one_protocol_frame(daemon_paths):
     payload_bytes = len(
         json.dumps(response.to_wire(), ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
     )
+    batch_response = CatalogRpcResponse(
+        id="1" * 32,
+        result={
+            "commit_seq": detail["commit_seq"],
+            "observed_at": detail["observed_at"],
+            "facts": [detail["facts"]] * 20,
+        },
+    )
+    batch_payload_bytes = len(
+        json.dumps(batch_response.to_wire(), ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+    )
     row_sizes = {
         key: len(json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
         for key, value in result["rows"][0]["facts"].items()
     }
     assert payload_bytes < MAX_PAYLOAD_BYTES, (payload_bytes, row_sizes)
+    assert batch_payload_bytes < MAX_PAYLOAD_BYTES, batch_payload_bytes
     frame = encode_frame(response)
     engine.dispose()
 

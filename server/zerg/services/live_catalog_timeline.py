@@ -10,8 +10,6 @@ from time import monotonic
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import DateTime
-
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
@@ -21,6 +19,8 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_capabilities_from_rows
+from zerg.services.catalog_facts import decode_catalog_datetime
+from zerg.services.catalog_facts import hydrate_catalog_row
 from zerg.services.catalog_read_gateway import session_snapshot
 from zerg.services.catalog_read_gateway import timeline_snapshot
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
@@ -46,32 +46,6 @@ from zerg.services.timeline_session_listing import TimelineSessionsListResponse
 from zerg.utils.time import normalize_utc
 
 
-def _decode_wire_datetime(value: object) -> object:
-    if not isinstance(value, str):
-        return value
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return value
-    return normalize_utc(parsed)
-
-
-def _hydrate_live_row(model, payload: dict[str, Any] | None):
-    """Build one detached read model from a catalogd raw-facts payload."""
-
-    if payload is None:
-        return None
-    values: dict[str, Any] = {}
-    for column in model.__table__.columns:
-        if column.name not in payload:
-            continue
-        value = payload[column.name]
-        if value is not None and isinstance(column.type, DateTime):
-            value = _decode_wire_datetime(value)
-        values[column.name] = value
-    return model(**values)
-
-
 def project_catalog_session_facts(
     facts: dict[str, Any],
     *,
@@ -79,10 +53,10 @@ def project_catalog_session_facts(
 ) -> SessionResponse:
     """Project one catalogd snapshot through the canonical state projector."""
 
-    session = _hydrate_live_row(LiveSessionCatalog, facts.get("catalog"))
+    session = hydrate_catalog_row(LiveSessionCatalog, facts.get("catalog"))
     if session is None:
         raise ValueError("catalog session facts are missing catalog")
-    card = _hydrate_live_row(LiveTimelineCard, facts.get("card"))
+    card = hydrate_catalog_row(LiveTimelineCard, facts.get("card"))
     if card is None:
         card = LiveTimelineCard(
             session_id=session.session_id,
@@ -101,13 +75,13 @@ def project_catalog_session_facts(
             transcript_revision=int(session.transcript_revision or 0),
             archive_state="pending",
         )
-    runtime = _hydrate_live_row(LiveRuntimeState, facts.get("runtime"))
-    readiness_row = _hydrate_live_row(LiveLaunchReadiness, facts.get("readiness"))
+    runtime = hydrate_catalog_row(LiveRuntimeState, facts.get("runtime"))
+    readiness_row = hydrate_catalog_row(LiveLaunchReadiness, facts.get("readiness"))
     readiness = project_live_launch_readiness(readiness_row) if readiness_row is not None else None
-    thread = _hydrate_live_row(LiveSessionThread, facts.get("primary_thread"))
-    run = _hydrate_live_row(LiveSessionRun, facts.get("latest_run"))
+    thread = hydrate_catalog_row(LiveSessionThread, facts.get("primary_thread"))
+    run = hydrate_catalog_row(LiveSessionRun, facts.get("latest_run"))
     connections = [
-        row for payload in facts.get("connections") or [] if (row := _hydrate_live_row(LiveSessionConnection, payload)) is not None
+        row for payload in facts.get("connections") or [] if (row := hydrate_catalog_row(LiveSessionConnection, payload)) is not None
     ]
     capabilities = project_capabilities_from_rows(
         session_id=str(session.session_id),
@@ -405,7 +379,7 @@ def list_live_catalog_timeline(
 def project_catalog_timeline_snapshot(snapshot: dict[str, Any]) -> TimelineSessionsListResponse:
     """Project a raw catalogd timeline snapshot without any storage access."""
 
-    observed_at = _decode_wire_datetime(snapshot.get("observed_at"))
+    observed_at = decode_catalog_datetime(snapshot.get("observed_at"))
     if not isinstance(observed_at, datetime):
         raise ValueError("catalog timeline snapshot is missing observed_at")
     cards: list[TimelineSessionCardResponse] = []
@@ -469,7 +443,7 @@ def read_live_catalog_session(session_id: UUID) -> tuple[SessionResponse | None,
     commit_seq = str(snapshot.get("commit_seq") or "0")
     if snapshot.get("found") is not True:
         return None, None, commit_seq
-    observed_at = _decode_wire_datetime(snapshot.get("observed_at"))
+    observed_at = decode_catalog_datetime(snapshot.get("observed_at"))
     facts = snapshot.get("facts")
     if not isinstance(observed_at, datetime) or not isinstance(facts, dict):
         raise ValueError("catalog session snapshot is incomplete")

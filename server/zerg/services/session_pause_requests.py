@@ -71,15 +71,15 @@ def load_hot_session_projection_map(session_ids: list[UUID]) -> dict[UUID, tuple
     """
     if not session_ids or not database_module.live_catalog_enabled():
         return {}
+    from zerg.services.catalog_facts import session_facts_map
     from zerg.services.catalog_read_gateway import CatalogReadError
-    from zerg.services.catalog_read_gateway import session_batch_snapshot
 
     try:
-        response = session_batch_snapshot([str(value) for value in session_ids])
+        facts_by_session = session_facts_map([str(value) for value in session_ids])
     except CatalogReadError:
         return {}
     result: dict[UUID, tuple[dict[str, Any] | None, str]] = {}
-    for facts in response.get("facts", []):
+    for facts in facts_by_session.values():
         if not isinstance(facts, dict):
             continue
         catalog = facts.get("catalog")

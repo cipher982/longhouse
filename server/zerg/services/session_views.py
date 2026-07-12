@@ -33,11 +33,13 @@ from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionMediaRef
 from zerg.models.agents import SessionTurn
+from zerg.models.live_store import LiveLaunchReadiness
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import latest_live_launch_readiness_map as query_live_launch_readiness_map
+from zerg.services.live_launch_readiness import project_live_launch_readiness
 from zerg.services.managed_control_state import CONTROL_SOURCE_RUNNER_CONNECTION
 from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
@@ -971,8 +973,7 @@ class SessionResponse(UTCBaseModel):
     launch_state: Optional[RemoteLaunchLifecycleState] = Field(
         None,
         description=(
-            "Remote-launch lifecycle: launching|live|launching_unknown|"
-            "launch_failed|launch_orphaned; null when there is no launch attempt"
+            "Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null when there is no launch attempt"
         ),
     )
     execution_lifetime: Optional[RemoteExecutionLifetime] = Field(
@@ -1026,7 +1027,7 @@ class SessionsListResponse(BaseModel):
     total: int
     has_real_sessions: bool = Field(
         True,
-        description=("True if any non-demo sessions exist (device_id != 'demo-mac'). " "False means only demo-seeded data is present."),
+        description=("True if any non-demo sessions exist (device_id != 'demo-mac'). False means only demo-seeded data is present."),
     )
 
 
@@ -1933,6 +1934,22 @@ def latest_live_launch_readiness(session_ids, *, now: datetime | None = None) ->
 
     if not session_ids or not database_module.live_store_configured():
         return {}
+    if database_module.live_catalog_enabled():
+        from zerg.services.catalog_facts import hydrate_catalog_row
+        from zerg.services.catalog_facts import session_facts_map
+
+        cutoff = normalize_utc(now) or datetime.now(timezone.utc)
+        facts_by_session = session_facts_map([str(session_id) for session_id in session_ids])
+        result: dict[UUID, LiveLaunchReadinessView] = {}
+        for session_id, facts in facts_by_session.items():
+            row = hydrate_catalog_row(LiveLaunchReadiness, facts.get("readiness"))
+            if row is None:
+                continue
+            expires_at = normalize_utc(row.expires_at)
+            if expires_at is not None and expires_at <= cutoff:
+                continue
+            result[UUID(session_id)] = project_live_launch_readiness(row)
+        return result
     live_session_factory = database_module.get_live_session_factory()
     if live_session_factory is None:
         return {}

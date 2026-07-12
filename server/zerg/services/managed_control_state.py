@@ -666,12 +666,24 @@ def load_managed_control_state_map(
 def _load_live_managed_control_state_map(session_ids: list[UUID]) -> dict[UUID, ManagedControlOverlay]:
     if not session_ids or not database_module.live_store_configured():
         return {}
-    live_session_factory = database_module.get_live_session_factory()
-    if live_session_factory is None:
-        return {}
     session_id_strings = [str(session_id) for session_id in session_ids]
-    with live_session_factory() as live_db:
-        rows = live_db.query(LiveControlLease).filter(LiveControlLease.session_id.in_(session_id_strings)).all()
+    if database_module.live_catalog_enabled():
+        from zerg.services.catalog_facts import hydrate_catalog_row
+        from zerg.services.catalog_facts import session_facts_map
+
+        facts_by_session = session_facts_map(session_id_strings)
+        rows = [
+            row
+            for facts in facts_by_session.values()
+            for payload in facts.get("control_leases") or []
+            if (row := hydrate_catalog_row(LiveControlLease, payload)) is not None
+        ]
+    else:
+        live_session_factory = database_module.get_live_session_factory()
+        if live_session_factory is None:
+            return {}
+        with live_session_factory() as live_db:
+            rows = live_db.query(LiveControlLease).filter(LiveControlLease.session_id.in_(session_id_strings)).all()
     best: dict[UUID, ManagedControlOverlay] = {}
     for row in rows:
         overlay = _overlay_from_live_lease(row)

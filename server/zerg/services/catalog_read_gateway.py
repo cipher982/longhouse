@@ -38,6 +38,13 @@ def session_batch_snapshot(session_ids: list[str]) -> dict[str, Any]:
     return _call("session.read.batch.v2", {"session_ids": session_ids})
 
 
+def active_session_ids(*, limit: int, days_back: int, observed_at: str) -> dict[str, Any]:
+    return _call(
+        "session.active.list.v2",
+        {"limit": limit, "days_back": days_back, "observed_at": observed_at},
+    )
+
+
 def resolve_session_prefix(prefix: str) -> dict[str, Any]:
     return _call("session.prefix.resolve.v2", {"prefix": prefix})
 
@@ -96,6 +103,7 @@ def _call(method: str, params: dict[str, Any]) -> dict[str, Any]:
 
 
 __all__ = [
+    "active_session_ids",
     "CatalogReadError",
     "active_owner_id",
     "enrolled_machines",

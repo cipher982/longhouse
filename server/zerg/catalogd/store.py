@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from zerg.catalogd.schema import catalog_meta
 from zerg.models.live_store import LiveArchiveOutbox
+from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveDeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveInteractionRequest
@@ -32,6 +33,7 @@ from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveMachineControlOperation
 from zerg.models.live_store import LiveRefreshSession
 from zerg.models.live_store import LiveRuntimeState
+from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionInputReceipt
@@ -2475,6 +2477,29 @@ class CatalogStore:
                 "facts": facts,
             }
 
+    def list_active_session_ids(self, *, limit: int, days_back: int, observed_at: datetime) -> dict[str, Any]:
+        """Return bounded recently observed session identities from the live lane."""
+
+        live = LiveSession.__table__
+        catalog = LiveSessionCatalog.__table__
+        cutoff = observed_at - timedelta(days=days_back)
+        with _read_snapshot(self.engine) as connection:
+            rows = connection.execute(
+                select(live.c.session_id)
+                .join(catalog, catalog.c.session_id == live.c.session_id)
+                .where(
+                    live.c.state.notin_(("missing", "ended")),
+                    catalog.c.user_state.notin_(("archived", "snoozed")),
+                    live.c.last_seen_at >= cutoff,
+                )
+                .order_by(live.c.last_seen_at.desc(), live.c.updated_at.desc(), live.c.session_id.desc())
+                .limit(limit)
+            ).all()
+            return {
+                "session_ids": [str(row[0]) for row in rows],
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
     def update_session_preferences(
         self,
         *,
@@ -2734,6 +2759,7 @@ def _assemble_session_facts(
     thread_table = LiveSessionThread.__table__
     run_table = LiveSessionRun.__table__
     connection_table = LiveSessionConnection.__table__
+    control_lease_table = LiveControlLease.__table__
     alias_table = LiveSessionThreadAlias.__table__
 
     catalogs = {
@@ -2796,6 +2822,32 @@ def _assemble_session_facts(
         ).mappings():
             connections_by_run.setdefault(str(row["run_id"]), []).append(row)
 
+    control_leases_by_session: dict[str, list[Any]] = {}
+    if not compact:
+        ranked_control_leases = (
+            select(
+                control_lease_table,
+                func.row_number()
+                .over(
+                    partition_by=control_lease_table.c.session_id,
+                    order_by=(control_lease_table.c.heartbeat_at.desc(), control_lease_table.c.id.desc()),
+                )
+                .label("lease_rank"),
+            )
+            .where(control_lease_table.c.session_id.in_(session_ids))
+            .subquery()
+        )
+        for row in connection.execute(
+            select(ranked_control_leases)
+            .where(ranked_control_leases.c.lease_rank <= 8)
+            .order_by(
+                ranked_control_leases.c.session_id.asc(),
+                ranked_control_leases.c.heartbeat_at.desc(),
+                ranked_control_leases.c.id.desc(),
+            )
+        ).mappings():
+            control_leases_by_session.setdefault(str(row["session_id"]), []).append(row)
+
     provider_alias_by_thread: dict[str, Any] = {}
     source_alias_by_thread: dict[str, Any] = {}
     if thread_ids:
@@ -2846,6 +2898,16 @@ def _assemble_session_facts(
                     _row_dto(row, fields=_CONNECTION_FIELDS, text_limits=_CONNECTION_TEXT_LIMITS)
                     for row in _bounded_connections(connections_by_run.get(run_id, []), observed_at=observed_at)
                 ],
+                **(
+                    {
+                        "control_leases": [
+                            _row_dto(row, fields=_CONTROL_LEASE_FIELDS, text_limits=_CONTROL_LEASE_TEXT_LIMITS)
+                            for row in control_leases_by_session.get(session_id, [])
+                        ]
+                    }
+                    if not compact
+                    else {}
+                ),
                 "provider_alias": (
                     _truncate_utf8(str(provider_alias_by_thread[thread_id]["alias_value"]), 512)
                     if not compact and thread_id in provider_alias_by_thread
@@ -3046,6 +3108,20 @@ _CONNECTION_FIELDS = frozenset(
         "last_health_at",
     }
 )
+_CONTROL_LEASE_FIELDS = frozenset(
+    {
+        "id",
+        "session_id",
+        "provider",
+        "device_id",
+        "machine_id",
+        "state",
+        "sequence",
+        "heartbeat_at",
+        "payload_json",
+        "updated_at",
+    }
+)
 _RUNTIME_TEXT_LIMITS = {
     "runtime_key": 255,
     "provider": 64,
@@ -3072,6 +3148,13 @@ _CONNECTION_TEXT_LIMITS = {
     "acquisition_kind": 32,
     "state": 32,
     "device_id": 255,
+}
+_CONTROL_LEASE_TEXT_LIMITS = {
+    "provider": 64,
+    "device_id": 255,
+    "machine_id": 255,
+    "state": 32,
+    "payload_json": 2048,
 }
 
 
