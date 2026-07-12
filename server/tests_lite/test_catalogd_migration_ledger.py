@@ -249,6 +249,8 @@ async def test_explicit_coverage_degradation_is_terminal_not_reclaimed(daemon_pa
             },
         )
         assert completed["session"]["state"] == "degraded"
+        assert completed["session"]["error_code"] == "source_coverage_missing"
+        assert completed["session"]["error_message"] == "source_missing=1; media_missing=0"
         reclaimed = await client.call(
             "migration.session.claim.v2",
             {

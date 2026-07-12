@@ -101,6 +101,53 @@ def test_source_batches_bound_dense_render_payloads():
 
 
 @pytest.mark.asyncio
+async def test_oversized_legacy_tool_output_keeps_raw_truth_and_terminally_degrades_render(legacy_db, tmp_path: Path):
+    session = _session()
+    raw = '{"type":"tool_result","content":"preserved in raw"}'
+    with legacy_db() as db:
+        db.add(session)
+        db.flush()
+        db.add(
+            AgentSourceLine(
+                session_id=session.id,
+                source_path="oversized.jsonl",
+                source_offset=0,
+                branch_id=0,
+                raw_json=raw,
+                raw_json_codec=0,
+                line_hash=hashlib.sha256(raw.encode()).hexdigest(),
+            )
+        )
+        event = _event(session.id, raw_json=raw, source_path="oversized.jsonl", source_offset=0)
+        event.role = "tool"
+        event.tool_output_text = "x" * (2 * 1024 * 1024 + 1)
+        db.add(event)
+        db.commit()
+        watermark = freeze_high_watermark(db)
+
+    catalog = FakeCatalog()
+    converter = LegacyCorpusConverter(
+        session_factory=legacy_db,
+        catalog=catalog,
+        object_root=tmp_path / "objects-v2",
+        tenant_id="tenant-a",
+    )
+    with legacy_db() as db:
+        result = await converter.convert_session(db, session.id, watermark)
+
+    commits = [payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2"]
+    assert len(commits) == 1
+    assert commits[0]["render_state"] == "failed"
+    assert commits[0]["render_manifest"] is None
+    assert result.degradation_code == "render_projection_failed"
+    assert "tool_output_text" in (result.degradation_message or "")
+    assert result.parity_matches is False
+    await converter._complete(uuid4(), uuid4(), result)
+    completion = [payload for method, payload in catalog.calls if method == "migration.session.complete.v2"]
+    assert completion[0]["degradation_code"] == "render_projection_failed"
+
+
+@pytest.mark.asyncio
 async def test_unmatched_events_are_preserved_in_bounded_synthetic_batches(legacy_db, tmp_path: Path):
     session = _session()
     raw = '{"type":"user","message":"matched"}'

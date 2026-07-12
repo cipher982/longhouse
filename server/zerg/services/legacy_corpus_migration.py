@@ -40,6 +40,7 @@ from zerg.storage_v2.raw_objects import RawObjectSpec
 from zerg.storage_v2.raw_objects import RawRecord
 from zerg.storage_v2.raw_objects import seal_raw_object
 from zerg.storage_v2.render_objects import RenderObjectSpec
+from zerg.storage_v2.render_objects import RenderObjectValidationError
 from zerg.storage_v2.render_objects import RenderRecord
 from zerg.storage_v2.render_objects import seal_render_object
 
@@ -107,6 +108,8 @@ class MigrationResult:
     output_proof_hash: str
     parity_proof_hash: str
     parity_matches: bool
+    degradation_code: str | None
+    degradation_message: str | None
     envelope_ids: tuple[str, ...]
     media_hashes: tuple[str, ...]
 
@@ -346,6 +349,7 @@ class LegacyCorpusConverter:
         )
         consumed_event_ids: set[int] = set()
         rendered_records: list[RenderRecord] = []
+        render_failures: list[str] = []
         owner_id = await self._active_owner_id() if batches else None
 
         for batch in batches:
@@ -389,8 +393,13 @@ class LegacyCorpusConverter:
                 source_envelope_id=sealed_raw.envelope_id,
                 records=tuple(render_records),
             )
-            sealed_render = await asyncio.to_thread(seal_render_object, self.object_root, render_spec)
-            rendered_records.extend(render_records)
+            try:
+                sealed_render = await asyncio.to_thread(seal_render_object, self.object_root, render_spec)
+            except RenderObjectValidationError as exc:
+                sealed_render = None
+                render_failures.append(str(exc))
+            else:
+                rendered_records.extend(render_records)
             committed = await self.catalog.call(
                 "storage.raw_object.commit.v2",
                 _raw_commit(
@@ -406,7 +415,9 @@ class LegacyCorpusConverter:
             )
             envelope_ids.append(sealed_raw.envelope_id)
             committed_seq = str(committed["receipt"]["commit_seq"])
-            output_parts.extend((sealed_raw.object_hash, sealed_render.object_hash, committed_seq))
+            output_parts.extend((sealed_raw.object_hash, committed_seq))
+            if sealed_render is not None:
+                output_parts.append(sealed_render.object_hash)
 
         media_covered, media_missing, media_hashes = await self._migrate_media(db, session_id, watermark)
         output_proof = _proof("output", str(session_id), *sorted(output_parts), *sorted(media_hashes))
@@ -424,6 +435,8 @@ class LegacyCorpusConverter:
             output_proof_hash=output_proof,
             parity_proof_hash=parity_proof,
             parity_matches=parity_matches,
+            degradation_code="render_projection_failed" if render_failures else None,
+            degradation_message="; ".join(sorted(set(render_failures)))[:2048] if render_failures else None,
             envelope_ids=tuple(envelope_ids),
             media_hashes=tuple(sorted(media_hashes)),
         )
@@ -619,6 +632,9 @@ class LegacyCorpusConverter:
 
     async def _complete(self, run_id: UUID, claim_token: UUID, result: MigrationResult) -> None:
         if not result.parity_matches:
+            if result.degradation_code is not None:
+                await self._complete_with_degradation(run_id, claim_token, result)
+                return
             failed_at = datetime.now(UTC)
             await self.catalog.call(
                 "migration.session.fail.v2",
@@ -634,6 +650,9 @@ class LegacyCorpusConverter:
                 timeout_seconds=5.0,
             )
             return
+        await self._complete_with_degradation(run_id, claim_token, result)
+
+    async def _complete_with_degradation(self, run_id: UUID, claim_token: UUID, result: MigrationResult) -> None:
         await self.catalog.call(
             "migration.session.complete.v2",
             {
@@ -646,6 +665,8 @@ class LegacyCorpusConverter:
                 "media_missing": result.media_missing,
                 "output_proof_hash": result.output_proof_hash,
                 "parity_proof_hash": result.parity_proof_hash,
+                "degradation_code": result.degradation_code,
+                "degradation_message": result.degradation_message,
                 "completed_at": datetime.now(UTC).isoformat(),
             },
             timeout_seconds=5.0,
@@ -755,6 +776,27 @@ def _render_record(
 
 
 def _raw_commit(*, session, raw_spec, sealed_raw, render_spec, sealed_render, tenant_id: str, owner_id: str) -> dict[str, Any]:  # noqa: E501
+    render_manifest = None
+    if sealed_render is not None:
+        render_manifest = {
+            "generation_id": str(render_spec.render_generation),
+            "parser_revision": render_spec.parser_revision,
+            "ordering_revision": render_spec.ordering_revision,
+            "object_id": sealed_render.object_id,
+            "object_hash": sealed_render.object_hash,
+            "payload_hash": sealed_render.payload_hash,
+            "object_path": sealed_render.object_path,
+            "uncompressed_size": sealed_render.uncompressed_size,
+            "compressed_size": sealed_render.compressed_size,
+            "event_count": sealed_render.event_count,
+            "first_order_key": sealed_render.first_order_key,
+            "last_order_key": sealed_render.last_order_key,
+            "user_messages": sealed_render.user_messages,
+            "assistant_messages": sealed_render.assistant_messages,
+            "tool_calls": sealed_render.tool_calls,
+            "first_user_message_preview": sealed_render.first_user_message_preview,
+            "last_visible_text_preview": sealed_render.last_visible_text_preview,
+        }
     return {
         "protocol_version": 2,
         "tenant_id": tenant_id,
@@ -778,28 +820,10 @@ def _raw_commit(*, session, raw_spec, sealed_raw, render_spec, sealed_render, te
         "uncompressed_size": sealed_raw.uncompressed_size,
         "compressed_size": sealed_raw.compressed_size,
         "provenance_kind": raw_spec.provenance_kind,
-        "render_state": "ready",
+        "render_state": "ready" if sealed_render is not None else "failed",
         "media_refs": [],
         "projectors": ["search-v2"],
-        "render_manifest": {
-            "generation_id": str(render_spec.render_generation),
-            "parser_revision": render_spec.parser_revision,
-            "ordering_revision": render_spec.ordering_revision,
-            "object_id": sealed_render.object_id,
-            "object_hash": sealed_render.object_hash,
-            "payload_hash": sealed_render.payload_hash,
-            "object_path": sealed_render.object_path,
-            "uncompressed_size": sealed_render.uncompressed_size,
-            "compressed_size": sealed_render.compressed_size,
-            "event_count": sealed_render.event_count,
-            "first_order_key": sealed_render.first_order_key,
-            "last_order_key": sealed_render.last_order_key,
-            "user_messages": sealed_render.user_messages,
-            "assistant_messages": sealed_render.assistant_messages,
-            "tool_calls": sealed_render.tool_calls,
-            "first_user_message_preview": sealed_render.first_user_message_preview,
-            "last_visible_text_preview": sealed_render.last_visible_text_preview,
-        },
+        "render_manifest": render_manifest,
         "session_facts": {
             "environment": session.environment,
             "project": _optional_text(session.project),

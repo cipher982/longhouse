@@ -5199,6 +5199,8 @@ class CatalogStore:
         media_missing: int,
         output_proof_hash: str,
         parity_proof_hash: str,
+        degradation_code: str | None,
+        degradation_message: str | None,
         completed_at: datetime,
     ) -> dict[str, Any]:
         rows = LegacyMigrationSession.__table__
@@ -5207,6 +5209,14 @@ class CatalogStore:
             row = connection.execute(select(rows).where(rows.c.run_id == run_key, rows.c.session_id == session_key)).mappings().first()
             if row is None:
                 return {"session_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            if degradation_code is None and (source_missing or media_missing):
+                if source_missing and media_missing:
+                    degradation_code = "source_and_media_coverage_missing"
+                elif source_missing:
+                    degradation_code = "source_coverage_missing"
+                else:
+                    degradation_code = "media_coverage_missing"
+                degradation_message = f"source_missing={source_missing}; media_missing={media_missing}"
             if row["last_completion_token"] == claim_token:
                 if (
                     int(row["source_covered"]) != source_covered
@@ -5215,6 +5225,8 @@ class CatalogStore:
                     or int(row["media_missing"]) != media_missing
                     or row["output_proof_hash"] != output_proof_hash
                     or row["parity_proof_hash"] != parity_proof_hash
+                    or row["error_code"] != degradation_code
+                    or row["error_message"] != degradation_message
                 ):
                     return {"claim_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 return {
@@ -5229,7 +5241,7 @@ class CatalogStore:
                 row["media_expected"]
             ):
                 return {"coverage_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
-            state = "verified" if source_missing == 0 and media_missing == 0 else "degraded"
+            state = "verified" if degradation_code is None else "degraded"
             commit_seq = _advance_commit_seq(connection, completed_at)
             connection.execute(
                 update(rows)
@@ -5242,8 +5254,8 @@ class CatalogStore:
                     media_missing=media_missing,
                     output_proof_hash=output_proof_hash,
                     parity_proof_hash=parity_proof_hash,
-                    error_code=None,
-                    error_message=None,
+                    error_code=degradation_code,
+                    error_message=degradation_message,
                     claim_token=None,
                     worker_id=None,
                     lease_expires_at=None,

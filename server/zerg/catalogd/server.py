@@ -1862,7 +1862,7 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _complete_migration_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        expected = {
+        required = {
             "run_id",
             "session_id",
             "claim_token",
@@ -1874,7 +1874,8 @@ class CatalogDaemon:
             "parity_proof_hash",
             "completed_at",
         }
-        if set(request.params) != expected:
+        optional = {"degradation_code", "degradation_message"}
+        if not required.issubset(request.params) or set(request.params) - required - optional:
             return self._error(request, "invalid_request", "migration.session.complete.v2 has invalid parameters")
         try:
             params = {
@@ -1887,6 +1888,16 @@ class CatalogDaemon:
                 "media_missing": _bounded_count(request.params["media_missing"], "media_missing"),
                 "output_proof_hash": _proof_hash(request.params["output_proof_hash"], "output_proof_hash"),
                 "parity_proof_hash": _proof_hash(request.params["parity_proof_hash"], "parity_proof_hash"),
+                "degradation_code": (
+                    _bounded_text(request.params["degradation_code"], "degradation_code", 64)
+                    if request.params.get("degradation_code") is not None
+                    else None
+                ),
+                "degradation_message": (
+                    _bounded_text(request.params["degradation_message"], "degradation_message", 2_048)
+                    if request.params.get("degradation_message") is not None
+                    else None
+                ),
                 "completed_at": _parse_datetime(request.params["completed_at"], "completed_at"),
             }
         except ValueError as exc:
