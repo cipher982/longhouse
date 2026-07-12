@@ -10,6 +10,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -22,7 +23,11 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
+import zerg.database as database_module
+from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
+from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.database import get_session_factory
 from zerg.dependencies.agents_auth import require_single_tenant
@@ -33,6 +38,7 @@ from zerg.services.agents import AgentsStore
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.internal_sessions import provider_proof_session_clause
+from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.retrieval_index import child_chunk_count
@@ -49,6 +55,7 @@ from zerg.services.retrieval_index_jobs import get_recall_index_job
 from zerg.services.retrieval_index_jobs import recall_index_jobs_table_ready
 from zerg.services.retrieval_index_jobs import request_recall_index_cancel
 from zerg.services.retrieval_index_jobs import wake_recall_index_worker
+from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_pause_requests import load_active_pause_request_map
 from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_processing.embeddings import CleanTranscriptEvent
@@ -56,10 +63,127 @@ from zerg.services.session_processing.embeddings import iter_clean_transcript_ev
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
+from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import build_session_response
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 logger = logging.getLogger(__name__)
+
+_catalog_db_dependency = catalog_db_dependency()
+
+
+def _legacy_search_db():
+    if database_module.live_catalog_enabled():
+        yield None
+        return
+    with database_module.get_session_factory()() as db:
+        yield db
+
+
+search_db_dependency = get_db if _catalog_db_dependency is get_db else _legacy_search_db
+
+
+def _catalog_owner_id(auth: object) -> int:
+    owner_id = getattr(auth, "owner_id", None)
+    if owner_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "owner_required",
+                "message": "Storage-v2 search requires an owner-bound device token.",
+            },
+        )
+    return int(owner_id)
+
+
+async def search_storage_v2_rows(
+    *,
+    owner_id: int,
+    query: str,
+    project: str | None,
+    provider: str | None,
+    environment: str | None,
+    days_back: int,
+    limit: int,
+) -> list[dict[str, object]]:
+    """Search the disposable v2 index without opening the retired archive DB."""
+
+    search = get_searchd_client()
+    if search is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "search_unavailable", "message": "The derived search index is unavailable."},
+        )
+    now = datetime.now(timezone.utc)
+    try:
+        result = await search.call(
+            "search.query.v2",
+            {
+                "owner_id": str(owner_id),
+                "query": query,
+                "project": project,
+                "provider": provider,
+                "environment": environment,
+                "window_start_us": int((now - timedelta(days=days_back)).timestamp() * 1_000_000),
+                "window_end_us": None,
+                "limit": min(200, max(1, limit)),
+            },
+        )
+    except (CatalogRemoteError, CatalogUnavailable) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "search_unavailable", "message": "The derived search index is unavailable."},
+        ) from exc
+    return [row for row in (result.get("results") or []) if isinstance(row, dict)]
+
+
+async def search_storage_v2_sessions(
+    *,
+    owner_id: int,
+    query: str,
+    project: str | None,
+    provider: str | None,
+    environment: str | None,
+    days_back: int,
+    limit: int,
+    include_test: bool,
+    hide_autonomous: bool = False,
+    include_automation: bool = False,
+    device_id: str | None = None,
+) -> list[SessionResponse]:
+    rows = await search_storage_v2_rows(
+        owner_id=owner_id,
+        query=query,
+        project=project,
+        provider=provider,
+        environment=environment,
+        days_back=days_back,
+        limit=200,
+    )
+    best_rows: dict[str, dict[str, object]] = {}
+    for row in rows:
+        session_id = str(row.get("session_id") or "")
+        if session_id and session_id not in best_rows:
+            best_rows[session_id] = row
+    projected = await asyncio.gather(*(asyncio.to_thread(read_live_catalog_session, UUID(session_id)) for session_id in best_rows))
+    sessions = []
+    for (session, _provider_alias, _commit_seq), row in zip(projected, best_rows.values(), strict=True):
+        if session is None:
+            continue
+        if not include_test and session.environment in {"test", "e2e"}:
+            continue
+        if not include_automation and session.environment == "automation":
+            continue
+        if hide_autonomous and session.user_messages <= 0:
+            continue
+        if device_id is not None and session.device_id != device_id:
+            continue
+        snippet = str(row.get("content_snippet") or row.get("tool_output_snippet") or "") or None
+        rank = abs(float(row.get("rank") or 0.0))
+        sessions.append(session.model_copy(update={"match_snippet": snippet, "match_score": 1.0 / (1.0 + rank)}))
+        if len(sessions) >= limit:
+            break
+    return sessions
 
 
 async def _run_retrieval_index_recall(
@@ -134,11 +258,15 @@ async def _run_retrieval_index_recall(
     return RecallResponse(**data) if data is not None else None
 
 
-async def get_recall_database_url() -> str:
+async def get_recall_database_url() -> str | None:
+    if database_module.live_catalog_enabled():
+        return None
     return get_settings().database_url
 
 
-async def get_recall_session_factory() -> sessionmaker:
+async def get_recall_session_factory() -> sessionmaker | None:
+    if database_module.live_catalog_enabled():
+        return None
     return get_session_factory()
 
 
@@ -391,8 +519,8 @@ async def semantic_search_sessions(
     days_back: int = Query(14, ge=1, le=365, description="Days to look back"),
     limit: int = Query(10, ge=1, le=50, description="Max results"),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    db: Session | None = Depends(search_db_dependency),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SemanticSearchResponse:
     """Search sessions by semantic similarity using embeddings."""
@@ -406,6 +534,30 @@ async def semantic_search_sessions(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="context_mode must be one of: forensic, active_context",
         )
+
+    if database_module.live_catalog_enabled():
+        if context_mode != "forensic":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "search_mode_unsupported",
+                    "message": "Storage-v2 search does not yet project active-context boundaries.",
+                },
+            )
+        sessions = await search_storage_v2_sessions(
+            owner_id=_catalog_owner_id(_auth),
+            query=query,
+            project=project,
+            provider=provider,
+            environment=environment,
+            days_back=days_back,
+            limit=limit,
+            include_test=include_test,
+            hide_autonomous=True,
+        )
+        return SemanticSearchResponse(sessions=sessions, total=len(sessions), has_real_sessions=bool(sessions))
+
+    assert db is not None
 
     config = get_embedding_config()
     if not config:
@@ -538,11 +690,15 @@ async def semantic_search_sessions(
 
 @router.get("/recall/status")
 async def recall_index_status(
-    database_url: str = Depends(get_recall_database_url),
+    database_url: str | None = Depends(get_recall_database_url),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     """Return retrieval.db recall index status."""
+
+    if database_module.live_catalog_enabled():
+        return {"status": "retired", "reason": "storage_v2_search_owned"}
+    assert database_url is not None
 
     retrieval_path = resolve_retrieval_db_path(database_url)
     if retrieval_path is None:
@@ -570,11 +726,18 @@ async def index_recall_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     since_days: int = Query(90, ge=1, le=365, description="Days to index"),
     limit: int = Query(100, ge=1, le=1000, description="Max sessions to index"),
-    database_url: str = Depends(get_recall_database_url),
+    database_url: str | None = Depends(get_recall_database_url),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     """Queue recent sessions for projection into retrieval.db."""
+
+    if database_module.live_catalog_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={"code": "recall_index_retired", "message": "Search indexing is owned by storage v2."},
+        )
+    assert database_url is not None
 
     retrieval_path = resolve_retrieval_db_path(database_url)
     if retrieval_path is None:
@@ -605,10 +768,16 @@ async def index_recall_sessions(
 @router.get("/recall/index/{job_id}")
 async def recall_index_job_status(
     job_id: str,
-    database_url: str = Depends(get_recall_database_url),
+    database_url: str | None = Depends(get_recall_database_url),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
+    if database_module.live_catalog_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={"code": "recall_index_retired", "message": "Search indexing is owned by storage v2."},
+        )
+    assert database_url is not None
     retrieval_path = resolve_retrieval_db_path(database_url)
     if retrieval_path is None or not retrieval_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Retrieval index unavailable.")
@@ -623,10 +792,16 @@ async def recall_index_job_status(
 @router.post("/recall/index/{job_id}/cancel")
 async def cancel_recall_index_job(
     job_id: str,
-    database_url: str = Depends(get_recall_database_url),
+    database_url: str | None = Depends(get_recall_database_url),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
+    if database_module.live_catalog_enabled():
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail={"code": "recall_index_retired", "message": "Search indexing is owned by storage v2."},
+        )
+    assert database_url is not None
     retrieval_path = resolve_retrieval_db_path(database_url)
     if retrieval_path is None or not retrieval_path.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Retrieval index unavailable.")
@@ -652,9 +827,9 @@ async def recall_sessions(
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     include_automation: bool = Query(False, description="Include Hatch automation sessions in recall results"),
     mode: str = "auto",
-    database_url: str = Depends(get_recall_database_url),
-    session_factory: sessionmaker = Depends(get_recall_session_factory),
-    _auth: None = Depends(verify_agents_token),
+    database_url: str | None = Depends(get_recall_database_url),
+    session_factory: sessionmaker | None = Depends(get_recall_session_factory),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> RecallResponse:
     """Recall specific knowledge from past sessions."""
@@ -677,6 +852,55 @@ async def recall_sessions(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="mode must be one of: auto, lexical, semantic",
         )
+
+    if database_module.live_catalog_enabled():
+        if context_mode != "forensic":
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "code": "search_mode_unsupported",
+                    "message": "Storage-v2 search does not yet project active-context boundaries.",
+                },
+            )
+        rows = await search_storage_v2_rows(
+            owner_id=_catalog_owner_id(_auth),
+            query=query,
+            project=project,
+            provider=provider,
+            environment=None,
+            days_back=since_days,
+            limit=min(200, max_results * 8),
+        )
+        matches: list[RecallMatch] = []
+        seen: set[str] = set()
+        for row in rows:
+            session_id = str(row.get("session_id") or "")
+            environment = str(row.get("environment") or "")
+            if not session_id or session_id in seen:
+                continue
+            if not include_test and environment in {"test", "e2e"}:
+                continue
+            if not include_automation and environment == "automation":
+                continue
+            seen.add(session_id)
+            snippet = str(row.get("content_snippet") or row.get("tool_output_snippet") or "")
+            matches.append(
+                RecallMatch(
+                    session_id=session_id,
+                    chunk_index=int(row.get("record_ordinal") or 0),
+                    score=1.0 / (1.0 + abs(float(row.get("rank") or 0.0))),
+                    context_text=snippet or None,
+                    evidence=snippet or None,
+                    total_events=0,
+                    context=[],
+                )
+            )
+            if len(matches) >= max_results:
+                break
+        return RecallResponse(matches=matches, total=len(matches))
+
+    assert database_url is not None
+    assert session_factory is not None
 
     if mode in {"auto", "lexical"}:
         lexical_started = time.perf_counter()

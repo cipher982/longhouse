@@ -34,6 +34,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
+from zerg.routers.agents_search import search_storage_v2_sessions
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
@@ -432,6 +433,44 @@ async def list_sessions(
             context_mode=context_mode,
         )
         if database_module.live_catalog_enabled():
+            if query is not None:
+                if context_mode != "forensic":
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail={
+                            "code": "search_mode_unsupported",
+                            "message": "Storage-v2 search does not yet project active-context boundaries.",
+                        },
+                    )
+                owner_id = getattr(_auth, "owner_id", None)
+                if owner_id is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail={
+                            "code": "owner_required",
+                            "message": "Storage-v2 search requires an owner-bound device token.",
+                        },
+                    )
+                sessions = await search_storage_v2_sessions(
+                    owner_id=int(owner_id),
+                    query=query,
+                    project=project,
+                    provider=provider,
+                    environment=environment,
+                    days_back=days_back,
+                    limit=limit + offset,
+                    include_test=include_test,
+                    hide_autonomous=hide_autonomous,
+                    include_automation=include_automation,
+                    device_id=device_id,
+                )
+                page = sessions[offset : offset + limit]
+                return SessionsListResponse(sessions=page, total=len(sessions), has_real_sessions=bool(sessions))
+            if (mode or "lexical") != "lexical":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"code": "search_query_required", "message": "Semantic and hybrid modes require a query."},
+                )
             return await asyncio.to_thread(list_live_catalog_sessions, params=params)
         assert db is not None
         owner_id = _owner_id_from_agents_auth(db, _auth)
