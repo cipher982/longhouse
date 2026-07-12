@@ -19,6 +19,7 @@ from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
+from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id
 
@@ -787,6 +788,59 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         assert high_manifest["objects"][0]["range_start"] == str(high_start)
         assert high_manifest["source_epoch"]["accepted_through"] == str(high_start + 1)
         assert (await client.call("ping.v2"))["commit_seq"] == "4"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_storage_health_reports_owner_freshness_without_legacy_database(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    raw = _raw_params(
+        epoch=uuid4(),
+        session_id=session_id,
+        start=0,
+        end=6,
+        records=(b"hello\n",),
+        sealed_at=now,
+    )
+    raw["media_refs"] = [
+        {
+            "media_hash": hashlib.sha256(b"missing").hexdigest(),
+            "source_position": 0,
+            "ref_key": "missing:0",
+            "availability": "missing",
+        }
+    ]
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with engine.begin() as connection:
+        connection.execute(
+            LiveHeartbeatStamp.__table__.insert().values(
+                device_id="cinder",
+                received_at=now,
+                is_offline=0,
+            )
+        )
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call("storage.raw_object.commit.v2", raw)
+        health = await client.call("storage.health.v2", {"owner_id": "42"})
+        assert health["session_count"] == 1
+        assert health["last_session_at"] == now.isoformat()
+        assert health["last_heartbeat_at"] == now.isoformat()
+        assert health["media_repair_refs"] == 1
+        assert health["media_repair_bytes"] == 0
+
+        other_owner = await client.call("storage.health.v2", {"owner_id": "7"})
+        assert other_owner["session_count"] == 0
+        assert other_owner["last_session_at"] is None
     finally:
         await client.close()
         await daemon.close()

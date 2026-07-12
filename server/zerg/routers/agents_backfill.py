@@ -17,12 +17,18 @@ from fastapi import status
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker as _sessionmaker
 
+from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.database import get_db
+from zerg.database import live_catalog_enabled
+from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.device_token import DeviceToken
+from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_summaries import summarize_and_persist
 from zerg.services.session_views import BackfillEmbeddingsProgressResponse
@@ -38,6 +44,14 @@ from zerg.services.session_views import UsageStatsResponse
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
+
+
+def _no_ingest_health_db():
+    yield None
+
+
+_settings = get_settings()
+_ingest_health_db_dependency = get_db if _settings.testing or not live_store_configured() else _no_ingest_health_db
 
 _backfill_state: dict[str, Any] = {
     "running": False,
@@ -469,14 +483,38 @@ async def backfill_cursor_roles(
 
 @router.get("/ingest-health", response_model=IngestHealthResponse)
 async def get_ingest_health(
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    db: Session | None = Depends(_ingest_health_db_dependency),
+    _auth: DeviceToken | object | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> IngestHealthResponse:
     """Check ingest freshness -- detects if sessions have stopped shipping."""
     from zerg.services.ingest_health import compute_ingest_health
+    from zerg.services.ingest_health import compute_ingest_health_from_catalog_facts
     from zerg.services.media_backfill import compute_media_repair_health
 
+    if live_catalog_enabled():
+        owner_id = getattr(_auth, "owner_id", None)
+        if owner_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "owner_required", "message": "A device token is required for ingest health."},
+            )
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "catalog_unavailable", "message": "Catalog health is temporarily unavailable."},
+            )
+        try:
+            facts = await catalogd.call("storage.health.v2", {"owner_id": str(owner_id)})
+        except (CatalogUnavailable, CatalogRemoteError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"code": "catalog_unavailable", "message": "Catalog health is temporarily unavailable."},
+            ) from exc
+        return IngestHealthResponse(**compute_ingest_health_from_catalog_facts(facts))
+
+    assert db is not None
     result = compute_ingest_health(db)
     result.update(compute_media_repair_health(db))
     return IngestHealthResponse(**result)

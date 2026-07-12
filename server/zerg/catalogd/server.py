@@ -315,6 +315,8 @@ class CatalogDaemon:
             return await self._delete_storage_session(request)
         if request.method == "storage.session.timeline.list.v2":
             return await self._list_storage_sessions(request)
+        if request.method == "storage.health.v2":
+            return await self._read_storage_health(request)
         if request.method == "storage.session.raw_manifest.v2":
             return await self._read_storage_session_raw_manifest(request)
         if request.method == "storage.session.render_manifest.v2":
@@ -1606,6 +1608,16 @@ class CatalogDaemon:
             provider=filters["provider"],
             include_test=include_test,
             limit=limit,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_storage_health(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id"} or not _is_string(request.params["owner_id"], maximum=64):
+            return self._error(request, "invalid_request", "storage.health.v2 requires owner_id")
+        assert self._store is not None
+        result = await self._run_read_store(
+            self._store.read_storage_health,
+            owner_id=request.params["owner_id"],
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

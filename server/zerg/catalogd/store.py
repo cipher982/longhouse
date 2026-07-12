@@ -17,6 +17,7 @@ from uuid import uuid5
 
 from sqlalchemy import Engine
 from sqlalchemy import and_
+from sqlalchemy import case
 from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy import insert
@@ -4058,6 +4059,39 @@ class CatalogStore:
             return {
                 "sessions": [_storage_session_dto(row) for row in rows],
                 "has_more": has_more,
+                "commit_seq": str(_current_commit_seq(connection)),
+                "observed_at": observed_at.isoformat(),
+            }
+
+    def read_storage_health(self, *, owner_id: str) -> dict[str, Any]:
+        """Return bounded ingest-freshness facts without scanning the retired monolith."""
+
+        sessions = StorageSession.__table__
+        tombstones = LiveSessionTombstone.__table__
+        heartbeats = LiveHeartbeatStamp.__table__
+        observed_at = datetime.now(UTC)
+        visible = and_(
+            sessions.c.owner_id == owner_id,
+            sessions.c.user_state != "deleted",
+            ~select(tombstones.c.session_id).where(tombstones.c.session_id == sessions.c.session_id).exists(),
+        )
+        with _read_snapshot(self.engine) as connection:
+            session_count, last_session_at, media_repair_refs = connection.execute(
+                select(
+                    func.count(sessions.c.session_id),
+                    func.max(sessions.c.last_activity_at),
+                    func.sum(case((sessions.c.media_state != "complete", 1), else_=0)),
+                ).where(visible)
+            ).one()
+            last_heartbeat_at = connection.execute(
+                select(func.max(heartbeats.c.received_at)).where(heartbeats.c.is_offline == 0)
+            ).scalar_one_or_none()
+            return {
+                "session_count": int(session_count or 0),
+                "last_session_at": _encode_datetime(last_session_at),
+                "last_heartbeat_at": _encode_datetime(last_heartbeat_at),
+                "media_repair_refs": int(media_repair_refs or 0),
+                "media_repair_bytes": 0,
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
             }

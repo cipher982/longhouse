@@ -7,7 +7,9 @@ import hashlib
 import json
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
@@ -25,6 +27,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
+from zerg.services.ingest_health import compute_ingest_health_from_catalog_facts
 
 
 def _setup_app(tmp_path, monkeypatch):
@@ -215,3 +218,45 @@ def test_ingest_health_reports_media_repair_debt_separately(tmp_path, monkeypatc
         assert body["media_repair_bytes"] == 0
     finally:
         cleanup()
+
+
+def test_catalog_ingest_health_route_does_not_read_legacy_tables(tmp_path, monkeypatch):
+    _factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    from zerg.routers import agents_backfill as route_module
+
+    class Catalog:
+        async def call(self, method, params):
+            assert method == "storage.health.v2"
+            assert params == {"owner_id": "42"}
+            return {
+                "session_count": 17_901,
+                "last_session_at": datetime.now(timezone.utc).isoformat(),
+                "last_heartbeat_at": datetime.now(timezone.utc).isoformat(),
+                "media_repair_refs": 10,
+                "media_repair_bytes": 0,
+            }
+
+    api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(owner_id=42)
+    monkeypatch.setattr(route_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(route_module, "get_catalogd_client", lambda: Catalog())
+    client = TestClient(api_app)
+    try:
+        response = client.get("/agents/ingest-health")
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "ok"
+        assert response.json()["session_count"] == 17_901
+        assert response.json()["media_repair_refs"] == 10
+    finally:
+        cleanup()
+
+
+def test_catalog_ingest_health_distinguishes_online_stale_from_offline():
+    now = datetime.now(timezone.utc)
+    facts = {
+        "session_count": 1,
+        "last_session_at": (now - timedelta(hours=8)).isoformat(),
+        "last_heartbeat_at": (now - timedelta(minutes=1)).isoformat(),
+    }
+    assert compute_ingest_health_from_catalog_facts(facts, now=now)["status"] == "stale"
+    facts["last_heartbeat_at"] = (now - timedelta(hours=1)).isoformat()
+    assert compute_ingest_health_from_catalog_facts(facts, now=now)["status"] == "device_offline"

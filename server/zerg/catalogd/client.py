@@ -72,6 +72,7 @@ _SAFE_RETRY_METHODS = {
     "storage.session.read.v2",
     "storage.session.delete.v2",
     "storage.session.timeline.list.v2",
+    "storage.health.v2",
     "storage.session.raw_manifest.v2",
     "storage.session.render_manifest.v2",
     "storage.session.render_objects.list.v2",
