@@ -611,6 +611,30 @@ class LiveSessionInputReceipt(LiveBase):
     )
 
 
+class LiveSessionInputAttachment(LiveBase):
+    """Bounded metadata for an input attachment whose bytes live on disk."""
+
+    __tablename__ = "live_session_input_attachments"
+
+    id = Column(String(36), primary_key=True)
+    input_receipt_id = Column(String(36), nullable=False, index=True)
+    owner_id = Column(Integer, nullable=False, index=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    mime_type = Column(String(64), nullable=False)
+    byte_size = Column(Integer, nullable=False)
+    sha256 = Column(String(64), nullable=False)
+    blob_path = Column(Text, nullable=False)
+    original_filename = Column(String(255), nullable=True)
+    original_byte_size = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+
+    __table_args__ = (
+        Index("ix_live_input_attachments_receipt_created", "input_receipt_id", "created_at"),
+        Index("ix_live_input_attachments_expiry", "expires_at", "id"),
+    )
+
+
 class LiveArchiveOutbox(LiveBase):
     __tablename__ = "live_archive_outbox"
 
@@ -657,5 +681,7 @@ class LiveHeartbeatStamp(LiveBase):
     raw_json = Column(Text, nullable=True)
     sessions_digest = Column(String(128), nullable=True)
     sessions_sequence = Column(Integer, nullable=True)
+    request_sha256 = Column(String(64), nullable=True)
+    catalog_result_json = Column(Text, nullable=True)
 
     __table_args__ = (Index("ix_live_heartbeats_device_received", "device_id", "received_at"),)

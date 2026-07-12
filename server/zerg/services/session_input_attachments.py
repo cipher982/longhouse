@@ -50,7 +50,7 @@ BLOB_RETENTION_SECS = 24 * 3600
 @dataclass(frozen=True)
 class StoredAttachment:
     id: UUID
-    session_input_id: int
+    session_input_id: int | str
     session_id: UUID
     mime_type: str
     byte_size: int
@@ -74,6 +74,124 @@ def attachment_blob_root() -> Path:
 
 def _blob_path_for(session_id: UUID, attach_id: UUID) -> Path:
     return attachment_blob_root() / str(session_id) / f"{attach_id}.bin"
+
+
+async def store_catalog_attachment_blob(
+    *,
+    input_receipt_id: str,
+    owner_id: int,
+    session_id: UUID,
+    mime_type: str,
+    data: bytes,
+    original_filename: str | None,
+    original_byte_size: int | None,
+) -> StoredAttachment:
+    """Write attachment bytes locally and persist bounded metadata via catalogd."""
+
+    if mime_type not in ALLOWED_MIME_TYPES:
+        raise ValueError(f"unsupported mime: {mime_type}")
+    if not data or len(data) > MAX_ATTACHMENT_BYTES:
+        raise ValueError("attachment size is outside the supported range")
+    receipt_uuid = UUID(input_receipt_id)
+    attach_id = uuid4()
+    blob_path = _blob_path_for(session_id, attach_id)
+    blob_path.parent.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(data).hexdigest()
+    tmp_path = blob_path.with_suffix(".tmp")
+    tmp_path.write_bytes(data)
+    os.chmod(tmp_path, 0o600)
+    os.replace(tmp_path, blob_path)
+    relative = blob_path.relative_to(attachment_blob_root())
+
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        blob_path.unlink(missing_ok=True)
+        raise RuntimeError("catalogd is unavailable")
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=BLOB_RETENTION_SECS)
+    try:
+        result = await catalogd.call(
+            "session.input.attachment.create.v2",
+            {
+                "attachment": {
+                    "id": str(attach_id),
+                    "input_receipt_id": str(receipt_uuid),
+                    "owner_id": int(owner_id),
+                    "session_id": str(session_id),
+                    "mime_type": mime_type,
+                    "byte_size": len(data),
+                    "sha256": digest,
+                    "blob_path": str(relative),
+                    "original_filename": (original_filename or "")[:255] or None,
+                    "original_byte_size": original_byte_size,
+                    "expires_at": expires_at.isoformat(),
+                }
+            },
+            timeout_seconds=1.0,
+        )
+    except Exception:
+        blob_path.unlink(missing_ok=True)
+        raise
+    root = attachment_blob_root().resolve()
+    for raw_path in result.get("pruned_blob_paths") or []:
+        candidate = (root / str(raw_path)).resolve()
+        if candidate.is_relative_to(root):
+            candidate.unlink(missing_ok=True)
+    if not result.get("attachment"):
+        blob_path.unlink(missing_ok=True)
+        raise RuntimeError(str(result.get("reason") or "catalog attachment was not persisted"))
+    return StoredAttachment(
+        id=attach_id,
+        session_input_id=str(receipt_uuid),
+        session_id=session_id,
+        mime_type=mime_type,
+        byte_size=len(data),
+        sha256=digest,
+        blob_path=blob_path,
+        original_filename=(original_filename or "")[:255] or None,
+        original_byte_size=original_byte_size,
+    )
+
+
+async def get_catalog_attachment(
+    *,
+    owner_id: int,
+    session_id: UUID,
+    input_receipt_id: str,
+    attachment_id: UUID,
+) -> StoredAttachment | None:
+    """Read bounded attachment metadata through catalogd."""
+
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise RuntimeError("catalogd is unavailable")
+    result = await catalogd.call(
+        "session.input.attachment.read.v2",
+        {
+            "owner_id": int(owner_id),
+            "session_id": str(session_id),
+            "input_receipt_id": str(UUID(input_receipt_id)),
+            "attachment_id": str(attachment_id),
+        },
+        timeout_seconds=1.0,
+    )
+    row = result.get("attachment")
+    if not isinstance(row, dict):
+        return None
+    return StoredAttachment(
+        id=UUID(str(row["id"])),
+        session_input_id=str(row["input_receipt_id"]),
+        session_id=UUID(str(row["session_id"])),
+        mime_type=str(row["mime_type"]),
+        byte_size=int(row["byte_size"]),
+        sha256=str(row["sha256"]),
+        blob_path=attachment_blob_root() / str(row["blob_path"]),
+        original_filename=row.get("original_filename"),
+        original_byte_size=(int(row["original_byte_size"]) if row.get("original_byte_size") is not None else None),
+    )
 
 
 def store_attachment_blob(

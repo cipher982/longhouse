@@ -80,6 +80,8 @@ class CatalogDaemon:
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-sqlite")
             self._read_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="catalogd-read")
             self._store = CatalogStore(self._engine)
+            self._store.retire_archive_outbox()
+            self._meta = read_catalog_meta(self._engine)
             if os.getenv("LONGHOUSE_CATALOGD_TEST_EXIT_AFTER_SCHEMA") == "1":
                 os._exit(93)
             self._prepare_final_socket_path()
@@ -275,6 +277,10 @@ class CatalogDaemon:
             return await self._claim_queued_input(request)
         if request.method == "session.input.finish.v2":
             return await self._finish_queued_input(request)
+        if request.method == "session.input.attachment.create.v2":
+            return await self._create_input_attachment(request)
+        if request.method == "session.input.attachment.read.v2":
+            return await self._read_input_attachment(request)
         if request.method == "session.input.receipt.upsert.v2":
             return await self._upsert_input_receipt(request)
         if request.method == "session.input.receipt.read.v2":
@@ -1193,6 +1199,30 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.upsert_input_receipt, receipt=receipt)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _create_input_attachment(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"attachment"}:
+            return self._error(request, "invalid_request", "session.input.attachment.create.v2 requires attachment")
+        try:
+            attachment = _validate_input_attachment(request.params["attachment"])
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.create_input_attachment, attachment=attachment)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_input_attachment(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"owner_id", "session_id", "input_receipt_id", "attachment_id"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "session.input.attachment.read.v2 has invalid parameters")
+        if type(request.params["owner_id"]) is not int or request.params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        for field in ("session_id", "input_receipt_id", "attachment_id"):
+            if not _is_canonical_uuid(request.params[field]):
+                return self._error(request, "invalid_request", f"{field} must be a canonical UUID")
+        assert self._store is not None
+        result = await self._run_store(self._store.read_input_attachment, **request.params)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_input_receipt(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2705,6 +2735,47 @@ _INPUT_RECEIPT_FIELDS = {
     "error",
     "expires_at",
 }
+_INPUT_ATTACHMENT_FIELDS = {
+    "id",
+    "input_receipt_id",
+    "owner_id",
+    "session_id",
+    "mime_type",
+    "byte_size",
+    "sha256",
+    "blob_path",
+    "original_filename",
+    "original_byte_size",
+    "expires_at",
+}
+
+
+def _validate_input_attachment(value: object) -> dict:
+    if not isinstance(value, dict) or set(value) != _INPUT_ATTACHMENT_FIELDS:
+        raise ValueError("attachment has invalid fields")
+    result = dict(value)
+    for field in ("id", "input_receipt_id", "session_id"):
+        if not _is_canonical_uuid(result[field]):
+            raise ValueError(f"attachment.{field} must be a canonical UUID")
+    if type(result["owner_id"]) is not int or result["owner_id"] <= 0:
+        raise ValueError("attachment.owner_id must be a positive integer")
+    if not _is_string(result["mime_type"], maximum=64):
+        raise ValueError("attachment.mime_type must contain 1 to 64 characters")
+    if type(result["byte_size"]) is not int or not 0 < result["byte_size"] <= 2 * 1024 * 1024:
+        raise ValueError("attachment.byte_size must be between 1 byte and 2 MiB")
+    sha256 = result["sha256"]
+    if not isinstance(sha256, str) or len(sha256) != 64 or any(ch not in "0123456789abcdef" for ch in sha256):
+        raise ValueError("attachment.sha256 must be lowercase hex")
+    if not _is_string(result["blob_path"], maximum=1024) or result["blob_path"].startswith(("/", "..")):
+        raise ValueError("attachment.blob_path must be a safe relative path")
+    filename = result["original_filename"]
+    if filename is not None and (not isinstance(filename, str) or not filename or len(filename) > 255):
+        raise ValueError("attachment.original_filename must be null or contain 1 to 255 characters")
+    original_size = result["original_byte_size"]
+    if original_size is not None and (type(original_size) is not int or original_size < 0):
+        raise ValueError("attachment.original_byte_size must be a non-negative integer or null")
+    result["expires_at"] = _parse_datetime(result["expires_at"], "attachment.expires_at")
+    return result
 
 
 def _validate_input_receipt(value: object) -> dict:

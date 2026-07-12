@@ -116,6 +116,7 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "machine_presence",
         "live_runtime_state",
         "live_session_input_receipts",
+        "live_session_input_attachments",
         "live_session_live_previews",
         "live_sessions",
     } | set(live_catalog_table_names())

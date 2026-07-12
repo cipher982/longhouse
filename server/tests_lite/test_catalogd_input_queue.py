@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,6 +17,7 @@ from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionInputAttachment
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
@@ -202,5 +204,61 @@ async def test_catalogd_claims_and_finishes_queued_input_exactly_once(daemon_pat
     engine = create_catalog_engine(database_path)
     with Session(engine) as db:
         assert db.get(LiveSessionInputReceipt, receipt_id).status == "delivered"
-        assert db.query(LiveArchiveOutbox).count() == 1
+        assert db.query(LiveArchiveOutbox).count() == 0
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_catalogd_attachment_metadata_is_receipt_scoped_and_bounded(daemon_paths):
+    database_path, socket_path = daemon_paths
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    session_id, receipt_id = _seed_queue(engine)
+    engine.dispose()
+
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    attachment_id = str(uuid4())
+    expires_at = datetime.now(UTC) + timedelta(hours=24)
+    try:
+        created = await client.call(
+            "session.input.attachment.create.v2",
+            {
+                "attachment": {
+                    "id": attachment_id,
+                    "input_receipt_id": receipt_id,
+                    "owner_id": 7,
+                    "session_id": str(session_id),
+                    "mime_type": "image/png",
+                    "byte_size": 67,
+                    "sha256": "a" * 64,
+                    "blob_path": f"{session_id}/{attachment_id}.bin",
+                    "original_filename": "image.png",
+                    "original_byte_size": 67,
+                    "expires_at": expires_at.isoformat(),
+                }
+            },
+        )
+        assert created["created"] is True
+        assert created["attachment"]["input_receipt_id"] == receipt_id
+
+        lookup = {
+            "owner_id": 7,
+            "session_id": str(session_id),
+            "input_receipt_id": receipt_id,
+            "attachment_id": attachment_id,
+        }
+        found = await client.call("session.input.attachment.read.v2", lookup)
+        assert found["found"] is True
+        assert found["attachment"]["sha256"] == "a" * 64
+        wrong_owner = await client.call("session.input.attachment.read.v2", {**lookup, "owner_id": 8})
+        assert wrong_owner["found"] is False
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    with Session(engine) as db:
+        assert db.get(LiveSessionInputAttachment, attachment_id).input_receipt_id == receipt_id
     engine.dispose()

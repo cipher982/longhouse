@@ -55,6 +55,7 @@ from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionInputAttachment
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionLivePreview
@@ -308,6 +309,23 @@ def _input_receipt_dto(receipt: Any) -> dict[str, Any]:
     }
 
 
+def _input_attachment_dto(row: Any) -> dict[str, Any]:
+    return {
+        "id": str(row.id),
+        "input_receipt_id": str(row.input_receipt_id),
+        "owner_id": int(row.owner_id),
+        "session_id": str(row.session_id),
+        "mime_type": str(row.mime_type),
+        "byte_size": int(row.byte_size),
+        "sha256": str(row.sha256),
+        "blob_path": str(row.blob_path),
+        "original_filename": row.original_filename,
+        "original_byte_size": int(row.original_byte_size) if row.original_byte_size is not None else None,
+        "created_at": _encode_datetime(row.created_at),
+        "expires_at": _encode_datetime(row.expires_at),
+    }
+
+
 def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, Any]:
     from zerg.services.machine_control_operations import machine_control_operation_to_response
 
@@ -318,6 +336,26 @@ def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, 
 
 
 class CatalogStore:
+    def retire_archive_outbox(self) -> dict[str, int | str]:
+        """Remove dead monolith projections and retain launch rows only as completed receipts."""
+
+        table = LiveArchiveOutbox.__table__
+        observed_at = datetime.now(UTC)
+        obsolete_kinds = ("heartbeat_stamp.v1", "runtime_event.v1", "session_input_receipt.v1")
+        launch_kinds = ("managed_local_launch.v1", "remote_launch.v1", "remote_launch_outcome.v1")
+        with _write_transaction(self.engine) as connection:
+            deleted = connection.execute(delete(table).where(table.c.kind.in_(obsolete_kinds))).rowcount or 0
+            completed = (
+                connection.execute(
+                    update(table)
+                    .where(table.c.kind.in_(launch_kinds), table.c.drained_at.is_(None))
+                    .values(drained_at=table.c.created_at, last_error=None)
+                ).rowcount
+                or 0
+            )
+            commit_seq = _advance_commit_seq(connection, observed_at) if deleted or completed else _current_commit_seq(connection)
+            return {"deleted": int(deleted), "completed": int(completed), "commit_seq": str(commit_seq)}
+
     """Small product operations over the bounded catalog.
 
     Methods are deliberately synchronous: the daemon invokes mutations on one
@@ -1106,25 +1144,31 @@ class CatalogStore:
         device_id = str(heartbeat["device_id"])
         received_at = heartbeat["received_at"]
         assert isinstance(received_at, datetime)
-        request_key = _heartbeat_idempotency_key(device_id=device_id, received_at=received_at)
         request_sha256 = _heartbeat_request_sha256(
             heartbeat=heartbeat,
             managed_leases=managed_leases,
             managed_leases_present=managed_leases_present,
             owner_id=owner_id,
         )
-        outbox = LiveArchiveOutbox.__table__
         stamp = LiveHeartbeatStamp.__table__
         with _write_transaction(self.engine) as connection:
-            replay = connection.execute(select(outbox).where(outbox.c.idempotency_key == request_key)).mappings().first()
+            replay = (
+                connection.execute(
+                    select(stamp)
+                    .where(stamp.c.device_id == device_id, stamp.c.received_at == received_at)
+                    .order_by(stamp.c.id.desc())
+                    .limit(1)
+                )
+                .mappings()
+                .first()
+            )
             if replay is not None:
-                payload = _decode_json_object(replay["payload_json"])
-                if payload.get("request_sha256") != request_sha256:
+                if replay["request_sha256"] != request_sha256:
                     return {
                         "idempotency_conflict": True,
                         "commit_seq": str(_current_commit_seq(connection)),
                     }
-                stored_result = payload.get("catalog_result")
+                stored_result = _decode_json_object(replay["catalog_result_json"])
                 if not isinstance(stored_result, dict):
                     raise RuntimeError("heartbeat replay receipt is incomplete")
                 return {**stored_result, "exact_replay": True}
@@ -1142,21 +1186,8 @@ class CatalogStore:
 
             cutoff = received_at - timedelta(days=30)
             connection.execute(stamp.delete().where(stamp.c.device_id == device_id, stamp.c.received_at < cutoff))
-            connection.execute(insert(stamp).values(**heartbeat))
-            provisional_payload = {
-                "heartbeat": _jsonable_catalog_value(heartbeat),
-                "request_sha256": request_sha256,
-                "catalog_result": None,
-            }
-            outbox_id = connection.execute(
-                insert(outbox)
-                .values(
-                    idempotency_key=request_key,
-                    kind="heartbeat_stamp.v1",
-                    payload_json=json.dumps(provisional_payload, sort_keys=True, separators=(",", ":")),
-                    created_at=received_at,
-                )
-                .returning(outbox.c.id)
+            stamp_id = connection.execute(
+                insert(stamp).values(**heartbeat, request_sha256=request_sha256).returning(stamp.c.id)
             ).scalar_one()
 
             lease_objects = [SimpleNamespace(**lease) for lease in managed_leases]
@@ -1212,18 +1243,16 @@ class CatalogStore:
                 "touched_session_ids": sorted(str(session_id) for session_id in touched),
                 "exact_replay": False,
             }
-            provisional_payload["catalog_result"] = result
             connection.execute(
-                update(outbox)
-                .where(outbox.c.id == outbox_id)
-                .values(payload_json=json.dumps(provisional_payload, sort_keys=True, separators=(",", ":")))
+                update(stamp)
+                .where(stamp.c.id == stamp_id)
+                .values(catalog_result_json=json.dumps(result, sort_keys=True, separators=(",", ":")))
             )
             return result
 
     def apply_session_runtime(self, *, events: list[Any]) -> dict[str, Any]:
-        """Atomically reduce one bounded runtime batch and queue durable events."""
+        """Atomically reduce one bounded runtime batch."""
 
-        from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
         from zerg.services.session_runtime import ingest_live_runtime_events
 
         observed_at = datetime.now(UTC)
@@ -1248,11 +1277,9 @@ class CatalogStore:
                         {"user_state": "active", "user_state_at": observed_at},
                         synchronize_session=False,
                     )
-                archive_events = [event for event in events if not _is_bridge_live_transcript_event(event)]
                 for event in events:
                     if event.runtime_key in updated_keys and event.kind in {"pause_request", "pause_resolution"}:
                         _apply_live_interaction_event(orm, event)
-                enqueue_runtime_events_outbox(orm, archive_events)
                 orm.commit()
             except BaseException:
                 orm.rollback()
@@ -1266,9 +1293,8 @@ class CatalogStore:
             }
 
     def register_interaction(self, *, interaction: dict[str, Any]) -> dict[str, Any]:
-        """Register one held interaction and queue the same canonical runtime event."""
+        """Register one held interaction and its canonical runtime state."""
 
-        from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
         from zerg.services.session_runtime import RuntimeEventIngest
         from zerg.services.session_runtime import ingest_live_runtime_events
 
@@ -1312,7 +1338,6 @@ class CatalogStore:
                     }
                 result = ingest_live_runtime_events(orm, [event])
                 row = _apply_live_interaction_event(orm, event)
-                enqueue_runtime_events_outbox(orm, [event])
                 orm.commit()
             except BaseException:
                 orm.rollback()
@@ -1375,7 +1400,6 @@ class CatalogStore:
     ) -> dict[str, Any]:
         """Resolve exactly one pending interaction and clear matching runtime truth."""
 
-        from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
         from zerg.services.session_runtime import RuntimeEventIngest
         from zerg.services.session_runtime import ingest_live_runtime_events
 
@@ -1467,7 +1491,6 @@ class CatalogStore:
                 )
                 ingest_live_runtime_events(orm, [event])
                 resolved = _apply_live_interaction_event(orm, event)
-                enqueue_runtime_events_outbox(orm, [event])
                 orm.commit()
             except BaseException:
                 orm.rollback()
@@ -2589,6 +2612,88 @@ class CatalogStore:
             return {
                 "receipt": _input_receipt_dto(snapshot),
                 "commit_seq": str(commit_seq),
+            }
+
+    def create_input_attachment(self, *, attachment: dict[str, Any]) -> dict[str, Any]:
+        """Create bounded attachment metadata under an existing live receipt."""
+
+        observed_at = datetime.now(UTC)
+        table = LiveSessionInputAttachment.__table__
+        receipt_table = LiveSessionInputReceipt.__table__
+        with _write_transaction(self.engine) as connection:
+            pruned_blob_paths = list(connection.execute(select(table.c.blob_path).where(table.c.expires_at <= observed_at)).scalars())
+            connection.execute(delete(table).where(table.c.expires_at <= observed_at))
+            receipt = connection.execute(
+                select(receipt_table.c.id).where(
+                    receipt_table.c.id == attachment["input_receipt_id"],
+                    receipt_table.c.owner_id == attachment["owner_id"],
+                    receipt_table.c.session_id == attachment["session_id"],
+                )
+            ).first()
+            if receipt is None:
+                return {
+                    "created": False,
+                    "reason": "input_receipt_not_found",
+                    "pruned_blob_paths": pruned_blob_paths,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            existing = connection.execute(select(table).where(table.c.id == attachment["id"])).mappings().first()
+            values = {**attachment, "created_at": observed_at}
+            if existing is not None:
+                comparable = {key: existing[key] for key in attachment}
+                if comparable != attachment:
+                    return {
+                        "created": False,
+                        "reason": "idempotency_conflict",
+                        "pruned_blob_paths": pruned_blob_paths,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                return {
+                    "created": False,
+                    "attachment": _input_attachment_dto(SimpleNamespace(**existing)),
+                    "pruned_blob_paths": pruned_blob_paths,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            connection.execute(insert(table).values(**values))
+            row = connection.execute(select(table).where(table.c.id == attachment["id"])).mappings().one()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "created": True,
+                "attachment": _input_attachment_dto(SimpleNamespace(**row)),
+                "pruned_blob_paths": pruned_blob_paths,
+                "commit_seq": str(commit_seq),
+            }
+
+    def read_input_attachment(
+        self,
+        *,
+        owner_id: int,
+        session_id: str,
+        input_receipt_id: str,
+        attachment_id: str,
+    ) -> dict[str, Any]:
+        """Read one unexpired attachment through its full ownership boundary."""
+
+        table = LiveSessionInputAttachment.__table__
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            row = (
+                connection.execute(
+                    select(table).where(
+                        table.c.id == attachment_id,
+                        table.c.input_receipt_id == input_receipt_id,
+                        table.c.owner_id == owner_id,
+                        table.c.session_id == session_id,
+                        table.c.expires_at > observed_at,
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            return {
+                "found": row is not None,
+                "attachment": _input_attachment_dto(SimpleNamespace(**row)) if row is not None else None,
+                "commit_seq": str(_current_commit_seq(connection)),
             }
 
     def read_input_receipt(
@@ -6221,10 +6326,6 @@ def _truncate_utf8(value: str, maximum_bytes: int) -> str:
     return encoded[:maximum_bytes].decode("utf-8", errors="ignore")
 
 
-def _heartbeat_idempotency_key(*, device_id: str, received_at: datetime) -> str:
-    return f"heartbeat_stamp.v1:{device_id}:{received_at.isoformat()}"
-
-
 def _heartbeat_request_sha256(
     *,
     heartbeat: dict[str, Any],
@@ -6622,16 +6723,6 @@ def _u64_key(value: int) -> str:
     if not 0 <= value < 1 << 64:
         raise ValueError("value exceeds u64")
     return f"{value:020d}"
-
-
-def _is_bridge_live_transcript_event(event: Any) -> bool:
-    payload = event.payload if isinstance(event.payload, dict) else {}
-    return (
-        str(event.provider or "").strip().lower() == "codex"
-        and str(event.source or "").strip().lower() == "codex_bridge_live"
-        and event.kind == "progress_signal"
-        and payload.get("progress_kind") == "bridge_live_transcript_delta"
-    )
 
 
 def _recency_weight(age_days: float) -> int:

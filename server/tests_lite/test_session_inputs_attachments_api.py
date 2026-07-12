@@ -19,7 +19,10 @@ from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
+from fastapi import UploadFile
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
+from starlette.datastructures import Headers
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -49,13 +52,14 @@ from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
 from zerg.services.runner_connection_manager import get_runner_connection_manager
-from zerg.services.session_locks import session_lock_manager
+from zerg.services.session_input_attachments import StoredAttachment
 from zerg.services.session_input_attachments import cleanup_stale_blobs
 from zerg.services.session_input_attachments import store_attachment_blob
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import create_session_input
 from zerg.services.session_inputs import requeue_stuck_delivering
+from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
@@ -66,6 +70,141 @@ _PNG_BYTES = (
     b"c\xfc\xcf\xc0P\x0f\x00\x05\x01\x01\x02\xb4\x9d\xb1\xa6\x00\x00\x00"
     b"\x00IEND\xaeB`\x82"
 )
+
+
+@pytest.mark.asyncio
+async def test_catalog_multipart_uses_live_receipt_without_legacy_db(monkeypatch, tmp_path):
+    import zerg.routers.session_inputs_attachments as route
+
+    _set_blob_root(monkeypatch, tmp_path)
+    session_id = uuid4()
+    receipt_id = str(uuid4())
+    attachment_id = uuid4()
+    source_session = SimpleNamespace(
+        id=session_id,
+        provider="codex",
+        device_id="cinder",
+        primary_thread_id=uuid4(),
+        catalog_facts={
+            "connections": [
+                {
+                    "control_plane": "codex_bridge",
+                    "state": "attached",
+                    "released_at": None,
+                }
+            ]
+        },
+    )
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(route.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(route, "_load_session_for_continuation", lambda db, sid: source_session)
+    monkeypatch.setattr(route, "_assert_live_session_send_available", lambda *args, **kwargs: None)
+
+    async def record_receipt(**kwargs):
+        calls["receipt"] = kwargs
+        return receipt_id
+
+    async def store_blob(**kwargs):
+        calls["store"] = kwargs
+        return StoredAttachment(
+            id=attachment_id,
+            session_input_id=receipt_id,
+            session_id=session_id,
+            mime_type="image/png",
+            byte_size=len(_PNG_BYTES),
+            sha256=hashlib.sha256(_PNG_BYTES).hexdigest(),
+            blob_path=tmp_path / "blob.bin",
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+
+    async def dispatch(**kwargs):
+        calls["dispatch"] = kwargs
+        return JSONResponse({"accepted": True})
+
+    async def finish(**kwargs):
+        calls.setdefault("finishes", []).append(kwargs)
+
+    async def acquire(**kwargs):
+        return SimpleNamespace()
+
+    monkeypatch.setattr(route, "record_live_input_receipt_best_effort", record_receipt)
+    monkeypatch.setattr(route, "store_catalog_attachment_blob", store_blob)
+    monkeypatch.setattr(route, "_build_managed_local_chat_response", dispatch)
+    monkeypatch.setattr(route, "_finish_catalog_receipt", finish)
+    monkeypatch.setattr(route.session_lock_manager, "acquire", acquire)
+
+    upload = UploadFile(
+        file=io.BytesIO(_PNG_BYTES),
+        filename="a.png",
+        headers=Headers({"content-type": "image/png"}),
+    )
+    response = await route.create_session_input_with_attachments(
+        session_id=str(session_id),
+        text="look",
+        intent="auto",
+        client_request_id="catalog-attachment-1",
+        attachments=[upload],
+        user_agent="Longhouse-iOS",
+        db=None,
+        current_user=SimpleNamespace(id=7),
+    )
+
+    assert response.input_id is None
+    assert response.live_input_id == receipt_id
+    assert calls["store"]["input_receipt_id"] == receipt_id
+    assert calls["dispatch"]["db"] is None
+    assert f"/inputs/{receipt_id}/attachments/{attachment_id}/blob" in calls["dispatch"]["attachments"][0]["blob_url"]
+    assert calls["finishes"] == [
+        {"receipt_id": receipt_id, "delivery_request_id": calls["receipt"]["delivery_request_id"]}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_catalog_attachment_blob_fetch_uses_catalog_metadata_without_legacy_db(monkeypatch, tmp_path):
+    import zerg.routers.session_inputs_attachments as route
+
+    session_id = uuid4()
+    receipt_id = str(uuid4())
+    attachment_id = uuid4()
+    blob_path = tmp_path / "attachment.bin"
+    blob_path.write_bytes(_PNG_BYTES)
+    digest = hashlib.sha256(_PNG_BYTES).hexdigest()
+
+    async def get_catalog(**kwargs):
+        assert kwargs == {
+            "owner_id": 7,
+            "session_id": session_id,
+            "input_receipt_id": receipt_id,
+            "attachment_id": attachment_id,
+        }
+        return StoredAttachment(
+            id=attachment_id,
+            session_input_id=receipt_id,
+            session_id=session_id,
+            mime_type="image/png",
+            byte_size=len(_PNG_BYTES),
+            sha256=digest,
+            blob_path=blob_path,
+            original_filename="a.png",
+            original_byte_size=len(_PNG_BYTES),
+        )
+
+    monkeypatch.setattr(route.database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(route, "get_catalog_attachment", get_catalog)
+    response = await route.fetch_attachment_blob(
+        session_id=str(session_id),
+        input_id=receipt_id,
+        attachment_id=str(attachment_id),
+        db=None,
+        device_token=SimpleNamespace(owner_id=7),
+        _single=None,
+    )
+
+    assert response.headers["x-attachment-sha256"] == digest
+    assert response.headers["content-length"] == str(len(_PNG_BYTES))
+    assert b"".join([chunk async for chunk in response.body_iterator]) == _PNG_BYTES
 
 
 def _make_db(tmp_path):
@@ -373,9 +512,7 @@ def test_multipart_accepts_attachment_only_input(monkeypatch, tmp_path):
             assert row.client_request_id == "attachment-only-1"
             assert row.status == INPUT_STATUS_DELIVERED
             attachment_count = (
-                db.query(SessionInputAttachment)
-                .filter(SessionInputAttachment.session_input_id == row.id)
-                .count()
+                db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == row.id).count()
             )
             assert attachment_count == 1
     finally:
