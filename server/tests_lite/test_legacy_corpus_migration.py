@@ -24,6 +24,8 @@ from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.legacy_corpus_migration import STREAMING_EVENT_PAGE
 from zerg.services.legacy_corpus_migration import LegacyCorpusConverter
+from zerg.services.legacy_corpus_migration import LegacyHighWatermark
+from zerg.services.legacy_corpus_migration import _legacy_source_epoch
 from zerg.services.legacy_corpus_migration import _normalized_event_source
 from zerg.services.legacy_corpus_migration import _source_batches
 from zerg.services.legacy_corpus_migration import _SourceRecord
@@ -34,9 +36,15 @@ from zerg.storage_v2.raw_objects import read_raw_object
 
 
 class FakeCatalog:
-    def __init__(self, *, source_epoch_found: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        source_epoch_found: bool = False,
+        source_epochs: dict[str, dict] | None = None,
+    ) -> None:
         self.calls: list[tuple[str, dict]] = []
         self.source_epoch_found = source_epoch_found
+        self.source_epochs = source_epochs or {}
 
     async def call(self, method, params=None, *, timeout_seconds=None):
         payload = dict(params or {})
@@ -52,7 +60,21 @@ class FakeCatalog:
         if method == "auth.owner.get.v2":
             return {"found": True, "owner_id": 7}
         if method == "storage.source_epoch.manifest.v2":
-            return {"found": self.source_epoch_found}
+            source_epoch = payload["source_epoch"]
+            facts = self.source_epochs.get(source_epoch)
+            if facts is not None:
+                return {"found": True, "source_epoch": facts}
+            if self.source_epoch_found:
+                return {
+                    "found": True,
+                    "source_epoch": {
+                        "source_epoch": source_epoch,
+                        "state": "open",
+                        "predecessor_source_epoch": None,
+                        "replaced_by_source_epoch": None,
+                    },
+                }
+            return {"found": False}
         return {"ok": True}
 
 
@@ -495,6 +517,49 @@ async def test_retry_replaces_partial_source_epoch_when_batch_layout_changed(leg
     manifest = next(payload for method, payload in catalog.calls if method == "storage.source_epoch.manifest.v2")
     assert commit["predecessor_source_epoch"] == manifest["source_epoch"]
     assert commit["source_epoch"] != manifest["source_epoch"]
+
+
+@pytest.mark.asyncio
+async def test_stream_retry_replaces_current_open_epoch_after_layout_revision(legacy_db, tmp_path: Path):
+    session_id = uuid4()
+    source_path = f"legacy-unmatched-events:{session_id}"
+    watermark = LegacyHighWatermark(session_rowid=12, source_line_id=34, event_id=56, media_ref_id=78)
+    original = _legacy_source_epoch(session_id, source_path, "legacy_normalized_event", watermark)
+    current = uuid4()
+    catalog = FakeCatalog(
+        source_epochs={
+            str(original): {
+                "source_epoch": str(original),
+                "state": "closed",
+                "predecessor_source_epoch": None,
+                "replaced_by_source_epoch": str(current),
+            },
+            str(current): {
+                "source_epoch": str(current),
+                "state": "open",
+                "predecessor_source_epoch": str(original),
+                "replaced_by_source_epoch": None,
+            },
+        }
+    )
+    converter = LegacyCorpusConverter(
+        session_factory=legacy_db,
+        catalog=catalog,
+        object_root=tmp_path / "objects-v2",
+        tenant_id="tenant-a",
+    )
+
+    replacement, predecessor = await converter._stream_epoch_plan(
+        session_id,
+        source_path,
+        "legacy_normalized_event",
+        watermark,
+        replace_existing_epochs=True,
+        layout_revision="bounded-events-v2",
+    )
+
+    assert predecessor == current
+    assert replacement not in {original, current}
 
 
 @pytest.mark.asyncio

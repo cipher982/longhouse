@@ -54,8 +54,9 @@ ORDERING_REVISION = "semantic-order-v2"
 MIGRATION_LAYOUT_REVISION = "bounded-v2"
 INVENTORY_BATCH = 500
 STREAMING_SOURCE_THRESHOLD = 10_000
-STREAMING_EVENT_PAGE = 500
+STREAMING_EVENT_PAGE = 50
 STREAMING_MATCH_PAGE = 250
+STREAMING_EVENT_LAYOUT_REVISION = "bounded-events-v2"
 
 
 class CatalogCaller(Protocol):
@@ -831,6 +832,7 @@ class LegacyCorpusConverter:
                         "legacy_normalized_event",
                         watermark,
                         replace_existing_epochs=replace_existing_epochs,
+                        layout_revision=STREAMING_EVENT_LAYOUT_REVISION,
                     )
                     plan = (epoch, predecessor, 0)
                 epoch, predecessor, range_start = plan
@@ -879,6 +881,7 @@ class LegacyCorpusConverter:
         watermark: LegacyHighWatermark,
         *,
         replace_existing_epochs: bool,
+        layout_revision: str = MIGRATION_LAYOUT_REVISION,
     ) -> tuple[UUID, UUID | None]:
         original = _legacy_source_epoch(session_id, source_path, provenance_kind, watermark)
         if not replace_existing_epochs:
@@ -888,18 +891,39 @@ class LegacyCorpusConverter:
             {"source_epoch": str(original), "after_position": None, "limit": 1},
             timeout_seconds=5.0,
         )
-        predecessor = original
         if manifest.get("found") is not True:
             return original, None
+        current = original
+        current_facts = manifest.get("source_epoch")
+        if not isinstance(current_facts, dict):
+            raise RuntimeError("source epoch manifest is missing epoch facts")
+        for _ in range(8):
+            replacement_value = current_facts.get("replaced_by_source_epoch")
+            if current_facts.get("state") == "open" or replacement_value is None:
+                break
+            current = UUID(str(replacement_value))
+            current_manifest = await self.catalog.call(
+                "storage.source_epoch.manifest.v2",
+                {"source_epoch": str(current), "after_position": None, "limit": 1},
+                timeout_seconds=5.0,
+            )
+            current_facts = current_manifest.get("source_epoch")
+            if current_manifest.get("found") is not True or not isinstance(current_facts, dict):
+                raise RuntimeError("replacement source epoch manifest is unavailable")
+        if current_facts.get("state") != "open":
+            raise RuntimeError("source epoch replacement chain has no open head")
         replacement = _stable_uuid(
             "source-replacement",
-            MIGRATION_LAYOUT_REVISION,
+            layout_revision,
             str(session_id),
             source_path,
             provenance_kind,
             watermark.encode(),
         )
-        return replacement, predecessor
+        if current == replacement:
+            predecessor = current_facts.get("predecessor_source_epoch")
+            return current, UUID(str(predecessor)) if predecessor is not None else None
+        return replacement, current
 
     async def _commit_stream_batch(
         self,
