@@ -22,6 +22,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import UUID
 from uuid import uuid4
 
@@ -56,8 +57,6 @@ from zerg.services.live_archive_outbox import enqueue_remote_launch_outbox
 from zerg.services.live_archive_outbox import enqueue_remote_launch_outcome_outbox
 from zerg.services.live_archive_outbox import remote_launch_idempotency_key
 from zerg.services.live_catalog_launch import attach_live_catalog_control
-from zerg.services.live_catalog_launch import create_live_launch_catalog_shell
-from zerg.services.live_catalog_launch import live_launch_result
 from zerg.services.live_catalog_launch import update_live_launch_catalog_outcome
 from zerg.services.live_launch_readiness import get_live_launch_readiness_by_client_request
 from zerg.services.live_launch_readiness import update_live_launch_readiness_state
@@ -354,6 +353,42 @@ async def _read_live_launch_idempotency(
     provider: str,
     client_request_id: str,
 ):
+    if database_module.live_catalog_enabled():
+        from zerg.services.catalogd_supervisor import get_catalogd_client
+
+        catalogd = get_catalogd_client()
+        if catalogd is None:
+            raise RemoteLaunchError(
+                "Remote launch is blocked because catalogd is unavailable; retry shortly.",
+                code="launch_timeout",
+                status_code=503,
+            )
+        try:
+            result = await catalogd.call(
+                "session.launch.idempotency.v2",
+                {
+                    "owner_id": owner_id,
+                    "device_id": device_id,
+                    "provider": provider,
+                    "client_request_id": client_request_id,
+                },
+                timeout_seconds=1.0,
+            )
+        except Exception as exc:
+            raise RemoteLaunchError(
+                "Remote launch is blocked because catalogd could not resolve launch identity; retry shortly.",
+                code="launch_timeout",
+                status_code=503,
+            ) from exc
+        launch = result.get("launch")
+        if result.get("found") is not True or not isinstance(launch, dict):
+            return None
+        return SimpleNamespace(
+            **{
+                **launch,
+                "session_id": UUID(str(launch["session_id"])),
+            }
+        )
     live_session_factory = database_module.get_live_session_factory()
     if live_session_factory is not None:
         with live_session_factory() as live_db:
@@ -374,6 +409,45 @@ async def _read_live_launch_idempotency(
         ),
         label="remote-launch-idempotency",
     )
+
+
+def _catalog_launch_wire_payload(launch: Mapping[str, object]) -> dict[str, object]:
+    """Normalize an internal launch payload to the strict catalogd contract."""
+
+    result = dict(launch)
+    for field in ("started_at", "expires_at"):
+        value = result.get(field)
+        if not isinstance(value, datetime):
+            raise RuntimeError(f"launch payload missing {field}")
+        result[field] = value.isoformat()
+    result.setdefault("run_id", None)
+    result.setdefault("git_repo", None)
+    result.setdefault("git_branch", None)
+    result.setdefault("client_request_id", None)
+    result.setdefault("launch_actor", None)
+    result.setdefault("launch_surface", None)
+    return result
+
+
+async def _call_catalog_launch(method: str, params: dict[str, object]) -> dict:
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise RemoteLaunchError(
+            "Remote launch is blocked because catalogd is unavailable; retry shortly.",
+            code="launch_timeout",
+            status_code=503,
+        )
+    try:
+        return await catalogd.call(method, params, timeout_seconds=1.0)
+    except Exception as exc:
+        logger.warning("Catalog launch transaction failed method=%s", method, exc_info=True)
+        raise RemoteLaunchError(
+            "Remote launch is blocked because catalogd could not persist launch state; retry shortly.",
+            code="launch_timeout",
+            status_code=503,
+        ) from exc
 
 
 def _control_plane_for_provider(provider: str | None) -> str:
@@ -918,49 +992,10 @@ async def _launch_remote_session_live_catalog(
     )
     launch_payload["primary_thread_id"] = str(thread_uuid)
 
-    def _record_intent(live_db: Session):
-        attempt = create_live_launch_catalog_shell(
-            live_db,
-            session_id=session_uuid,
-            thread_id=thread_uuid,
-            run_id=run_uuid,
-            owner_id=params.owner_id,
-            provider=provider,
-            device_id=device_id,
-            device_name=machine_name,
-            cwd=cwd,
-            project=project,
-            git_repo=params.git_repo,
-            git_branch=params.git_branch,
-            display_name=display_name,
-            initial_prompt=initial_prompt,
-            execution_lifetime=execution_lifetime,
-            client_request_id=client_request_id,
-            command_id=command_id,
-            started_at=now,
-            expires_at=lease_until,
-            launch_actor=launch_actor,
-            launch_surface=launch_surface,
-        )
-        upsert_live_launch_readiness(
-            live_db,
-            session_id=session_uuid,
-            owner_id=params.owner_id,
-            device_id=device_id,
-            provider=provider,
-            execution_lifetime=execution_lifetime,
-            state="pending",
-            command_id=command_id,
-            client_request_id=client_request_id,
-            machine_id=machine_name or device_id,
-            project=project,
-            expires_at=lease_until,
-            now=now,
-        )
-        enqueue_remote_launch_outbox(live_db, launch=launch_payload)
-        return attempt
-
-    await _execute_live_launch_write(_record_intent, label="remote-launch-catalog-intent")
+    await _call_catalog_launch(
+        "session.launch.intent.create.v2",
+        {"launch": _catalog_launch_wire_payload(launch_payload)},
+    )
 
     payload = {
         "provider": provider,
@@ -1002,28 +1037,20 @@ async def _launch_remote_session_live_catalog(
         "error_message": error_message,
     }
 
-    def _record_outcome(live_db: Session):
-        attempt = update_live_launch_catalog_outcome(
-            live_db,
-            session_id=session_uuid,
-            command_id=command_id,
-            state=state,
-            error_code=error_code,
-            error_message=error_message,
-        )
-        update_live_launch_readiness_state(
-            live_db,
-            session_id=session_uuid,
-            state=state,
-            error_code=error_code,
-            error_message=error_message,
-            clear_expires=state == "failed",
-        )
-        enqueue_remote_launch_outcome_outbox(live_db, launch=launch_payload, outcome=outcome)
-        return live_launch_result(attempt)
-
-    result = await _execute_live_launch_write(_record_outcome, label="remote-launch-catalog-outcome")
-    return RemoteLaunchResult(**result)
+    result = await _call_catalog_launch(
+        "session.launch.outcome.apply.v2",
+        {
+            "launch": _catalog_launch_wire_payload(launch_payload),
+            "outcome": outcome,
+        },
+    )
+    launch_result = result["launch"]
+    return RemoteLaunchResult(
+        **{
+            **launch_result,
+            "session_id": UUID(str(launch_result["session_id"])),
+        }
+    )
 
 
 def _remote_continue_outbox_key(*, session_id: UUID, client_request_id: str) -> str:

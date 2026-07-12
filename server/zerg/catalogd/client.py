@@ -39,6 +39,9 @@ _SAFE_RETRY_METHODS = {
     "ping.v2",
     "schema.v2",
     "session.prefix.resolve.v2",
+    "session.launch.idempotency.v2",
+    "session.launch.intent.create.v2",
+    "session.launch.outcome.apply.v2",
     "session.read.v2",
     "session.timeline.list.v2",
 }

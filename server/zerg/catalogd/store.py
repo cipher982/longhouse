@@ -31,6 +31,7 @@ from zerg.models.live_store import LiveRefreshSession
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
@@ -53,6 +54,30 @@ _RECENCY_BUCKETS: tuple[tuple[float, int], ...] = (
     (14.0, 50),
     (31.0, 30),
 )
+
+
+def _json_launch_result(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **result,
+        "session_id": str(result["session_id"]),
+    }
+
+
+def _launch_view_dto(view: Any) -> dict[str, Any]:
+    return {
+        "session_id": str(view.session_id),
+        "launch_state": view.launch_state,
+        "execution_lifetime": view.execution_lifetime,
+        "launch_error_code": view.launch_error_code,
+        "launch_error_message": view.launch_error_message,
+        "owner_id": view.owner_id,
+        "provider": view.provider,
+        "device_id": view.device_id,
+        "machine_id": view.machine_id,
+        "project": view.project,
+        "created_at": _encode_datetime(view.created_at),
+        "updated_at": _encode_datetime(view.updated_at),
+    }
 
 
 class CatalogStore:
@@ -1123,6 +1148,211 @@ class CatalogStore:
                 orm.close()
             commit_seq = _advance_commit_seq(connection, observed_at) if changed else _current_commit_seq(connection)
             return {"found": True, "changed": changed, "commit_seq": str(commit_seq)}
+
+    def read_launch_idempotency(
+        self,
+        *,
+        owner_id: int,
+        device_id: str,
+        provider: str,
+        client_request_id: str,
+    ) -> dict[str, Any]:
+        """Resolve one launch idempotency key from a bounded snapshot."""
+
+        from zerg.services.live_launch_readiness import get_live_launch_readiness_by_client_request
+
+        with _read_snapshot(self.engine) as connection:
+            orm = Session(bind=connection, expire_on_commit=False)
+            try:
+                view = get_live_launch_readiness_by_client_request(
+                    orm,
+                    owner_id=owner_id,
+                    device_id=device_id,
+                    provider=provider,
+                    client_request_id=client_request_id,
+                )
+            finally:
+                orm.close()
+            return {
+                "found": view is not None,
+                "launch": _launch_view_dto(view) if view is not None else None,
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def create_launch_intent(self, *, launch: dict[str, Any]) -> dict[str, Any]:
+        """Atomically create a launch shell, readiness fact, and archive outbox row."""
+
+        from zerg.services.live_archive_outbox import enqueue_remote_launch_outbox
+        from zerg.services.live_catalog_launch import create_live_launch_catalog_shell
+        from zerg.services.live_catalog_launch import live_launch_result
+        from zerg.services.live_launch_readiness import upsert_live_launch_readiness
+
+        observed_at = launch["started_at"]
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                existing = (
+                    orm.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == launch["command_id"]).one_or_none()
+                )
+                if existing is not None:
+                    exact_replay = (
+                        str(existing.session_id) == launch["session_id"]
+                        and str(existing.thread_id or "") == launch["primary_thread_id"]
+                        and str(existing.run_id or "") == str(launch.get("run_id") or "")
+                        and existing.owner_id == launch["owner_id"]
+                        and str(existing.provider) == launch["provider"]
+                        and str(existing.host_id or "") == launch["device_id"]
+                        and str(existing.execution_lifetime) == launch["execution_lifetime"]
+                        and str(existing.client_request_id or "") == str(launch.get("client_request_id") or "")
+                    )
+                    result = live_launch_result(existing) if exact_replay else None
+                    orm.rollback()
+                    return {
+                        "created": False,
+                        "exact_replay": exact_replay,
+                        "idempotency_conflict": not exact_replay,
+                        "launch": _json_launch_result(result) if result is not None else None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                attempt = create_live_launch_catalog_shell(
+                    orm,
+                    session_id=UUID(launch["session_id"]),
+                    thread_id=UUID(launch["primary_thread_id"]),
+                    run_id=UUID(launch["run_id"]) if launch.get("run_id") else None,
+                    owner_id=launch["owner_id"],
+                    provider=launch["provider"],
+                    device_id=launch["device_id"],
+                    device_name=launch.get("machine_id"),
+                    cwd=launch["cwd"],
+                    project=launch["project"],
+                    git_repo=launch.get("git_repo"),
+                    git_branch=launch.get("git_branch"),
+                    display_name=launch.get("display_name"),
+                    initial_prompt=launch.get("initial_prompt"),
+                    execution_lifetime=launch["execution_lifetime"],
+                    client_request_id=launch.get("client_request_id"),
+                    command_id=launch["command_id"],
+                    started_at=observed_at,
+                    expires_at=launch["expires_at"],
+                    launch_actor=launch.get("launch_actor"),
+                    launch_surface=launch.get("launch_surface"),
+                )
+                upsert_live_launch_readiness(
+                    orm,
+                    session_id=UUID(launch["session_id"]),
+                    owner_id=launch["owner_id"],
+                    device_id=launch["device_id"],
+                    provider=launch["provider"],
+                    execution_lifetime=launch["execution_lifetime"],
+                    state="pending",
+                    command_id=launch["command_id"],
+                    client_request_id=launch.get("client_request_id"),
+                    machine_id=launch.get("machine_id") or launch["device_id"],
+                    project=launch["project"],
+                    expires_at=launch["expires_at"],
+                    now=observed_at,
+                )
+                enqueue_remote_launch_outbox(orm, launch=launch)
+                result = live_launch_result(attempt)
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "created": True,
+                "exact_replay": False,
+                "idempotency_conflict": False,
+                "launch": _json_launch_result(result),
+                "commit_seq": str(commit_seq),
+            }
+
+    def apply_launch_outcome(
+        self,
+        *,
+        launch: dict[str, Any],
+        outcome: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Atomically project transport outcome and queue its archive record."""
+
+        from zerg.services.live_archive_outbox import enqueue_remote_launch_outcome_outbox
+        from zerg.services.live_catalog_launch import live_launch_result
+        from zerg.services.live_catalog_launch import update_live_launch_catalog_outcome
+        from zerg.services.live_launch_readiness import update_live_launch_readiness_state
+
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                existing = (
+                    orm.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == launch["command_id"]).one_or_none()
+                )
+                if existing is None or str(existing.session_id) != launch["session_id"]:
+                    orm.rollback()
+                    return {
+                        "found": False,
+                        "changed": False,
+                        "launch": None,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                exact_replay = (
+                    str(existing.state) == outcome["state"]
+                    and str(existing.error_code or "") == str(outcome.get("error_code") or "")
+                    and str(existing.error_message or "") == str(outcome.get("error_message") or "")
+                )
+                if exact_replay:
+                    result = live_launch_result(existing)
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "changed": False,
+                        "launch": _json_launch_result(result),
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                if str(existing.state) in {"adopted", "failed", "abandoned"} and outcome["state"] == "dispatched":
+                    result = live_launch_result(existing)
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "changed": False,
+                        "launch": _json_launch_result(result),
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                attempt = update_live_launch_catalog_outcome(
+                    orm,
+                    session_id=UUID(launch["session_id"]),
+                    command_id=launch["command_id"],
+                    state=outcome["state"],
+                    error_code=outcome.get("error_code"),
+                    error_message=outcome.get("error_message"),
+                    now=observed_at,
+                )
+                update_live_launch_readiness_state(
+                    orm,
+                    session_id=UUID(launch["session_id"]),
+                    state=outcome["state"],
+                    error_code=outcome.get("error_code"),
+                    error_message=outcome.get("error_message"),
+                    clear_expires=outcome["state"] == "failed",
+                    now=observed_at,
+                )
+                enqueue_remote_launch_outcome_outbox(orm, launch=launch, outcome=outcome)
+                result = live_launch_result(attempt)
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "found": True,
+                "changed": True,
+                "launch": _json_launch_result(result),
+                "commit_seq": str(commit_seq),
+            }
 
     def list_session_timeline(
         self,

@@ -1232,10 +1232,14 @@ def test_remote_launch_materializes_archive_shell_before_dispatch(tmp_path, monk
 
 
 def test_live_catalog_launch_dispatches_without_opening_archive_then_projects(tmp_path, monkeypatch):
+    from zerg.catalogd.schema import initialize_catalog_schema
+    from zerg.catalogd.store import CatalogStore
+
     ArchiveSession = _make_db(tmp_path)
     _seed_user_and_device(ArchiveSession)
     live_engine = make_live_engine(f"sqlite:///{tmp_path}/live-catalog-launch.db")
     initialize_live_database(live_engine)
+    initialize_catalog_schema(live_engine)
     LiveSession = sessionmaker(bind=live_engine)
     with LiveSession() as live_db:
         live_db.add(User(id=OWNER_ID, email=f"u{OWNER_ID}@ex.com", role="ADMIN"))
@@ -1252,12 +1256,30 @@ def test_live_catalog_launch_dispatches_without_opening_archive_then_projects(tm
 
     registry = CatalogDispatchRegistry()
     _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
-    live_serializer = _LiveReadinessSerializer(LiveSession)
+    catalog_store = CatalogStore(live_engine)
+
+    class _CatalogClient:
+        async def call(self, method, params, **_kwargs):
+            if method == "session.launch.idempotency.v2":
+                return catalog_store.read_launch_idempotency(**params)
+            launch = dict(params["launch"])
+            launch["started_at"] = datetime.fromisoformat(launch["started_at"])
+            launch["expires_at"] = datetime.fromisoformat(launch["expires_at"])
+            if method == "session.launch.intent.create.v2":
+                return catalog_store.create_launch_intent(launch=launch)
+            if method == "session.launch.outcome.apply.v2":
+                return catalog_store.apply_launch_outcome(launch=launch, outcome=params["outcome"])
+            raise AssertionError(method)
+
     monkeypatch.setattr(remote_launch_module.database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(remote_launch_module.database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr(remote_launch_module.database_module, "get_live_session_factory", lambda: LiveSession)
     monkeypatch.setattr(remote_launch_module.database_module, "get_live_write_session_factory", lambda: LiveSession)
-    monkeypatch.setattr(remote_launch_module, "get_live_write_serializer", lambda: live_serializer)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: _CatalogClient())
+    monkeypatch.setattr(
+        remote_launch_module,
+        "get_live_write_serializer",
+        lambda: (_ for _ in ()).throw(AssertionError("catalog launch must not use the API live serializer")),
+    )
 
     try:
         with LiveSession() as catalog_db:
@@ -1635,9 +1657,7 @@ def test_live_launch_mobile_tail_uses_placeholder_while_shell_is_catching_up(tmp
             )
 
         assert mobile_tail.projection.total == 1
-        assert [item.event.content_text for item in mobile_tail.projection.items if item.event] == [
-            "Codex is ready."
-        ]
+        assert [item.event.content_text for item in mobile_tail.projection.items if item.event] == ["Codex is ready."]
     finally:
         live_engine.dispose()
 
