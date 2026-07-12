@@ -367,6 +367,7 @@ def resume_command(
     budget: str | None = typer.Option(None, "--budget", help="Per-tick byte budget, e.g. 512MB or 4GB."),
     include_huge: bool = typer.Option(True, "--include-huge/--exclude-huge", help="Allow ranges >=100MB."),
     retry_now: bool = typer.Option(False, "--retry-now", help="Make pending archive ranges eligible immediately."),
+    max_minutes: int = typer.Option(60, "--max-minutes", min=1, help="Expire resumed repair automatically."),
     state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
 ) -> None:
     """Resume local archive repair replay."""
@@ -376,6 +377,7 @@ def resume_command(
         mode=mode,
         max_tick_bytes=parse_byte_budget(budget),
         include_huge=include_huge,
+        lease_minutes=max_minutes,
     )
     typer.echo(f"Archive repair resumed in {result['mode']} mode: {result['path']}")
     if retry_now:
@@ -389,16 +391,16 @@ def drain_command(
     target: str | None = typer.Option(None, "--target", help="Drain target. Supported: max-safe."),
     include_huge: bool = typer.Option(True, "--include-huge/--exclude-huge", help="Allow ranges >=100MB."),
     retry_now: bool = typer.Option(False, "--retry-now", help="Make pending archive ranges eligible immediately."),
-    max_minutes: int | None = typer.Option(
-        None,
+    max_minutes: int = typer.Option(
+        60,
         "--max-minutes",
-        help="Accepted for operator intent; engine drains by tick budget.",
+        min=1,
+        help="Expire drain automatically and return to the configured safe mode.",
     ),
     state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
 ) -> None:
     """Switch archive repair to explicit drain mode."""
 
-    _ = max_minutes
     normalized_target = str(target or "").strip().lower()
     if normalized_target and normalized_target != "max-safe":
         raise typer.BadParameter("--target currently supports only 'max-safe'")
@@ -408,6 +410,7 @@ def drain_command(
         mode="drain",
         max_tick_bytes=parse_byte_budget(budget),
         include_huge=effective_include_huge,
+        lease_minutes=max_minutes,
     )
     if normalized_target == "max-safe":
         typer.echo(f"Archive repair max-safe drain enabled: {result['path']}")

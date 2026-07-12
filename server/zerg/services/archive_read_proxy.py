@@ -45,10 +45,16 @@ _PASSTHROUGH_HEADERS = {
     "last-modified",
     "x-limit-cap",
 }
-# Cold reads share the same physical volume as the live catalog. One isolated
-# reader can use most of the archive disk's sequential-read bandwidth, so more
-# concurrency only starves live writes without improving useful throughput.
-_ARCHIVE_READ_SLOTS = asyncio.Semaphore(1)
+# Repair/source-proof traffic must never occupy the capacity reserved for user
+# reads and health proofs.  This is temporary containment until immutable v2
+# objects replace cold SQLite serving entirely.
+_ARCHIVE_USER_READ_SLOTS = asyncio.Semaphore(1)
+_ARCHIVE_BACKGROUND_READ_SLOTS = asyncio.Semaphore(1)
+_BACKGROUND_ARCHIVE_PATHS = {"/agents/source-lines/claims"}
+
+
+def archive_read_lane(path: str) -> str:
+    return "background" if path in _BACKGROUND_ARCHIVE_PATHS else "user"
 
 
 async def _stop_child(proc: asyncio.subprocess.Process) -> None:
@@ -108,6 +114,7 @@ def should_proxy_archive_request(request: Request, *, routes: Iterable[Any] = ()
 
 async def proxy_archive_request(request: Request) -> Response:
     path = normalized_api_path(request)
+    lane = archive_read_lane(path)
     settings = get_settings()
     if path.startswith("/agents/") and not settings.auth_disabled and not settings.testing and not request.headers.get("X-Agents-Token"):
         # Authentication is a live-catalog concern. Reject a missing machine
@@ -127,8 +134,10 @@ async def proxy_archive_request(request: Request) -> Response:
         "body_b64": base64.b64encode(body).decode("ascii"),
     }
     env = dict(os.environ)
+    slots = _ARCHIVE_BACKGROUND_READ_SLOTS if lane == "background" else _ARCHIVE_USER_READ_SLOTS
+    admission_timeout = 1.0 if lane == "background" else 25.0
     try:
-        await asyncio.wait_for(_ARCHIVE_READ_SLOTS.acquire(), timeout=1.0)
+        await asyncio.wait_for(slots.acquire(), timeout=admission_timeout)
     except TimeoutError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -174,7 +183,7 @@ async def proxy_archive_request(request: Request) -> Response:
             detail={"code": "archive_request_unavailable", "message": "Archive worker could not start."},
         ) from None
     finally:
-        _ARCHIVE_READ_SLOTS.release()
+        slots.release()
     if proc.returncode != 0:
         logger.warning(
             "Archive request child failed returncode=%s path=%s stderr=%s",

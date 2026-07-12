@@ -55,7 +55,13 @@ _catalog_db_dependency = catalog_db_dependency()
 
 PROVIDER_LIVE_PROOF_COMMAND = "provider.live_proof"
 ARCHIVE_BACKLOG_CONTROL_COMMAND = "archive.backlog_control"
+ARCHIVE_BACKLOG_CONTROL_COMMAND_V2 = "archive.backlog_control.v2"
 PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS = 15
+
+
+def archive_backlog_control_command_type(mode: str) -> str:
+    """Require lease-aware engines before enabling repair work."""
+    return ARCHIVE_BACKLOG_CONTROL_COMMAND if mode == "paused" else ARCHIVE_BACKLOG_CONTROL_COMMAND_V2
 
 
 @router.get("", response_model=MachineDirectoryResponse)
@@ -153,7 +159,8 @@ async def control_machine_archive_backlog(
     info = registry.info(owner_id=owner_id, device_id=device_id)
     if info is None:
         raise HTTPException(status_code=503, detail="Machine Agent control channel is offline")
-    if not registry.supports(owner_id=owner_id, device_id=device_id, capability=ARCHIVE_BACKLOG_CONTROL_COMMAND):
+    command_type = archive_backlog_control_command_type(request.mode)
+    if not registry.supports(owner_id=owner_id, device_id=device_id, capability=command_type):
         raise HTTPException(status_code=409, detail="Machine Agent does not advertise archive backlog control")
 
     payload = request.model_dump(exclude_none=True)
@@ -162,7 +169,7 @@ async def control_machine_archive_backlog(
         owner_id=owner_id,
         device_id=device_id,
         session_id=None,
-        command_type=ARCHIVE_BACKLOG_CONTROL_COMMAND,
+        command_type=command_type,
         payload=payload,
         timeout_secs=request.timeout_secs or 15,
     )

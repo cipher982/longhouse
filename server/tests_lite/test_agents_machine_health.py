@@ -22,6 +22,16 @@ from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentHeartbeat
+from zerg.routers.agents_machines import archive_backlog_control_command_type
+from zerg.schemas.machines import ArchiveBacklogControlRequest
+
+
+def test_archive_control_requires_lease_aware_engine_to_start_work():
+    assert archive_backlog_control_command_type("paused") == "archive.backlog_control"
+    assert archive_backlog_control_command_type("trickle") == "archive.backlog_control.v2"
+    assert archive_backlog_control_command_type("drain") == "archive.backlog_control.v2"
+    request = ArchiveBacklogControlRequest(mode="drain")
+    assert archive_backlog_control_command_type(request.mode) == "archive.backlog_control.v2"
 
 
 def _make_db(tmp_path):

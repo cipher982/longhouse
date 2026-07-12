@@ -322,12 +322,34 @@ struct ManagedObservationScanResult {
 #[derive(Clone, Debug, Default, Deserialize)]
 struct ArchiveRepairControl {
     mode: Option<String>,
+    expires_at: Option<String>,
     max_tick_bytes: Option<u64>,
     include_huge: Option<bool>,
 }
 
 impl ArchiveRepairControl {
+    fn active_override(&self) -> bool {
+        let mode = self
+            .mode
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if matches!(mode.as_str(), "paused" | "pause") {
+            return true;
+        }
+        let Some(expires_at) = self.expires_at.as_deref() else {
+            return false;
+        };
+        chrono::DateTime::parse_from_rfc3339(expires_at)
+            .map(|value| value.with_timezone(&chrono::Utc) > chrono::Utc::now())
+            .unwrap_or(false)
+    }
+
     fn normalized_mode(&self, default_mode: ArchiveRepairMode) -> ArchiveRepairMode {
+        if !self.active_override() {
+            return ArchiveRepairMode::Paused;
+        }
         match self
             .mode
             .as_deref()
@@ -348,6 +370,14 @@ impl ArchiveRepairControl {
     }
 
     fn tick_bytes(&self, default_mode: ArchiveRepairMode) -> u64 {
+        if !self.active_override() {
+            return match default_mode {
+                ArchiveRepairMode::Drain => ARCHIVE_DRAIN_TICK_BYTES,
+                ArchiveRepairMode::Paused | ArchiveRepairMode::Trickle => {
+                    ARCHIVE_TRICKLE_TICK_BYTES
+                }
+            };
+        }
         match self.normalized_mode(default_mode) {
             ArchiveRepairMode::Drain => self.max_tick_bytes.unwrap_or(ARCHIVE_DRAIN_TICK_BYTES),
             ArchiveRepairMode::Paused | ArchiveRepairMode::Trickle => {
@@ -357,7 +387,11 @@ impl ArchiveRepairControl {
     }
 
     fn includes_huge(&self) -> bool {
-        self.include_huge.unwrap_or(true)
+        if self.active_override() {
+            self.include_huge.unwrap_or(true)
+        } else {
+            true
+        }
     }
 }
 
@@ -4376,7 +4410,13 @@ mod tests {
 
                 let control_path = config::get_agent_archive_repair_control_path().unwrap();
                 std::fs::create_dir_all(control_path.parent().unwrap()).unwrap();
-                std::fs::write(&control_path, r#"{"mode":"trickle"}"#).unwrap();
+                let expires_at = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+                std::fs::write(
+                    &control_path,
+                    serde_json::to_vec(&json!({"mode": "trickle", "expires_at": expires_at}))
+                        .unwrap(),
+                )
+                .unwrap();
 
                 let queued = queue_failed_shipment_retry_paths(
                     &mut scheduler,
@@ -4520,11 +4560,12 @@ mod tests {
         );
         assert_eq!(
             unset.normalized_mode(ArchiveRepairMode::Drain),
-            ArchiveRepairMode::Drain
+            ArchiveRepairMode::Paused
         );
 
         let operator_control = ArchiveRepairControl {
             mode: Some("trickle".to_string()),
+            expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()),
             max_tick_bytes: None,
             include_huge: None,
         };
@@ -4535,11 +4576,35 @@ mod tests {
 
         let invalid_control = ArchiveRepairControl {
             mode: Some("enabled".to_string()),
+            expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()),
             max_tick_bytes: None,
             include_huge: None,
         };
         assert_eq!(
             invalid_control.normalized_mode(ArchiveRepairMode::Paused),
+            ArchiveRepairMode::Paused
+        );
+
+        let expired_control = ArchiveRepairControl {
+            mode: Some("drain".to_string()),
+            expires_at: Some((chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339()),
+            max_tick_bytes: Some(4 * 1024 * 1024 * 1024),
+            include_huge: Some(true),
+        };
+        assert_eq!(
+            expired_control.normalized_mode(ArchiveRepairMode::Paused),
+            ArchiveRepairMode::Paused
+        );
+        assert!(!expired_control.active_override());
+
+        let legacy_drain = ArchiveRepairControl {
+            mode: Some("drain".to_string()),
+            expires_at: None,
+            max_tick_bytes: Some(4 * 1024 * 1024 * 1024),
+            include_huge: Some(true),
+        };
+        assert_eq!(
+            legacy_drain.normalized_mode(ArchiveRepairMode::Drain),
             ArchiveRepairMode::Paused
         );
     }
@@ -4565,6 +4630,7 @@ mod tests {
         payload.archive_backlog.state = "paused".to_string();
         let control = ArchiveRepairControl {
             mode: Some("trickle".to_string()),
+            expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()),
             max_tick_bytes: None,
             include_huge: None,
         };

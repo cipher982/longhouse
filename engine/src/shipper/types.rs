@@ -216,7 +216,6 @@ pub(crate) struct GapRecoveryOutcome {
 
 pub(crate) enum AttemptedShip {
     Shipped(ShipItem),
-    Reconciled(ShipItem),
     Transient {
         item: ShipItem,
         error: String,

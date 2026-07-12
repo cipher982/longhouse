@@ -1955,6 +1955,11 @@ async fn attempt_ship(
     let http_send_started_at_ms = chrono::Utc::now().timestamp_millis();
     let request_timeout = request_timeout_for_trace(ship_trace);
     let mut flight_record = build_ship_trace_value(&item, ship_trace, http_send_started_at_ms);
+    insert_json_field(
+        &mut flight_record,
+        "source_line_ref_count",
+        json!(item.source_line_refs.len()),
+    );
     if let Some(timeout) = request_timeout {
         insert_json_field(
             &mut flight_record,
@@ -1967,66 +1972,9 @@ async fn attempt_ship(
     let trace_header = ship_trace
         .map(|trace| build_ship_trace_header_value(&item, trace, http_send_started_at_ms))
         .and_then(|header_record| serde_json::to_string(&header_record).ok());
-    if matches!(ship_lane, ShipLane::Archive | ShipLane::Repair)
-        && !item.source_line_refs.is_empty()
-    {
-        match source_line_claims::claim_source_lines_present(
-            client,
-            &item.session_id,
-            &item.path_str,
-            &item.source_line_refs,
-            request_timeout,
-        )
-        .await
-        {
-            Ok(summary) if summary.claimed > 0 && summary.missing == 0 => {
-                if !item.media_objects.is_empty() {
-                    if let Err(err) = media_upload::ensure_media_uploaded(
-                        client,
-                        &item.session_id,
-                        &item.provider,
-                        &item.path_str,
-                        &item.media_objects,
-                        request_timeout,
-                    )
-                    .await
-                    {
-                        return AttemptedShip::MediaUploadFailed {
-                            item,
-                            error: err.to_string(),
-                        };
-                    }
-                }
-                tracing::info!(
-                    path = %item.path_str,
-                    provider = %item.provider,
-                    session_id = %item.session_id,
-                    source_lines = summary.present,
-                    "Archive transcript range already durable; reconciling without replay"
-                );
-                return AttemptedShip::Reconciled(item);
-            }
-            Ok(summary) => {
-                tracing::debug!(
-                    path = %item.path_str,
-                    provider = %item.provider,
-                    session_id = %item.session_id,
-                    source_lines_present = summary.present,
-                    source_lines_missing = summary.missing,
-                    "Archive transcript range still needs ingest"
-                );
-            }
-            Err(error) => {
-                tracing::debug!(
-                    path = %item.path_str,
-                    provider = %item.provider,
-                    session_id = %item.session_id,
-                    error = %error,
-                    "Source-line reconciliation unavailable; continuing with ingest"
-                );
-            }
-        }
-    }
+    // Archive retry identity is enforced by the ingest transaction.  Do not
+    // issue a cold source-line proof request before every replay range: that
+    // doubles archive work and lets repair occupy user-read capacity.
     if !item.media_objects.is_empty() {
         match media_upload::ensure_media_uploaded(
             client,
@@ -2838,24 +2786,6 @@ pub async fn ship_prepared_file_with_trace(
                 )
                 .await
                 {
-                    AttemptedShip::Reconciled(item) => {
-                        match cursor_mode {
-                            CursorMode::Archive => file_state.set_offset(
-                                &item.path_str,
-                                item.new_offset,
-                                &item.session_id,
-                                &item.session_id,
-                                &item.provider,
-                            )?,
-                            CursorMode::Live => live_file_state.set_offset(
-                                &item.path_str,
-                                item.new_offset,
-                                &item.provider,
-                                &item.session_id,
-                            )?,
-                        }
-                        outcome.bytes_shipped += item.new_offset - item.offset;
-                    }
                     AttemptedShip::Shipped(item) => {
                         match cursor_mode {
                             CursorMode::Archive => file_state.set_offset(
@@ -3398,15 +3328,6 @@ async fn replay_spool_entries(
                     )
                     .await
                     {
-                        AttemptedShip::Reconciled(item) => {
-                            file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
-                            if item.new_offset >= entry.end_offset {
-                                spool.mark_shipped(entry.id)?;
-                                entry_done = true;
-                            } else {
-                                spool.advance_start(entry.id, item.new_offset)?;
-                            }
-                        }
                         AttemptedShip::Shipped(item) => {
                             outcome.events_shipped += item.event_count;
                             file_state.set_acked_offset(&entry.file_path, item.new_offset)?;

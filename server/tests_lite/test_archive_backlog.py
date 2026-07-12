@@ -90,6 +90,7 @@ def test_archive_inspect_and_control(tmp_path: Path):
     assert payload["mode"] == "drain"
     assert payload["max_tick_bytes"] == 123
     assert payload["include_huge"] is True
+    assert payload["expires_at"] > payload["updated_at"]
 
 
 def test_archive_status_cli_reads_state_root(tmp_path: Path):
@@ -332,6 +333,15 @@ def test_archive_drain_max_safe_excludes_huge_ranges(tmp_path: Path):
     assert payload["mode"] == "drain"
     assert payload["max_tick_bytes"] == 4 * 1024 * 1024 * 1024
     assert payload["include_huge"] is False
+    assert payload["expires_at"] > payload["updated_at"]
+
+
+def test_archive_pause_is_persistent_but_drain_is_leased(tmp_path: Path):
+    paused = write_archive_control(tmp_path, mode="paused")
+    assert "expires_at" not in paused
+
+    drain = write_archive_control(tmp_path, mode="drain", lease_minutes=1)
+    assert drain["expires_at"] > drain["updated_at"]
 
 
 def test_archive_inspect_largest_cli_is_explicit(tmp_path: Path):

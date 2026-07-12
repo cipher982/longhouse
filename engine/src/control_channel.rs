@@ -52,6 +52,7 @@ const COMMAND_TERMINATE: &str = "session.terminate";
 const COMMAND_RUN_ONCE: &str = "session.run_once";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
+const COMMAND_ARCHIVE_BACKLOG_CONTROL_V2: &str = "archive.backlog_control.v2";
 const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_CURSOR_BIN: &str = "cursor-agent";
 const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
@@ -437,6 +438,7 @@ fn control_supports_for_path_with_env(
 ) -> Vec<String> {
     let mut supports = Vec::new();
     supports.push(COMMAND_ARCHIVE_BACKLOG_CONTROL.to_string());
+    supports.push(COMMAND_ARCHIVE_BACKLOG_CONTROL_V2.to_string());
     let longhouse_available = command_exists_in_path(DEFAULT_LONGHOUSE_BIN, path_value);
     for contract in managed_provider_contract_items() {
         let requires_longhouse = contract
@@ -799,7 +801,9 @@ async fn execute_command(
     if command_type == COMMAND_PROVIDER_LIVE_PROOF {
         return run_provider_live_proof_command(&payload).await;
     }
-    if command_type == COMMAND_ARCHIVE_BACKLOG_CONTROL {
+    if command_type == COMMAND_ARCHIVE_BACKLOG_CONTROL
+        || command_type == COMMAND_ARCHIVE_BACKLOG_CONTROL_V2
+    {
         return run_archive_backlog_control_command(&payload).await;
     }
 
@@ -1366,6 +1370,16 @@ async fn run_archive_backlog_control_command(
         "mode": normalized_mode,
         "updated_at": timestamp_now(),
     });
+    if normalized_mode != "paused" {
+        let lease_seconds = payload
+            .get("lease_seconds")
+            .and_then(Value::as_u64)
+            .unwrap_or(3600)
+            .clamp(60, 86_400);
+        control["expires_at"] = json!((chrono::Utc::now()
+            + chrono::Duration::seconds(lease_seconds as i64))
+        .to_rfc3339());
+    }
     if let Some(max_tick_bytes) = payload.get("max_tick_bytes").and_then(Value::as_u64) {
         control["max_tick_bytes"] = json!(max_tick_bytes);
     }
@@ -2808,6 +2822,7 @@ mod tests {
             supports,
             vec![
                 "archive.backlog_control".to_string(),
+                "archive.backlog_control.v2".to_string(),
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
                 "opencode.launch".to_string(),
@@ -2821,6 +2836,7 @@ mod tests {
             supports,
             vec![
                 "archive.backlog_control".to_string(),
+                "archive.backlog_control.v2".to_string(),
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
                 "opencode.launch".to_string(),
@@ -2848,7 +2864,10 @@ mod tests {
         write_executable(&dir, "agy");
         write_executable(&dir, "cursor-agent");
         let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
-        let mut expected = vec!["archive.backlog_control".to_string()];
+        let mut expected = vec![
+            "archive.backlog_control".to_string(),
+            "archive.backlog_control.v2".to_string(),
+        ];
         for contract in managed_provider_contract_items() {
             expected.extend(
                 contract

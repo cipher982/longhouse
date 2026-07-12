@@ -6,6 +6,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 from typing import Any
@@ -178,12 +179,16 @@ def write_archive_control(
     mode: str,
     max_tick_bytes: int | None = None,
     include_huge: bool | None = None,
+    lease_minutes: int = 60,
 ) -> dict[str, Any]:
     normalized_mode = _normalize_mode(mode)
+    now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
         "mode": normalized_mode,
-        "updated_at": _utc_now_iso(),
+        "updated_at": now.isoformat().replace("+00:00", "Z"),
     }
+    if normalized_mode != "paused":
+        payload["expires_at"] = (now + timedelta(minutes=max(1, lease_minutes))).isoformat().replace("+00:00", "Z")
     if max_tick_bytes is not None:
         payload["max_tick_bytes"] = max(1, int(max_tick_bytes))
     if include_huge is not None:

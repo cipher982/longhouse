@@ -157,6 +157,12 @@ class ArchiveBacklogControlRequest(UTCBaseModel):
         default=False,
         description="Allow replaying archive ranges >=100MB in explicit drain mode.",
     )
+    lease_seconds: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        description="Expiry for trickle/drain control; ignored for paused mode.",
+    )
     timeout_secs: int | None = Field(
         default=None,
         ge=1,

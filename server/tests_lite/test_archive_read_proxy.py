@@ -22,10 +22,11 @@ from zerg.database import get_db
 from zerg.database import initialize_live_database
 from zerg.database import make_live_engine
 from zerg.main import api_app
+from zerg.services.archive_read_proxy import archive_read_lane
 from zerg.services.archive_read_proxy import proxy_archive_request
 from zerg.services.archive_read_proxy import should_proxy_archive_request
-from zerg.services.archive_read_subprocess import _request_is_read_only
 from zerg.services.archive_read_subprocess import _readonly_sqlite_url
+from zerg.services.archive_read_subprocess import _request_is_read_only
 
 
 def _request(path: str, query: str = "", method: str = "GET", body: bytes = b"") -> Request:
@@ -88,6 +89,50 @@ def test_archive_read_proxy_routes_only_cold_get_surfaces():
     assert not should_proxy_archive_request(_request("/timeline/sessions"))
     assert not should_proxy_archive_request(_request("/timeline/sessions/stream"))
     assert not should_proxy_archive_request(_request("/agents/machines"))
+
+
+def test_archive_read_lane_reserves_user_capacity_from_source_proof():
+    assert archive_read_lane("/agents/source-lines/claims") == "background"
+    assert archive_read_lane("/agents/worklog/day") == "user"
+    assert archive_read_lane("/agents/ingest-health") == "user"
+    assert archive_read_lane("/timeline/sessions/example/workspace") == "user"
+
+
+@pytest.mark.asyncio
+async def test_background_source_proof_cannot_block_user_archive_read(monkeypatch):
+    background_started = asyncio.Event()
+    release_background = asyncio.Event()
+
+    class Child:
+        returncode = 0
+
+        async def communicate(self, payload):
+            request = json.loads(payload)
+            if request["path"] == "/agents/source-lines/claims":
+                background_started.set()
+                await release_background.wait()
+            envelope = {
+                "status_code": 200,
+                "headers": {"content-type": "application/json"},
+                "body_b64": base64.b64encode(b"{}").decode(),
+            }
+            return json.dumps(envelope).encode(), b""
+
+    async def spawn(*_args, **_kwargs):
+        return Child()
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", spawn)
+    background = asyncio.create_task(proxy_archive_request(_request("/agents/source-lines/claims", method="POST")))
+    await background_started.wait()
+
+    user_response = await asyncio.wait_for(
+        proxy_archive_request(_request("/agents/worklog/day")),
+        timeout=1.0,
+    )
+    assert user_response.status_code == 200
+
+    release_background.set()
+    assert (await background).status_code == 200
 
 
 @pytest.mark.parametrize(
