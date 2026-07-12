@@ -5475,14 +5475,20 @@ def _legacy_migration_summary(connection, run_id: str) -> dict[str, Any]:
 
 def _refresh_legacy_migration_run(connection, run_id: str, commit_seq: int, observed_at: datetime) -> None:
     runs = LegacyMigrationRun.__table__
+    rows = LegacyMigrationSession.__table__
     run = connection.execute(select(runs).where(runs.c.run_id == run_id)).mappings().one()
-    summary = _legacy_migration_summary(connection, run_id)
-    registered = int(summary["registered_session_count"])
     expected = int(run["expected_session_count"])
-    states = summary["state_counts"]
-    if registered < expected or states["pending"] or states["migrating"]:
-        state, completed_at = ("inventory" if registered < expected else "migrating"), None
-    elif states["degraded"]:
+    if run["state"] == "inventory":
+        registered = int(connection.execute(select(func.count()).select_from(rows).where(rows.c.run_id == run_id)).scalar_one())
+        if registered < expected:
+            state, completed_at = "inventory", None
+        else:
+            state, completed_at = "migrating", None
+    elif connection.execute(
+        select(rows.c.session_id).where(rows.c.run_id == run_id, rows.c.state.in_(("pending", "migrating"))).limit(1)
+    ).first():
+        state, completed_at = "migrating", None
+    elif connection.execute(select(rows.c.session_id).where(rows.c.run_id == run_id, rows.c.state == "degraded").limit(1)).first():
         state, completed_at = "degraded", observed_at
     else:
         state, completed_at = "complete", observed_at
