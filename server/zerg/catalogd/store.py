@@ -26,6 +26,7 @@ from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveDeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveLaunchReadiness
+from zerg.models.live_store import LiveMachineControlOperation
 from zerg.models.live_store import LiveRefreshSession
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
@@ -901,6 +902,78 @@ class CatalogStore:
             commit_seq = _advance_commit_seq(connection, observed_at)
             return {
                 **result.model_dump(mode="json"),
+                "commit_seq": str(commit_seq),
+            }
+
+    def apply_control_command_result(
+        self,
+        *,
+        owner_id: int,
+        device_id: str,
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Reconcile one unmatched control result without opening SQLite in the API."""
+
+        from zerg.services.machine_control_operations import TERMINAL_OPERATION_STATUSES
+        from zerg.services.remote_session_launch import reconcile_live_launch_from_command_result
+
+        command_id = str(message["command_id"])
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            matched = False
+            changed = False
+            match_kind: str | None = None
+            try:
+                operation = (
+                    orm.query(LiveMachineControlOperation)
+                    .filter(
+                        LiveMachineControlOperation.command_id == command_id,
+                        LiveMachineControlOperation.owner_id == owner_id,
+                        LiveMachineControlOperation.device_id == device_id,
+                    )
+                    .first()
+                )
+                if operation is not None:
+                    matched = True
+                    match_kind = "operation"
+                    if str(operation.status) not in TERMINAL_OPERATION_STATUSES:
+                        operation.finished_at = observed_at
+                        operation.updated_at = observed_at
+                        operation.expires_at = None
+                        if message["ok"]:
+                            operation.status = "succeeded"
+                            operation.result_json = json.dumps(message.get("result") or {}, sort_keys=True)
+                            operation.error_json = None
+                        else:
+                            error = message.get("error") or {}
+                            operation.status = "failed"
+                            operation.error_json = json.dumps(
+                                {
+                                    "code": str(error.get("code") or "machine_control_operation_failed"),
+                                    "message": str(error.get("message") or "Machine Agent control command failed"),
+                                },
+                                sort_keys=True,
+                            )
+                        changed = True
+                elif command_id.startswith(("launch-", "continue-")):
+                    matched = reconcile_live_launch_from_command_result(
+                        orm,
+                        message,
+                        command_id=command_id,
+                    )
+                    match_kind = "launch" if matched else None
+                    changed = matched
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at) if changed else _current_commit_seq(connection)
+            return {
+                "matched": matched,
+                "match_kind": match_kind,
                 "commit_seq": str(commit_seq),
             }
 

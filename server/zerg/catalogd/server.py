@@ -227,6 +227,8 @@ class CatalogDaemon:
             return await self._apply_machine_heartbeat(request)
         if request.method == "session.runtime.apply.v2":
             return await self._apply_session_runtime(request)
+        if request.method == "control.command_result.apply.v2":
+            return await self._apply_control_command_result(request)
         if request.method == "session.timeline.list.v2":
             return await self._list_session_timeline(request)
         if request.method == "session.read.v2":
@@ -633,6 +635,29 @@ class CatalogDaemon:
         result = await self._run_store(self._store.apply_session_runtime, events=events)
         return CatalogRpcResponse(id=request.id, result=result)
 
+    async def _apply_control_command_result(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "device_id", "message"}:
+            return self._error(request, "invalid_request", "control.command_result.apply.v2 has invalid parameters")
+        owner_id = request.params["owner_id"]
+        device_id = request.params["device_id"]
+        message = request.params["message"]
+        if type(owner_id) is not int or owner_id < 0:
+            return self._error(request, "invalid_request", "owner_id must be a non-negative integer")
+        if not _is_string(device_id, maximum=255):
+            return self._error(request, "invalid_request", "device_id must contain 1 to 255 characters")
+        try:
+            normalized_message = _validate_control_command_result(message)
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.apply_control_command_result,
+            owner_id=owner_id,
+            device_id=device_id,
+            message=normalized_message,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
     async def _list_session_timeline(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         expected = {
             "project",
@@ -888,6 +913,36 @@ def _validate_managed_lease(value: object) -> dict:
     if result["observed_at"] is not None:
         result["observed_at"] = _parse_datetime(result["observed_at"], "managed lease observed_at")
     return result
+
+
+def _validate_control_command_result(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise ValueError("message must be an object")
+    allowed = {"type", "command_id", "ok", "result", "error", "session_id"}
+    if not set(value).issubset(allowed):
+        raise ValueError("message has invalid fields")
+    command_id = value.get("command_id")
+    if not _is_string(command_id, maximum=96):
+        raise ValueError("message.command_id must contain 1 to 96 characters")
+    if type(value.get("ok")) is not bool:
+        raise ValueError("message.ok must be a boolean")
+    message_type = value.get("type")
+    if message_type is not None and message_type != "command_result":
+        raise ValueError("message.type must be command_result or null")
+    for field in ("result", "error"):
+        if value.get(field) is not None and not isinstance(value[field], dict):
+            raise ValueError(f"message.{field} must be an object or null")
+    session_id = value.get("session_id")
+    if session_id is not None and (not isinstance(session_id, str) or len(session_id) > 64):
+        raise ValueError("message.session_id must be a string of at most 64 characters or null")
+    return {
+        "type": "command_result",
+        "command_id": command_id,
+        "ok": value["ok"],
+        "result": dict(value.get("result") or {}),
+        "error": dict(value.get("error") or {}),
+        "session_id": session_id,
+    }
 
 
 def socket_path_is_live(path: Path) -> bool:

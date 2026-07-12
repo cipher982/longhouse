@@ -2027,110 +2027,119 @@ async def continue_remote_session(
     return _launch_result_for_attempt(launch_attempt)
 
 
+def reconcile_live_launch_from_command_result(
+    live_db: Session,
+    message: dict,
+    *,
+    command_id: str,
+    attach_catalog_control: bool = True,
+) -> bool:
+    """Apply one late launch result using the caller-owned catalog transaction."""
+
+    session_uuid: UUID | None = None
+    client_request_id: str | None = None
+    readiness = live_db.query(LiveLaunchReadiness).filter(LiveLaunchReadiness.command_id == command_id).first()
+    if readiness is not None:
+        try:
+            session_uuid = UUID(str(readiness.session_id))
+        except ValueError:
+            return False
+        client_request_id = (readiness.client_request_id or "").strip() or None
+    elif command_id.startswith("launch-"):
+        try:
+            session_uuid = UUID(command_id.removeprefix("launch-"))
+        except ValueError:
+            return False
+    else:
+        return False
+
+    reported_session_id = str(message.get("session_id") or "").strip()
+    if reported_session_id and reported_session_id != str(session_uuid):
+        return False
+
+    outbox_query = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == REMOTE_LAUNCH_KIND)
+    if command_id.startswith("continue-") and client_request_id:
+        outbox_query = outbox_query.filter(
+            LiveArchiveOutbox.idempotency_key == _remote_continue_outbox_key(session_id=session_uuid, client_request_id=client_request_id)
+        )
+    else:
+        outbox_query = outbox_query.filter(LiveArchiveOutbox.idempotency_key == remote_launch_idempotency_key(session_id=session_uuid))
+    outbox = outbox_query.order_by(LiveArchiveOutbox.id.desc()).first()
+    if outbox is None:
+        return False
+    payload = json.loads(outbox.payload_json or "{}")
+    launch = payload.get("launch") or {}
+    if message.get("ok"):
+        outcome = {
+            "state": "adopted",
+            "pid": _result_pid(message),
+            "argv": _result_argv(message),
+            "provider_thread_id": _result_resume_thread_id(message),
+            "thread_path": _result_resume_thread_path(message),
+            "external_name": launch.get("machine_id") or launch.get("device_id"),
+        }
+        update_live_launch_readiness_state(
+            live_db,
+            session_id=session_uuid,
+            state="adopted",
+            clear_expires=True,
+        )
+        if attach_catalog_control and str(launch.get("execution_lifetime") or "live_control") == "live_control":
+            attach_live_catalog_control(
+                live_db,
+                session_id=session_uuid,
+                provider=str(launch.get("provider") or ""),
+                device_id=str(launch.get("device_id") or "").strip() or None,
+                state="attached",
+                external_name=str(outcome.get("external_name") or "").strip() or None,
+                run_id=str(launch.get("run_id") or "").strip() or None,
+                provider_session_id=str(outcome.get("provider_thread_id") or "").strip() or None,
+                source_path=str(outcome.get("thread_path") or "").strip() or None,
+                launch_origin=str(launch.get("launch_origin") or "longhouse_spawned"),
+                force_new_run=str(launch.get("mode") or "") == "continue",
+            )
+        catalog_attempt = live_db.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == command_id).one_or_none()
+        if catalog_attempt is not None:
+            update_live_launch_catalog_outcome(
+                live_db,
+                session_id=session_uuid,
+                command_id=command_id,
+                state="adopted",
+            )
+    else:
+        error = message.get("error") or {}
+        code = normalize_remote_launch_error_code(error.get("code"))
+        outcome = {
+            "state": "failed",
+            "error_code": code,
+            "error_message": str(error.get("message") or "unknown error"),
+        }
+        update_live_launch_readiness_state(
+            live_db,
+            session_id=session_uuid,
+            state="failed",
+            error_code=code,
+            error_message=str(error.get("message") or "unknown error"),
+            clear_expires=True,
+        )
+    enqueue_remote_launch_outcome_outbox(live_db, launch=launch, outcome=outcome)
+    return True
+
+
 def _reconcile_live_launch_from_command_result(message: dict, *, command_id: str) -> bool:
     if not (command_id.startswith("launch-") or command_id.startswith("continue-")) or not database_module.live_store_configured():
         return False
-
     live_session_factory = database_module.get_live_write_session_factory()
     if live_session_factory is None:
         return False
-
-    def _write(live_db: Session) -> bool:
-        session_uuid: UUID | None = None
-        client_request_id: str | None = None
-        readiness = live_db.query(LiveLaunchReadiness).filter(LiveLaunchReadiness.command_id == command_id).first()
-        if readiness is not None:
-            try:
-                session_uuid = UUID(str(readiness.session_id))
-            except ValueError:
-                return False
-            client_request_id = (readiness.client_request_id or "").strip() or None
-        elif command_id.startswith("launch-"):
-            try:
-                session_uuid = UUID(command_id.removeprefix("launch-"))
-            except ValueError:
-                return False
-        else:
-            return False
-
-        reported_session_id = str(message.get("session_id") or "").strip()
-        if reported_session_id and reported_session_id != str(session_uuid):
-            return False
-
-        outbox_query = live_db.query(LiveArchiveOutbox).filter(LiveArchiveOutbox.kind == REMOTE_LAUNCH_KIND)
-        if command_id.startswith("continue-") and client_request_id:
-            outbox_query = outbox_query.filter(
-                LiveArchiveOutbox.idempotency_key
-                == _remote_continue_outbox_key(session_id=session_uuid, client_request_id=client_request_id)
-            )
-        else:
-            outbox_query = outbox_query.filter(LiveArchiveOutbox.idempotency_key == remote_launch_idempotency_key(session_id=session_uuid))
-        outbox = outbox_query.order_by(LiveArchiveOutbox.id.desc()).first()
-        if outbox is None:
-            return False
-        payload = json.loads(outbox.payload_json or "{}")
-        launch = payload.get("launch") or {}
-        if message.get("ok"):
-            outcome = {
-                "state": "adopted",
-                "pid": _result_pid(message),
-                "argv": _result_argv(message),
-                "provider_thread_id": _result_resume_thread_id(message),
-                "thread_path": _result_resume_thread_path(message),
-                "external_name": launch.get("machine_id") or launch.get("device_id"),
-            }
-            update_live_launch_readiness_state(
-                live_db,
-                session_id=session_uuid,
-                state="adopted",
-                clear_expires=True,
-            )
-            if database_module.live_catalog_enabled() and str(launch.get("execution_lifetime") or "live_control") == "live_control":
-                attach_live_catalog_control(
-                    live_db,
-                    session_id=session_uuid,
-                    provider=str(launch.get("provider") or ""),
-                    device_id=str(launch.get("device_id") or "").strip() or None,
-                    state="attached",
-                    external_name=str(outcome.get("external_name") or "").strip() or None,
-                    run_id=str(launch.get("run_id") or "").strip() or None,
-                    provider_session_id=str(outcome.get("provider_thread_id") or "").strip() or None,
-                    source_path=str(outcome.get("thread_path") or "").strip() or None,
-                    launch_origin=str(launch.get("launch_origin") or "longhouse_spawned"),
-                    force_new_run=str(launch.get("mode") or "") == "continue",
-                )
-            catalog_attempt = (
-                live_db.query(LiveSessionLaunchAttempt).filter(LiveSessionLaunchAttempt.command_id == command_id).one_or_none()
-            )
-            if catalog_attempt is not None:
-                update_live_launch_catalog_outcome(
-                    live_db,
-                    session_id=session_uuid,
-                    command_id=command_id,
-                    state="adopted",
-                )
-        else:
-            error = message.get("error") or {}
-            code = normalize_remote_launch_error_code(error.get("code"))
-            outcome = {
-                "state": "failed",
-                "error_code": code,
-                "error_message": str(error.get("message") or "unknown error"),
-            }
-            update_live_launch_readiness_state(
-                live_db,
-                session_id=session_uuid,
-                state="failed",
-                error_code=code,
-                error_message=str(error.get("message") or "unknown error"),
-                clear_expires=True,
-            )
-        enqueue_remote_launch_outcome_outbox(live_db, launch=launch, outcome=outcome)
-        return True
-
     try:
         with live_session_factory() as live_db:
-            result = _write(live_db)
+            result = reconcile_live_launch_from_command_result(
+                live_db,
+                message,
+                command_id=command_id,
+                attach_catalog_control=database_module.live_catalog_enabled(),
+            )
             live_db.commit()
             return bool(result)
     except Exception:
