@@ -319,8 +319,10 @@ def _machine_operation_dto(operation: LiveMachineControlOperation) -> dict[str, 
 class CatalogStore:
     """Small product operations over the bounded catalog.
 
-    Methods are deliberately synchronous: the daemon invokes them only on its
-    single dedicated executor, keeping SQLite work off the asyncio socket loop.
+    Methods are deliberately synchronous: the daemon invokes mutations on one
+    executor and explicitly read-only operations on a separate bounded pool,
+    keeping SQLite work off the asyncio socket loop while WAL readers remain
+    available during background writes.
     """
 
     def __init__(self, engine: Engine) -> None:

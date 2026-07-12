@@ -59,6 +59,7 @@ class CatalogDaemon:
         self._schema_generation = schema_generation
         self._checkpoint_interval_seconds = checkpoint_interval_seconds
         self._executor: ThreadPoolExecutor | None = None
+        self._read_executor: ThreadPoolExecutor | None = None
         self._store: CatalogStore | None = None
         self._checkpoint_task: asyncio.Task | None = None
 
@@ -77,6 +78,7 @@ class CatalogDaemon:
             self._engine = create_catalog_engine(self.database_path)
             self._meta = initialize_catalog_schema(self._engine)
             self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="catalogd-sqlite")
+            self._read_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="catalogd-read")
             self._store = CatalogStore(self._engine)
             if os.getenv("LONGHOUSE_CATALOGD_TEST_EXIT_AFTER_SCHEMA") == "1":
                 os._exit(93)
@@ -121,6 +123,9 @@ class CatalogDaemon:
         if self._executor is not None:
             self._executor.shutdown(wait=True, cancel_futures=True)
             self._executor = None
+        if self._read_executor is not None:
+            self._read_executor.shutdown(wait=True, cancel_futures=True)
+            self._read_executor = None
         if self._engine is not None:
             self._engine.dispose()
             self._engine = None
@@ -388,7 +393,7 @@ class CatalogDaemon:
         if not isinstance(token_hash, str) or len(token_hash) != 64 or any(character not in "0123456789abcdef" for character in token_hash):
             return self._error(request, "invalid_request", "token_hash must be 64 lowercase hexadecimal characters")
         assert self._store is not None
-        result = await self._run_store(
+        result = await self._run_read_store(
             self._store.authenticate_device,
             token_hash=token_hash,
         )
@@ -404,9 +409,8 @@ class CatalogDaemon:
         if type(touch) is not bool:
             return self._error(request, "invalid_request", "touch_last_login must be a boolean")
         assert self._store is not None
-        return CatalogRpcResponse(
-            id=request.id, result=await self._run_store(self._store.get_user, user_id=user_id, touch_last_login=touch)
-        )
+        runner = self._run_store if touch else self._run_read_store
+        return CatalogRpcResponse(id=request.id, result=await runner(self._store.get_user, user_id=user_id, touch_last_login=touch))
 
     async def _get_active_owner(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if request.params:
@@ -414,7 +418,7 @@ class CatalogDaemon:
         assert self._store is not None
         return CatalogRpcResponse(
             id=request.id,
-            result=await self._run_store(self._store.get_active_owner),
+            result=await self._run_read_store(self._store.get_active_owner),
         )
 
     async def _resolve_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -435,7 +439,8 @@ class CatalogDaemon:
         if type(interval) is not int or not 0 <= interval <= 86_400:
             return self._error(request, "invalid_request", "touch_interval_seconds must be an integer from 0 through 86400")
         assert self._store is not None
-        result = await self._run_store(
+        runner = self._run_store if touch else self._run_read_store
+        result = await runner(
             self._store.resolve_device,
             token_hash=token_hash,
             touch_last_used=touch,
@@ -2091,6 +2096,12 @@ class CatalogDaemon:
             raise CatalogDaemonError("catalog executor is not ready")
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, lambda: operation(*args, **kwargs))
+
+    async def _run_read_store(self, operation, *args, **kwargs):
+        if self._read_executor is None:
+            raise CatalogDaemonError("catalog read executor is not ready")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(self._read_executor, lambda: operation(*args, **kwargs))
 
     async def _checkpoint_loop(self) -> None:
         assert self._store is not None

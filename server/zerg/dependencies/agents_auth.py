@@ -136,7 +136,7 @@ def _validate_device_token_through_catalogd(token: str) -> DeviceToken | None:
             "auth.device.resolve.v2",
             params={
                 "token_hash": token_hash,
-                "touch_last_used": True,
+                "touch_last_used": False,
                 "touch_interval_seconds": 300,
             },
             timeout_seconds=0.1,

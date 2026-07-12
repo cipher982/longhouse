@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import stat
+import threading
 import time
 from datetime import UTC
 from datetime import datetime
@@ -436,6 +437,35 @@ async def test_catalog_operations_run_off_the_socket_event_loop(daemon_paths):
         assert not call.done()
         assert await call == {"valid": False, "commit_seq": "0"}
     finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_device_auth_reads_remain_live_while_mutation_executor_is_busy(daemon_paths):
+    database_path, socket_path = daemon_paths
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    mutation_started = threading.Event()
+    release_mutation = threading.Event()
+
+    def block_mutations():
+        mutation_started.set()
+        release_mutation.wait(timeout=2)
+
+    blocked = asyncio.create_task(daemon._run_store(block_mutations))
+    client = CatalogClient(socket_path)
+    try:
+        assert await asyncio.to_thread(mutation_started.wait, 1)
+        result = await asyncio.wait_for(
+            client.call("auth.device.validate.v2", {"token_hash": "a" * 64}),
+            timeout=0.2,
+        )
+        assert result == {"valid": False, "commit_seq": "0"}
+        assert not blocked.done()
+    finally:
+        release_mutation.set()
+        await blocked
         await client.close()
         await daemon.close()
 
