@@ -98,11 +98,11 @@ class AuthStrategy(ABC):
     """Pluggable authentication backend (strategy pattern)."""
 
     @abstractmethod
-    def get_current_user(self, request: Request, db: Session):  # noqa: D401 – abstract
+    def get_current_user(self, request: Request, db: Session | None = None):  # noqa: D401 – abstract
         """Return the authenticated user or raise **401**."""
 
     @abstractmethod
-    def validate_ws_token(self, token: str | None, db: Session):  # noqa: D401 – abstract
+    def validate_ws_token(self, token: str | None, db: Session | None = None):  # noqa: D401 – abstract
         """Return user for valid token, *None* otherwise (WS handshake)."""
 
 
@@ -216,20 +216,54 @@ class DevAuthStrategy(AuthStrategy):
 
     # Public API --------------------------------------------------------
 
-    def get_current_user(self, request: Request, db: Session):  # noqa: D401 – impl
+    def get_current_user(self, request: Request, db: Session | None = None):  # noqa: D401 – impl
         auth_header = request.headers.get("Authorization")
 
         # If *no* header provided we still allow access for almost all paths.
         if not auth_header:
             if "/mcp-servers" in request.url.path:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
-            return self._get_or_create_dev_user(db)
+            return self._resolve_dev_user(db)
 
         # Header present → always return dev user regardless of its content.
-        return self._get_or_create_dev_user(db)
+        return self._resolve_dev_user(db)
 
-    def validate_ws_token(self, token: str | None, db: Session):  # noqa: D401 – impl
-        return self._get_or_create_dev_user(db)
+    def validate_ws_token(self, token: str | None, db: Session | None = None):  # noqa: D401 – impl
+        return self._resolve_dev_user(db)
+
+    def _resolve_dev_user(self, db: Session | None):
+        if _legacy_auth_allowed(db):
+            assert db is not None
+            return self._get_or_create_dev_user(db)
+
+        from zerg.auth.catalog_gateway import resolve_local_user
+
+        desired_role = "ADMIN" if self._settings.dev_admin else "USER"
+        if self._settings.single_tenant:
+            from zerg.services.single_tenant import OSS_DEFAULT_EMAIL
+            from zerg.services.single_tenant import get_owner_email
+
+            owner_email = get_owner_email()
+            return resolve_local_user(
+                email=owner_email,
+                provider="local" if owner_email == OSS_DEFAULT_EMAIL else "dev",
+                provider_user_id="local-user-1" if owner_email == OSS_DEFAULT_EMAIL else None,
+                role=desired_role,
+                adopt_existing=True,
+                require_email_match=False,
+                max_users=None,
+                promote_role=True,
+            )
+        return resolve_local_user(
+            email=self.DEV_EMAIL,
+            provider="dev",
+            provider_user_id="test-user-1",
+            role=desired_role,
+            adopt_existing=False,
+            require_email_match=False,
+            max_users=None,
+            promote_role=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +308,7 @@ class JWTAuthStrategy(AuthStrategy):
 
     # Public API --------------------------------------------------------
 
-    def get_current_user(self, request: Request, db: Session):  # noqa: D401 – impl
+    def get_current_user(self, request: Request, db: Session | None = None):  # noqa: D401 – impl
         token = self._extract_token(request)
         if not token:
             raise HTTPException(
@@ -283,7 +317,7 @@ class JWTAuthStrategy(AuthStrategy):
             )
 
         if token.startswith("zdt_"):
-            user = _resolve_device_token_user(token, db)
+            user = _resolve_device_token_user(token, db, touch=True)
             if user is None:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked device token")
             return user
@@ -298,6 +332,15 @@ class JWTAuthStrategy(AuthStrategy):
         except Exception:  # noqa: BLE001
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token subject")
 
+        if not _legacy_auth_allowed(db):
+            from zerg.auth.catalog_gateway import resolve_user
+
+            user = resolve_user(user_id_int, touch_last_login=True)
+            if user is None or not user.is_active:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+            return user
+
+        assert db is not None
         user = get_user(db, user_id_int)
         if user is None or not getattr(user, "is_active", True):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
@@ -308,12 +351,12 @@ class JWTAuthStrategy(AuthStrategy):
 
         return user
 
-    def validate_ws_token(self, token: str | None, db: Session):  # noqa: D401 – impl
+    def validate_ws_token(self, token: str | None, db: Session | None = None):  # noqa: D401 – impl
         if not token:
             return None
 
         if token.startswith("zdt_"):
-            return _resolve_device_token_user(token, db)
+            return _resolve_device_token_user(token, db, touch=False)
 
         try:
             payload = self._decode(token)
@@ -325,6 +368,13 @@ class JWTAuthStrategy(AuthStrategy):
         except Exception:  # noqa: BLE001
             return None
 
+        if not _legacy_auth_allowed(db):
+            from zerg.auth.catalog_gateway import resolve_user
+
+            user = resolve_user(user_id_int, touch_last_login=False)
+            return user if user is not None and user.is_active else None
+
+        assert db is not None
         user = get_user(db, user_id_int)
         if user is None or not getattr(user, "is_active", True):
             return None
@@ -427,9 +477,9 @@ class HostedCPAuthStrategy(AuthStrategy):
             db.refresh(user)
         return user
 
-    def _user_from_token(self, token: str, db: Session):
+    def _user_from_token(self, token: str, db: Session | None):
         if token.startswith("zdt_"):
-            user = _resolve_device_token_user(token, db)
+            user = _resolve_device_token_user(token, db, touch=True)
             if user is None:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked device token")
             return user
@@ -437,9 +487,14 @@ class HostedCPAuthStrategy(AuthStrategy):
             claims = verify_runtime_token(token, audience=self._audience)
         except CPTokenError:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+        if not _legacy_auth_allowed(db):
+            from zerg.auth.catalog_gateway import resolve_control_plane_user
+
+            return resolve_control_plane_user(claims)
+        assert db is not None
         return self._resolve_claims_user(db, claims)
 
-    def get_current_user(self, request: Request, db: Session):  # noqa: D401 – impl
+    def get_current_user(self, request: Request, db: Session | None = None):  # noqa: D401 – impl
         token = self._extract_token(request)
         if not token:
             raise HTTPException(
@@ -448,23 +503,31 @@ class HostedCPAuthStrategy(AuthStrategy):
             )
         return self._user_from_token(token, db)
 
-    def validate_ws_token(self, token: str | None, db: Session):  # noqa: D401 – impl
+    def validate_ws_token(self, token: str | None, db: Session | None = None):  # noqa: D401 – impl
         if not token:
             return None
         try:
             return self._user_from_token(token, db)
-        except HTTPException:
+        except HTTPException as exc:
+            if exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+                raise
             return None
 
 
-def _resolve_device_token_user(token: str, db: Session):
+def _resolve_device_token_user(token: str, db: Session | None, *, touch: bool):
     """Resolve a `zdt_...` device token to its owner User row, or None.
 
     Lets the local dev proxy (and any other tooling that already holds a
     device token) authenticate browser API routes as the token's owner.
     """
+    if not _legacy_auth_allowed(db):
+        from zerg.auth.catalog_gateway import resolve_device_token
+
+        return resolve_device_token(token, touch_last_used=touch)
+
     from zerg.routers.device_tokens import validate_device_token
 
+    assert db is not None
     device_token = validate_device_token(token, db)
     if device_token is None:
         return None
@@ -472,6 +535,15 @@ def _resolve_device_token_user(token: str, db: Session):
     if user is None or not getattr(user, "is_active", True):
         return None
     return user
+
+
+def _legacy_auth_allowed(db: Session | None) -> bool:
+    """Keep ORM auth only inside explicit development and test processes."""
+
+    if db is None:
+        return False
+    settings = get_settings()
+    return bool(settings.testing or os.getenv("NODE_ENV") == "test")
 
 
 def _hosted_audience(settings) -> str:

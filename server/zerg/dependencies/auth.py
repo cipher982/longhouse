@@ -10,12 +10,12 @@ easier to test.
 from __future__ import annotations
 
 import hmac
+import os
 
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
-from sqlalchemy.orm import Session
 
 from zerg.auth.strategy import SESSION_COOKIE_NAME
 from zerg.auth.strategy import DevAuthStrategy
@@ -23,9 +23,7 @@ from zerg.auth.strategy import HostedCPAuthStrategy
 from zerg.auth.strategy import JWTAuthStrategy
 from zerg.auth.strategy import _decode_jwt_fallback as _decode_jwt_fallback  # type: ignore
 from zerg.config import get_settings
-from zerg.database import catalog_db_dependency
-
-_catalog_db_dependency = catalog_db_dependency()
+from zerg.database import get_db
 
 # ---------------------------------------------------------------------------
 # Choose strategy once per interpreter – no per-request branching.
@@ -60,6 +58,18 @@ DEV_EMAIL: str = "dev@local"  # noqa: N816 – keep legacy name
 _strategy_cache: dict[str, object] = {}
 
 
+def _no_auth_db():
+    """Production auth never asks FastAPI to open a SQLAlchemy session."""
+
+    yield None
+
+
+# Select the dependency graph once at startup. This preserves ordinary `get_db`
+# overrides in unit tests without resolving that dependency at all in runtime
+# processes, including AUTH_DISABLED/demo deployments.
+_auth_compat_db = get_db if (_settings.testing or os.getenv("NODE_ENV") == "test") else _no_auth_db
+
+
 def _get_strategy():  # noqa: D401 – internal helper
     """Return *singleton* strategy instance based on ``AUTH_DISABLED`` flag."""
 
@@ -85,7 +95,7 @@ def _get_strategy():  # noqa: D401 – internal helper
 # ---------------------------------------------------------------------------
 
 
-def get_current_user(request: Request, db: Session = Depends(_catalog_db_dependency)):
+def get_current_user(request: Request, db=Depends(_auth_compat_db)):
     """Return the authenticated *User* row or raise **401**.
 
     Accepts auth from:
@@ -105,7 +115,7 @@ def get_current_user(request: Request, db: Session = Depends(_catalog_db_depende
     return _get_strategy().get_current_user(request, db)
 
 
-def get_optional_user(request: Request, db: Session = Depends(_catalog_db_dependency)):
+def get_optional_user(request: Request, db=Depends(_auth_compat_db)):
     """Return the authenticated *User* row or **None**.
 
     This is a non-throwing variant for endpoints that need to detect auth
@@ -192,7 +202,7 @@ def require_internal_call(request: Request):
 # ---------------------------------------------------------------------------
 
 
-def validate_ws_jwt(token: str | None, db: Session):
+def validate_ws_jwt(token: str | None, db=None):
     """Return user for a valid WebSocket token – *None* when invalid."""
 
     return _get_strategy().validate_ws_token(token, db)
