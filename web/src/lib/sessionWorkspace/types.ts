@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentSessionTranscriptAction } from "../../services/api/agents";
+import type { AgentEvent, AgentEventId, AgentSessionTranscriptAction } from "../../services/api/agents";
 
 export type EventFilter = "all" | "messages" | "tools";
 
@@ -8,7 +8,7 @@ export type ToolInteraction = {
   callEvent: AgentEvent | null;
   resultEvent: AgentEvent | null;
   pairing: "id" | "fifo" | "orphan" | "pending";
-  anchorId: number;
+  anchorId: AgentEventId;
   timestamp: string;
 };
 
@@ -21,7 +21,7 @@ export type NoiseGroup = {
   key: string;
   interactions: ToolInteraction[];
   timestamp: string;
-  anchorId: number;
+  anchorId: AgentEventId;
 };
 
 export type TimelineSeam = {
@@ -73,8 +73,8 @@ export type TimelineModel = {
   toolItems: ToolInteraction[];
   noiseGroups: NoiseGroup[];
   selectionMap: Map<string, TimelineSelection>;
-  eventIdToSelectionKey: Map<number, string>;
-  eventIdToRowId: Map<number, string>;
+  eventIdToSelectionKey: Map<AgentEventId, string>;
+  eventIdToRowId: Map<AgentEventId, string>;
 };
 
 export type SessionInteractionMode =

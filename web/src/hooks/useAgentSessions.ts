@@ -198,7 +198,7 @@ export function useAgentSessionProjectionInfinite(
 ) {
   const { limit = 1000, enabled = true, branch_mode = "head", initialPage = null } = options;
   type ProjectionPageParam =
-    | { anchor: "tail" }
+    | { anchor: "tail"; cursor?: string }
     | { anchor: "start"; offset: number; limit: number };
 
   return useInfiniteQuery<
@@ -213,6 +213,7 @@ export function useAgentSessionProjectionInfinite(
       fetchAgentSessionProjection(sessionId!, {
         limit: pageParam.anchor === "tail" ? limit : pageParam.limit,
         anchor: pageParam.anchor,
+        cursor: pageParam.anchor === "tail" ? pageParam.cursor : undefined,
         offset: pageParam.anchor === "start" ? pageParam.offset : undefined,
         branch_mode,
       }),
@@ -220,6 +221,11 @@ export function useAgentSessionProjectionInfinite(
     // The initial page is the latest tail window. "Previous" pages are older
     // slices prepended above it in display order.
     getPreviousPageParam: (firstPage) => {
+      if (firstPage.generation_id) {
+        return firstPage.has_more && firstPage.next_cursor
+          ? { anchor: "tail", cursor: firstPage.next_cursor }
+          : undefined;
+      }
       const currentOffset = firstPage.page_offset ?? 0;
       if (currentOffset <= 0) return undefined;
 

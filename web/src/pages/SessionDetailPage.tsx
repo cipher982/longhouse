@@ -43,6 +43,7 @@ import {
   createSessionShare,
   respondToPauseRequest,
   setSessionAction,
+  type AgentEventId,
   type PauseRequestResponseRequest,
 } from "../services/api/agents";
 import { ApiError, DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
@@ -71,7 +72,7 @@ function SessionDetailWorkspaceRoute({
   sharedByUserId,
   shareToken,
 }: {
-  highlightEventId: number | null;
+  highlightEventId: AgentEventId | null;
   returnTo: string;
   sessionId: string | null;
   debugTelemetry: boolean;
@@ -651,9 +652,7 @@ export default function SessionDetailPage() {
 
   const highlightEventId = useMemo(() => {
     const raw = searchParams.get("event_id");
-    if (!raw) return null;
-    const parsed = Number(raw);
-    return Number.isFinite(parsed) ? parsed : null;
+    return raw || null;
   }, [searchParams]);
 
   const debugTelemetry = searchParams.get("debug") === "telemetry";

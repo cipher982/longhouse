@@ -18,6 +18,7 @@ import {
 } from "../lib/sessionWorkspace";
 import {
   connectSessionWorkspaceStream,
+  type AgentEventId,
   type AgentSession,
   type AgentSessionProjectionItem,
   type AgentSessionProjectionResponse,
@@ -57,14 +58,14 @@ function workspaceHasRunningTool(
 }
 
 interface UseSessionWorkspaceOptions {
-  highlightEventId?: number | null;
+  highlightEventId?: AgentEventId | null;
   shared_by?: number | null;
   share_token?: string | null;
 }
 
 interface PendingRenderBeacon {
   sessionId: string;
-  latestEventId: number;
+  latestEventId: AgentEventId;
   latestEventEmittedAtMs: number | null;
   serverFanoutAtMs: number | null;
   clientReceivedAtMs: number | null;
@@ -314,7 +315,7 @@ export function useSessionWorkspace(
   const [filteredVisibleKey, setFilteredVisibleKey] = useState<string | null | undefined>(undefined);
   const [timelineListElement, setTimelineListElement] = useState<HTMLDivElement | null>(null);
   const [evictedTailItems, setEvictedTailItems] = useState<AgentSessionProjectionItem[]>([]);
-  const highlightedEventRef = useRef<number | null>(null);
+  const highlightedEventRef = useRef<AgentEventId | null>(null);
   const autoScrolledSelectionRef = useRef(false);
   const lastTailPageRef = useRef<AgentSessionProjectionResponse | null>(null);
 
@@ -329,6 +330,9 @@ export function useSessionWorkspace(
 
   const sortedProjectionPages = useMemo(() => {
     if (!projectionPagesData) return [];
+    if (projectionPagesData.pages.some((page) => page.generation_id)) {
+      return projectionPagesData.pages;
+    }
     return [...projectionPagesData.pages]
       .sort((left, right) => (left.page_offset ?? 0) - (right.page_offset ?? 0));
   }, [projectionPagesData]);

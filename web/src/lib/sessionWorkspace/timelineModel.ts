@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentSession, AgentSessionProjectionItem } from "../../services/api/agents";
+import type { AgentEvent, AgentEventId, AgentSession, AgentSessionProjectionItem } from "../../services/api/agents";
 import { parseUTC } from "../dateUtils";
 import type {
   NoiseGroup,
@@ -263,10 +263,10 @@ export function getToolExitCode(interaction: ToolInteraction): number | null {
 
 export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]): TimelineModel {
   const byCallId = new Map<string, ToolInteraction>();
-  const byCallEventId = new Map<number, ToolInteraction>();
+  const byCallEventId = new Map<AgentEventId, ToolInteraction>();
   const fifoQueue: ToolInteraction[] = [];
-  const absorbedResultIds = new Set<number>();
-  const eventIdToSelectionKey = new Map<number, string>();
+  const absorbedResultIds = new Set<AgentEventId>();
+  const eventIdToSelectionKey = new Map<AgentEventId, string>();
   const events: AgentEvent[] = [];
 
   // Pass 1: collect events and pair assistant→tool_result by tool_call_id.
@@ -411,7 +411,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
 
   // Pass 4: selection map.
   const selectionMap = new Map<string, TimelineSelection>();
-  const eventIdToRowId = new Map<number, string>();
+  const eventIdToRowId = new Map<AgentEventId, string>();
 
   for (const item of groupedItems) {
     if (item.kind === "seam" || item.kind === "action") continue;

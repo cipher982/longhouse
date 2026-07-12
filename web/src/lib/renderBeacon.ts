@@ -46,7 +46,7 @@ export function getClockSkewMs(): number {
  */
 export function emitRenderBeacon(params: {
   sessionId: string;
-  latestEventId: number;
+  latestEventId: string | number;
   latestEventEmittedAtMs: number | null | undefined;
   managed: boolean;
   serverFanoutAtMs?: number | null;

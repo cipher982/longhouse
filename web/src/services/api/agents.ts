@@ -330,10 +330,13 @@ export interface AgentSessionProjectionResponse {
   page_offset?: number;
   branch_mode?: "head" | "all";
   abandoned_events?: number;
+  generation_id?: string | null;
+  next_cursor?: string | null;
+  has_more?: boolean;
 }
 
 export interface AgentSessionWorkspaceRevision {
-  latest_event_id?: number;
+  latest_event_id?: AgentEventId | null;
   latest_session_updated_at?: string | null;
   latest_runtime_signal_at?: string | null;
   runtime_version_sum?: number;
@@ -435,8 +438,11 @@ export interface AgentEventInputOrigin {
   client_request_id?: string | null;
 }
 
+export type AgentEventId = string | number;
+
 export interface AgentEvent {
-  id: number;
+  id: AgentEventId;
+  cursor?: string | null;
   role: string;
   content_text: string | null;
   raw_content_text?: string | null;
@@ -904,6 +910,7 @@ export async function fetchAgentSessionProjection(
     offset?: number;
     anchor?: "start" | "tail";
     branch_mode?: "head" | "all";
+    cursor?: string | null;
   } = {},
 ): Promise<AgentSessionProjectionResponse> {
   const params = new URLSearchParams();
@@ -912,6 +919,7 @@ export async function fetchAgentSessionProjection(
   if (options.offset) params.set("offset", String(options.offset));
   if (options.anchor && options.anchor !== "start") params.set("anchor", options.anchor);
   if (options.branch_mode) params.set("branch_mode", options.branch_mode);
+  if (options.cursor) params.set("cursor", options.cursor);
 
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/projection${queryString ? `?${queryString}` : ""}`;
