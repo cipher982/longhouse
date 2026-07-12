@@ -61,7 +61,6 @@ from zerg.services.session_listing import SessionListingError
 from zerg.services.session_shares import SessionShareError
 from zerg.services.session_shares import resolve_session_share
 from zerg.services.session_views import DemoSeedResponse
-from zerg.services.session_views import EventsListResponse
 from zerg.services.session_views import FiltersResponse
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
@@ -708,8 +707,8 @@ def get_timeline_session_turn(
     )
 
 
-@router.get("/sessions/{session_id}/events", response_model=EventsListResponse)
-def get_timeline_session_events(
+@router.get("/sessions/{session_id}/events")
+async def get_timeline_session_events(
     session_id: UUID,
     thread_id: Optional[UUID] = Query(
         None,
@@ -723,23 +722,57 @@ def get_timeline_session_events(
     anchor: str = Query("start", description="Page anchor: start|tail"),
     limit: int = Query(100, ge=1, le=1000, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    db: Session = Depends(get_db),
+    cursor: Optional[str] = Query(None, description="Exclusive storage-v2 cursor for the next older page"),
+    legacy_session_factory=Depends(get_legacy_workspace_session_factory),
+    current_user=Depends(get_current_browser_user),
 ):
-    return _sessions_router.get_session_events(
+    storage_workspace = await build_storage_v2_workspace(
         session_id=session_id,
-        thread_id=thread_id,
-        roles=roles,
-        tool_name=tool_name,
-        query=query,
-        context_mode=context_mode,
+        owner_id=int(current_user.id),
         branch_mode=branch_mode,
-        anchor=anchor,
         limit=limit,
-        offset=offset,
-        db=db,
-        _auth=None,
-        _single=None,
+        cursor=cursor,
     )
+    if storage_workspace is not None:
+        projection = storage_workspace["projection"]
+        role_filter = {value.strip() for value in roles.split(",") if value.strip()} if roles else None
+        events = [item["event"] for item in projection["items"] if item.get("kind") == "event" and item.get("event")]
+        if role_filter is not None:
+            events = [event for event in events if event.get("role") in role_filter]
+        if tool_name is not None:
+            events = [event for event in events if event.get("tool_name") == tool_name]
+        if query is not None:
+            needle = query.casefold()
+            events = [event for event in events if needle in str(event.get("content_text") or "").casefold()]
+        return {
+            "events": events,
+            "total": projection["total"],
+            "branch_mode": branch_mode,
+            "abandoned_events": projection["abandoned_events"],
+            "generation_id": projection.get("generation_id"),
+            "next_cursor": projection.get("next_cursor"),
+            "has_more": projection.get("has_more", False),
+        }
+
+    def build_legacy_events():
+        with legacy_session_factory() as db:
+            return _sessions_router.get_session_events(
+                session_id=session_id,
+                thread_id=thread_id,
+                roles=roles,
+                tool_name=tool_name,
+                query=query,
+                context_mode=context_mode,
+                branch_mode=branch_mode,
+                anchor=anchor,
+                limit=limit,
+                offset=offset,
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+
+    return await asyncio.to_thread(build_legacy_events)
 
 
 @router.get("/sessions/{session_id}/projection")
