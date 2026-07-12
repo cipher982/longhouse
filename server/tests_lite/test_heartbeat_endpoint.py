@@ -127,6 +127,67 @@ def test_heartbeat_endpoint_creates_row(tmp_path):
     finally:
         api_app_ref.dependency_overrides = {}
 
+
+@pytest.mark.asyncio
+async def test_catalog_heartbeat_uses_one_rpc_without_opening_sqlite(monkeypatch):
+    import zerg.routers.heartbeat as heartbeat_router
+
+    calls: list[tuple[str, dict, float]] = []
+
+    class CatalogClient:
+        async def call(self, method, params, *, timeout_seconds):
+            calls.append((method, params, timeout_seconds))
+            return {"previous_sessions_digest": "digest-0", "commit_seq": "42", "exact_replay": False}
+
+    class FakeRequest:
+        client = SimpleNamespace(host="127.0.0.1")
+
+        async def body(self):
+            return b"{}"
+
+    def fail_legacy_serializer():  # pragma: no cover - assertion is the behavior
+        raise AssertionError("catalog heartbeat must not resolve a Runtime Host SQLite serializer")
+
+    monkeypatch.setattr(heartbeat_router, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(heartbeat_router, "live_store_configured", lambda: True)
+    monkeypatch.setattr(heartbeat_router, "get_catalogd_client", lambda: CatalogClient())
+    monkeypatch.setattr(heartbeat_router, "get_write_serializer", fail_legacy_serializer)
+    monkeypatch.setattr(heartbeat_router, "get_live_write_serializer", fail_legacy_serializer)
+
+    session_id = uuid4()
+    payload = heartbeat_router.HeartbeatIn(
+        version="catalog-test",
+        sessions_digest="digest-1",
+        sessions_sequence=8,
+        managed_sessions=[
+            heartbeat_router.ManagedSessionLeaseIn(
+                session_id=session_id,
+                provider="codex",
+                machine_id="cinder",
+                sequence=8,
+                state="attached",
+                phase="idle",
+            )
+        ],
+    )
+    response = await heartbeat_router.ingest_heartbeat(
+        payload,
+        FakeRequest(),
+        None,
+        SimpleNamespace(id="token-1", device_id="cinder", owner_id=7),
+    )
+
+    assert response.status_code == 204
+    assert len(calls) == 1
+    method, params, timeout = calls[0]
+    assert method == "machine.heartbeat.apply.v2"
+    assert timeout == heartbeat_router._HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS
+    assert params["heartbeat"]["device_id"] == "cinder"
+    assert params["heartbeat"]["sessions_digest"] == "digest-1"
+    assert params["managed_leases_present"] is True
+    assert params["managed_leases"][0]["session_id"] == str(session_id)
+    assert params["owner_id"] == 7
+
 def test_heartbeat_releases_request_db_before_serialized_write(tmp_path, monkeypatch):
     from zerg.dependencies.agents_auth import verify_agents_token
     from zerg.main import api_app

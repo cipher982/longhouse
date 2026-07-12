@@ -28,6 +28,9 @@ _SAFE_RETRY_METHODS = {
     "auth.device.validate.v2",
     "auth.owner.get.v2",
     "machine.enrollment.list.v2",
+    # apply is idempotent on (device_id, received_at) and rejects a key reused
+    # with different content, so a lost response can safely replay once.
+    "machine.heartbeat.apply.v2",
     "machine.workspace.list.v2",
     "ping.v2",
     "schema.v2",

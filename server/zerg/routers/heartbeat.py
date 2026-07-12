@@ -30,7 +30,11 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.client import CatalogRemoteError
+from zerg.catalogd.client import CatalogUnavailable
+from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
+from zerg.database import live_catalog_enabled
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import agents_heartbeat_payload_bytes
@@ -47,6 +51,7 @@ from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_archive_outbox import enqueue_heartbeat_stamp_outbox
 from zerg.services.live_session_state import mark_missing_live_sessions
 from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
@@ -88,6 +93,18 @@ UNBOUND_UNMANAGED_CLOSE_GRACE = timedelta(seconds=90)
 _HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS = 2.0
 _HEARTBEAT_BOOKKEEPING_EXEC_TIMEOUT_SECONDS = 5.0
 _TRUTHY_ENV = {"1", "true", "yes", "on"}
+
+
+def _no_heartbeat_db():
+    """The Runtime Host must not open SQLite for hosted heartbeats."""
+
+    yield None
+
+
+_settings = get_settings()
+_heartbeat_db_dependency = (
+    _catalog_db_dependency if _settings.testing or os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV else _no_heartbeat_db
+)
 
 
 class UnmanagedSessionBindingIn(UTCBaseModel):
@@ -748,7 +765,7 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
 async def ingest_heartbeat(
     payload: HeartbeatIn,
     request: Request,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_heartbeat_db_dependency),
     _token: DeviceToken | None = Depends(verify_agents_token),
 ) -> Response:
     """Accept a heartbeat from an engine daemon.
@@ -1086,25 +1103,74 @@ async def ingest_heartbeat(
                             )
                 return publish_sessions
 
-            ws = get_write_serializer()
-            live_ws = get_live_write_serializer() if live_store_configured() else None
+            catalog_mode = live_catalog_enabled()
+            ws = None if catalog_mode else get_write_serializer()
+            live_ws = get_live_write_serializer() if live_store_configured() and not catalog_mode else None
             with tracer.start_as_current_span("longhouse.heartbeat.write") as write_span:
                 write_started = time.monotonic()
                 try:
-                    if live_ws is not None:
+                    if catalog_mode:
+                        catalogd = get_catalogd_client()
+                        if catalogd is None:
+                            raise HTTPException(
+                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail={
+                                    "code": "catalog_unavailable",
+                                    "message": "Catalog mutation is temporarily unavailable.",
+                                },
+                            )
+                        result = await catalogd.call(
+                            "machine.heartbeat.apply.v2",
+                            {
+                                "heartbeat": {
+                                    key: (value.isoformat() if isinstance(value, datetime) else value)
+                                    for key, value in heartbeat_stamp_kwargs.items()
+                                },
+                                "managed_leases": [lease.model_dump(mode="json") for lease in _managed_leases],
+                                "managed_leases_present": _managed_leases_present,
+                                "owner_id": getattr(_token, "owner_id", None),
+                            },
+                            timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
+                        )
+                        previous_sessions_digest = result.get("previous_sessions_digest")
+                        commit_seq = result.get("commit_seq")
+                        exact_replay = result.get("exact_replay")
+                        if (
+                            (previous_sessions_digest is not None and not isinstance(previous_sessions_digest, str))
+                            or not isinstance(commit_seq, str)
+                            or not commit_seq.isdecimal()
+                            or type(exact_replay) is not bool
+                        ):
+                            raise HTTPException(
+                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail={
+                                    "code": "catalog_protocol_error",
+                                    "message": "Catalog returned an invalid heartbeat result.",
+                                },
+                            )
+                    elif live_ws is not None:
                         if not live_ws.is_configured:
                             raise HTTPException(
                                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                                 detail="Live Store write serializer is not configured",
                             )
                         if os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV:
-                            db.close()
+                            if db is not None:
+                                db.close()
                         previous_sessions_digest = await live_ws.execute(
                             _insert_live_heartbeat_stamp,
                             label="heartbeat-stamp",
                             queue_timeout_seconds=_HOT_HEARTBEAT_QUEUE_TIMEOUT_SECONDS,
                         )
                     else:
+                        if db is None:
+                            raise HTTPException(
+                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail={
+                                    "code": "catalog_unavailable",
+                                    "message": "Heartbeat storage is temporarily unavailable.",
+                                },
+                            )
                         previous_sessions_digest = await ws.execute_after_closing_request_session(
                             _insert_heartbeat_stamp,
                             db,
@@ -1113,7 +1179,30 @@ async def ingest_heartbeat(
                         )
                 except WriteQueueTimeoutError:
                     request_status_label = "write_backpressure"
-                    raise_hot_write_backpressure(live_ws or ws, admission_state="heartbeat_queue_timeout")
+                    serializer = live_ws or ws
+                    if serializer is None:  # pragma: no cover - catalogd does not raise this legacy exception
+                        raise
+                    raise_hot_write_backpressure(serializer, admission_state="heartbeat_queue_timeout")
+                except CatalogUnavailable as exc:
+                    request_status_label = "write_backpressure"
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail={
+                            "code": "catalog_unavailable",
+                            "message": "Catalog mutation is temporarily unavailable.",
+                        },
+                    ) from exc
+                except CatalogRemoteError as exc:
+                    request_status_label = "write_backpressure" if exc.retryable else "internal_error"
+                    raise HTTPException(
+                        status_code=(status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_500_INTERNAL_SERVER_ERROR),
+                        detail={
+                            "code": "catalog_unavailable" if exc.retryable else "catalog_operation_failed",
+                            "message": (
+                                "Catalog mutation is temporarily unavailable." if exc.retryable else "Catalog heartbeat mutation failed."
+                            ),
+                        },
+                    ) from exc
                 write_ms = round((time.monotonic() - write_started) * 1000, 1)
                 agents_heartbeat_write_seconds.observe(write_ms / 1000.0)
                 set_span_attributes(
@@ -1134,6 +1223,7 @@ async def ingest_heartbeat(
                         )
 
                     if os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV:
+                        assert ws is not None
                         publish_sessions = await execute_post_write(
                             ws,
                             write_fn,
@@ -1142,6 +1232,7 @@ async def ingest_heartbeat(
                             timeout_seconds=_HEARTBEAT_BOOKKEEPING_EXEC_TIMEOUT_SECONDS,
                         )
                     else:
+                        assert ws is not None
                         publish_sessions = await ws.execute(
                             write_fn,
                             label="heartbeat-bookkeeping",
@@ -1162,9 +1253,7 @@ async def ingest_heartbeat(
                 except Exception:
                     logger.exception("Failed to run heartbeat bookkeeping for device %s", _device_id)
 
-            from zerg.database import live_catalog_enabled
-
-            if live_catalog_enabled():
+            if catalog_mode:
                 pass
             elif os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV:
                 await _run_heartbeat_bookkeeping()
