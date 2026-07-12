@@ -478,6 +478,29 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // 3. Create HTTP client
     let client = ShipperClient::with_compression(&config.shipper_config, config.algo)?;
     tracing::info!("Shipping to: {}", client.ingest_url());
+    match client
+        .storage_v2_capabilities(
+            &config.shipper_config.machine_name,
+            Some(Duration::from_secs(5)),
+        )
+        .await?
+    {
+        Some(capabilities) if capabilities.cutover => {
+            anyhow::bail!(
+                "Runtime Host requires storage-v2 transcript shipping for tenant {}, but this engine build has not enabled its write path",
+                capabilities.tenant_id
+            );
+        }
+        Some(capabilities) => {
+            tracing::info!(
+                tenant_id = %capabilities.tenant_id,
+                "Runtime Host accepts storage-v2 but has not enabled cutover"
+            );
+        }
+        None => {
+            tracing::info!("Runtime Host does not advertise storage-v2; using the legacy ingest protocol");
+        }
+    }
 
     // 4. Discover providers
     let providers = discovery::get_providers();

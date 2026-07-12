@@ -13,6 +13,8 @@ use serde::de::DeserializeOwned;
 
 use crate::config::ShipperConfig;
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
+use crate::shipping::storage_v2::{StorageV2Capabilities, StorageV2Envelope, StorageV2Receipt};
+use crate::shipping::storage_v2::{STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER};
 
 const SHIP_TRACE_HEADER: &str = "X-Longhouse-Ship-Trace";
 const INGEST_BACKPRESSURE_HEADER: &str = "X-Ingest-Backpressure";
@@ -360,6 +362,75 @@ impl ShipperClient {
         let resp = request.send().await.context("GET failed")?;
         let resp = resp.error_for_status().context("GET returned non-2xx")?;
         resp.json::<T>().await.context("GET returned invalid JSON")
+    }
+
+    /// Negotiate storage-v2 once at process startup. Only a literal 404 means
+    /// an older Runtime Host; auth, transport, and server failures are errors.
+    pub async fn storage_v2_capabilities(
+        &self,
+        machine_id: &str,
+        request_timeout: Option<Duration>,
+    ) -> Result<Option<StorageV2Capabilities>> {
+        let url = self
+            .ingest_url
+            .replace("/api/agents/ingest", STORAGE_V2_CAPABILITIES_PATH);
+        let mut request = self
+            .client
+            .get(&url)
+            .header("X-Longhouse-Machine-Id", machine_id);
+        if let Some(request_timeout) = request_timeout {
+            request = request.timeout(request_timeout);
+        }
+        let response = request.send().await.context("storage-v2 capability request failed")?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let response = response
+            .error_for_status()
+            .context("storage-v2 capability request returned non-2xx")?;
+        let capabilities = response
+            .json::<StorageV2Capabilities>()
+            .await
+            .context("storage-v2 capability response is invalid")?;
+        capabilities.validate(machine_id)?;
+        Ok(Some(capabilities))
+    }
+
+    #[allow(dead_code)] // Activated atomically with the server's storage-v2 cutover flag.
+    pub async fn ship_storage_v2_envelope(
+        &self,
+        ingest_path: &str,
+        lane: &str,
+        envelope: &StorageV2Envelope,
+        request_timeout: Option<Duration>,
+    ) -> Result<StorageV2Receipt> {
+        if lane != "live" && lane != "repair" {
+            anyhow::bail!("storage-v2 lane must be live or repair");
+        }
+        let url = self.ingest_url.replace("/api/agents/ingest", ingest_path);
+        let body = serde_json::to_vec(envelope).context("serializing storage-v2 envelope")?;
+        let mut request = self
+            .client
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::CONTENT_ENCODING, "identity")
+            .header(STORAGE_V2_LANE_HEADER, lane)
+            .body(body);
+        if let Some(request_timeout) = request_timeout {
+            request = request.timeout(request_timeout);
+        }
+        let response = request.send().await.context("storage-v2 envelope POST failed")?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("storage-v2 envelope POST returned {status}: {body}");
+        }
+        let receipt = response
+            .json::<StorageV2Receipt>()
+            .await
+            .context("storage-v2 envelope receipt is invalid JSON")?;
+        receipt.validate(&envelope.expected_envelope_id)?;
+        Ok(receipt)
     }
 
     /// Get the ingest URL (for logging).

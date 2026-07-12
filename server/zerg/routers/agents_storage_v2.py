@@ -327,13 +327,14 @@ async def storage_v2_capabilities(
     _single: None = Depends(require_single_tenant),
 ) -> dict[str, object]:
     settings = get_settings()
-    payload_machine = request.query_params.get("machine_id")
+    payload_machine = request.headers.get("X-Longhouse-Machine-Id") or request.query_params.get("machine_id")
     try:
         machine_id = _authenticated_machine_id(auth_token, {"machine_id": payload_machine})
     except ValueError as exc:
         raise _http_error(status.HTTP_422_UNPROCESSABLE_ENTITY, "invalid_machine", str(exc)) from exc
     return {
         "protocol_version": 2,
+        "cutover": False,
         "tenant_id": settings.archive_primary_tenant_id,
         "machine_id": machine_id,
         "ingest_path": "/api/agents/storage/v2/envelopes",

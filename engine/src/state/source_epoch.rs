@@ -67,6 +67,7 @@ pub struct SourceEpochResolution {
     pub predecessor_epoch: Option<Uuid>,
     pub created: bool,
     pub start_reason: EpochStartReason,
+    pub opened_at: String,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +78,7 @@ struct ActiveEpoch {
     start_reason: EpochStartReason,
     max_observed_len: u64,
     source_revision: Option<String>,
+    opened_at: String,
 }
 
 /// Observe a real file and resolve its shared durable source epoch.
@@ -181,6 +183,7 @@ pub fn observe_source(
                 predecessor_epoch: active.predecessor_epoch,
                 created: false,
                 start_reason: active.start_reason,
+                opened_at: active.opened_at,
             };
             resolution
         }
@@ -209,6 +212,7 @@ pub fn observe_source(
                 predecessor_epoch: Some(active.source_epoch),
                 created: true,
                 start_reason: reason,
+                opened_at: now.clone(),
             }
         }
         (None, _) => {
@@ -230,6 +234,7 @@ pub fn observe_source(
                 predecessor_epoch: None,
                 created: true,
                 start_reason: EpochStartReason::Initial,
+                opened_at: now.clone(),
             }
         }
     };
@@ -237,9 +242,7 @@ pub fn observe_source(
     tx.execute(
         "INSERT INTO source_epoch_lane_state (source_epoch, lane, last_position, updated_at)
          VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(source_epoch, lane) DO UPDATE SET
-             last_position = MAX(last_position, excluded.last_position),
-             updated_at = excluded.updated_at",
+         ON CONFLICT(source_epoch, lane) DO NOTHING",
         params![
             resolved.source_epoch.to_string(),
             lane.as_str(),
@@ -251,6 +254,49 @@ pub fn observe_source(
     Ok(resolved)
 }
 
+pub fn lane_position(conn: &Connection, source_epoch: Uuid, lane: SourceLane) -> Result<u64> {
+    let value = conn
+        .query_row(
+            "SELECT last_position FROM source_epoch_lane_state WHERE source_epoch = ?1 AND lane = ?2",
+            params![source_epoch.to_string(), lane.as_str()],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .ok_or_else(|| anyhow::anyhow!("source epoch lane is not registered"))?;
+    u64::try_from(value).context("source epoch lane position is negative")
+}
+
+pub fn acknowledge_position(
+    conn: &mut Connection,
+    source_epoch: Uuid,
+    lane: SourceLane,
+    expected_start: u64,
+    acknowledged_through: u64,
+) -> Result<()> {
+    if acknowledged_through < expected_start {
+        bail!("source epoch acknowledgement cannot move backward");
+    }
+    let expected_start = i64::try_from(expected_start).context("source position exceeds SQLite INTEGER")?;
+    let acknowledged_through =
+        i64::try_from(acknowledged_through).context("source position exceeds SQLite INTEGER")?;
+    let changed = conn.execute(
+        "UPDATE source_epoch_lane_state
+         SET last_position = ?1, updated_at = ?2
+         WHERE source_epoch = ?3 AND lane = ?4 AND last_position = ?5",
+        params![
+            acknowledged_through,
+            Utc::now().to_rfc3339(),
+            source_epoch.to_string(),
+            lane.as_str(),
+            expected_start
+        ],
+    )?;
+    if changed != 1 {
+        bail!("source epoch lane cursor changed before acknowledgement");
+    }
+    Ok(())
+}
+
 fn load_active_epoch(
     conn: &Connection,
     provider: &str,
@@ -258,7 +304,7 @@ fn load_active_epoch(
 ) -> Result<Option<ActiveEpoch>> {
     conn.query_row(
         "SELECT source_epoch, file_incarnation, predecessor_epoch, start_reason,
-                max_observed_len, source_revision
+                max_observed_len, source_revision, created_at
          FROM source_epoch_registry
          WHERE provider = ?1 AND opaque_source_id = ?2 AND ended_at IS NULL",
         params![provider, opaque_source_id],
@@ -273,12 +319,13 @@ fn load_active_epoch(
                 reason,
                 row.get::<_, i64>(4)?,
                 row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
             ))
         },
     )
     .optional()?
     .map(
-        |(epoch, incarnation, predecessor, reason, max_len, source_revision)| {
+        |(epoch, incarnation, predecessor, reason, max_len, source_revision, opened_at)| {
             Ok(ActiveEpoch {
                 source_epoch: Uuid::parse_str(&epoch)?,
                 file_incarnation: incarnation,
@@ -288,6 +335,7 @@ fn load_active_epoch(
                 start_reason: parse_reason(&reason)?,
                 max_observed_len: u64::try_from(max_len).context("negative source length")?,
                 source_revision,
+                opened_at,
             })
         },
     )
@@ -378,6 +426,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(archive.source_epoch, live.source_epoch);
+        assert_eq!(lane_position(&conn, archive.source_epoch, SourceLane::Archive).unwrap(), 4);
+        assert_eq!(lane_position(&conn, archive.source_epoch, SourceLane::Live).unwrap(), 8);
+        assert!(!archive.opened_at.is_empty());
         drop(conn);
 
         let mut reopened = crate::state::db::open_db(Some(&db_path)).unwrap();
@@ -394,6 +445,17 @@ mod tests {
         .unwrap();
         assert_eq!(archive.source_epoch, after_restart.source_epoch);
         assert!(!after_restart.created);
+        assert_eq!(after_restart.opened_at, archive.opened_at);
+        assert_eq!(lane_position(&reopened, archive.source_epoch, SourceLane::Archive).unwrap(), 4);
+        acknowledge_position(
+            &mut reopened,
+            archive.source_epoch,
+            SourceLane::Archive,
+            4,
+            8,
+        )
+        .unwrap();
+        assert_eq!(lane_position(&reopened, archive.source_epoch, SourceLane::Archive).unwrap(), 8);
     }
 
     #[test]
