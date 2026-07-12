@@ -225,6 +225,8 @@ class CatalogDaemon:
             return await self._revoke_refresh_family(request)
         if request.method == "machine.heartbeat.apply.v2":
             return await self._apply_machine_heartbeat(request)
+        if request.method == "session.runtime.apply.v2":
+            return await self._apply_session_runtime(request)
         if request.method == "session.timeline.list.v2":
             return await self._list_session_timeline(request)
         if request.method == "session.read.v2":
@@ -606,6 +608,29 @@ class CatalogDaemon:
                 "heartbeat idempotency identity was reused with different content",
                 details={"reason": "idempotency_conflict"},
             )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _apply_session_runtime(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"events"}:
+            return self._error(request, "invalid_request", "session.runtime.apply.v2 has invalid parameters")
+        raw_events = request.params["events"]
+        if not isinstance(raw_events, list) or not 1 <= len(raw_events) <= 128:
+            return self._error(request, "invalid_request", "events must contain 1 through 128 rows")
+        from pydantic import ValidationError
+
+        from zerg.services.session_runtime import RuntimeEventIngest
+
+        try:
+            events = [RuntimeEventIngest.model_validate(item) for item in raw_events]
+        except ValidationError as exc:
+            return self._error(
+                request,
+                "invalid_request",
+                "runtime event validation failed",
+                details={"error_count": len(exc.errors())},
+            )
+        assert self._store is not None
+        result = await self._run_store(self._store.apply_session_runtime, events=events)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_session_timeline(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

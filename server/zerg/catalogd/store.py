@@ -862,6 +862,48 @@ class CatalogStore:
             )
             return result
 
+    def apply_session_runtime(self, *, events: list[Any]) -> dict[str, Any]:
+        """Atomically reduce one bounded runtime batch and queue durable events."""
+
+        from zerg.services.live_archive_outbox import enqueue_runtime_events_outbox
+        from zerg.services.session_runtime import ingest_live_runtime_events
+
+        observed_at = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                result = ingest_live_runtime_events(orm, events)
+                updated_keys = set(result.updated_runtime_keys)
+                resume_session_ids = {
+                    str(event.session_id)
+                    for event in events
+                    if event.session_id is not None
+                    and event.runtime_key in updated_keys
+                    and event.kind == "phase_signal"
+                    and event.phase in {"thinking", "running"}
+                }
+                if resume_session_ids:
+                    orm.query(LiveSessionCatalog).filter(
+                        LiveSessionCatalog.session_id.in_(resume_session_ids),
+                        LiveSessionCatalog.user_state == "snoozed",
+                    ).update(
+                        {"user_state": "active", "user_state_at": observed_at},
+                        synchronize_session=False,
+                    )
+                archive_events = [event for event in events if not _is_bridge_live_transcript_event(event)]
+                enqueue_runtime_events_outbox(orm, archive_events)
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                **result.model_dump(mode="json"),
+                "commit_seq": str(commit_seq),
+            }
+
     def list_session_timeline(
         self,
         *,
@@ -1638,6 +1680,16 @@ def _decode_json_object(value: object) -> dict[str, Any]:
     if not isinstance(decoded, dict):
         raise RuntimeError("catalog receipt JSON is not an object")
     return decoded
+
+
+def _is_bridge_live_transcript_event(event: Any) -> bool:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    return (
+        str(event.provider or "").strip().lower() == "codex"
+        and str(event.source or "").strip().lower() == "codex_bridge_live"
+        and event.kind == "progress_signal"
+        and payload.get("progress_kind") == "bridge_live_transcript_delta"
+    )
 
 
 def _recency_weight(age_days: float) -> int:
