@@ -66,7 +66,6 @@ from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import should_include_runtime_view
-from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_STATE
 from zerg.services.session_runtime_display import ActivityRecency
 from zerg.services.session_runtime_display import ControlPath
 from zerg.services.session_runtime_display import HostState
@@ -76,7 +75,6 @@ from zerg.services.session_runtime_display import SignalTier
 from zerg.services.session_runtime_display import TerminalReason
 from zerg.services.session_runtime_display import Tone
 from zerg.services.session_runtime_display import TruthTier
-from zerg.services.session_runtime_display import build_session_runtime_display
 from zerg.services.session_state_contract import SessionStateFacts
 from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_title import resolve_timeline_title
@@ -362,60 +360,6 @@ def _runtime_is_executing(*, runtime_display, runtime_facts) -> bool:
     return phase_kind in {"thinking", "running", "blocked", "stalled"}
 
 
-def build_session_runtime_display_response(
-    *,
-    runtime_overlay: SessionRuntimeView,
-    capability_flags,
-    ended_at: datetime | None,
-    binding_host_state: str | None = None,
-    binding_terminal_reason: str | None = None,
-    last_activity_at: datetime | None = None,
-    user_messages: int | None = None,
-    assistant_messages: int | None = None,
-    has_visible_transcript_preview: bool = False,
-    has_pending_response_turn: bool = False,
-    pause_request: dict[str, Any] | None = None,
-    now: datetime | None = None,
-) -> SessionRuntimeDisplayResponse:
-    display = build_session_runtime_display(
-        runtime_view=runtime_overlay,
-        capabilities=capability_flags,
-        ended_at=ended_at,
-        binding_host_state=binding_host_state,
-        binding_terminal_reason=binding_terminal_reason,
-        last_activity_at=last_activity_at,
-        user_messages=user_messages,
-        assistant_messages=assistant_messages,
-        has_visible_transcript_preview=has_visible_transcript_preview,
-        has_pending_response_turn=has_pending_response_turn,
-        pause_request=pause_request,
-        now=now,
-    )
-    return SessionRuntimeDisplayResponse(
-        truth_tier=display.truth_tier,
-        signal_tier=display.signal_tier,
-        state=display.state,
-        tone=display.tone,
-        headline=display.headline,
-        detail=display.detail,
-        phase_label=display.phase_label,
-        compact_tool_label=display.compact_tool_label,
-        is_live=display.is_live,
-        is_executing=display.is_executing,
-        needs_attention=display.needs_attention,
-        is_idle=display.is_idle,
-        is_stalled=display.is_stalled,
-        is_managed_local_truth=display.is_managed_local_truth,
-        has_signal=display.has_signal,
-        control_path=display.control_path,
-        activity_recency=display.activity_recency,
-        lifecycle=display.lifecycle,
-        host_state=display.host_state,
-        terminal_reason=display.terminal_reason,
-        pause_request=display.pause_request,
-    )
-
-
 def derive_session_liveness_facts(
     *,
     runtime_overlay: SessionRuntimeView | None,
@@ -457,6 +401,7 @@ def build_session_timeline_card_response(
     *,
     runtime_view: SessionRuntimeView | None,
     runtime_display: SessionRuntimeDisplayResponse,
+    session_state: SessionStateFacts | None = None,
 ) -> TimelineCardPresentationResponse:
     """Derive the timeline card entirely from the public runtime_display projection.
 
@@ -465,6 +410,23 @@ def build_session_timeline_card_response(
     lifecycle, state, tone, signal_tier — come from runtime_display, which is
     the single source of presentation truth.
     """
+    if session_state is not None:
+        primary = session_state.presentation.primary
+        status = TimelineStatusPresentationResponse(
+            label=primary.label if primary is not None else "No live signal",
+            tone=primary.tone if primary is not None else "inactive",
+            seen_at=primary.observed_at if primary is not None else None,
+            seen_at_prefix="Closed" if primary is not None and primary.key == "closed" else "Updated",
+        )
+        return TimelineCardPresentationResponse(
+            ownership=TimelineBadgePresentationResponse(
+                label="Managed" if session_state.control.ownership == "owned" else "Unmanaged",
+                tone="neutral",
+            ),
+            status=status,
+            border_tone=status.tone,
+        )
+
     ownership = TimelineBadgePresentationResponse(
         label="Managed" if runtime_display.control_path == ControlPath.MANAGED else "Unmanaged",
         tone="neutral",
@@ -474,6 +436,134 @@ def build_session_timeline_card_response(
         ownership=ownership,
         status=status,
         border_tone=status.tone,
+    )
+
+
+def build_compat_runtime_display_response(
+    *,
+    session_state: SessionStateFacts,
+    pause_request: dict[str, Any] | None,
+    now: datetime,
+) -> SessionRuntimeDisplayResponse:
+    """Project deprecated display aliases from canonical facts only."""
+
+    primary = session_state.presentation.primary
+    activity = session_state.activity
+    primary_key = primary.key if primary is not None else ""
+    state_map = {
+        "thinking": PresenceState.THINKING,
+        "executing": PresenceState.RUNNING,
+        "idle": PresenceState.IDLE,
+        "blocked": PresenceState.BLOCKED,
+        "stalled": PresenceState.STALLED,
+        "needs_answer": PresenceState.NEEDS_USER,
+        "needs_approval": PresenceState.NEEDS_USER,
+    }
+    tone_map = {
+        "thinking": Tone.THINKING,
+        "executing": Tone.RUNNING,
+        "idle": Tone.IDLE,
+        "blocked": Tone.BLOCKED,
+        "stalled": Tone.STALLED,
+        "needs_answer": Tone.BLOCKED,
+        "needs_approval": Tone.BLOCKED,
+        "closed": Tone.CLOSED,
+        "ended": Tone.CLOSED,
+        "starting": Tone.ACTIVE,
+    }
+    state = state_map.get(primary_key)
+    closed = session_state.disposition.state == "closed"
+    valid_until = normalize_utc(activity.valid_until)
+    activity_current = valid_until is None or valid_until > now
+    has_activity = activity.state != "unknown" and activity_current
+    host_state = HostState(session_state.host.state)
+    terminal_reason = None
+    if closed and session_state.disposition.close_reason in {item.value for item in TerminalReason}:
+        terminal_reason = TerminalReason(session_state.disposition.close_reason)
+    pause_projection = None
+    if pause_request is not None:
+        try:
+            pause_projection = SessionPauseRequestProjectionResponse.model_validate(pause_request)
+        except ValueError:
+            pause_projection = None
+    return SessionRuntimeDisplayResponse(
+        truth_tier=(
+            TruthTier.MANAGED_LOCAL
+            if has_activity and session_state.mode == "helm"
+            else TruthTier.FRESH
+            if has_activity
+            else TruthTier.NONE
+        ),
+        signal_tier=SignalTier.PHASE_SIGNAL if has_activity else SignalTier.NONE,
+        state=state,
+        tone=tone_map.get(primary_key, Tone.INACTIVE),
+        headline=primary.label if primary is not None else "Inactive",
+        detail=(
+            (pause_projection.summary or pause_projection.title)
+            if pause_projection is not None
+            else "Waiting for next prompt"
+            if primary_key == "idle"
+            else None
+        ),
+        phase_label=primary.label if primary is not None else "Inactive",
+        compact_tool_label=activity.tool,
+        is_live=activity.state in {"thinking", "executing"} and activity_current,
+        is_executing=activity.state in {"thinking", "executing"} and activity_current,
+        needs_attention=session_state.pending_interaction is not None,
+        is_idle=closed or activity.state == "quiescent",
+        is_stalled=activity.state == "stalled",
+        is_managed_local_truth=session_state.mode == "helm",
+        has_signal=primary is not None,
+        control_path=(ControlPath.MANAGED if session_state.control.ownership == "owned" else ControlPath.UNMANAGED),
+        activity_recency=ActivityRecency.LIVE if has_activity else ActivityRecency.NONE,
+        lifecycle=Lifecycle.CLOSED if closed else Lifecycle.OPEN,
+        host_state=host_state,
+        terminal_reason=terminal_reason,
+        pause_request=pause_projection,
+    )
+
+
+def project_compat_capabilities_from_state(
+    capabilities: SessionCapabilitiesResponse,
+    session_state: SessionStateFacts,
+) -> SessionCapabilitiesResponse:
+    """Keep old capability aliases read-only and derived from action facts."""
+
+    actions = session_state.control.actions
+    access = session_state.presentation.access
+    access_key = access.key if access is not None else None
+    send_available = actions.send_input.state == "available"
+    reattach_available = actions.reattach.state == "available"
+    owned = session_state.control.ownership == "owned"
+    compatibility_label = access.label if access is not None else "Read only"
+    if access is None and session_state.presentation.primary is not None:
+        if session_state.presentation.primary.key in {"starting", "launch_failed"}:
+            compatibility_label = session_state.presentation.primary.label
+    return capabilities.model_copy(
+        update={
+            "live_control_available": send_available,
+            "host_reattach_available": reattach_available,
+            "reply_to_live_session_available": send_available,
+            "display_label": compatibility_label,
+            "display_tone": access.tone if access is not None else "neutral",
+            "input_mode": "live" if send_available else ("offline" if owned else "read_only"),
+            "composer_enabled": send_available,
+            "control_label": (
+                "live"
+                if access_key == "live_control"
+                else "reattach"
+                if access_key == "reattach"
+                else "search-only"
+                if access_key == "observe_only"
+                else "imported"
+            ),
+            "observe_only": access_key == "observe_only",
+            "search_only": access_key == "search_only",
+            "can_send_input": send_available,
+            "can_interrupt": actions.interrupt.state == "available",
+            "can_terminate": actions.terminate.state == "available",
+            "can_resume": actions.resume.state == "available" or reattach_available,
+        }
     )
 
 
@@ -487,13 +577,6 @@ def _timeline_status_from_display(
     progress_at = normalize_utc(runtime_view.last_progress_at) if runtime_view is not None else None
     last_live_at = normalize_utc(runtime_view.last_live_at) if runtime_view is not None else None
 
-    if state == TRANSCRIPT_SYNC_STATE:
-        return TimelineStatusPresentationResponse(
-            label="Working",
-            tone="thinking",
-            seen_at=presence_at,
-            seen_at_prefix="Updated",
-        )
     if runtime_display.pause_request is not None and runtime_display.pause_request.status == "pending":
         return TimelineStatusPresentationResponse(
             label="Needs answer",
@@ -526,30 +609,12 @@ def _timeline_status_from_display(
             seen_at=progress_at or last_live_at,
             seen_at_prefix="Verified",
         )
-    if _managed_control_ready_for_timeline(runtime_display):
-        return TimelineStatusPresentationResponse(
-            label="Ready",
-            tone="idle",
-            seen_at=None,
-            seen_at_prefix="Checked",
-        )
     last_signal = presence_at or last_live_at
     return TimelineStatusPresentationResponse(
         label="No live signal",
         tone="inactive",
         seen_at=last_signal,
         seen_at_prefix="Last signal" if last_signal is not None else "Checked",
-    )
-
-
-def _managed_control_ready_for_timeline(runtime_display: SessionRuntimeDisplayResponse) -> bool:
-    """Recognize live, send-capable managed control without inventing a provider phase."""
-    return bool(
-        runtime_display.control_path == ControlPath.MANAGED
-        and runtime_display.lifecycle == Lifecycle.OPEN
-        and runtime_display.state is None
-        and runtime_display.tone == Tone.IDLE
-        and runtime_display.phase_label == "Ready"
     )
 
 
@@ -1046,6 +1111,7 @@ class ActiveSessionResponse(UTCBaseModel):
     home_label: Optional[str] = Field(None, description="User-facing home label, e.g. On this Mac|Hosted|Moved to cloud")
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
+    session_state: SessionStateFacts = Field(..., description="Versioned orthogonal session facts and presentation")
     runtime_display: SessionRuntimeDisplayResponse = Field(..., description="Server-derived display state for clients")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
 
@@ -1575,6 +1641,7 @@ def build_session_response(
     kernel_capabilities=None,
     has_pending_response_turn: bool = False,
     pause_request: dict[str, Any] | None = None,
+    archive_state: str = "current",
     launch_attempt: SessionLaunchAttempt | None | object = _LAUNCH_ATTEMPT_MISSING,
     launch_readiness: LiveLaunchReadinessView | None = None,
     sharer: SessionSharerResponse | None = None,
@@ -1635,20 +1702,6 @@ def build_session_response(
     has_visible_transcript_preview = bool(
         transcript_preview_response is not None and transcript_preview_response.text.strip() and not transcript_preview_response.is_stale
     )
-    runtime_display = build_session_runtime_display_response(
-        runtime_overlay=display_runtime_overlay,
-        capability_flags=capability_flags,
-        ended_at=session.ended_at,
-        binding_host_state=binding_host_state,
-        binding_terminal_reason=binding_terminal_reason,
-        last_activity_at=display_last_activity_at,
-        user_messages=session.user_messages or 0,
-        assistant_messages=session.assistant_messages or 0,
-        has_visible_transcript_preview=has_visible_transcript_preview,
-        has_pending_response_turn=has_pending_response_turn,
-        pause_request=pause_request,
-        now=current_now,
-    )
     runtime_facts = derive_session_liveness_facts(
         runtime_overlay=runtime_overlay,
         capability_flags=capability_flags,
@@ -1703,7 +1756,26 @@ def build_session_response(
         has_pending_response_turn=has_pending_response_turn,
         user_messages=session.user_messages or 0,
         assistant_messages=session.assistant_messages or 0,
+        archive_state=archive_state,
         now=current_now,
+    )
+    runtime_display = build_compat_runtime_display_response(
+        session_state=session_state,
+        pause_request=pause_request,
+        now=current_now,
+    )
+    response_capabilities = project_compat_capabilities_from_state(
+        build_session_capabilities_response(
+            session=session,
+            capability_flags=capability_flags,
+            runtime_display=runtime_display,
+            runtime_facts=runtime_facts,
+            kernel_capabilities=resolved_kernel_capabilities,
+            can_continue=continue_target is not None,
+            continue_targets=continue_targets,
+            launch_lifecycle=archive_launch_lifecycle,
+        ),
+        session_state,
     )
     return SessionResponse(
         id=str(session.id),
@@ -1770,22 +1842,14 @@ def build_session_response(
             capability_flags=effective_capability_flags,
             control_projection=kernel_projection.control,
         ),
-        capabilities=build_session_capabilities_response(
-            session=session,
-            capability_flags=capability_flags,
-            runtime_display=runtime_display,
-            runtime_facts=runtime_facts,
-            kernel_capabilities=resolved_kernel_capabilities,
-            can_continue=continue_target is not None,
-            continue_targets=continue_targets,
-            launch_lifecycle=archive_launch_lifecycle,
-        ),
+        capabilities=response_capabilities,
         session_state=session_state,
         runtime_display=runtime_display,
         transcript_preview=transcript_preview_response,
         timeline_card=build_session_timeline_card_response(
             runtime_view=display_runtime_overlay,
             runtime_display=runtime_display,
+            session_state=session_state,
         ),
         loop_mode=_coerce_session_loop_mode(preferences.loop_mode),
         user_state=preferences.user_state,
@@ -1897,59 +1961,18 @@ def build_live_launch_placeholder_response(
     project = (launch_readiness.project or "").strip() or None
     title = project or f"{provider} launch"
     session_id = str(launch_readiness.session_id)
-    display_state = PresenceState.SYNCING_TRANSCRIPT
-    phase_label = "Launching"
-    headline = "Launching"
-    detail = "Waiting for the machine to start the session."
     capability_label = "Launching"
     capability_detail = f"Setting up {provider_label} on {machine_label}."
     composer_disabled_reason = f"Setting up {provider_label}."
-    confidence = "live"
     user_state = "active"
     if launch_readiness.launch_state == "live":
-        phase_label = "Live"
-        headline = "Session launched"
-        detail = f"{provider_label} launched; controls are connecting."
         capability_detail = f"Connecting to {provider_label} on {machine_label}."
         composer_disabled_reason = f"Connecting to {provider_label}."
-    elif launch_readiness.launch_state == "launching_unknown":
-        phase_label = "Dispatching"
-        headline = "Launch dispatched"
-        detail = "Waiting for the machine to report back."
     elif launch_readiness.launch_state in {"launch_failed", "launch_orphaned"}:
-        display_state = None
-        phase_label = "Launch failed"
-        headline = "Launch failed"
-        detail = launch_readiness.launch_error_message
         capability_label = "Launch failed"
         capability_detail = launch_readiness.launch_error_message or "The session did not start."
         composer_disabled_reason = "Launch failed."
-        confidence = None
         user_state = "archived"
-
-    runtime_display = SessionRuntimeDisplayResponse(
-        truth_tier=TruthTier.FRESH if display_state is not None else TruthTier.NONE,
-        signal_tier=SignalTier.NONE,
-        state=display_state,
-        tone=Tone.ACTIVE if display_state is not None else Tone.INACTIVE,
-        headline=headline,
-        detail=detail,
-        phase_label=phase_label,
-        compact_tool_label=None,
-        is_live=launch_readiness.launch_state == "live",
-        is_executing=launch_readiness.launch_state in {"launching", "launching_unknown"},
-        needs_attention=False,
-        is_idle=launch_readiness.launch_state == "live",
-        is_stalled=False,
-        is_managed_local_truth=False,
-        has_signal=True,
-        control_path=ControlPath.MANAGED,
-        activity_recency=ActivityRecency.RECENT,
-        lifecycle=Lifecycle.OPEN,
-        host_state=HostState.ONLINE if launch_readiness.device_id else HostState.UNKNOWN,
-        terminal_reason=None,
-        pause_request=None,
-    )
     capabilities = SessionCapabilitiesResponse(
         live_control_available=False,
         host_reattach_available=False,
@@ -1967,7 +1990,7 @@ def build_live_launch_placeholder_response(
         control_label="search-only",
         observe_only=True,
         search_only=False,
-        staleness_reason="archive_catching_up",
+        staleness_reason="launch_pending",
         can_send_input=False,
         can_interrupt=False,
         can_terminate=False,
@@ -2025,6 +2048,12 @@ def build_live_launch_placeholder_response(
         archive_state="pending",
         now=current_now,
     )
+    runtime_display = build_compat_runtime_display_response(
+        session_state=session_state,
+        pause_request=None,
+        now=current_now,
+    )
+    capabilities = project_compat_capabilities_from_state(capabilities, session_state)
     return SessionResponse(
         id=session_id,
         provider=provider,
@@ -2041,20 +2070,20 @@ def build_live_launch_placeholder_response(
         tool_calls=0,
         last_activity_at=started_at,
         timeline_anchor_at=normalize_utc(launch_readiness.updated_at) or started_at,
-        runtime_phase=display_state.value if display_state is not None else None,
+        runtime_phase=runtime_display.state.value if runtime_display.state is not None else None,
         phase_started_at=started_at,
         last_progress_at=normalize_utc(launch_readiness.updated_at) or started_at,
         runtime_source="live_launch_readiness",
         terminal_state=None,
         runtime_version=None,
-        status="active" if display_state is not None else None,
-        presence_state=display_state.value if display_state is not None else None,
+        status=("working" if runtime_display.is_executing else "idle" if runtime_display.is_idle else None),
+        presence_state=runtime_display.state.value if runtime_display.state is not None else None,
         presence_tool=None,
         presence_updated_at=normalize_utc(launch_readiness.updated_at) or started_at,
         last_live_at=normalize_utc(launch_readiness.updated_at) or started_at,
-        display_phase=phase_label,
-        active_tool=None,
-        confidence=confidence,
+        display_phase=runtime_display.phase_label,
+        active_tool=runtime_display.compact_tool_label,
+        confidence="live" if runtime_display.activity_recency == ActivityRecency.LIVE else None,
         summary=None,
         summary_title=None,
         anchor_title=None,
@@ -2083,6 +2112,7 @@ def build_live_launch_placeholder_response(
         timeline_card=build_session_timeline_card_response(
             runtime_view=None,
             runtime_display=runtime_display,
+            session_state=session_state,
         ),
         loop_mode=SessionLoopMode.ASSIST,
         user_state=user_state,
@@ -2130,14 +2160,6 @@ def build_active_session_response(
                 source=CONTROL_SOURCE_RUNNER_CONNECTION,
                 seen_at=current_now,
             )
-    runtime_display = build_session_runtime_display_response(
-        runtime_overlay=runtime_overlay,
-        capability_flags=capability_flags,
-        ended_at=session.ended_at,
-        binding_host_state=binding_host_state,
-        binding_terminal_reason=binding_terminal_reason,
-        pause_request=pause_request,
-    )
     runtime_facts = derive_session_liveness_facts(
         runtime_overlay=runtime_overlay,
         capability_flags=capability_flags,
@@ -2156,6 +2178,34 @@ def build_active_session_response(
     from zerg.services.session_preferences import load_session_preferences
 
     preferences = load_session_preferences(session.id, standalone_session=session)
+    session_state = build_session_state_facts(
+        session=session,
+        runtime_view=runtime_overlay,
+        capabilities=capability_flags,
+        liveness=runtime_facts,
+        pause_request=pause_request,
+        last_activity_at=last_activity_at,
+        user_messages=int(session.user_messages or 0),
+        assistant_messages=int(session.assistant_messages or 0),
+        now=now,
+    )
+    runtime_display = build_compat_runtime_display_response(
+        session_state=session_state,
+        pause_request=pause_request,
+        now=now,
+    )
+    response_capabilities = project_compat_capabilities_from_state(
+        build_session_capabilities_response(
+            session=session,
+            capability_flags=capability_flags,
+            runtime_display=runtime_display,
+            runtime_facts=runtime_facts,
+            kernel_capabilities=resolved_kernel_capabilities,
+            can_continue=continue_target is not None,
+            continue_targets=continue_targets,
+        ),
+        session_state,
+    )
     return ActiveSessionResponse(
         id=str(session.id),
         project=session.project,
@@ -2194,15 +2244,8 @@ def build_active_session_response(
             capability_flags=effective_capability_flags,
             control_projection=kernel_projection.control,
         ),
-        capabilities=build_session_capabilities_response(
-            session=session,
-            capability_flags=capability_flags,
-            runtime_display=runtime_display,
-            runtime_facts=runtime_facts,
-            kernel_capabilities=resolved_kernel_capabilities,
-            can_continue=continue_target is not None,
-            continue_targets=continue_targets,
-        ),
+        capabilities=response_capabilities,
+        session_state=session_state,
         runtime_display=runtime_display,
         loop_mode=_coerce_session_loop_mode(preferences.loop_mode),
     )
@@ -2352,14 +2395,13 @@ def _event_media_ref_response(ref: SessionMediaRef, media: MediaObject | None) -
 
 
 def is_session_closed(session: AgentSession) -> bool:
-    """Lifecycle truth: has this session reached a terminal state?
+    """Whether the durable session itself was explicitly closed.
 
-    Closed when ``ended_at`` is stamped (irreversible) or the session has an
-    explicit closed terminal_state. Mirrors ``Lifecycle.CLOSED`` derivation in
-    ``build_session_runtime_display`` so per-event tool_call_state stays in
-    sync with the runtime_display lifecycle the client is rendering.
+    ``ended_at`` is historical run/transcript evidence and is intentionally not
+    disposition truth: managed sessions can end a process and later resume the
+    same session.  Only an explicit session-level terminal state closes it.
     """
-    if getattr(session, "ended_at", None) is not None:
+    if normalize_utc(getattr(session, "closed_at", None)) is not None:
         return True
     terminal_state = (getattr(session, "terminal_state", "") or "").strip().lower()
     return terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES

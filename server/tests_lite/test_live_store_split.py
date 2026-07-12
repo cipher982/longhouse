@@ -45,6 +45,7 @@ from zerg.models.live_store import LiveSession as LiveSessionRow
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLivePreview
+from zerg.models.live_store import LiveTimelineCard
 from zerg.services.agents import AgentsStore
 from zerg.services.live_archive_outbox import HEARTBEAT_STAMP_KIND
 from zerg.services.live_archive_outbox import MANAGED_LOCAL_LAUNCH_KIND
@@ -67,6 +68,7 @@ from zerg.services.live_session_inputs import upsert_live_input_receipt
 from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.live_session_state import mark_missing_live_sessions
 from zerg.services.live_session_state import upsert_live_sessions_from_managed_leases
+from zerg.services.live_catalog_timeline import list_live_catalog_timeline
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.managed_control_state import mark_missing_live_control_leases
 from zerg.services.managed_control_state import upsert_live_control_leases
@@ -82,6 +84,8 @@ from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.session_runtime import session_is_closed_for_input
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import latest_live_launch_readiness
+from zerg.services.session_workspace import build_session_workspace
+from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.write_serializer import get_live_write_serializer
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import normalize_utc
@@ -203,6 +207,134 @@ def test_archive_and_live_runtime_state_columns_stay_in_sync():
     live_columns = {column.name for column in LiveRuntimeState.__table__.columns}
 
     assert live_columns == archive_columns
+
+
+def test_hot_interaction_and_archive_state_match_list_and_workspace_before_archive_convergence(tmp_path, monkeypatch):
+    archive_engine = make_engine(f"sqlite:///{tmp_path}/archive.db")
+    archive_engine = archive_engine.execution_options(schema_translate_map={"agents": None})
+    Base.metadata.create_all(bind=archive_engine)
+    archive_factory = sessionmaker(bind=archive_engine)
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    live_factory = sessionmaker(bind=live_engine)
+    session_id = uuid4()
+    pause_id = str(uuid4())
+    now = datetime.now(timezone.utc)
+    projection = {
+        "id": pause_id,
+        "session_id": str(session_id),
+        "runtime_key": f"codex:{session_id}",
+        "request_key": "codex:runtime:question",
+        "status": "pending",
+        "kind": "structured_question",
+        "provider": "codex",
+        "occurred_at": now.isoformat(),
+        "can_respond": True,
+        "questions": [
+            {
+                "id": "choice",
+                "question": "Choose",
+                "options": [{"label": "fast"}, {"label": "safe"}],
+            }
+        ],
+    }
+
+    with archive_factory() as db:
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="production",
+                project="parity",
+                started_at=now,
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+            )
+        )
+        db.commit()
+    with live_factory() as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=str(session_id),
+                provider="codex",
+                environment="production",
+                project="parity",
+                started_at=now,
+                last_activity_at=now,
+                user_messages=1,
+                assistant_messages=1,
+            )
+        )
+        db.add(
+            LiveTimelineCard(
+                session_id=str(session_id),
+                provider="codex",
+                environment="production",
+                project="parity",
+                started_at=now,
+                last_activity_at=now,
+                user_messages=1,
+                assistant_messages=1,
+                transcript_revision=7,
+                archive_state="pending",
+                parser_revision="test",
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveRuntimeState(
+                runtime_key=f"codex:{session_id}",
+                session_id=session_id,
+                provider="codex",
+                phase="needs_user",
+                phase_source="provider",
+                timeline_anchor_at=now,
+                pending_interaction_id=pause_id,
+                pending_interaction_kind="structured_question",
+                pending_interaction_opened_at=now,
+                pending_interaction_updated_at=now,
+                pending_interaction_projection_json=projection,
+                pending_interaction_can_respond=1,
+                runtime_version=3,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(database_module, "get_catalog_session_factory", lambda: live_factory)
+    monkeypatch.setattr(database_module, "get_live_session_factory", lambda: live_factory)
+
+    with live_factory() as db:
+        timeline = list_live_catalog_timeline(
+            db,
+            params=TimelineSessionListParams(
+                project=None,
+                provider=None,
+                environment=None,
+                include_test=True,
+                hide_autonomous=False,
+                device_id=None,
+                days_back=30,
+                query=None,
+                limit=10,
+                offset=0,
+                sort=None,
+                mode="lexical",
+                context_mode="default",
+                include_automation=True,
+            ),
+        )
+    with archive_factory() as db:
+        workspace = build_session_workspace(db=db, session_id=session_id)
+
+    list_session = timeline.sessions[0].head
+    assert workspace.session.runtime_display.pause_request == list_session.runtime_display.pause_request
+    assert workspace.session.session_state.pending_interaction == list_session.session_state.pending_interaction
+    assert workspace.session.session_state.transcript == list_session.session_state.transcript
+    assert workspace.session.runtime_display.pause_request is not None
+    assert workspace.session.runtime_display.pause_request.questions[0].question == "Choose"
 
 
 def test_live_input_receipt_is_idempotent_by_client_request_id(tmp_path):
@@ -900,6 +1032,46 @@ def test_live_runtime_state_feeds_existing_runtime_overlay(tmp_path, monkeypatch
         assert overlay.runtime_source == "codex_bridge"
     finally:
         archive_engine.dispose()
+        live_engine.dispose()
+
+
+def test_live_pause_resolution_watermark_rejects_late_request_replay(tmp_path):
+    now = datetime.now(timezone.utc)
+    live_engine = make_live_engine(f"sqlite:///{tmp_path}/live.db")
+    initialize_live_database(live_engine)
+    LiveSession = sessionmaker(bind=live_engine)
+    session_id = uuid4()
+    runtime_key = runtime_key_for_session("codex", str(session_id))
+
+    def event(kind: str, occurred_at: datetime, dedupe_key: str) -> RuntimeEventIngest:
+        return RuntimeEventIngest(
+            runtime_key=runtime_key,
+            session_id=session_id,
+            provider="codex",
+            device_id="cinder",
+            source="codex_bridge",
+            kind=kind,
+            occurred_at=occurred_at,
+            freshness_ms=60_000,
+            dedupe_key=dedupe_key,
+            payload={"request_key": "question-1", "kind": "structured_question", "can_respond": True},
+        )
+
+    try:
+        with LiveSession() as live_db:
+            request = event("pause_request", now, "pause-request-1")
+            resolution = event("pause_resolution", now + timedelta(seconds=2), "pause-resolution-1")
+            late_replay = event("pause_request", now + timedelta(seconds=1), "pause-request-replay")
+            assert ingest_live_runtime_events(live_db, [request]).accepted == 1
+            assert ingest_live_runtime_events(live_db, [resolution]).accepted == 1
+            assert ingest_live_runtime_events(live_db, [late_replay]).accepted == 1
+            live_db.commit()
+
+            state = live_db.query(LiveRuntimeState).filter(LiveRuntimeState.session_id == session_id).one()
+            assert state.pending_interaction_id is None
+            assert normalize_utc(state.pending_interaction_updated_at) == now + timedelta(seconds=2)
+            assert normalize_utc(state.updated_at) >= now + timedelta(seconds=2)
+    finally:
         live_engine.dispose()
 
 

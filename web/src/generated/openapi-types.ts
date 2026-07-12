@@ -4255,6 +4255,8 @@ export interface components {
             control?: components["schemas"]["SessionControlResponse"] | null;
             /** @description Canonical session capability flags */
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
+            /** @description Versioned orthogonal session facts and presentation */
+            session_state: components["schemas"]["SessionStateFacts"];
             /** @description Server-derived display state for clients */
             runtime_display: components["schemas"]["SessionRuntimeDisplayResponse"];
             /**
@@ -6131,7 +6133,7 @@ export interface components {
          * PresenceState
          * @enum {string}
          */
-        PresenceState: "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled" | "syncing_transcript";
+        PresenceState: "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
         /** ProductHealthCheckEvidenceRefResponse */
         ProductHealthCheckEvidenceRefResponse: {
             /** Kind */
@@ -7975,6 +7977,8 @@ export interface components {
             connection: "connected" | "degraded" | "disconnected" | "unknown" | "not_applicable";
             /** Connection Id */
             connection_id?: number | null;
+            /** Lease Generation */
+            lease_generation?: string | null;
             /** Control Plane */
             control_plane?: string | null;
             /** Observed At */

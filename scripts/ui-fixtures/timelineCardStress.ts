@@ -4,6 +4,28 @@ type SessionCapabilities = {
   reply_to_live_session_available: boolean;
 };
 
+type SessionStateFacts = {
+  state_contract_version: 1;
+  presentation_policy_version: 1;
+  mode: "shadow" | "helm" | "console" | "unknown";
+  disposition: { state: "open" | "closed"; closed_at?: string | null; close_reason?: string | null };
+  run: { lifecycle: "running" | "ended" | "unknown"; started_at?: string | null; ended_at?: string | null } | null;
+  activity: { state: string; raw_kind?: string | null; tool?: string | null; observed_at?: string | null; valid_until?: string | null };
+  control: {
+    ownership: "owned" | "unowned";
+    connection: string;
+    actions: Record<string, { state: "available" | "unavailable" | "unknown"; reason?: string | null }>;
+  };
+  pending_interaction: null;
+  transcript: { convergence: "current"; searchable: boolean; live_observation: boolean };
+  host: { state: string; observed_at?: string | null };
+  presentation: {
+    primary: { key: string; label: string; tone: string; observed_at?: string | null } | null;
+    access: { key: string; label: string; tone: string; observed_at?: string | null } | null;
+    transcript: null;
+  };
+};
+
 type SessionLivenessFacts = {
   control_path: "managed" | "unmanaged";
   process_state: "running" | "closed" | "unknown";
@@ -109,6 +131,9 @@ type AgentSession = {
     attach_command?: string | null;
   } | null;
   capabilities: SessionCapabilities;
+  session_state: SessionStateFacts;
+  runtime_display: Record<string, unknown>;
+  timeline_card: Record<string, unknown>;
   loop_mode: "manual" | "assist" | "autopilot";
   user_state?: string;
 };
@@ -186,9 +211,115 @@ function makeRuntimeFacts(overrides: Partial<SessionLivenessFacts> = {}): Sessio
   };
 }
 
+function canonicalState(session: Omit<AgentSession, "session_state" | "runtime_display" | "timeline_card">): SessionStateFacts {
+  const owned = session.control != null || session.capabilities.live_control_available || session.capabilities.host_reattach_available;
+  const closed = session.terminal_state === "user_closed";
+  const liveActivity = session.confidence === "live";
+  const rawActivity = liveActivity ? session.presence_state : null;
+  const activity = rawActivity === "running"
+    ? "executing"
+    : rawActivity === "thinking"
+      ? "thinking"
+      : rawActivity === "idle" || rawActivity === "needs_user"
+        ? "quiescent"
+        : rawActivity === "blocked" || rawActivity === "stalled"
+          ? rawActivity
+          : "unknown";
+  const primary = closed
+    ? { key: "closed", label: "Closed", tone: "closed", observed_at: session.timeline_anchor_at }
+    : activity === "executing"
+      ? { key: "executing", label: session.active_tool ? `Using ${session.active_tool}` : "Running", tone: "running", observed_at: session.presence_updated_at }
+      : activity === "thinking"
+        ? { key: "thinking", label: "Thinking", tone: "thinking", observed_at: session.presence_updated_at }
+        : activity === "quiescent"
+          ? { key: "idle", label: "Idle", tone: "idle", observed_at: session.presence_updated_at }
+          : activity === "blocked" || activity === "stalled"
+            ? { key: activity, label: activity === "blocked" ? "Blocked" : "Stalled", tone: activity, observed_at: session.presence_updated_at }
+            : { key: "activity_unknown", label: "Activity unknown", tone: "quiet", observed_at: null };
+  const accessKey = session.capabilities.live_control_available
+    ? "live_control"
+    : session.capabilities.host_reattach_available
+      ? "reattach"
+      : "observe_only";
+  const access = accessKey === "live_control"
+    ? { key: accessKey, label: "Live control", tone: "live", observed_at: session.presence_updated_at }
+    : accessKey === "reattach"
+      ? { key: accessKey, label: "Reattach", tone: "reattach", observed_at: session.presence_updated_at }
+      : { key: accessKey, label: "Observe only", tone: "observe", observed_at: null };
+  const available = { state: "available" as const };
+  const unavailable = { state: "unavailable" as const, reason: owned ? "not_granted" : "observe_only" };
+  return {
+    state_contract_version: 1,
+    presentation_policy_version: 1,
+    mode: owned ? "helm" : "shadow",
+    disposition: closed
+      ? { state: "closed", closed_at: session.timeline_anchor_at, close_reason: "user_closed" }
+      : { state: "open", closed_at: null, close_reason: null },
+    run: {
+      lifecycle: closed || session.terminal_state ? "ended" : "running",
+      started_at: session.started_at,
+      ended_at: closed || session.terminal_state ? session.timeline_anchor_at : null,
+    },
+    activity: {
+      state: activity,
+      raw_kind: session.presence_state,
+      tool: activity === "executing" ? session.active_tool : null,
+      observed_at: session.presence_updated_at,
+      valid_until: session.runtime_facts?.phase.expires_at,
+    },
+    control: {
+      ownership: owned ? "owned" : "unowned",
+      connection: session.capabilities.live_control_available
+        ? "connected"
+        : session.capabilities.host_reattach_available
+          ? "disconnected"
+          : "not_applicable",
+      actions: {
+        send_input: session.capabilities.live_control_available ? available : unavailable,
+        interrupt: session.capabilities.live_control_available ? available : unavailable,
+        terminate: session.capabilities.live_control_available ? available : unavailable,
+        reattach: session.capabilities.host_reattach_available && !session.capabilities.live_control_available ? available : unavailable,
+        resume: unavailable,
+      },
+    },
+    pending_interaction: null,
+    transcript: { convergence: "current", searchable: true, live_observation: !owned && activity !== "unknown" },
+    host: { state: session.runtime_facts?.host.state ?? "unknown", observed_at: session.runtime_facts?.host.last_seen_at },
+    presentation: { primary, access, transcript: null },
+  };
+}
+
+function compatRuntimeDisplay(state: SessionStateFacts): Record<string, unknown> {
+  const primary = state.presentation.primary;
+  const activity = state.activity.state;
+  return {
+    truth_tier: activity === "unknown" ? "none" : "fresh",
+    signal_tier: activity === "unknown" ? "none" : "phase_signal",
+    state: activity === "executing" ? "running" : activity === "quiescent" ? "idle" : activity === "unknown" ? null : activity,
+    tone: primary?.tone ?? "inactive",
+    headline: primary?.label ?? "Activity unknown",
+    detail: null,
+    phase_label: primary?.label ?? "Activity unknown",
+    compact_tool_label: state.activity.tool ?? null,
+    is_live: activity === "thinking" || activity === "executing",
+    is_executing: activity === "thinking" || activity === "executing",
+    needs_attention: false,
+    is_idle: activity === "quiescent" || state.disposition.state === "closed",
+    is_stalled: activity === "stalled",
+    is_managed_local_truth: state.mode === "helm",
+    has_signal: primary != null,
+    control_path: state.control.ownership === "owned" ? "managed" : "unmanaged",
+    activity_recency: activity === "unknown" ? "none" : "live",
+    lifecycle: state.disposition.state,
+    host_state: state.host.state,
+    terminal_reason: state.disposition.close_reason ?? null,
+    pause_request: null,
+  };
+}
+
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   const now = "2026-04-15T16:12:00Z";
-  return {
+  const session = {
     id: "session-1",
     provider: "codex",
     project: "zerg",
@@ -243,6 +374,18 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     capabilities: makeCapabilities(),
     loop_mode: "manual",
     ...overrides,
+  } as Omit<AgentSession, "session_state" | "runtime_display" | "timeline_card">;
+  const state = overrides.session_state ?? canonicalState(session);
+  const runtimeDisplay = overrides.runtime_display ?? compatRuntimeDisplay(state);
+  return {
+    ...session,
+    session_state: state,
+    runtime_display: runtimeDisplay,
+    timeline_card: {
+      ownership: { label: state.control.ownership === "owned" ? "Managed" : "Unmanaged", tone: "neutral" },
+      status: { label: state.presentation.primary?.label ?? "Activity unknown", tone: state.presentation.primary?.tone ?? "inactive", seen_at: state.presentation.primary?.observed_at ?? null, seen_at_prefix: "Updated" },
+      border_tone: state.presentation.primary?.tone ?? "inactive",
+    },
   };
 }
 
@@ -563,6 +706,7 @@ export function buildTimelineCardStressFixture(): {
       summary:
         "Finalized archive import cleanup and closed the terminal process after verifying session history, summaries, and tool counts were durable.",
       status: "completed",
+      terminal_state: "user_closed",
       presence_state: null,
       presence_updated_at: null,
       last_live_at: null,

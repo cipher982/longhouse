@@ -1225,7 +1225,7 @@ def test_timeline_workspace_does_not_claim_live_control_without_runner_truth(tmp
         assert capabilities["live_control_available"] is False
         assert capabilities["reply_to_live_session_available"] is False
         assert capabilities["can_queue_next_input"] is False
-        assert capabilities["display_label"] == "Control offline"
+        assert capabilities["display_label"] == "Reattach"
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

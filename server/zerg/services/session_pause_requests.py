@@ -6,12 +6,17 @@ from collections.abc import Mapping
 from datetime import datetime
 from datetime import timezone
 from typing import Any
+from uuid import NAMESPACE_URL
 from uuid import UUID
+from uuid import uuid5
 
 from sqlalchemy.orm import Session
 
+from zerg import database as database_module
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
+from zerg.models.live_store import LiveRuntimeState
+from zerg.models.live_store import LiveTimelineCard
 from zerg.utils.time import normalize_utc
 
 PAUSE_KIND_STRUCTURED_QUESTION = "structured_question"
@@ -29,6 +34,70 @@ QUESTION_PAYLOAD_KEYS = ("questions", "question", "prompt", "input", "schema", "
 REPLY_TRANSPORT_CLAUDE_PULL = "claude_pretooluse_pull"
 REPLY_TRANSPORT_MANAGED_PUSH = "managed_push"
 PULL_REPLY_TRANSPORTS = {REPLY_TRANSPORT_CLAUDE_PULL}
+
+
+def pending_interaction_from_live_runtime(runtime: LiveRuntimeState | None) -> dict[str, Any] | None:
+    """Project the answerable interaction carried by the hot runtime row."""
+    if runtime is None or not runtime.pending_interaction_id:
+        return None
+    projection = runtime.pending_interaction_projection_json
+    if isinstance(projection, dict):
+        result = {
+            **projection,
+            "can_respond": bool(runtime.pending_interaction_can_respond),
+        }
+        for key in ("occurred_at", "created_at", "expires_at"):
+            value = result.get(key)
+            if isinstance(value, str):
+                try:
+                    result[key] = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                except ValueError:
+                    result[key] = None
+        return result
+    return {
+        "id": runtime.pending_interaction_id,
+        "status": PENDING_STATUS,
+        "kind": runtime.pending_interaction_kind or PAUSE_KIND_STRUCTURED_QUESTION,
+        "occurred_at": runtime.pending_interaction_opened_at,
+        "can_respond": bool(runtime.pending_interaction_can_respond),
+    }
+
+
+def load_hot_session_projection_map(session_ids: list[UUID]) -> dict[UUID, tuple[dict[str, Any] | None, str]]:
+    """Load hot interaction and transcript convergence truth for detail reads.
+
+    The archive still owns transcript bodies, but the bounded catalog owns the
+    current interaction and convergence facts.  A present hot runtime row with
+    no interaction intentionally clears a stale archive pause projection.
+    """
+    if not session_ids or not database_module.live_catalog_enabled():
+        return {}
+    factory = database_module.get_catalog_session_factory()
+    with factory() as live_db:
+        runtime_rows = (
+            live_db.query(LiveRuntimeState)
+            .filter(LiveRuntimeState.session_id.in_(session_ids))
+            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+            .all()
+        )
+        runtime_by_session: dict[UUID, LiveRuntimeState] = {}
+        for runtime in runtime_rows:
+            if runtime.session_id is not None:
+                runtime_by_session.setdefault(runtime.session_id, runtime)
+        cards = live_db.query(LiveTimelineCard).filter(LiveTimelineCard.session_id.in_([str(value) for value in session_ids])).all()
+        card_by_session = {UUID(str(card.session_id)): card for card in cards}
+
+        result: dict[UUID, tuple[dict[str, Any] | None, str]] = {}
+        for session_id in session_ids:
+            runtime = runtime_by_session.get(session_id)
+            card = card_by_session.get(session_id)
+            if runtime is None and card is None:
+                continue
+            result[session_id] = (
+                pending_interaction_from_live_runtime(runtime),
+                str(card.archive_state or "pending") if card is not None else "pending",
+            )
+        return result
 
 
 def reply_transport_for_row(row: "SessionPauseRequest") -> str | None:
@@ -359,6 +428,45 @@ def apply_pause_runtime_event(db: Session, event: Any) -> bool:
         return bool(row is not None and row.status != PENDING_STATUS)
 
     return False
+
+
+def pause_runtime_request_key(event: Any) -> str:
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    provider = _clean_str(event.provider) or "unknown"
+    runtime_key = _clean_str(event.runtime_key) or ""
+    provider_request_id = _clean_str(payload.get("provider_request_id") or payload.get("request_id"))
+    return _clean_str(payload.get("request_key")) or make_pause_request_key(
+        provider=provider,
+        runtime_key=runtime_key,
+        provider_request_id=provider_request_id,
+        fallback=_clean_str(getattr(event, "dedupe_key", None)),
+    )
+
+
+def build_pause_runtime_projection(event: Any) -> dict[str, Any]:
+    """Build the complete client projection for the bounded live lane."""
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    request_payload = _request_payload(payload)
+    request_key = pause_runtime_request_key(event)
+    return {
+        "id": str(uuid5(NAMESPACE_URL, f"longhouse-pause:{request_key}")),
+        "request_key": request_key,
+        "session_id": str(event.session_id),
+        "runtime_key": _clean_str(event.runtime_key) or "",
+        "kind": _clean_str(payload.get("kind")) or PAUSE_KIND_STRUCTURED_QUESTION,
+        "status": PENDING_STATUS,
+        "provider": _clean_str(event.provider) or "unknown",
+        "can_respond": _bool(payload.get("can_respond")),
+        "title": _clean_str(payload.get("title")),
+        "summary": _clean_str(payload.get("summary")),
+        "tool_name": _clean_str(payload.get("tool_name") or event.tool_name),
+        "questions": _normalize_questions(request_payload),
+        "occurred_at": occurred_at.isoformat(),
+        "last_seen_at": occurred_at.isoformat(),
+        "resolved_at": None,
+        "expires_at": (expires_at.isoformat() if (expires_at := _datetime_payload(payload.get("expires_at"))) is not None else None),
+    }
 
 
 def serialize_pause_request_projection(

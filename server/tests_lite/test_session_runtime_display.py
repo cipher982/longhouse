@@ -179,8 +179,8 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "lifecycle": "open",
                 "state": None,
                 "tone": "idle",
-                "headline": "Ready",
-                "phase_label": "Ready",
+                "headline": "Activity unknown",
+                "phase_label": "Activity unknown",
                 "activity_recency": "stale",
                 "needs_attention": False,
             },
@@ -195,8 +195,8 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "lifecycle": "open",
                 "state": None,
                 "tone": "idle",
-                "headline": "Ready",
-                "phase_label": "Ready",
+                "headline": "Activity unknown",
+                "phase_label": "Activity unknown",
                 "activity_recency": "none",
                 "needs_attention": False,
             },
@@ -214,11 +214,11 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "expect": {
                 "control_path": "managed",
                 "signal_tier": "phase_signal",
-                "lifecycle": "closed",
+                "lifecycle": "unknown",
                 "state": None,
-                "tone": "closed",
-                "headline": "Closed",
-                "phase_label": "Closed",
+                "tone": "idle",
+                "headline": "Activity unknown",
+                "phase_label": "Activity unknown",
                 "activity_recency": "none",
                 "needs_attention": False,
             },
@@ -248,11 +248,11 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "expect": {
                 "control_path": "unmanaged",
                 "signal_tier": "process_binding",
-                "lifecycle": "closed",
+                "lifecycle": "open",
                 "state": None,
-                "tone": "closed",
-                "headline": "Closed",
-                "phase_label": "Closed",
+                "tone": "inactive",
+                "headline": "Inactive",
+                "phase_label": "Recent",
                 "activity_recency": "none",
                 "needs_attention": False,
             },
@@ -315,11 +315,11 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
             "expect": {
                 "control_path": "unmanaged",
                 "signal_tier": "transcript_progress",
-                "lifecycle": "closed",
+                "lifecycle": "unknown",
                 "state": None,
-                "tone": "closed",
-                "headline": "Closed",
-                "phase_label": "Closed",
+                "tone": "inactive",
+                "headline": "Completed",
+                "phase_label": "Completed",
                 "activity_recency": "none",
                 "needs_attention": False,
             },
@@ -388,7 +388,7 @@ def test_transcript_progress_does_not_create_active_display():
     assert display.has_signal is True
 
 
-def test_managed_idle_after_user_prompt_displays_transcript_sync():
+def test_managed_idle_after_user_prompt_remains_idle_while_transcript_lags():
     now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
@@ -411,15 +411,14 @@ def test_managed_idle_after_user_prompt_displays_transcript_sync():
         now=now,
     )
 
-    assert display.state == "syncing_transcript"
-    assert display.headline == "Working"
-    assert display.detail is None
-    assert display.phase_label == "Working"
-    assert display.tone == "active"
-    assert display.is_idle is False
+    assert display.state == "idle"
+    assert display.headline == "Idle"
+    assert display.phase_label == "Idle"
+    assert display.tone == "idle"
+    assert display.is_idle is True
 
 
-def test_managed_idle_after_pending_turn_displays_transcript_sync_without_archive_counts():
+def test_managed_idle_after_pending_turn_remains_idle_without_archive_counts():
     now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
@@ -443,11 +442,10 @@ def test_managed_idle_after_pending_turn_displays_transcript_sync_without_archiv
         now=now,
     )
 
-    assert display.state == "syncing_transcript"
-    assert display.headline == "Working"
-    assert display.detail is None
-    assert display.phase_label == "Working"
-    assert display.is_idle is False
+    assert display.state == "idle"
+    assert display.headline == "Idle"
+    assert display.phase_label == "Idle"
+    assert display.is_idle is True
 
 
 def test_managed_idle_after_user_prompt_keeps_idle_when_preview_is_visible():
@@ -658,9 +656,9 @@ def test_managed_stale_thinking_without_active_tool_is_not_current_state():
     assert display.is_stalled is False
     assert display.state is None
     assert display.tone == "idle"
-    assert display.headline == "Ready"
+    assert display.headline == "Activity unknown"
     assert display.detail == "Live control connected"
-    assert display.phase_label == "Ready"
+    assert display.phase_label == "Activity unknown"
     assert display.is_executing is False
     assert display.needs_attention is False
     assert display.activity_recency == "stale"
@@ -703,7 +701,7 @@ def test_real_stale_runtime_view_without_presence_is_stalled():
 
     assert display.is_stalled is False
     assert display.state is None
-    assert display.headline == "Ready"
+    assert display.headline == "Activity unknown"
     assert display.needs_attention is False
 
 
@@ -929,8 +927,8 @@ def test_managed_stale_needs_user_without_presence_is_not_actionable():
 
     assert display.control_path == "managed"
     assert display.state is None
-    assert display.phase_label == "Ready"
-    assert display.headline == "Ready"
+    assert display.phase_label == "Activity unknown"
+    assert display.headline == "Activity unknown"
     assert display.needs_attention is False
     assert display.tone == "idle"
 
@@ -977,7 +975,7 @@ def test_managed_live_thinking_without_active_tool_is_not_stalled():
     assert display.activity_recency == "live"
 
 
-def test_three_axis_fields_closed_with_explicit_terminal():
+def test_provider_terminal_ends_run_without_closing_session():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="finished",
@@ -989,11 +987,11 @@ def test_three_axis_fields_closed_with_explicit_terminal():
         ended_at=None,
     )
 
-    assert display.lifecycle == "closed"
+    assert display.lifecycle == "unknown"
     assert display.terminal_reason == "provider_signal"
 
 
-def test_three_axis_fields_collapses_provider_terminal_reason_to_canonical_value():
+def test_run_terminal_reason_collapses_to_canonical_value():
     """Raw provider terminal_reason strings are not part of the wire contract.
     The projection collapses provider signals into canonical TerminalReason values."""
     display = build_session_runtime_display(
@@ -1009,7 +1007,7 @@ def test_three_axis_fields_collapses_provider_terminal_reason_to_canonical_value
         ended_at=None,
     )
 
-    assert display.lifecycle == "closed"
+    assert display.lifecycle == "unknown"
     assert display.terminal_reason == "provider_signal"
 
 
@@ -1028,14 +1026,14 @@ def test_three_axis_fields_collapses_arbitrary_terminal_reason_to_provider_signa
         ended_at=None,
     )
 
-    assert display.lifecycle == "closed"
+    assert display.lifecycle == "unknown"
     assert display.terminal_reason == "provider_signal"
-    assert display.headline == "Closed"
-    assert display.detail is None
-    assert display.phase_label == "Closed"
+    assert display.headline == "Activity unknown"
+    assert display.detail == "Live control connected"
+    assert display.phase_label == "Activity unknown"
 
 
-def test_three_axis_fields_closed_with_process_gone_terminal():
+def test_process_gone_terminal_ends_run_without_closing_session():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="finished",
@@ -1048,11 +1046,11 @@ def test_three_axis_fields_closed_with_process_gone_terminal():
     )
 
     assert display.control_path == "managed"
-    assert display.lifecycle == "closed"
+    assert display.lifecycle == "unknown"
     assert display.terminal_reason == "process_gone"
 
 
-def test_process_gone_closure_suppresses_stale_attention_copy():
+def test_process_gone_binding_ends_observation_without_closing_session():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="needs_user",
@@ -1067,14 +1065,14 @@ def test_process_gone_closure_suppresses_stale_attention_copy():
         binding_terminal_reason="process_gone",
     )
 
-    assert display.lifecycle == "closed"
-    assert display.terminal_reason == "process_gone"
-    assert display.state is None
-    assert display.headline == "Closed"
-    assert display.phase_label == "Closed"
+    assert display.lifecycle == "open"
+    assert display.terminal_reason is None
+    assert display.state == "needs_user"
+    assert display.headline == "Idle"
+    assert display.phase_label == "Idle"
     assert display.needs_attention is False
     assert display.is_idle is True
-    assert display.tone == "closed"
+    assert display.tone == "idle"
 
 
 def test_host_expired_closure_suppresses_stale_attention_copy_without_process_gone():

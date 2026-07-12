@@ -17,32 +17,11 @@ interface SessionRuntimeStripProps {
   interaction: Pick<
     SessionInteractionCapabilities,
     | "isManagedLocalSession"
-    | "liveControlAvailable"
-    | "hostReattachAvailable"
-    | "sourceOriginLabel"
+    | "capabilityLabel"
   >;
-  hostLabel?: string | null;
   elapsedLabel?: string | null;
   variant?: "inline" | "block" | "dock" | "bar";
   testId?: string;
-}
-
-function getFallbackCapabilityLabel({
-  liveControlAvailable,
-  hostReattachAvailable,
-  hostLabel,
-}: {
-  liveControlAvailable: boolean;
-  hostReattachAvailable: boolean;
-  hostLabel: string;
-}): string {
-  if (liveControlAvailable) {
-    return `Live on ${hostLabel}`;
-  }
-  if (hostReattachAvailable) {
-    return "Control offline";
-  }
-  return "Read only";
 }
 
 function getRuntimeBadgeState(runtime: SessionRuntimeState): KnownPresenceState | null {
@@ -61,7 +40,6 @@ function shouldAnimateRuntimeBadge(state: KnownPresenceState | null): boolean {
 export function SessionRuntimeStrip({
   session,
   interaction,
-  hostLabel,
   elapsedLabel,
   variant = "inline",
   testId,
@@ -75,18 +53,7 @@ export function SessionRuntimeStrip({
     : getRuntimeOutcomeLabel(runtime);
   const runtimeDetail = interaction.isManagedLocalSession ? runtimeDisplay.detail : null;
   const runtimeMeta = getRuntimeMetaLabel(runtime);
-  const resolvedHostLabel =
-    hostLabel?.trim() ||
-    session.control?.source_runner_name?.trim() ||
-    interaction.sourceOriginLabel ||
-    "host";
-  const capabilityLabel =
-    session.capabilities?.display_label?.trim() ||
-    getFallbackCapabilityLabel({
-      liveControlAvailable: interaction.liveControlAvailable,
-      hostReattachAvailable: interaction.hostReattachAvailable,
-      hostLabel: resolvedHostLabel,
-    });
+  const capabilityLabel = interaction.capabilityLabel;
   const metaParts = [
     {
       key: "capability",

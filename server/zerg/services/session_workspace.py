@@ -17,6 +17,7 @@ from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_kernel_projection import project_session_lineage_fields
 from zerg.services.session_pause_requests import load_active_pause_request_map
+from zerg.services.session_pause_requests import load_hot_session_projection_map
 from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
@@ -203,6 +204,7 @@ def build_session_workspace(
             runtime_state_map = load_runtime_state_map(db, thread_session_ids)
         with timing.span("pause_requests"):
             pause_request_map = load_active_pause_request_map(db, thread_session_ids)
+            hot_projection_map = load_hot_session_projection_map(thread_session_ids)
         with timing.span("control_state"):
             control_state_map = load_managed_control_state_map(db, thread_session_ids)
         with timing.span("provisional_preview"):
@@ -235,7 +237,12 @@ def build_session_workspace(
                 owner_id=owner_id,
                 kernel_capabilities=kernel_capabilities_map.get(item.id),
                 has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),
-                pause_request=serialize_pause_request_projection(pause_request_map.get(item.id)),
+                pause_request=(
+                    hot_projection_map[item.id][0]
+                    if item.id in hot_projection_map
+                    else serialize_pause_request_projection(pause_request_map.get(item.id))
+                ),
+                archive_state=(hot_projection_map[item.id][1] if item.id in hot_projection_map else "current"),
                 launch_readiness=(live_readiness if item.id == session.id else None),
                 sharer=sharer,
             )
@@ -261,7 +268,12 @@ def build_session_workspace(
             owner_id=owner_id,
             kernel_capabilities=kernel_capabilities_map.get(session.id),
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
-            pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
+            pause_request=(
+                hot_projection_map[session.id][0]
+                if session.id in hot_projection_map
+                else serialize_pause_request_projection(pause_request_map.get(session.id))
+            ),
+            archive_state=(hot_projection_map[session.id][1] if session.id in hot_projection_map else "current"),
             launch_readiness=live_readiness,
             sharer=sharer,
         )
@@ -438,6 +450,7 @@ def build_session_mobile_tail(
             runtime_state_map = load_runtime_state_map(db, thread_session_ids)
         with timing.span("pause_requests"):
             pause_request_map = load_active_pause_request_map(db, thread_session_ids)
+            hot_projection_map = load_hot_session_projection_map(thread_session_ids)
         with timing.span("control_state"):
             control_state_map = load_managed_control_state_map(db, thread_session_ids)
         with timing.span("provisional_preview"):
@@ -466,7 +479,12 @@ def build_session_mobile_tail(
             control_overlay=control_state_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=owner_id,
-            pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
+            pause_request=(
+                hot_projection_map[session.id][0]
+                if session.id in hot_projection_map
+                else serialize_pause_request_projection(pause_request_map.get(session.id))
+            ),
+            archive_state=(hot_projection_map[session.id][1] if session.id in hot_projection_map else "current"),
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
             launch_readiness=live_readiness,
         )

@@ -50,7 +50,6 @@ from zerg.services.apns_sender import NOTIFICATION_CHANNEL_APNS_IOS
 from zerg.services.apns_sender import clear_live_activity_push_stamp
 from zerg.services.apns_sender import clear_session_attention_resolution_stamp
 from zerg.services.apns_sender import clear_widget_timeline_push_stamp
-from zerg.services.apns_sender import prepare_long_run_waiting_push
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
 from zerg.services.apns_sender import prepare_session_blocked_reminder_push
@@ -219,14 +218,6 @@ async def upsert_presence(
                 current_state=canonical_presence_state,
                 occurred_at=_now,
                 current_tool_name=runtime_tool_name,
-            )
-        if attention_push is None:
-            attention_push = prepare_long_run_waiting_push(
-                write_db,
-                owner_id=owner_id,
-                session_id=session_uuid,
-                current_state=canonical_presence_state,
-                occurred_at=_now,
             )
         attention_resolution_push = prepare_session_attention_resolution_push(
             write_db,

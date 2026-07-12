@@ -356,12 +356,13 @@ def test_startup_migration_clears_progress_only_runtime_live_timestamps(tmp_path
     ]
 
 
-def test_startup_migration_only_backfills_irreversible_terminal_states(tmp_path):
+def test_startup_migration_separates_session_closure_from_run_exit(tmp_path):
     db_path = tmp_path / "terminal_backfill.db"
     engine = make_engine(f"sqlite:///{db_path}")
 
     host_expired_id = "00000000-0000-0000-0000-000000000201"
     process_gone_id = "00000000-0000-0000-0000-000000000202"
+    user_closed_id = "00000000-0000-0000-0000-000000000203"
     with engine.begin() as conn:
         conn.exec_driver_sql(
             """
@@ -413,10 +414,11 @@ def test_startup_migration_only_backfills_irreversible_terminal_states(tmp_path)
                     id, provider, environment, started_at, user_messages, assistant_messages, tool_calls
                 ) VALUES
                   (:host_expired_id, 'claude', 'test', '2026-05-04 17:00:00', 1, 1, 0),
-                  (:process_gone_id, 'claude', 'test', '2026-05-04 17:00:00', 1, 1, 0)
+                  (:process_gone_id, 'claude', 'test', '2026-05-04 17:00:00', 1, 1, 0),
+                  (:user_closed_id, 'claude', 'test', '2026-05-04 17:00:00', 1, 1, 0)
                 """
             ),
-            {"host_expired_id": host_expired_id, "process_gone_id": process_gone_id},
+            {"host_expired_id": host_expired_id, "process_gone_id": process_gone_id, "user_closed_id": user_closed_id},
         )
         conn.execute(
             text(
@@ -435,21 +437,87 @@ def test_startup_migration_only_backfills_irreversible_terminal_states(tmp_path)
                     'claude:process-gone', :process_gone_id, 'claude', 'finished', 'semantic',
                     '2026-05-04 17:40:00', '2026-05-04 17:40:00', '2026-05-04 17:40:00',
                     'process_gone', '2026-05-04 17:40:00'
+                  ),
+                  (
+                    'claude:user-closed', :user_closed_id, 'claude', 'finished', 'semantic',
+                    '2026-05-04 17:50:00', '2026-05-04 17:50:00', '2026-05-04 17:50:00',
+                    'user_closed', '2026-05-04 17:50:00'
                   )
                 """
             ),
-            {"host_expired_id": host_expired_id, "process_gone_id": process_gone_id},
+            {"host_expired_id": host_expired_id, "process_gone_id": process_gone_id, "user_closed_id": user_closed_id},
         )
 
     _migrate_agents_columns(engine)
 
     with engine.connect() as conn:
-        rows = conn.execute(text("SELECT id, ended_at FROM sessions ORDER BY id")).fetchall()
+        rows = conn.execute(text("SELECT id, ended_at, closed_at, close_reason FROM sessions ORDER BY id")).fetchall()
 
     assert rows == [
-        (host_expired_id, None),
-        (process_gone_id, "2026-05-04 17:40:00"),
+        (host_expired_id, None, None, None),
+        (process_gone_id, None, None, None),
+        (user_closed_id, None, "2026-05-04 17:50:00", "user_closed"),
     ]
+
+
+def test_startup_migration_moves_terminal_runtime_evidence_to_run(tmp_path):
+    engine = make_engine(f"sqlite:///{tmp_path / 'run-terminal-backfill.db'}")
+    initialize_database(engine)
+    session_id = "00000000-0000-0000-0000-000000000211"
+    thread_id = "00000000-0000-0000-0000-000000000212"
+    run_id = "00000000-0000-0000-0000-000000000213"
+    with engine.begin() as conn:
+        # This migration only targets historical databases, which still carry
+        # the retired execution_home adapter column used by earlier steps.
+        conn.execute(text("ALTER TABLE sessions ADD COLUMN execution_home VARCHAR(32)"))
+        conn.execute(
+            text(
+                """
+                INSERT INTO sessions (id, provider, environment, started_at, user_messages, assistant_messages, tool_calls)
+                VALUES (:session_id, 'codex', 'test', '2026-05-04 17:00:00', 1, 1, 0)
+                """
+            ),
+            {"session_id": session_id},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO session_threads (id, session_id, provider, branch_kind, is_primary)
+                VALUES (:thread_id, :session_id, 'codex', 'root', 1)
+                """
+            ),
+            {"thread_id": thread_id, "session_id": session_id},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO session_runs (id, thread_id, provider, launch_origin, started_at)
+                VALUES (:run_id, :thread_id, 'codex', 'longhouse_spawned', '2026-05-04 17:00:00')
+                """
+            ),
+            {"run_id": run_id, "thread_id": thread_id},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO session_runtime_state (
+                    runtime_key, session_id, thread_id, run_id, provider, phase, phase_source,
+                    timeline_anchor_at, terminal_state, terminal_at, runtime_version
+                ) VALUES (
+                    'codex:run-terminal', :session_id, :thread_id, :run_id, 'codex', 'finished', 'semantic',
+                    '2026-05-04 17:40:00', 'process_gone', '2026-05-04 17:40:00', 1
+                )
+                """
+            ),
+            {"session_id": session_id, "thread_id": thread_id, "run_id": run_id},
+        )
+
+    _migrate_agents_columns(engine)
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT ended_at, exit_status FROM session_runs WHERE id = :run_id"), {"run_id": run_id}).one()
+        session_row = conn.execute(text("SELECT ended_at, closed_at FROM sessions WHERE id = :session_id"), {"session_id": session_id}).one()
+    assert row == ("2026-05-04 17:40:00", "process_gone")
+    assert session_row == (None, None)
 
 
 def test_heavy_migration_plan_detects_legacy_pending(tmp_path):

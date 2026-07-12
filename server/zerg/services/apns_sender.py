@@ -19,26 +19,24 @@ from sqlalchemy.orm import Session
 from zerg.config import get_settings
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
-from zerg.models.agents import SessionRuntimeState
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
-from zerg.models.machine_presence import MachinePresence
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.notification_policy import AttentionDeliveryAction
 from zerg.services.notification_policy import evaluate_tier1_delivery
-from zerg.services.notification_policy import evaluate_tier2_delivery
 from zerg.services.notification_policy import recent_visible_web_client_exists
 from zerg.services.notification_policy import user_time_sensitive_blocked
 from zerg.services.session_kernel_projection import project_session_control_fields
+from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
 from zerg.services.session_pause_requests import load_active_pause_request_for_session
 from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
-from zerg.services.session_runtime_display import build_session_runtime_display
+from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.write_serializer import execute_post_write
 
 logger = logging.getLogger(__name__)
@@ -47,12 +45,6 @@ ATTENTION_PUSH_STATES = {"blocked", "needs_answer"}
 RESOLVABLE_ATTENTION_PUSH_STATES = ATTENTION_PUSH_STATES | {"needs_user"}
 ATTENTION_PUSH_DEBOUNCE = timedelta(seconds=30)
 BLOCKED_REMINDER_DELAY = timedelta(minutes=15)
-LONG_RUN_WAITING_THRESHOLD = timedelta(minutes=30)
-LONG_RUN_WAITING_IDLE_10M_THRESHOLD = timedelta(minutes=15)
-LONG_RUN_WAITING_LOCKED_THRESHOLD = timedelta(minutes=10)
-LONG_RUN_WAITING_MIN_MEANINGFUL_RUN = timedelta(minutes=5)
-MACHINE_PRESENCE_FRESHNESS_WINDOW = timedelta(seconds=90)
-MACHINE_ACTIVE_SUPPRESSION_GRACE_WINDOW = timedelta(minutes=3)
 WIDGET_PUSH_DEBOUNCE = timedelta(seconds=30)
 WIDGET_PUSH_PLATFORM = "ios_widget"
 LIVE_ACTIVITY_PUSH_DEBOUNCE = timedelta(seconds=15)
@@ -61,7 +53,6 @@ ATTENTION_NOTIFICATION_THREAD_PREFIX = "longhouse-session"
 NOTIFICATION_EVENT_SESSION_BLOCKED = "session_blocked"
 NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER = "session_blocked_reminder"
 NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER = "session_needs_answer"
-NOTIFICATION_EVENT_LONG_RUN_WAITING = "long_run_waiting"
 NOTIFICATION_CHANNEL_APNS_IOS = "apns_ios"
 PROVIDER_DISPLAY_NAMES = {
     "claude": "Claude",
@@ -208,7 +199,7 @@ def record_notification_delivery_result(
 def rollback_session_attention_push_stamp(db: Session, *, notification: SessionAttentionPush) -> bool:
     """Rollback a pre-send attention stamp after no APNs target accepted it."""
 
-    if notification.event_type in {NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER, NOTIFICATION_EVENT_LONG_RUN_WAITING}:
+    if notification.event_type == NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER:
         return restore_session_attention_push_stamp(
             db,
             session_id=notification.session_id,
@@ -402,39 +393,6 @@ def _tier1_policy_allows_delivery(
     return False
 
 
-def _tier2_policy_allows_delivery(
-    db: Session,
-    *,
-    owner_id: int,
-    session: AgentSession,
-    event_type: str,
-    state_key: str,
-    collapse_key: str,
-    occurred_at: datetime,
-) -> bool:
-    user = _load_owner_user(db, owner_id)
-    decision = evaluate_tier2_delivery(
-        db,
-        user=user,
-        session=session,
-        occurred_at=occurred_at,
-    )
-    if decision.action == AttentionDeliveryAction.DELIVER:
-        return True
-    _record_attention_policy_decision(
-        db,
-        owner_id=owner_id,
-        session_id=str(session.id),
-        event_type=event_type,
-        state_key=state_key,
-        collapse_key=collapse_key,
-        occurred_at=occurred_at,
-        reason=str(decision.reason or decision.action.value),
-        queue_until=decision.queue_until,
-    )
-    return False
-
-
 def _record_no_ios_targets(
     db: Session,
     *,
@@ -474,7 +432,7 @@ def _mark_attention_events_resolved(
                     NOTIFICATION_EVENT_SESSION_BLOCKED,
                     NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER,
                     NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER,
-                    NOTIFICATION_EVENT_LONG_RUN_WAITING,
+                    "long_run_waiting",
                 ]
             ),
             NotificationEvent.resolved_at.is_(None),
@@ -831,197 +789,6 @@ def _recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at
     return recent_visible_web_client_exists(db, owner_id=owner_id, occurred_at=occurred_at)
 
 
-def _machine_presence_rows_since(
-    db: Session,
-    *,
-    owner_id: int,
-    occurred_at: datetime,
-    window: timedelta,
-) -> list[MachinePresence]:
-    threshold = occurred_at - window
-    presence_db = db
-    owned_presence_db = None
-    from zerg.database import get_live_session_factory
-    from zerg.database import live_catalog_enabled
-
-    if live_catalog_enabled():
-        live_factory = get_live_session_factory()
-        if live_factory is not None:
-            owned_presence_db = live_factory()
-            presence_db = owned_presence_db
-    try:
-        rows = presence_db.query(MachinePresence).filter(MachinePresence.owner_id == owner_id).all()
-    except OperationalError as exc:
-        if _is_missing_optional_table(exc):
-            return []
-        raise
-    finally:
-        if owned_presence_db is not None:
-            owned_presence_db.close()
-    recent_rows: list[MachinePresence] = []
-    for row in rows:
-        received_at = _as_aware_utc(row.received_at)
-        if received_at is not None and received_at >= threshold:
-            recent_rows.append(row)
-    return recent_rows
-
-
-def _long_run_waiting_threshold_for_owner(
-    db: Session,
-    *,
-    owner_id: int,
-    occurred_at: datetime,
-) -> timedelta | None:
-    if _recent_visible_web_client_exists(db, owner_id=owner_id, occurred_at=occurred_at):
-        return None
-
-    active_grace_rows = _machine_presence_rows_since(
-        db,
-        owner_id=owner_id,
-        occurred_at=occurred_at,
-        window=MACHINE_ACTIVE_SUPPRESSION_GRACE_WINDOW,
-    )
-    active_grace_states = {str(row.state or "").strip() for row in active_grace_rows}
-    if "active" in active_grace_states:
-        return None
-
-    rows = _machine_presence_rows_since(
-        db,
-        owner_id=owner_id,
-        occurred_at=occurred_at,
-        window=MACHINE_PRESENCE_FRESHNESS_WINDOW,
-    )
-    states = {str(row.state or "").strip() for row in rows}
-    if "locked" in states:
-        return LONG_RUN_WAITING_LOCKED_THRESHOLD
-    if states and states.issubset({"idle_10m"}):
-        return LONG_RUN_WAITING_IDLE_10M_THRESHOLD
-    return LONG_RUN_WAITING_THRESHOLD
-
-
-def _session_execution_started_at(db: Session, *, session_id) -> datetime | None:
-    runtime_state = (
-        db.query(SessionRuntimeState)
-        .filter(SessionRuntimeState.session_id == session_id)
-        .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
-        .first()
-    )
-    if runtime_state is None:
-        return None
-    return _as_aware_utc(runtime_state.execution_started_at)
-
-
-def _long_run_alert_body(*, project: str | None, title: str, elapsed: timedelta) -> str:
-    elapsed_minutes = max(1, int(elapsed.total_seconds() // 60))
-    parts: list[str] = []
-    if project:
-        parts.append(project)
-    parts.append(f"Ran {elapsed_minutes}m")
-    parts.append(title)
-    return _trim_alert_text(" · ".join(parts))
-
-
-def prepare_long_run_waiting_push(
-    db: Session,
-    *,
-    owner_id: int | None,
-    session_id,
-    current_state: str | None,
-    occurred_at: datetime,
-    targets: tuple[APNSDeviceTarget, ...] | None | object = _TARGETS_SENTINEL,
-) -> SessionAttentionPush | None:
-    if owner_id is None or session_id is None or current_state != "needs_user":
-        return None
-
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    if session is None:
-        return None
-
-    execution_started_at = _session_execution_started_at(db, session_id=session_id)
-    if execution_started_at is None:
-        return None
-    elapsed = occurred_at - execution_started_at
-    threshold = _long_run_waiting_threshold_for_owner(db, owner_id=owner_id, occurred_at=occurred_at)
-    if threshold is None:
-        return None
-    threshold = max(threshold, LONG_RUN_WAITING_MIN_MEANINGFUL_RUN)
-    if elapsed < threshold:
-        return None
-
-    previous_stamp_state = str(session.last_attention_push_state or "").strip() or None
-    previous_stamp_at = _as_aware_utc(session.last_attention_push_at)
-    if _base_attention_state(previous_stamp_state) == "needs_user":
-        return None
-    if _has_unresolved_attention(previous_stamp_state, "blocked"):
-        return None
-    if _has_unresolved_attention(previous_stamp_state, "needs_answer"):
-        return None
-
-    collapse_id = _collapse_id("lh-attn-longrun", str(session.id))
-    state_key = f"needs_user:{execution_started_at.isoformat()}"
-    if not _tier2_policy_allows_delivery(
-        db,
-        owner_id=owner_id,
-        session=session,
-        event_type=NOTIFICATION_EVENT_LONG_RUN_WAITING,
-        state_key=state_key,
-        collapse_key=collapse_id,
-        occurred_at=occurred_at,
-    ):
-        return None
-
-    if targets is _TARGETS_SENTINEL:
-        targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="long-run waiting push")
-    if not targets:
-        _record_no_ios_targets(
-            db,
-            owner_id=owner_id,
-            session_id=str(session.id),
-            event_type=NOTIFICATION_EVENT_LONG_RUN_WAITING,
-            state_key=state_key,
-            collapse_key=collapse_id,
-            occurred_at=occurred_at,
-        )
-        return None
-
-    provider = _clean_label(getattr(session, "provider", None))
-    project = _clean_label(getattr(session, "project", None))
-    title = _session_title(session, db=db)
-    summary = str(getattr(session, "summary", "") or "").strip() or title
-    notification_event = _create_notification_event(
-        db,
-        owner_id=owner_id,
-        session_id=str(session.id),
-        event_type=NOTIFICATION_EVENT_LONG_RUN_WAITING,
-        state_key=state_key,
-        collapse_key=collapse_id,
-        occurred_at=occurred_at,
-    )
-    session.last_attention_push_at = occurred_at
-    stamp_state = "needs_user:long_run"
-    session.last_attention_push_state = stamp_state
-
-    return SessionAttentionPush(
-        session_id=str(session.id),
-        state="needs_user",
-        occurred_at=occurred_at,
-        title=title,
-        summary=summary,
-        project=project,
-        provider=provider,
-        tool_name=None,
-        alert_title="Ready for you",
-        alert_body=_long_run_alert_body(project=project, title=title, elapsed=elapsed),
-        collapse_id=collapse_id,
-        targets=targets,
-        event_type=NOTIFICATION_EVENT_LONG_RUN_WAITING,
-        notification_event_id=str(notification_event.id),
-        previous_stamp_state=previous_stamp_state,
-        previous_stamp_at=previous_stamp_at,
-        stamp_state=stamp_state,
-    )
-
-
 def prepare_session_attention_resolution_push(
     db: Session,
     *,
@@ -1187,18 +954,37 @@ def prepare_session_live_activity_pushes(
         runtime_state_map=runtime_state_map or {},
         now=occurred_at,
     )
-    runtime_display = build_session_runtime_display(
+    capabilities = project_session_capabilities(db, session_id=session.id)
+    pause_request = serialize_pause_request_projection(load_active_pause_request_for_session(db, session.id))
+    state_facts = build_session_state_facts(
+        session=session,
         runtime_view=runtime_overlay,
-        capabilities=project_session_capabilities(db, session_id=session.id),
-        ended_at=session.ended_at,
-        pause_request=serialize_pause_request_projection(load_active_pause_request_for_session(db, session.id)),
+        capabilities=capabilities,
+        liveness=build_session_liveness_facts(
+            runtime_view=runtime_overlay,
+            capabilities=capabilities,
+            last_activity_at=session.last_activity_at,
+            now=occurred_at,
+        ),
+        pause_request=pause_request,
+        last_activity_at=session.last_activity_at,
+        user_messages=int(session.user_messages or 0),
+        assistant_messages=int(session.assistant_messages or 0),
+        now=occurred_at,
     )
-    presence_state = runtime_display.state or str(current_state or getattr(session, "status", None) or "unknown")
-    active_tool = runtime_display.compact_tool_label or str(current_tool_name or "").strip() or None
-    display_phase = runtime_display.phase_label or _live_activity_display_phase(presence_state, active_tool)
+    presence_state = {
+        "executing": "running",
+        "quiescent": "idle",
+    }.get(state_facts.activity.state, state_facts.activity.state)
+    active_tool = state_facts.activity.tool or str(current_tool_name or "").strip() or None
+    display_phase = (
+        state_facts.presentation.primary.label
+        if state_facts.presentation.primary is not None
+        else _live_activity_display_phase(presence_state, active_tool)
+    )
     title = _session_title(session, db=db)
     project = _session_project(session)
-    is_attention = runtime_display.needs_attention
+    is_attention = state_facts.pending_interaction is not None
     state_hash = _live_activity_state_hash(
         title=title,
         provider=provider,

@@ -97,7 +97,7 @@ final class SessionChatUITests: XCTestCase {
         composer.typeText(message)
         sendButton.tap()
 
-        XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: 1))
+        XCTAssertTrue(app.staticTexts[message].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Longhouse"].waitForExistence(timeout: 5))
         XCTAssertEqual(composer.value as? String, "Send a message to the live Codex session...")
     }

@@ -11,7 +11,6 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
-from datetime import timezone
 from enum import Enum
 from typing import Any
 
@@ -19,7 +18,6 @@ from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
 from zerg.services.session_runtime import UNVERIFIED_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
-from zerg.utils.time import normalize_utc
 
 
 class TruthTier(str, Enum):
@@ -68,7 +66,6 @@ class PresenceState(str, Enum):
     NEEDS_USER = "needs_user"
     BLOCKED = "blocked"
     STALLED = "stalled"
-    SYNCING_TRANSCRIPT = "syncing_transcript"
 
 
 class Tone(str, Enum):
@@ -94,7 +91,6 @@ KNOWN_PRESENCE_STATES = {"thinking", "running", "idle", "needs_user", "blocked",
 LIVE_EXECUTION_STATES = {"thinking", "running"}
 ATTENTION_STATES = {"blocked"}
 TRANSCRIPT_SYNC_DISPLAY_WINDOW = timedelta(seconds=30)
-TRANSCRIPT_SYNC_STATE = PresenceState.SYNCING_TRANSCRIPT.value
 
 
 @dataclass(frozen=True)
@@ -291,7 +287,7 @@ def _managed_copy(
         return "Needs permission", f"Approval needed • {compact_tool}" if compact_tool else "Approval needed"
     if presence_state is None:
         if live_control_ready:
-            return "Ready", "Live control connected"
+            return "Activity unknown", "Live control connected"
         return "Not connected", None
     return "Idle", "Waiting for next prompt"
 
@@ -370,7 +366,7 @@ def build_session_runtime_display(
     explicit_host_unavailable = host_state in {"offline", "stale", "lost"}
     live_control_ready = bool(capabilities.live_control_available and capabilities.can_send_input and not explicit_host_unavailable)
     if live_control_ready and presence_state is None:
-        phase_label = "Ready"
+        phase_label = "Activity unknown"
     if is_managed_session:
         headline, detail = _managed_copy(
             presence_state=presence_state,
@@ -412,7 +408,6 @@ def build_session_runtime_display(
         process_observed=process_observed,
         has_signal=has_signal,
     )
-    binding_closed = binding_terminal_reason == "process_gone" and control_path == "unmanaged"
     if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
         lifecycle = "closed"
         terminal_reason = _derive_terminal_reason(runtime_view.terminal_reason) or _derive_terminal_reason(terminal_state)
@@ -420,9 +415,6 @@ def build_session_runtime_display(
         # Unverified or reversible signals (like "finished") don't actually close the session.
         lifecycle = "unknown"
         terminal_reason = _derive_terminal_reason(runtime_view.terminal_reason) or _derive_terminal_reason(terminal_state)
-    elif binding_closed:
-        lifecycle = "closed"
-        terminal_reason = _derive_terminal_reason(binding_terminal_reason)
     else:
         lifecycle = "open"
         terminal_reason = None
@@ -451,37 +443,10 @@ def build_session_runtime_display(
         process_observed = False
         is_stalled = False
         has_signal = True
-    transcript_sync_pending = (
-        _transcript_sync_pending(
-            control_path=control_path,
-            lifecycle=lifecycle,
-            presence_state=presence_state,
-            runtime_view=runtime_view,
-            last_activity_at=last_activity_at,
-            user_messages=user_messages,
-            assistant_messages=assistant_messages,
-            has_visible_transcript_preview=has_visible_transcript_preview,
-            has_pending_response_turn=has_pending_response_turn and active_pause_request is None,
-            now=now,
-        )
-        and active_pause_request is None
-    )
-    if transcript_sync_pending:
-        presence_state = TRANSCRIPT_SYNC_STATE
-        headline = "Working"
-        detail = None
-        phase_label = "Working"
-        is_executing = False
-        needs_attention = False
-        is_idle = False
-        process_observed = False
-        is_stalled = False
     no_runtime_signal = signal_tier == "none" and presence_state is None and not process_observed and not live_control_ready
     tone = (
         "blocked"
         if active_pause_request is not None
-        else "active"
-        if transcript_sync_pending
         else "closed"
         if lifecycle == "closed"
         else "idle"
@@ -574,40 +539,6 @@ def _derive_activity_recency(
     if confidence == "stale":
         return "stale"
     return "none"
-
-
-def _transcript_sync_pending(
-    *,
-    control_path: str,
-    lifecycle: str,
-    presence_state: str | None,
-    runtime_view: SessionRuntimeView,
-    last_activity_at: datetime | None,
-    user_messages: int | None,
-    assistant_messages: int | None,
-    has_visible_transcript_preview: bool,
-    has_pending_response_turn: bool,
-    now: datetime | None,
-) -> bool:
-    if control_path != "managed" or lifecycle != "open":
-        return False
-    if presence_state not in {"idle", "needs_user"}:
-        return False
-    if has_visible_transcript_preview:
-        return False
-    if not has_pending_response_turn and int(user_messages or 0) <= int(assistant_messages or 0):
-        return False
-
-    signal_at = normalize_utc(runtime_view.presence_updated_at) or normalize_utc(runtime_view.last_live_at)
-    if signal_at is None:
-        return False
-
-    activity_at = normalize_utc(last_activity_at)
-    if activity_at is not None and signal_at < activity_at:
-        return False
-
-    now_utc = normalize_utc(now) or datetime.now(timezone.utc)
-    return now_utc - signal_at <= TRANSCRIPT_SYNC_DISPLAY_WINDOW
 
 
 def _derive_terminal_reason(terminal_state: str | None) -> str | None:

@@ -36,6 +36,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
+from zerg.models.live_store import LiveRuntimeState
 from zerg.models.user import User
 from zerg.services.agents.kernel_writes import primary_thread_id_for_session
 from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
@@ -67,6 +68,7 @@ from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
 from zerg.services.session_chat_impl import SessionDraftReplyResponse
 from zerg.services.session_chat_impl import SessionLockInfo
 from zerg.services.session_chat_impl import _acquire_session_lock_or_raise
+from zerg.services.session_chat_impl import _assert_live_session_action_available
 from zerg.services.session_chat_impl import _assert_live_session_send_available
 from zerg.services.session_chat_impl import _authorize_live_send
 from zerg.services.session_chat_impl import _build_managed_local_chat_response
@@ -599,6 +601,16 @@ def _list_pause_requests_response(
     status_filter: str | None,
     db: Session,
 ) -> PauseRequestListResponse:
+    if database_module.live_catalog_enabled():
+        state = (
+            db.query(LiveRuntimeState)
+            .filter(LiveRuntimeState.session_id == source_session.id)
+            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+            .first()
+        )
+        projection = state.pending_interaction_projection_json if state is not None else None
+        requests = [projection] if isinstance(projection, dict) and (status_filter in {None, PAUSE_PENDING_STATUS}) else []
+        return PauseRequestListResponse(requests=requests, total=len(requests))
     rows = list_pause_requests_for_session(
         db,
         source_session.id,
@@ -790,6 +802,14 @@ async def _respond_to_pause_request(
     body: PauseRequestResponseRequest,
     db: Session,
 ) -> PauseRequestResponseResponse:
+    if database_module.live_catalog_enabled():
+        return await _respond_to_live_pause_request(
+            source_session=source_session,
+            owner_id=owner_id,
+            pause_request_id=pause_request_id,
+            body=body,
+            db=db,
+        )
     try:
         parsed_pause_request_id = uuid.UUID(pause_request_id)
     except ValueError as exc:
@@ -913,6 +933,90 @@ async def _respond_to_pause_request(
     )
 
 
+async def _respond_to_live_pause_request(
+    *,
+    source_session,
+    owner_id: int,
+    pause_request_id: str,
+    body: PauseRequestResponseRequest,
+    db: Session,
+) -> PauseRequestResponseResponse:
+    state = (
+        db.query(LiveRuntimeState)
+        .filter(LiveRuntimeState.session_id == source_session.id)
+        .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+        .first()
+    )
+    projection = state.pending_interaction_projection_json if state is not None else None
+    if not isinstance(projection, dict) or str(projection.get("id") or "") != pause_request_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="pause request not found for this session")
+    if not bool(projection.get("can_respond")):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "pause_request_not_answerable",
+                "error_code": "pause_request_not_answerable",
+                "message": "Answer this request in the terminal.",
+                "pause_request_id": pause_request_id,
+            },
+        )
+    decision = str(body.decision or "answer").strip().lower() or "answer"
+    if decision not in {"answer", "reject", "cancel"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="decision must be answer, reject, or cancel")
+    answers = dict(body.answers or {})
+    message = str(body.message or body.content or "").strip() or None
+    if message is None and answers:
+        labels = {
+            str(item.get("id") or ""): str(item.get("question") or item.get("header") or item.get("id") or "")
+            for item in projection.get("questions", [])
+            if isinstance(item, dict)
+        }
+        message = (
+            "; ".join(
+                f"{labels.get(str(key), str(key))}: {', '.join(map(str, value)) if isinstance(value, list) else value}"
+                for key, value in answers.items()
+            )
+            or None
+        )
+    request_key = str(projection.get("request_key") or state.pending_interaction_id or "").strip()
+    result = await answer_pause_request_on_managed_local_session(
+        db=db,
+        owner_id=owner_id,
+        session=source_session,
+        request_key=request_key,
+        decision=decision,
+        answers=answers,
+        content=body.content,
+        message=message,
+        request_id=f"pause-{pause_request_id}",
+    )
+    if not result.ok:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "pause_response_dispatch_failed",
+                "error_code": "pause_response_dispatch_failed",
+                "message": str(result.error or "Failed to dispatch pause response command"),
+                "pause_request_id": pause_request_id,
+                "retryable": True,
+                "refetch_required": True,
+            },
+        )
+    resolved_at = datetime.now(timezone.utc)
+    status_value = "resolved" if decision == "answer" else "rejected"
+    terminal_projection = {**projection, "status": status_value, "resolved_at": resolved_at}
+    state.pending_interaction_id = None
+    state.pending_interaction_kind = None
+    state.pending_interaction_opened_at = None
+    state.pending_interaction_can_respond = 0
+    state.pending_interaction_projection_json = None
+    state.pending_interaction_updated_at = resolved_at
+    state.runtime_version = int(state.runtime_version or 0) + 1
+    state.updated_at = resolved_at
+    db.commit()
+    return PauseRequestResponseResponse(status=status_value, pause_request=terminal_projection)
+
+
 def _pause_response_message(*, row, body: PauseRequestResponseRequest) -> str | None:
     explicit = str(body.message or "").strip()
     if explicit:
@@ -957,6 +1061,25 @@ def _pause_question_labels(payload: dict[str, Any]) -> dict[str, str]:
 
 
 def _assert_no_answerable_pause_request_pending(*, db: Session, source_session) -> None:
+    if database_module.live_catalog_enabled():
+        state = (
+            db.query(LiveRuntimeState)
+            .filter(LiveRuntimeState.session_id == source_session.id)
+            .order_by(LiveRuntimeState.updated_at.desc(), LiveRuntimeState.runtime_version.desc())
+            .first()
+        )
+        projection = state.pending_interaction_projection_json if state is not None else None
+        if isinstance(projection, dict) and bool(projection.get("can_respond")):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "code": "pause_request_pending",
+                    "error_code": "pause_request_pending",
+                    "message": "Answer the pending provider question before sending a new prompt.",
+                    "pause_request_id": str(projection.get("id") or ""),
+                },
+            )
+        return
     pause_request = load_active_pause_request_for_session(db, source_session.id)
     if pause_request is not None and pause_request.status == PAUSE_PENDING_STATUS and pause_request.can_respond:
         raise _pending_pause_request_conflict(pause_request)
@@ -1127,7 +1250,7 @@ async def interrupt_live_session(
     """Browser-authenticated explicit interrupt for managed-local sessions."""
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
-    _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
+    _assert_live_session_action_available(db, source_session, action="interrupt", owner_id=current_user.id)
     return await _interrupt_live_session_response(
         db=db,
         owner_id=current_user.id,
@@ -1160,7 +1283,7 @@ async def interrupt_live_session_agents(
         auth_disabled=settings.auth_disabled,
     )
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
-    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
+    _assert_live_session_action_available(db, source_session, action="interrupt", owner_id=owner_id)
     return await _interrupt_live_session_response(
         db=db,
         owner_id=owner_id,
@@ -1178,7 +1301,7 @@ async def terminate_live_session(
     """Browser-authenticated explicit terminate for managed-local sessions."""
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
-    _assert_live_session_send_available(db, source_session, owner_id=current_user.id)
+    _assert_live_session_action_available(db, source_session, action="terminate", owner_id=current_user.id)
     return await _terminate_live_session_response(
         db=db,
         owner_id=current_user.id,
@@ -1213,7 +1336,7 @@ async def terminate_live_session_agents(
         auth_disabled=settings.auth_disabled,
     )
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
-    _assert_live_session_send_available(db, source_session, owner_id=owner_id)
+    _assert_live_session_action_available(db, source_session, action="terminate", owner_id=owner_id)
     return await _terminate_live_session_response(
         db=db,
         owner_id=owner_id,
@@ -1226,7 +1349,7 @@ async def terminate_live_session_agents(
 async def list_pause_requests_endpoint(
     session_id: str,
     status_filter: str | None = PAUSE_PENDING_STATUS,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     _current_user: User = Depends(get_current_browser_route_user),
 ) -> PauseRequestListResponse:
     source_session = _load_session_for_continuation(db, session_id)
@@ -1242,7 +1365,7 @@ async def respond_to_pause_request_endpoint(
     session_id: str,
     pause_request_id: str,
     body: PauseRequestResponseRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_browser_route_user),
 ) -> PauseRequestResponseResponse:
     source_session = _load_session_for_continuation(db, session_id)
@@ -1260,7 +1383,7 @@ async def list_pause_requests_agents(
     session_id: str,
     request: Request,
     status_filter: str | None = PAUSE_PENDING_STATUS,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> PauseRequestListResponse:
@@ -1286,7 +1409,7 @@ async def respond_to_pause_request_agents(
     pause_request_id: str,
     body: PauseRequestResponseRequest,
     request: Request,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> PauseRequestResponseResponse:

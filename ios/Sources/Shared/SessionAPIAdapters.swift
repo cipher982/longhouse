@@ -95,6 +95,7 @@ private extension APISessionStateFacts {
             presentationPolicyVersion: presentationPolicyVersion ?? 1,
             mode: mode,
             dispositionState: disposition.state,
+            launchState: launch?.state,
             runLifecycle: run?.lifecycle,
             activityState: activity.state,
             activityTool: activity.tool,
@@ -245,7 +246,9 @@ extension APISessionResponse {
             capabilities: capabilities.sessionCapabilities,
             runtimeDisplay: runtimeDisplay.sessionRuntimeDisplay,
             loopMode: loopMode.flatMap { SessionLoopMode(rawValue: $0.rawValue) },
-            stateFacts: sessionState.sessionStateFacts,
+            stateFacts: DefaultUnknownSessionStateFacts(
+                wrappedValue: sessionState.sessionStateFacts
+            ),
             transcriptPreview: transcriptPreview?.sessionTranscriptPreview
         )
     }

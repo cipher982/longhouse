@@ -60,7 +60,6 @@ VALID_PRESENCE_STATES = {
     "needs_user",
     "blocked",
     "stalled",
-    "syncing_transcript",
     None,
 }
 VALID_TONES = {
@@ -220,12 +219,6 @@ def test_no_signal_constraints(display: SessionRuntimeDisplay) -> None:
         assert display.state is None
         assert display.truth_tier in {"stale", "none"}
         assert display.activity_recency in {"stale", "none"}
-
-
-def test_syncing_transcript_excludes_idle_and_executing(display: SessionRuntimeDisplay) -> None:
-    if display.state == "syncing_transcript":
-        assert display.is_idle is False
-        assert display.is_executing is False
 
 
 def test_explicit_closed_lifecycle_uses_explicit_terminal_state() -> None:

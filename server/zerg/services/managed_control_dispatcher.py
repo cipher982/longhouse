@@ -217,7 +217,36 @@ async def dispatch_managed_control_command(
     run_id: str | None = None,
 ) -> ManagedControlDispatchResult:
     """Dispatch one managed-control command through the Machine Agent channel."""
-    del db
+    dispatch_payload = dict(payload or {})
+    if database_module.live_catalog_enabled() and command_type in {
+        MANAGED_CONTROL_COMMAND_SEND_TEXT,
+        MANAGED_CONTROL_COMMAND_STEER_TEXT,
+        MANAGED_CONTROL_COMMAND_ANSWER_PAUSE,
+        MANAGED_CONTROL_COMMAND_INTERRUPT,
+        MANAGED_CONTROL_COMMAND_TERMINATE,
+    }:
+        from zerg.services.live_control_catalog import get_live_control_grant
+
+        action = {
+            MANAGED_CONTROL_COMMAND_SEND_TEXT: "send",
+            MANAGED_CONTROL_COMMAND_STEER_TEXT: "send",
+            MANAGED_CONTROL_COMMAND_ANSWER_PAUSE: "send",
+            MANAGED_CONTROL_COMMAND_INTERRUPT: "interrupt",
+            MANAGED_CONTROL_COMMAND_TERMINATE: "terminate",
+        }[command_type]
+        grant = get_live_control_grant(db, session_id=getattr(session, "id"), capability=action)
+        if grant is None:
+            return ManagedControlDispatchResult(
+                ok=False,
+                transport=MANAGED_CONTROL_TRANSPORT_NONE,
+                error=MANAGED_CONTROL_UNAVAILABLE_ERROR,
+            )
+        run_id = grant.run_id
+        dispatch_payload["longhouse_control_grant"] = {
+            "connection_id": grant.connection_id,
+            "run_id": grant.run_id,
+            "lease_generation": grant.lease_generation,
+        }
 
     transport = select_managed_control_transport(session, owner_id=owner_id, command_type=command_type)
     if transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL:
@@ -225,7 +254,7 @@ async def dispatch_managed_control_command(
             owner_id=owner_id,
             session=session,
             command_type=command_type,
-            payload=payload,
+            payload=dispatch_payload,
             timeout_secs=timeout_secs,
             command_id=_engine_command_id(
                 session=session,

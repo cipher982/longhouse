@@ -1,8 +1,6 @@
 import Foundation
 import SwiftUI
 
-let transcriptSyncState = "syncing_transcript"
-
 struct SessionStateLabel: Hashable, Codable, Sendable {
     let key: String
     let label: String
@@ -22,6 +20,7 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     let presentationPolicyVersion: Int
     let mode: String
     let dispositionState: String
+    let launchState: String?
     let runLifecycle: String?
     let activityState: String
     let activityTool: String?
@@ -39,6 +38,61 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     let primary: SessionStateLabel?
     let access: SessionStateLabel?
     let transcript: SessionStateLabel?
+
+    static let unknown = SessionStateFacts(
+        contractVersion: 1,
+        presentationPolicyVersion: 1,
+        mode: "unknown",
+        dispositionState: "unknown",
+        launchState: nil,
+        runLifecycle: nil,
+        activityState: "unknown",
+        activityTool: nil,
+        activityObservedAt: nil,
+        activityValidUntil: nil,
+        controlOwnership: "unowned",
+        controlConnection: "unknown",
+        sendInput: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
+        interrupt: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
+        terminate: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
+        reattach: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
+        resume: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
+        pendingInteractionKind: nil,
+        transcriptConvergence: "unknown",
+        primary: nil,
+        access: nil,
+        transcript: nil
+    )
+}
+
+/// Keeps pre-contract on-device caches readable while every in-memory model
+/// still has a non-optional facts object. Network DTOs require `session_state`;
+/// this compatibility seam is only for Codable domain snapshots and old test
+/// payloads, and never reconstructs facts from legacy display aliases.
+@propertyWrapper
+struct DefaultUnknownSessionStateFacts: Hashable, Codable, Sendable {
+    var wrappedValue: SessionStateFacts
+
+    init(wrappedValue: SessionStateFacts = .unknown) {
+        self.wrappedValue = wrappedValue
+    }
+
+    init(from decoder: Decoder) throws {
+        wrappedValue = try SessionStateFacts(from: decoder)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try wrappedValue.encode(to: encoder)
+    }
+}
+
+extension KeyedDecodingContainer {
+    func decode(
+        _ type: DefaultUnknownSessionStateFacts.Type,
+        forKey key: Key
+    ) throws -> DefaultUnknownSessionStateFacts {
+        try decodeIfPresent(type, forKey: key) ?? DefaultUnknownSessionStateFacts()
+    }
 }
 
 /// Honest summarization state — mirrors backend `summary_status` field.
@@ -82,7 +136,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let replyToLiveSessionAvailable: Bool?
     let runtimeDisplay: SessionRuntimeDisplay
     let timelineCard: TimelineCardPresentation?
-    let stateFacts: SessionStateFacts?
+    @DefaultUnknownSessionStateFacts var stateFacts: SessionStateFacts
 
     init(
         id: String,
@@ -112,7 +166,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         replyToLiveSessionAvailable: Bool? = nil,
         runtimeDisplay: SessionRuntimeDisplay,
         timelineCard: TimelineCardPresentation? = nil,
-        stateFacts: SessionStateFacts? = nil
+        stateFacts: SessionStateFacts = .unknown
     ) {
         self.id = id
         self.threadId = threadId
@@ -144,19 +198,19 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.stateFacts = stateFacts
     }
 
-    var isClosed: Bool { stateFacts?.dispositionState == "closed" }
+    var isClosed: Bool { stateFacts.dispositionState == "closed" }
 
-    var isBlocked: Bool { !isClosed && stateFacts?.activityState == "blocked" }
+    var isBlocked: Bool { !isClosed && stateFacts.activityState == "blocked" }
     var isUserActive: Bool { userState == nil || userState == "active" }
     var needsAttention: Bool {
         if isClosed || !isUserActive { return false }
-        return stateFacts?.pendingInteractionKind != nil
+        return stateFacts.pendingInteractionKind != nil
     }
     var isExecuting: Bool {
-        !isClosed && ["thinking", "executing"].contains(stateFacts?.activityState)
+        !isClosed && ["thinking", "executing"].contains(stateFacts.activityState)
     }
-    var isIdle: Bool { isClosed || stateFacts?.activityState == "quiescent" }
-    var runtimeTone: String { stateFacts?.primary?.tone ?? "inactive" }
+    var isIdle: Bool { isClosed || stateFacts.activityState == "quiescent" }
+    var runtimeTone: String { stateFacts.primary?.tone ?? "inactive" }
     var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
     var timelineBranchBadgeLabel: String? {
         guard let branch = gitBranch?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty else {
@@ -181,29 +235,26 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var managementLabel: String {
-        if let label = stateFacts?.access?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
-            return label
-        }
-        return stateFacts?.controlOwnership == "owned" ? "Managed" : "Unmanaged"
+        return stateFacts.controlOwnership == "owned" ? "Managed" : "Unmanaged"
     }
 
     var managementTone: String {
-        return stateFacts?.access?.tone ?? "neutral"
+        "neutral"
     }
 
-    private var isManaged: Bool { stateFacts?.controlOwnership == "owned" }
+    private var isManaged: Bool { stateFacts.controlOwnership == "owned" }
 
-    var displayPhaseLabel: String { stateFacts?.primary?.label ?? "" }
+    var displayPhaseLabel: String { stateFacts.primary?.label ?? "" }
 
     var timelineStatusLabel: String {
-        if let label = stateFacts?.primary?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+        if let label = stateFacts.primary?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
         }
         return ""
     }
 
     var timelineStatusSeenAt: String? {
-        if let seenAt = stateFacts?.primary?.observedAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
+        if let seenAt = stateFacts.primary?.observedAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
             return seenAt
         }
         return nil
@@ -217,7 +268,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineStatusTone: String {
-        if let tone = stateFacts?.primary?.tone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
+        if let tone = stateFacts.primary?.tone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
             return tone
         }
         return "inactive"
@@ -226,7 +277,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     var shouldAnnotateTimelineStatusAsStale: Bool {
         !isClosed
             && timelineStatusTone.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "inactive"
-            && stateFacts?.activityState == "unknown"
+            && stateFacts.activityState == "unknown"
     }
 
     var timelineBorderTone: String {
@@ -343,7 +394,7 @@ enum TimelineSignal {
         if suppressed { return .quiet }
         if session.needsAttention { return .attention }
 
-        switch session.stateFacts?.activityState {
+        switch session.stateFacts.activityState {
         case "thinking", "executing":
             return .working
         case "blocked", "stalled":
@@ -733,7 +784,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     let capabilities: SessionCapabilities
     let runtimeDisplay: SessionRuntimeDisplay
     let loopMode: SessionLoopMode?
-    var stateFacts: SessionStateFacts? = nil
+    @DefaultUnknownSessionStateFacts var stateFacts: SessionStateFacts
     var transcriptPreview: SessionTranscriptPreview? = nil
 
     var displayTitle: String {
@@ -753,9 +804,12 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         loopMode ?? .manual
     }
 
-    var isClosed: Bool { stateFacts?.dispositionState == "closed" }
+    var isClosed: Bool { stateFacts.dispositionState == "closed" }
     var activePauseRequest: SessionPauseRequest? {
-        guard !isClosed, let request = runtimeDisplay.pauseRequest, request.isPending else {
+        guard !isClosed,
+              stateFacts.pendingInteractionKind != nil,
+              let request = runtimeDisplay.pauseRequest,
+              request.isPending else {
             return nil
         }
         return request
@@ -763,49 +817,32 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var shouldShowAttentionFallback: Bool {
         guard !isClosed, activePauseRequest == nil else { return false }
-        return stateFacts?.pendingInteractionKind != nil
-            || stateFacts?.activityState == "blocked"
+        return stateFacts.pendingInteractionKind != nil
+            || stateFacts.activityState == "blocked"
     }
 
     var canSendLive: Bool {
         if isClosed { return false }
-        return stateFacts?.sendInput.isAvailable == true
+        return stateFacts.sendInput.isAvailable
     }
 
     /// The archive is still converging with a live/catalog session. This is a
     /// distinct transcript state: an empty projection here is not evidence that
     /// the session has never produced messages.
     var isTranscriptSyncing: Bool {
-        stateFacts?.transcriptConvergence == "lagging"
+        stateFacts.transcriptConvergence == "lagging"
     }
 
     var canDraftBeforeSendReady: Bool {
         guard !isClosed, !canSendLive else { return false }
-        guard stateFacts?.controlOwnership == "owned" else { return false }
-        let label = runtimeCapabilityLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let phase = runtimePhaseLabel.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let disabledReason = capabilities.composerDisabledReason?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased() ?? ""
-        return label == "launching"
-            || phase == "launching"
-            || phase == "dispatching"
-            || disabledReason.hasPrefix("setting up")
-            || disabledReason == "session is still starting."
+        guard stateFacts.controlOwnership == "owned" else { return false }
+        return stateFacts.launchState == "pending" || stateFacts.launchState == "dispatched"
     }
 
     /// Codex managed sessions advertise `attach_images=true` once both the
     /// backend and the engine on this device support the attach pipeline.
     var attachImagesEnabled: Bool {
         canSendLive && (capabilities.attachImages ?? false)
-    }
-
-    var inputModeValue: String? {
-        guard let mode = capabilities.inputMode?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !mode.isEmpty else {
-            return nil
-        }
-        return mode.lowercased()
     }
 
     var canQueueNextInput: Bool {
@@ -817,37 +854,40 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var isControlOffline: Bool {
-        if inputModeValue == "offline" { return true }
-        if inputModeValue == "read_only" { return false }
-        return !canSendLive && capabilities.hostReattachAvailable
+        stateFacts.controlOwnership == "owned"
+            && !canSendLive
+            && ["degraded", "disconnected", "unknown"].contains(stateFacts.controlConnection)
     }
 
     var isReadOnly: Bool {
-        if inputModeValue == "read_only" { return true }
-        if inputModeValue == "offline" { return false }
-        return !canSendLive && !capabilities.hostReattachAvailable
+        !canSendLive && !isControlOffline
     }
 
-    var runtimePhaseState: String { stateFacts?.activityState ?? "unknown" }
+    var runtimePhaseState: String { stateFacts.activityState }
 
-    var runtimePhaseLabel: String { stateFacts?.primary?.label ?? "" }
+    var runtimePhaseLabel: String { stateFacts.primary?.label ?? "" }
 
     var controlHealthMessage: String? {
-        if let disabledReason = capabilities.composerDisabledReason?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !disabledReason.isEmpty {
-            return disabledReason
+        if isClosed { return "This session is closed." }
+        if stateFacts.launchState == "pending" || stateFacts.launchState == "dispatched" {
+            return "Session is still starting."
         }
         if isControlOffline {
-            return capabilities.displayDetail ?? "Control is offline until the host reconnects."
+            return "Control is offline until the host reconnects."
         }
         if isReadOnly {
-            return capabilities.displayDetail ?? "Read-only imported session."
+            return stateFacts.controlOwnership == "owned"
+                ? "This managed session is read-only."
+                : "Read-only imported session."
         }
         return nil
     }
 
     var runtimeCapabilityLabel: String {
-        if let label = capabilities.displayLabel?.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+        if stateFacts.launchState == "pending" || stateFacts.launchState == "dispatched" {
+            return "Launching"
+        }
+        if let label = stateFacts.access?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             if label.caseInsensitiveCompare("Live control") == .orderedSame { return "Send" }
             if label.caseInsensitiveCompare("Search only") == .orderedSame { return "Read only" }
             return label
@@ -858,9 +898,6 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var runtimeCapabilityTone: String {
-        if let tone = capabilities.displayTone?.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
-            return tone
-        }
         if canSendLive { return "success" }
         if isControlOffline { return "warning" }
         return "neutral"
@@ -882,10 +919,10 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return placeholder
     }
 
-    var runtimeHeadline: String { stateFacts?.primary?.label ?? "" }
+    var runtimeHeadline: String { stateFacts.primary?.label ?? "" }
 
     var runtimeDetail: String? {
-        guard let detail = runtimeDisplay.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty else {
+        guard let detail = stateFacts.transcript?.label.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty else {
             return nil
         }
         return detail
@@ -896,6 +933,9 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         let providerLabel = providerName.isEmpty ? "session" : providerName.prefix(1).uppercased() + providerName.dropFirst()
         let fallback = providerLabel == "session" ? "Setting up session" : "Setting up \(providerLabel)"
         guard canDraftBeforeSendReady else { return fallback }
+        if stateFacts.launchState == "pending" || stateFacts.launchState == "dispatched" {
+            return fallback
+        }
         guard var message = controlHealthMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
               !message.isEmpty else {
             return fallback
@@ -906,10 +946,10 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return message.isEmpty ? fallback : message
     }
 
-    var runtimeTone: String { stateFacts?.primary?.tone ?? "inactive" }
+    var runtimeTone: String { stateFacts.primary?.tone ?? "inactive" }
 
     var isSessionExecuting: Bool {
-        ["thinking", "executing"].contains(stateFacts?.activityState ?? "unknown")
+        ["thinking", "executing"].contains(stateFacts.activityState)
     }
 
     func replacingTranscriptPreview(_ transcriptPreview: SessionTranscriptPreview?) -> SessionDetail {
@@ -934,7 +974,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             capabilities: capabilities,
             runtimeDisplay: runtimeDisplay,
             loopMode: loopMode,
-            stateFacts: stateFacts,
+            stateFacts: DefaultUnknownSessionStateFacts(wrappedValue: stateFacts),
             transcriptPreview: transcriptPreview
         )
     }

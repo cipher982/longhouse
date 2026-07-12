@@ -14,6 +14,7 @@ from datetime import timezone
 
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
+from zerg.services.session_runtime import RUN_END_TERMINAL_STATES
 from zerg.services.session_runtime import UNVERIFIED_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
 
@@ -176,6 +177,8 @@ def _explicit_lifecycle(runtime_view: SessionRuntimeView | None) -> LifecycleFac
     terminal_reason = _normalized(runtime_view.terminal_reason)
     if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
         return LifecycleFact(state="closed", reason=terminal_reason or terminal_state, observed_at=observed_at)
+    if terminal_state in RUN_END_TERMINAL_STATES:
+        return LifecycleFact(state="unknown", reason=terminal_reason or terminal_state, observed_at=observed_at)
     if terminal_state in UNVERIFIED_TERMINAL_STATES:
         return LifecycleFact(state="unknown", reason=terminal_reason or terminal_state, observed_at=observed_at)
     return LifecycleFact(state="closed", reason=terminal_reason or "provider_signal", observed_at=observed_at)

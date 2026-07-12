@@ -755,7 +755,7 @@ export function SessionChat({
       ? { variant: "warning" as const, label: "Stalled" }
     : isSendLocked
       ? { variant: "warning" as const, label: "Working" }
-      : { variant: "neutral" as const, label: "Ready" };
+      : { variant: "neutral" as const, label: "Input available" };
   const submitButtonLabel = !isSendLocked
     ? submitLabel
     : canSteerNow

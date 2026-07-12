@@ -30,6 +30,13 @@ ROOT_SCHEMAS = [
     "SessionTurnTimingResponse",
 ]
 
+# Read-only rolling compatibility. These values are never advertised by the
+# current server contract, but a newly installed client must still decode a
+# cached/older-server payload during server-first rollout.
+LEGACY_ENUM_VALUES = {
+    "PresenceState": ["syncing_transcript"],
+}
+
 SWIFT_RESERVED = {
     "associatedtype",
     "class",
@@ -198,7 +205,7 @@ def render_struct(name: str, schema: dict[str, Any]) -> str:
     if isinstance(enum_values, list) and enum_values:
         type_name = swift_type_name(name)
         lines = [f"enum {type_name}: String, Codable, Hashable, Sendable, CaseIterable {{"]
-        for value in enum_values:
+        for value in [*enum_values, *LEGACY_ENUM_VALUES.get(name, [])]:
             text = str(value)
             lines.append(f"    case {_swift_enum_case(text)} = \"{text}\"")
         lines.append("}")

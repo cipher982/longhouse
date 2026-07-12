@@ -26,6 +26,10 @@ from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.live_store import LiveRuntimeState
+from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
 from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
 from zerg.services.session_live_previews import upsert_live_session_live_preview
 from zerg.services.session_live_previews import upsert_session_live_preview
@@ -55,31 +59,37 @@ PHASE_FRESHNESS = {
     "needs_user": timedelta(minutes=10),
 }
 MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
-# Irreversible session endings. These states stamp AgentSession.ended_at and
-# render as closed in liveness facts.
-EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "user_closed", "process_gone"}
+# Only explicit user/admin closure closes the durable session. Provider exit and
+# process loss end the current run; they never change session disposition.
+EXPLICIT_CLOSED_TERMINAL_STATES = {"user_closed"}
+RUN_END_TERMINAL_STATES = {"session_ended", "process_gone"}
 RUN_TERMINAL_STATES = {"run_completed", "run_failed", "run_cancelled"}
 UNVERIFIED_TERMINAL_STATES = {"host_expired"}
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked"}
-KNOWN_PHASES = {"thinking", "running", "blocked", "stalled", "needs_user", "idle", "finished", "syncing_transcript"}
+KNOWN_PHASES = {"thinking", "running", "blocked", "stalled", "needs_user", "idle", "finished"}
 MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
 MANAGED_CODEX_RUNTIME_SOURCES = {MANAGED_SESSION_LEASE_SOURCE, "codex_bridge", "codex_bridge_live", "codex_exec"}
 
 
-def session_is_closed_for_input(db: Session, session_id: UUID | None) -> bool:
-    """Return whether runtime terminal truth makes a session reject new input."""
+def session_input_block_reason(db: Session, session_id: UUID | None) -> str | None:
+    """Return the orthogonal disposition/run reason input cannot target this run."""
     if session_id is None:
-        return False
+        return None
     runtime_state = load_runtime_state_map(db, [session_id]).get(str(session_id))
     terminal_state = str(getattr(runtime_state, "terminal_state", "") or "").strip()
     if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
-        return True
-    if terminal_state == "finished":
-        return False
-    if terminal_state in UNVERIFIED_TERMINAL_STATES:
-        return False
-    return bool(terminal_state)
+        return "session_closed"
+    if terminal_state in RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES:
+        return "run_ended"
+    if terminal_state in {"", "finished"} | UNVERIFIED_TERMINAL_STATES:
+        return None
+    return "run_ended"
+
+
+def session_is_closed_for_input(db: Session, session_id: UUID | None) -> bool:
+    """Compatibility predicate for whether the current run rejects new input."""
+    return session_input_block_reason(db, session_id) is not None
 
 
 def _latest_timestamp(*values: datetime | None) -> datetime | None:
@@ -794,24 +804,35 @@ def _apply_run_terminal_event(
     db: Session,
     *,
     event: RuntimeEventIngest,
-    state: SessionRuntimeState,
+    state: SessionRuntimeState | LiveRuntimeState,
     occurred_at: datetime,
 ) -> bool:
     run_id = event.run_id or state.run_id
     if run_id is None:
         return False
-    run = db.query(SessionRun).filter(SessionRun.id == run_id).first()
+    live_lane = isinstance(state, LiveRuntimeState)
+    run_model = LiveSessionRun if live_lane else SessionRun
+    connection_model = LiveSessionConnection if live_lane else SessionConnection
+    run = db.query(run_model).filter(run_model.id == str(run_id) if live_lane else run_model.id == run_id).first()
     if run is None:
         return False
     if event.session_id is not None:
-        from zerg.models.agents import SessionThread
+        if live_lane:
+            owned = (
+                db.query(LiveSessionThread.id)
+                .filter(LiveSessionThread.id == str(run.thread_id))
+                .filter(LiveSessionThread.session_id == str(event.session_id))
+                .first()
+            )
+        else:
+            from zerg.models.agents import SessionThread
 
-        owned = (
-            db.query(SessionThread.id)
-            .filter(SessionThread.id == run.thread_id)
-            .filter(SessionThread.session_id == event.session_id)
-            .first()
-        )
+            owned = (
+                db.query(SessionThread.id)
+                .filter(SessionThread.id == run.thread_id)
+                .filter(SessionThread.session_id == event.session_id)
+                .first()
+            )
         if owned is None:
             return False
     terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
@@ -825,9 +846,9 @@ def _apply_run_terminal_event(
     else:
         connection_released_at = run_ended_at
     for conn in (
-        db.query(SessionConnection)
-        .filter(SessionConnection.run_id == run.id)
-        .filter(SessionConnection.state.in_(("attached", "degraded", "detached")))
+        db.query(connection_model)
+        .filter(connection_model.run_id == run.id)
+        .filter(connection_model.state.in_(("attached", "degraded", "detached")))
         .all()
     ):
         changed = True
@@ -930,7 +951,38 @@ def _apply_runtime_event(
 ) -> RuntimeEventApplyOutcome:
     if event.kind in {"pause_request", "pause_resolution"}:
         if not archive_side_effects:
-            return "ignored"
+            from zerg.services.session_pause_requests import build_pause_runtime_projection
+            from zerg.services.session_pause_requests import pause_runtime_request_key
+
+            state = _ensure_state(db, event, state_model=state_model, archive_side_effects=False)
+            payload = event.payload if isinstance(event.payload, dict) else {}
+            occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+            interaction_updated_at = normalize_utc(state.pending_interaction_updated_at)
+            if interaction_updated_at is not None and (
+                occurred_at < interaction_updated_at or (occurred_at == interaction_updated_at and event.kind == "pause_request")
+            ):
+                return "ignored"
+            if event.kind == "pause_request":
+                projection = build_pause_runtime_projection(event)
+                state.pending_interaction_id = projection["request_key"]
+                state.pending_interaction_kind = str(payload.get("kind") or "structured_question").strip()
+                state.pending_interaction_opened_at = occurred_at
+                state.pending_interaction_can_respond = int(bool(payload.get("can_respond")))
+                state.pending_interaction_projection_json = projection
+            else:
+                target_id = pause_runtime_request_key(event)
+                if state.pending_interaction_id is not None and target_id != state.pending_interaction_id:
+                    return "ignored"
+                state.pending_interaction_id = None
+                state.pending_interaction_kind = None
+                state.pending_interaction_opened_at = None
+                state.pending_interaction_can_respond = 0
+                state.pending_interaction_projection_json = None
+            state.pending_interaction_updated_at = occurred_at
+            state.runtime_version = int(state.runtime_version or 0) + 1
+            state.updated_at = max(normalize_utc(state.updated_at) or occurred_at, occurred_at)
+            db.flush()
+            return "applied"
         from zerg.services.session_pause_requests import apply_pause_runtime_event
 
         return "applied" if apply_pause_runtime_event(db, event) else "ignored"
@@ -980,8 +1032,8 @@ def _apply_runtime_event(
             state.terminal_at,
         )
         next_phase = (event.phase or state.phase or "idle").strip() or "idle"
-        if next_phase not in KNOWN_PHASES:
-            next_phase = "idle"
+        # Preserve rolling-producer vocabulary exactly. Unknown provider phases
+        # project as activity unknown; they must never be rewritten to idle.
         stale_lease_observed_at = _stale_managed_lease_observed_at(event, latest_phase_signal_at)
         next_active_tool = None
         if next_phase in {"running", "blocked"}:
@@ -1146,10 +1198,15 @@ def _apply_runtime_event(
         phase_started_at = normalize_utc(state.phase_started_at)
         if phase_started_at is None or phase_started_at < occurred_at:
             state.phase_started_at = occurred_at
+        if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES and event.session_id is not None:
+            session_model = AgentSession if archive_side_effects else LiveSessionCatalog
+            id_column = session_model.id if archive_side_effects else session_model.session_id
+            session_key = event.session_id if archive_side_effects else str(event.session_id)
+            session = db.query(session_model).filter(id_column == session_key).first()
+            if session is not None and session.closed_at is None:
+                session.closed_at = occurred_at
+                session.close_reason = terminal_state
         if archive_side_effects and terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES and event.session_id is not None:
-            session = db.query(AgentSession).filter(AgentSession.id == event.session_id).first()
-            if session is not None and session.ended_at is None:
-                session.ended_at = occurred_at
             from zerg.services.session_pause_requests import expire_pending_pause_requests_for_session
 
             pause_changed = (
@@ -1173,7 +1230,7 @@ def _apply_runtime_event(
                 )
                 > 0
             )
-        if archive_side_effects and terminal_state in RUN_TERMINAL_STATES:
+        if terminal_state in RUN_END_TERMINAL_STATES | RUN_TERMINAL_STATES:
             _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at)
 
     elif event.kind == "binding_signal":

@@ -272,7 +272,7 @@ export function toTitleCaseWords(value: string): string {
 export function getRuntimeOutcomeLabel(
   runtime: ReturnType<typeof resolveSessionRuntimeState>,
 ): string {
-  return runtime.runtimeDisplay.headline;
+  return runtime.stateFacts.presentation.primary?.label ?? "No live signal";
 }
 
 export interface RuntimeDisplayCopy {
@@ -284,8 +284,8 @@ export function getRuntimeDisplayCopy(
   runtime: ReturnType<typeof resolveSessionRuntimeState>,
 ): RuntimeDisplayCopy {
   return {
-    headline: runtime.runtimeDisplay.headline,
-    detail: runtime.runtimeDisplay.detail,
+    headline: runtime.stateFacts.presentation.primary?.label ?? "No live signal",
+    detail: runtime.stateFacts.presentation.transcript?.label ?? null,
   };
 }
 

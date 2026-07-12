@@ -10,8 +10,6 @@ from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.provisional_events import EVENT_ORIGIN_LIVE_PROVISIONAL
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.session_runtime import SessionRuntimeView
-from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_DISPLAY_WINDOW
-from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_STATE
 from zerg.services.session_runtime_display import build_session_runtime_display
 from zerg.services.session_views import PROVISIONAL_TRANSCRIPT_COMPLETE_FRESHNESS
 from zerg.services.session_views import PROVISIONAL_TRANSCRIPT_PARTIAL_FRESHNESS
@@ -142,8 +140,8 @@ def test_transcript_preview_freshness_contract_prefers_durable_activity_over_age
     assert missing_timestamp.stale_reason == "missing_preview_timestamp"
 
 
-def test_runtime_transcript_sync_freshness_contract_uses_backend_clock_window():
-    signal_at = PINNED_NOW - TRANSCRIPT_SYNC_DISPLAY_WINDOW
+def test_transcript_lag_never_changes_provider_activity():
+    signal_at = PINNED_NOW
     display = build_session_runtime_display(
         runtime_view=_runtime_view(signal_at=signal_at),
         capabilities=_managed_capabilities(),
@@ -155,26 +153,9 @@ def test_runtime_transcript_sync_freshness_contract_uses_backend_clock_window():
         now=PINNED_NOW,
     )
 
-    assert display.state == TRANSCRIPT_SYNC_STATE
-    assert display.headline == "Working"
-    assert display.detail is None
-    assert display.phase_label == "Working"
-
-    expired_signal_at = PINNED_NOW - TRANSCRIPT_SYNC_DISPLAY_WINDOW - timedelta(microseconds=1)
-    expired = build_session_runtime_display(
-        runtime_view=_runtime_view(signal_at=expired_signal_at),
-        capabilities=_managed_capabilities(),
-        ended_at=None,
-        last_activity_at=expired_signal_at - timedelta(microseconds=1),
-        user_messages=2,
-        assistant_messages=1,
-        has_visible_transcript_preview=False,
-        now=PINNED_NOW,
-    )
-
-    assert expired.state == "idle"
-    assert expired.headline == "Idle"
-    assert expired.detail == "Waiting for next prompt"
+    assert display.state == "idle"
+    assert display.headline == "Idle"
+    assert display.phase_label == "Idle"
 
 
 def test_runtime_transcript_sync_freshness_contract_suppresses_when_evidence_catches_up():

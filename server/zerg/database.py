@@ -983,6 +983,65 @@ def initialize_live_database(engine: Engine | None = None) -> None:
         _auto_add_missing_columns(target_engine, LiveBase.metadata, apply=True)
 
 
+def _migrate_session_disposition_and_run_facts(engine: Engine) -> None:
+    """Backfill the orthogonal session-close and run-end facts independently."""
+    if engine.dialect.name != "sqlite":
+        return
+    try:
+        with engine.begin() as conn:
+            tables = {row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+            if "sessions" not in tables or "session_runtime_state" not in tables:
+                return
+            session_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
+            runtime_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_runtime_state)"))}
+            if {"closed_at", "close_reason"}.issubset(session_columns):
+                conn.execute(
+                    text(
+                        """
+                        UPDATE sessions
+                        SET closed_at = (
+                            SELECT COALESCE(srs.terminal_at, srs.last_runtime_signal_at)
+                            FROM session_runtime_state srs
+                            WHERE srs.session_id = sessions.id AND srs.terminal_state = 'user_closed'
+                            ORDER BY srs.terminal_at DESC LIMIT 1
+                        ), close_reason = 'user_closed'
+                        WHERE closed_at IS NULL AND EXISTS (
+                            SELECT 1 FROM session_runtime_state srs
+                            WHERE srs.session_id = sessions.id AND srs.terminal_state = 'user_closed'
+                        )
+                        """
+                    )
+                )
+            if "session_runs" in tables and "run_id" in runtime_columns:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE session_runs
+                        SET ended_at = COALESCE(ended_at, (
+                                SELECT COALESCE(srs.terminal_at, srs.last_runtime_signal_at)
+                                FROM session_runtime_state srs
+                                WHERE srs.run_id = session_runs.id
+                                  AND srs.terminal_state IN ('session_ended', 'process_gone', 'run_completed', 'run_failed', 'run_cancelled')
+                                ORDER BY srs.terminal_at DESC LIMIT 1
+                            )),
+                            exit_status = COALESCE(exit_status, (
+                                SELECT srs.terminal_state FROM session_runtime_state srs
+                                WHERE srs.run_id = session_runs.id
+                                  AND srs.terminal_state IN ('session_ended', 'process_gone', 'run_completed', 'run_failed', 'run_cancelled')
+                                ORDER BY srs.terminal_at DESC LIMIT 1
+                            ))
+                        WHERE EXISTS (
+                            SELECT 1 FROM session_runtime_state srs
+                            WHERE srs.run_id = session_runs.id
+                              AND srs.terminal_state IN ('session_ended', 'process_gone', 'run_completed', 'run_failed', 'run_cancelled')
+                        )
+                        """
+                    )
+                )
+    except Exception:
+        logger.debug("session disposition/run fact migration skipped", exc_info=True)
+
+
 def _migrate_agents_columns(engine: Engine) -> None:
     """Residual SQLite migrations not absorbed by the auto-derive path.
 
@@ -1005,6 +1064,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
     """
     if engine.dialect.name != "sqlite":
         return
+
+    _migrate_session_disposition_and_run_facts(engine)
 
     try:
         with engine.begin() as conn:
@@ -1126,10 +1187,9 @@ def _migrate_agents_columns(engine: Engine) -> None:
                         ") WHERE last_activity_at IS NULL"
                     )
                 )
-            # Backfill: close sessions whose runtime row already observed an
-            # irreversible terminal state but whose ended_at was never written.
-            # host_expired is intentionally excluded because it only proves
-            # that the host stopped reporting, not that the session died.
+            # Split the historical overloaded ended_at meaning. Provider/run
+            # exit ends the matching run; only explicit user closure changes
+            # durable session disposition.
             runtime_state_exists = conn.execute(
                 text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_runtime_state'")
             ).fetchone()
@@ -1138,25 +1198,68 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     text(
                         """
                         UPDATE sessions
-                        SET ended_at = (
+                        SET closed_at = (
                             SELECT COALESCE(srs.terminal_at, srs.last_runtime_signal_at)
                             FROM session_runtime_state srs
                             WHERE srs.session_id = sessions.id
-                              AND srs.terminal_state IN
-                                  ('session_ended', 'process_gone', 'user_closed')
+                              AND srs.terminal_state = 'user_closed'
                             ORDER BY srs.terminal_at DESC
                             LIMIT 1
-                        )
-                        WHERE ended_at IS NULL
+                        ), close_reason = 'user_closed'
+                        WHERE closed_at IS NULL
                           AND EXISTS (
                                 SELECT 1 FROM session_runtime_state srs
                                 WHERE srs.session_id = sessions.id
-                                  AND srs.terminal_state IN
-                                      ('session_ended', 'process_gone', 'user_closed')
+                                  AND srs.terminal_state = 'user_closed'
                           )
                         """
                     )
                 )
+                runs_exists = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_runs'")).fetchone()
+                if runs_exists:
+                    conn.execute(
+                        text(
+                            """
+                        UPDATE session_runs
+                        SET ended_at = COALESCE(
+                                ended_at,
+                                (
+                                    SELECT COALESCE(srs.terminal_at, srs.last_runtime_signal_at)
+                                    FROM session_runtime_state srs
+                                    WHERE srs.run_id = session_runs.id
+                                      AND srs.terminal_state IN (
+                                          'session_ended', 'process_gone',
+                                          'run_completed', 'run_failed', 'run_cancelled'
+                                      )
+                                    ORDER BY srs.terminal_at DESC
+                                    LIMIT 1
+                                )
+                            ),
+                            exit_status = COALESCE(
+                                exit_status,
+                                (
+                                    SELECT srs.terminal_state
+                                    FROM session_runtime_state srs
+                                    WHERE srs.run_id = session_runs.id
+                                      AND srs.terminal_state IN (
+                                          'session_ended', 'process_gone',
+                                          'run_completed', 'run_failed', 'run_cancelled'
+                                      )
+                                    ORDER BY srs.terminal_at DESC
+                                    LIMIT 1
+                                )
+                            )
+                        WHERE EXISTS (
+                            SELECT 1 FROM session_runtime_state srs
+                            WHERE srs.run_id = session_runs.id
+                              AND srs.terminal_state IN (
+                                  'session_ended', 'process_gone',
+                                  'run_completed', 'run_failed', 'run_cancelled'
+                              )
+                        )
+                            """
+                        )
+                    )
             # Multi-column indexes the model layer doesn't declare on these columns.
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_execution_home ON sessions(execution_home)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_source_runner_id ON sessions(source_runner_id)"))

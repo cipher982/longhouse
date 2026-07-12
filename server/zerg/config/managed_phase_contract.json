@@ -33,11 +33,6 @@
       "attention": "idle"
     },
     {
-      "raw_phase": "syncing_transcript",
-      "display_label": "working",
-      "attention": "working"
-    },
-    {
       "raw_phase": "finished",
       "display_label": "completed",
       "attention": "idle",

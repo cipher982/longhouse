@@ -54,17 +54,4 @@ describe("PresenceBadge styles", () => {
     expect(indicator.style.animation).toBe("");
   });
 
-  it("renders transcript handoff as working without plumbing copy", () => {
-    render(
-      <>
-        <PresenceBadge state="syncing_transcript" />
-        <PresenceBadge state="syncing_transcript" compact animateCompact />
-      </>,
-    );
-
-    expect(screen.getByText("Working")).toBeInTheDocument();
-    expect(screen.queryByText((content) => content.includes("Updating") && content.includes("transcript"))).not.toBeInTheDocument();
-    const compactIndicator = screen.getByTitle("Working").firstElementChild as HTMLElement;
-    expect(compactIndicator.style.animation).toContain("presence-pulse");
-  });
 });

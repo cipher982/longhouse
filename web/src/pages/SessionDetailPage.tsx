@@ -333,6 +333,7 @@ function SessionDetailWorkspaceRoute({
     headThreadSession,
   });
   const activePauseRequest =
+    branchSourceSession.session_state.pending_interaction != null &&
     branchSourceSession.runtime_display?.pause_request?.status === "pending"
       ? branchSourceSession.runtime_display.pause_request
       : null;
@@ -553,7 +554,6 @@ function SessionDetailWorkspaceRoute({
               <SessionRuntimeStrip
                 session={displaySession}
                 interaction={interaction}
-                hostLabel={runtimeHostLabel}
                 elapsedLabel={runtimeElapsedLabel}
                 variant="bar"
                 testId="session-control-strip"
@@ -586,10 +586,11 @@ function SessionDetailWorkspaceRoute({
                     displaySession.capabilities?.can_steer_active_turn,
                   )}
                   timelineItems={items}
-                  isStalled={Boolean(displaySession.runtime_display?.is_stalled)}
-                  isSessionExecuting={Boolean(
-                    displaySession.runtime_display?.is_executing,
-                  )}
+                  isStalled={displaySession.session_state.activity.state === "stalled"}
+                  isSessionExecuting={
+                    displaySession.session_state.activity.state === "thinking" ||
+                    displaySession.session_state.activity.state === "executing"
+                  }
                   onSessionChanged={(nextSessionId) => {
                     if (!nextSessionId || nextSessionId === session.id) return;
                     navigate(`/timeline/${nextSessionId}`, {

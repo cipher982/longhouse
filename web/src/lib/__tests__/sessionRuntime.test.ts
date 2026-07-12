@@ -67,7 +67,31 @@ function makeSession(overrides: Partial<TimelineRuntimeSession> = {}): TimelineR
 }
 
 describe("resolveSessionRuntimeState", () => {
-  it("reads backend runtime_display directly", () => {
+  it("ignores contradictory legacy aliases in favor of orthogonal facts", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        runtime_display: makeRuntimeDisplay({
+          state: "running",
+          tone: "running",
+          headline: "Working",
+          is_live: true,
+          is_executing: true,
+          control_path: "managed",
+        }),
+        session_state: makeSessionStateFacts({
+          activity: "quiescent",
+          access: "observe_only",
+        }),
+      }),
+    );
+
+    expect(runtime.presenceState).toBe("idle");
+    expect(runtime.displayPhase).toBe("Idle");
+    expect(runtime.isExecuting).toBe(false);
+    expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
+  });
+
+  it("reads canonical state facts instead of legacy display aliases", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         status: "working",
@@ -91,17 +115,17 @@ describe("resolveSessionRuntimeState", () => {
       }),
     );
 
-    expect(runtime.truthTier).toBe("managed-local");
+    expect(runtime.truthTier).toBe("fresh");
     expect(runtime.presenceState).toBe("running");
     expect(runtime.presenceTool).toBe("Shell");
     expect(runtime.displayPhase).toBe("Using Shell");
     expect(runtime.tone).toBe("running");
     expect(runtime.isExecuting).toBe(true);
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Managed");
-    expect(getRuntimeOutcomeLabel(runtime)).toBe("Working");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("Using Shell");
     expect(getRuntimeDisplayCopy(runtime)).toEqual({
-      headline: "Working",
-      detail: "Using Shell",
+      headline: "Using Shell",
+      detail: null,
     });
   });
 
@@ -169,8 +193,8 @@ describe("resolveTimelineSignal", () => {
   });
 
   it("transcript convergence never fabricates working activity", () => {
-    expect(sig({ state: "syncing_transcript", tone: "active", activity_recency: "live" })).toBe("quiet");
-    expect(sig({ state: "syncing_transcript", tone: "active", activity_recency: "stale" })).toBe("quiet");
+    expect(sig({ tone: "active", activity_recency: "live" })).toBe("quiet");
+    expect(sig({ tone: "active", activity_recency: "stale" })).toBe("quiet");
   });
 
   it("stale running does NOT pulse — falls to quiet", () => {

@@ -13,11 +13,9 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentSession
 from zerg.models.notification_event import NotificationEvent
 from zerg.services.apns_sender import NOTIFICATION_CHANNEL_APNS_IOS
-from zerg.services.apns_sender import NOTIFICATION_EVENT_LONG_RUN_WAITING
 from zerg.services.apns_sender import NOTIFICATION_EVENT_SESSION_BLOCKED
 from zerg.services.apns_sender import NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER
 from zerg.services.apns_sender import NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER
-from zerg.services.apns_sender import prepare_long_run_waiting_push
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_blocked_reminder_push
 from zerg.services.apns_sender import prepare_session_needs_answer_push
@@ -122,15 +120,6 @@ async def process_queued_notification_events(
                     previous_state=previous_state,
                     occurred_at=now,
                 )
-        elif event_type == NOTIFICATION_EVENT_LONG_RUN_WAITING and current_state == "needs_user":
-            push = prepare_long_run_waiting_push(
-                db,
-                owner_id=owner_id,
-                session_id=session_uuid,
-                current_state=current_state,
-                occurred_at=now,
-            )
-
         if push is None:
             event.resolved_at = now
             results = dict(event.channel_results or {})

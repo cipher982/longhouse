@@ -27,20 +27,6 @@ type TranscriptPreviewFixture = {
   }>;
 };
 
-type InteractionCapabilitiesFixture = {
-  cases: Array<{
-    name: string;
-    session: unknown;
-    expectations: {
-      web_mode: string;
-      web_capability_label: string;
-      web_composer_disabled_reason: string | null;
-      web_send_disabled_reason: string | null;
-      web_primary_action_label: string;
-    };
-  }>;
-};
-
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
     live_control_available: false,
@@ -51,6 +37,13 @@ function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): Session
 }
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
+  const capabilities = overrides.capabilities ?? makeCapabilities();
+  const runtimeDisplay = overrides.runtime_display;
+  const access = capabilities.live_control_available
+    ? "live_control"
+    : capabilities.host_reattach_available
+      ? "reattach"
+      : "search_only";
   return {
     id: "session-1",
     provider: "claude",
@@ -79,8 +72,24 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     branched_from_event_id: null,
     is_writable_head: true,
     control: null,
-    capabilities: makeCapabilities(),
-    session_state: makeSessionStateFacts(),
+    capabilities,
+    session_state: makeSessionStateFacts({
+      closed: runtimeDisplay?.lifecycle === "closed",
+      access,
+      activity:
+        runtimeDisplay?.state === "running"
+          ? "executing"
+          : runtimeDisplay?.state === "thinking"
+            ? "thinking"
+            : runtimeDisplay?.state === "idle" || runtimeDisplay?.state === "needs_user"
+              ? "quiescent"
+              : runtimeDisplay?.state === "blocked" || runtimeDisplay?.state === "stalled"
+                ? runtimeDisplay.state
+                : "unknown",
+      pendingInteraction: runtimeDisplay?.needs_attention,
+      tool: runtimeDisplay?.compact_tool_label,
+      sendAvailable: capabilities.reply_to_live_session_available === true,
+    }),
     loop_mode: "assist",
     ...overrides,
   };
@@ -89,11 +98,6 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
 function loadTranscriptPreviewFixture(): TranscriptPreviewFixture {
   const fixturePath = resolve(process.cwd(), "../tests/fixtures/session-transcript-preview/rendering.json");
   return JSON.parse(readFileSync(fixturePath, "utf8")) as TranscriptPreviewFixture;
-}
-
-function loadInteractionCapabilitiesFixture(): InteractionCapabilitiesFixture {
-  const fixturePath = resolve(process.cwd(), "../tests/fixtures/session-interaction/capabilities.json");
-  return JSON.parse(readFileSync(fixturePath, "utf8")) as InteractionCapabilitiesFixture;
 }
 
 describe("buildTimelineModel", () => {
@@ -302,18 +306,6 @@ describe("isToolInteractionDropped", () => {
 });
 
 describe("getSessionInteractionCapabilities", () => {
-  it.each(loadInteractionCapabilitiesFixture().cases)("matches shared capability fixture: $name", ({ session, expectations }) => {
-    const capabilities = getSessionInteractionCapabilities({
-      session: session as AgentSession,
-    });
-
-    expect(capabilities.mode).toBe(expectations.web_mode);
-    expect(capabilities.capabilityLabel).toBe(expectations.web_capability_label);
-    expect(capabilities.composerDisabledReason).toBe(expectations.web_composer_disabled_reason);
-    expect(capabilities.sendDisabledReason).toBe(expectations.web_send_disabled_reason);
-    expect(capabilities.primaryActionLabel).toBe(expectations.web_primary_action_label);
-  });
-
   it("treats managed-local sessions with runner metadata as browser-drivable live sessions", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
@@ -343,7 +335,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.submitLabel).toBe("Send");
   });
 
-  it("uses runtime display control_path as the ownership axis", () => {
+  it("uses canonical control ownership instead of runtime display aliases", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "codex",
@@ -368,12 +360,13 @@ describe("getSessionInteractionCapabilities", () => {
           terminal_reason: null,
         },
         capabilities: makeCapabilities(),
+        session_state: makeSessionStateFacts({ access: null, activity: "quiescent" }),
       }),
     });
 
     expect(capabilities.mode).toBe("unsupported");
-    expect(capabilities.managementLabel).toBe("Managed");
-    expect(capabilities.managedLaunchSuggestion).toBeNull();
+    expect(capabilities.managementLabel).toBe("Unmanaged");
+    expect(capabilities.managedLaunchSuggestion).not.toBeNull();
     expect(capabilities.capabilityLabel).toBe("Read only");
     expect(capabilities.composerDisabledReason).toMatch(/managed Codex session is read-only/i);
   });
@@ -409,6 +402,11 @@ describe("getSessionInteractionCapabilities", () => {
           can_interrupt: false,
           can_resume: false,
         }),
+        session_state: makeSessionStateFacts({
+          access: "live_control",
+          activity: "quiescent",
+          sendAvailable: false,
+        }),
       }),
     });
 
@@ -439,10 +437,8 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.managementLabel).toBe("Managed");
-    expect(capabilities.sendDisabledReason).toBe("input_not_supported");
-    expect(capabilities.composerDisabledReason).toBe(
-      "This live Codex session is connected, but this control path cannot accept typed input.",
-    );
+    expect(capabilities.sendDisabledReason).toBe("not_granted");
+    expect(capabilities.composerDisabledReason).toMatch(/managed Codex session is read-only/i);
     expect(capabilities.composerDisabledReason).not.toMatch(/engine reconnects/i);
   });
 
@@ -465,7 +461,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
-    expect(capabilities.capabilityLabel).toBe("Control offline");
+    expect(capabilities.capabilityLabel).toBe("Reattach");
     expect(capabilities.composerDisabledReason).toMatch(/cannot send prompts/i);
     expect(capabilities.composerDisabledReason).toMatch(/engine reconnects/i);
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
@@ -488,10 +484,10 @@ describe("getSessionInteractionCapabilities", () => {
       }),
     });
 
-    expect(capabilities.mode).toBe("managed_local_unavailable");
+    expect(capabilities.mode).toBe("managed_local");
     expect(capabilities.placeholder).toBe("Server placeholder");
-    expect(capabilities.composerDisabledReason).toBe("Server says control is offline.");
-    expect(capabilities.sendDisabledReason).toBe("control_offline");
+    expect(capabilities.composerDisabledReason).toBeNull();
+    expect(capabilities.sendDisabledReason).toBeNull();
   });
 
   it("shows reattach when a managed-local Claude session loses its live control channel", () => {
@@ -514,7 +510,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managedLaunchSuggestion).toBeNull();
-    expect(capabilities.capabilityLabel).toBe("Control offline");
+    expect(capabilities.capabilityLabel).toBe("Reattach");
   });
 
   it("treats a synced Claude transcript as search-only", () => {

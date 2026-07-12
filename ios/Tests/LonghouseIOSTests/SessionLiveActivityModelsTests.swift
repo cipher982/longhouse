@@ -97,134 +97,11 @@ struct SessionLiveActivityModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
         let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
 
         #expect(state.displayPhase == "Using Shell")
         #expect(state.activeTool == "Shell")
-    }
-
-    @Test
-    func contentStateUsesRuntimeDisplayOverRuntimeFacts() throws {
-        let json = """
-        {
-          "id": "session-runtime-facts",
-          "provider": "codex",
-          "project": "zerg",
-          "cwd": "/Users/example/git/zerg",
-          "git_branch": "main",
-          "summary": "Run checks",
-          "summary_title": "Run Checks",
-          "presence_state": "running",
-          "presence_tool": "bash",
-          "user_state": "active",
-          "status": "working",
-          "last_activity_at": "2026-04-25T20:00:00Z",
-          "display_phase": "Running bash",
-          "active_tool": "bash",
-          "home_label": "On this Mac",
-          "origin_label": "On this Mac",
-          "capabilities": {
-            "live_control_available": true,
-            "host_reattach_available": true,
-            "reply_to_live_session_available": true,
-            "display_label": "Live on this Mac",
-            "display_detail": "Longhouse can send prompts into this live session.",
-            "display_tone": "success"
-          },
-          "runtime_display": {
-            "truth_tier": "managed-local",
-            "signal_tier": "phase_signal",
-            "state": "running",
-            "tone": "running",
-            "headline": "Working",
-            "detail": "Using Shell",
-            "phase_label": "Using Shell",
-            "compact_tool_label": "Shell",
-            "is_live": true,
-            "is_executing": true,
-            "needs_attention": true,
-            "is_idle": false,
-            "is_stalled": false,
-            "is_managed_local_truth": true,
-            "has_signal": true,
-            "control_path": "managed",
-            "activity_recency": "live",
-            "lifecycle": "open",
-            "host_state": "online",
-            "terminal_reason": null
-          },
-          "loop_mode": "assist"
-        }
-        """.data(using: .utf8)!
-
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
-        let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
-
-        #expect(state.presenceState == "running")
-        #expect(state.displayPhase == "Using Shell")
-        #expect(state.activeTool == "Shell")
-        #expect(state.isAttention)
-    }
-
-    @Test
-    func contentStateRendersClosedLifecycleGenericallyRegardlessOfTerminalReason() throws {
-        let json = """
-        {
-          "id": "session-terminal-disconnected",
-          "provider": "codex",
-          "project": "zerg",
-          "cwd": "/Users/example/git/zerg",
-          "git_branch": "main",
-          "summary": "Closed",
-          "summary_title": "Closed",
-          "presence_state": "needs_user",
-          "presence_tool": null,
-          "user_state": "active",
-          "status": "working",
-          "last_activity_at": "2026-04-25T20:00:00Z",
-          "display_phase": "Idle",
-          "active_tool": null,
-          "home_label": "On this Mac",
-          "origin_label": "On this Mac",
-          "capabilities": {
-            "live_control_available": false,
-            "host_reattach_available": true,
-            "reply_to_live_session_available": false
-          },
-          "runtime_display": {
-            "truth_tier": "managed-local",
-            "signal_tier": "phase_signal",
-            "state": null,
-            "tone": "closed",
-            "headline": "Closed",
-            "detail": null,
-            "phase_label": "Closed",
-            "compact_tool_label": null,
-            "is_live": false,
-            "is_executing": false,
-            "needs_attention": false,
-            "is_idle": true,
-            "is_stalled": false,
-            "is_managed_local_truth": true,
-            "has_signal": true,
-            "control_path": "managed",
-            "activity_recency": "stale",
-            "lifecycle": "closed",
-            "host_state": "online",
-            "terminal_reason": "provider_signal"
-          },
-          "loop_mode": "assist"
-        }
-        """.data(using: .utf8)!
-
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
-        let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
-
-        #expect(state.presenceState == "unknown")
-        #expect(state.displayPhase == "Closed")
-        #expect(state.activeTool == nil)
-        #expect(state.isAttention == false)
     }
 
     @Test
@@ -281,70 +158,13 @@ struct SessionLiveActivityModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
         let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
 
         #expect(state.presenceState == "unknown")
-        #expect(state.displayPhase == "Inactive")
+        #expect(state.displayPhase == "Activity unknown")
         #expect(state.activeTool == nil)
         #expect(state.isAttention == false)
     }
 
-    @Test
-    func contentStateUsesWorkingPhaseForTranscriptHandoff() throws {
-        let json = """
-        {
-          "id": "session-transcript-handoff",
-          "provider": "claude",
-          "project": "zerg",
-          "cwd": "/Users/example/git/zerg",
-          "git_branch": "main",
-          "summary": "Waiting for visible response",
-          "summary_title": "Waiting for visible response",
-          "presence_state": "idle",
-          "presence_tool": null,
-          "user_state": "active",
-          "status": "idle",
-          "last_activity_at": "2026-04-25T20:00:00Z",
-          "display_phase": "Idle",
-          "active_tool": null,
-          "capabilities": {
-            "live_control_available": true,
-            "host_reattach_available": true,
-            "reply_to_live_session_available": true
-          },
-          "runtime_display": {
-            "truth_tier": "managed-local",
-            "signal_tier": "phase_signal",
-            "state": "syncing_transcript",
-            "tone": "active",
-            "headline": "Working",
-            "detail": null,
-            "phase_label": "Working",
-            "compact_tool_label": null,
-            "is_live": false,
-            "is_executing": false,
-            "needs_attention": false,
-            "is_idle": false,
-            "is_stalled": false,
-            "is_managed_local_truth": true,
-            "has_signal": true,
-            "control_path": "managed",
-            "activity_recency": "live",
-            "lifecycle": "open",
-            "host_state": "online",
-            "terminal_reason": null
-          },
-          "loop_mode": "assist"
-        }
-        """.data(using: .utf8)!
-
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
-        let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
-
-        #expect(state.presenceState == "syncing_transcript")
-        #expect(state.displayPhase == "Working")
-        #expect(state.activeTool == nil)
-        #expect(state.isAttention == false)
-    }
 }

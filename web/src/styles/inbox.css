@@ -560,7 +560,7 @@
 
   @media (max-width: 720px) {
     .inbox-row {
-      grid-template-columns: minmax(0, 1fr) var(--inbox-time-width);
+      grid-template-columns: minmax(0, 1fr) max-content;
       grid-template-areas:
         "main main"
         "status time";
@@ -573,6 +573,16 @@
 
     .inbox-row-status {
       justify-self: start;
+      width: 100%;
+    }
+
+    .inbox-row-status-label {
+      flex: 1 1 auto;
+    }
+
+    .inbox-row-time {
+      width: auto;
+      max-width: var(--inbox-time-width);
     }
 
     .inbox-row-control--status {

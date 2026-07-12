@@ -150,6 +150,24 @@ def test_managed_attached_grants_live(db):
     assert caps.can_tail_output is True
 
 
+def test_lease_generation_is_stable_across_health_renewals(db):
+    s = _make_session(db)
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    connection = _make_conn(db, r, state="attached", caps={"send": 1})
+    acquired_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    connection.acquired_at = acquired_at
+    db.commit()
+
+    first = project_session_capabilities(db, session_id=s.id)
+    connection.last_health_at = datetime.now(timezone.utc) + timedelta(seconds=5)
+    db.commit()
+    second = project_session_capabilities(db, session_id=s.id)
+
+    assert first.lease_generation == f"{connection.id}:{acquired_at.isoformat()}"
+    assert second.lease_generation == first.lease_generation
+
+
 @pytest.mark.parametrize("control_plane", ["codex_bridge", "claude_channel_bridge"])
 def test_live_send_capable_channel_bridges_can_steer_active_turn(db, control_plane):
     s = _make_session(db, provider="claude" if control_plane == "claude_channel_bridge" else "codex")

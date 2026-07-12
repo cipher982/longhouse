@@ -19,11 +19,11 @@ struct SessionWatchAttributes: ActivityAttributes {
 extension SessionDetail {
     func liveActivityContentState(updatedAt: Date = Date()) -> SessionWatchAttributes.ContentState {
         SessionWatchAttributes.ContentState(
-            presenceState: stateFacts?.activityState ?? "unknown",
-            displayPhase: stateFacts?.primary?.label ?? "",
-            activeTool: stateFacts?.activityTool,
+            presenceState: stateFacts.activityState,
+            displayPhase: stateFacts.primary?.label ?? "",
+            activeTool: stateFacts.activityTool,
             updatedAt: Int(updatedAt.timeIntervalSince1970),
-            isAttention: stateFacts?.pendingInteractionKind != nil
+            isAttention: stateFacts.pendingInteractionKind != nil
         )
     }
 

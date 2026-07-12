@@ -61,7 +61,7 @@ def _terminal(session_id, occurred_at):
     )
 
 
-def test_close_keeps_initial_ai_title_when_summary_changes(tmp_path):
+def test_run_end_keeps_initial_ai_title_when_summary_changes(tmp_path):
     engine, SessionLocal = _make_db(tmp_path, "anchor_close_promote.db")
     now = datetime.now(timezone.utc)
     with SessionLocal() as db:
@@ -71,7 +71,7 @@ def test_close_keeps_initial_ai_title_when_summary_changes(tmp_path):
         db.commit()
 
         stored = db.query(AgentSession).filter(AgentSession.id == session.id).one()
-        assert stored.ended_at is not None
+        assert stored.ended_at is None
         assert stored.anchor_title == "Initial Setup"
     engine.dispose()
 

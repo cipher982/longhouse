@@ -18,6 +18,7 @@ from types import SimpleNamespace
 from zerg.services.session_views import DROPPED_TOOL_AGE
 from zerg.services.session_views import ToolCallState
 from zerg.services.session_views import build_tool_call_state_map
+from zerg.services.session_views import is_session_closed
 
 
 def _event(
@@ -59,6 +60,20 @@ def test_unpaired_call_in_closed_session_is_dropped():
     events = [_event(1, "assistant", tool_name="bash", tool_call_id="A", timestamp=now)]
     result = build_tool_call_state_map(events, session_closed=True, now=now)
     assert result == {1: ToolCallState.DROPPED}
+
+
+def test_run_end_timestamp_does_not_close_resumable_session():
+    session = SimpleNamespace(
+        ended_at=datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc),
+        closed_at=None,
+        terminal_state="process_gone",
+    )
+    assert is_session_closed(session) is False
+
+
+def test_explicit_user_close_closes_session():
+    session = SimpleNamespace(ended_at=None, closed_at=datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc))
+    assert is_session_closed(session) is True
 
 
 def test_unpaired_old_call_in_open_session_is_dropped():

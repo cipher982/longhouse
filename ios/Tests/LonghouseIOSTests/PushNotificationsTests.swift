@@ -155,7 +155,15 @@ struct PushNotificationsTests {
             lastActivityAt: nil,
             userState: userState,
             status: nil,
-            runtimeDisplay: display
+            runtimeDisplay: display,
+            stateFacts: makeSessionStateFacts(
+                activity: presenceState == "running"
+                    ? "executing"
+                    : presenceState == "idle" || presenceState == "needs_user"
+                        ? "quiescent"
+                        : presenceState,
+                pendingInteractionKind: presenceState == "blocked" ? "question" : nil
+            )
         )
     }
 }

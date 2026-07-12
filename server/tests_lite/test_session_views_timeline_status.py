@@ -125,10 +125,10 @@ def test_timeline_status_marks_live_managed_control_ready_without_provider_phase
         runtime_view=_runtime_view(last_live_at=datetime(2026, 3, 21, 11, 30, tzinfo=timezone.utc)),
     )
 
-    assert status.label == "Ready"
-    assert status.tone == "idle"
-    assert status.seen_at is None
-    assert status.seen_at_prefix == "Checked"
+    assert status.label == "No live signal"
+    assert status.tone == "inactive"
+    assert status.seen_at == datetime(2026, 3, 21, 11, 30, tzinfo=timezone.utc)
+    assert status.seen_at_prefix == "Last signal"
 
 
 @pytest.mark.parametrize(

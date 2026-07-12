@@ -11,7 +11,6 @@ enum ManagedPhaseContract {
         "ready": .idle,
         "stalled": .idle,
         "idle": .idle,
-        "working": .working,
         "completed": .idle,
     ]
 

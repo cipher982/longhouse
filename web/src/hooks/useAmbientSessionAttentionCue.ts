@@ -9,7 +9,7 @@ type NavigatorWithBadge = Navigator & {
 };
 
 function attentionCount(sessions: TimelineSessionCard[]): number {
-  return sessions.filter((thread) => thread.head.runtime_display?.needs_attention).length;
+  return sessions.filter((thread) => thread.head.session_state.pending_interaction != null).length;
 }
 
 function attentionTitle(count: number): string {

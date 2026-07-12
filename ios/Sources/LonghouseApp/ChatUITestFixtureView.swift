@@ -595,7 +595,9 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         let composerPlaceholder = isMarketing
             ? "Send a message to the live session…"
             : "Send a message to the live Codex session..."
-        let idleDetail = isMarketing ? "Ready" : "Ready for UI test input"
+        let idleDetail = isMarketing ? "Waiting for input" : "Waiting for UI test input"
+        let available = SessionStateAction(state: "available", reason: nil)
+        let unavailable = SessionStateAction(state: "unavailable", reason: "fixture_not_granted")
         let detail = SessionDetail(
             id: sessionID,
             title: title,
@@ -654,7 +656,33 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 hostState: "online",
                 terminalReason: nil
             ),
-            loopMode: .assist
+            loopMode: .assist,
+            stateFacts: DefaultUnknownSessionStateFacts(
+                wrappedValue: SessionStateFacts(
+                    contractVersion: 1,
+                    presentationPolicyVersion: 1,
+                    mode: "helm",
+                    dispositionState: "open",
+                    launchState: nil,
+                    runLifecycle: "running",
+                    activityState: "quiescent",
+                    activityTool: nil,
+                    activityObservedAt: nil,
+                    activityValidUntil: nil,
+                    controlOwnership: "owned",
+                    controlConnection: "connected",
+                    sendInput: available,
+                    interrupt: available,
+                    terminate: available,
+                    reattach: unavailable,
+                    resume: unavailable,
+                    pendingInteractionKind: nil,
+                    transcriptConvergence: "current",
+                    primary: SessionStateLabel(key: "idle", label: "Idle", tone: "idle", observedAt: nil),
+                    access: SessionStateLabel(key: "live_control", label: "Live control", tone: "live", observedAt: nil),
+                    transcript: nil
+                )
+            )
         )
         return detail
     }

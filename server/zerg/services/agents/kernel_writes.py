@@ -326,6 +326,11 @@ def record_connection(
         can_terminate=can_terminate,
         can_tail_output=can_tail_output,
         can_resume=can_resume,
+        # Creating an attached/degraded connection is itself a current health
+        # observation.  Without this stamp the capability projector correctly
+        # freshness-clamps the brand-new lease to detached before the first
+        # command can use it.
+        last_health_at=(datetime.now(timezone.utc) if state in {"attached", "degraded"} else None),
     )
     db.add(conn)
     db.flush()

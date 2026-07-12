@@ -81,7 +81,7 @@ enum TestWorkspaceFactory {
           }
         }
         """.data(using: .utf8)!
-        return try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: json)
+        return try JSONDecoder.snakeCase.decodeSessionFixture(SessionWorkspaceResponse.self, from: json)
     }
 
     static func jsonString(_ value: String) throws -> String {

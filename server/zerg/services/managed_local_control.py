@@ -61,15 +61,21 @@ _MANAGED_LOCAL_RUNTIME_PHASE_SOURCES = frozenset(
 _MANAGED_LOCAL_ACTIVE_HOOK_PHASES = frozenset({"thinking", "running"})
 
 
-def _is_managed_local_session(db: Session, session: AgentSession) -> bool:
+def _managed_local_action_available(db: Session, session: AgentSession, action: str) -> bool:
+    """Revalidate the exact action against the current control lease."""
+
     import zerg.database as database_module
 
     if database_module.live_catalog_enabled():
         from zerg.services.live_control_catalog import live_control_capability_available
 
-        return live_control_capability_available(db, session_id=session.id, capability="send")
+        return live_control_capability_available(db, session_id=session.id, capability=action)
     capabilities = project_session_capabilities(db, session_id=session.id)
-    return bool(capabilities.live_control_available or capabilities.host_reattach_available)
+    return {
+        "send": capabilities.can_send_input,
+        "interrupt": capabilities.can_interrupt,
+        "terminate": capabilities.can_terminate,
+    }.get(action, False)
 
 
 _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS = {
@@ -568,7 +574,7 @@ async def interrupt_managed_local_session(
     has confirmed the turn stopped.
     """
 
-    if not _is_managed_local_session(db, session):
+    if not _managed_local_action_available(db, session, "interrupt"):
         return ManagedLocalInterruptResult(ok=False, error="Session is not managed_local")
     transport_error = _managed_control_transport_error(
         session,
@@ -625,7 +631,7 @@ async def terminate_managed_local_session(
     though most transports (cursor_helm, codex) kill the child synchronously.
     """
 
-    if not _is_managed_local_session(db, session):
+    if not _managed_local_action_available(db, session, "terminate"):
         return ManagedLocalInterruptResult(ok=False, error="Session is not managed_local")
     transport_error = _managed_control_transport_error(
         session,
@@ -681,7 +687,7 @@ async def send_text_to_managed_local_session(
 ) -> ManagedLocalSendResult:
     """Send text into a managed-local session through Machine Agent control."""
 
-    if not _is_managed_local_session(db, session):
+    if not _managed_local_action_available(db, session, "send"):
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
     transport_error = _managed_control_transport_error(
         session,
@@ -809,7 +815,7 @@ async def steer_text_to_managed_local_session(
     structured 409.
     """
 
-    if not _is_managed_local_session(db, session):
+    if not _managed_local_action_available(db, session, "send"):
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
     transport_error = _managed_control_transport_error(
         session,
@@ -885,7 +891,7 @@ async def answer_pause_request_on_managed_local_session(
 ) -> ManagedLocalSendResult:
     """Send a provider-native answer for a held structured pause request."""
 
-    if not _is_managed_local_session(db, session):
+    if not _managed_local_action_available(db, session, "send"):
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
     transport_error = _managed_control_transport_error(
         session,

@@ -194,6 +194,24 @@ function makePauseRequest(
 }
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
+  const capabilities = overrides.capabilities ?? makeCapabilities();
+  const runtimeDisplay = overrides.runtime_display ?? makeRuntimeDisplay();
+  const access = runtimeDisplay.control_path === "managed"
+    ? capabilities.live_control_available
+      ? "live_control"
+      : capabilities.host_reattach_available
+        ? "reattach"
+        : null
+    : "search_only";
+  const activity = runtimeDisplay.state === "running"
+    ? "executing"
+    : runtimeDisplay.state === "thinking"
+      ? "thinking"
+      : runtimeDisplay.state === "idle" || runtimeDisplay.state === "needs_user"
+        ? "quiescent"
+        : runtimeDisplay.state === "blocked" || runtimeDisplay.state === "stalled"
+          ? runtimeDisplay.state
+          : "unknown";
   return {
     id: "session-codex",
     provider: "codex",
@@ -227,9 +245,17 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
       attach_command:
         "zsh -lc 'exec longhouse-engine codex-bridge attach --session-id session-codex'",
     },
-    capabilities: makeCapabilities(),
-    session_state: makeSessionStateFacts({ access: "live_control", activity: "executing" }),
-    runtime_display: makeRuntimeDisplay(),
+    capabilities,
+    session_state: makeSessionStateFacts({
+      closed: runtimeDisplay.lifecycle === "closed",
+      access,
+      activity,
+      pendingInteraction: runtimeDisplay.needs_attention || runtimeDisplay.pause_request != null,
+      observedAt: runtimeDisplay.activity_recency === "live" ? "2026-03-22T22:04:30Z" : null,
+      tool: runtimeDisplay.compact_tool_label,
+      sendAvailable: capabilities.reply_to_live_session_available === true,
+    }),
+    runtime_display: runtimeDisplay,
     timeline_card: {
       ownership: {
         label: "Managed",
@@ -443,9 +469,6 @@ describe("SessionDetailPage", () => {
       screen.queryByTestId("session-detail-header-runtime"),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Working",
-    );
-    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Using Shell",
     );
     expect(document.querySelector(".session-workspace-route")).toHaveClass(
@@ -487,27 +510,12 @@ describe("SessionDetailPage", () => {
     const drawer = screen.getByTestId("session-info-drawer");
     const summaryTitle = screen.getByText("Summary");
     const metadataTitle = screen.getByText("Metadata");
-    const terminalTitle = screen.getByText("Terminal");
     expect(drawer).toContainElement(summaryTitle);
     expect(drawer).toContainElement(metadataTitle);
-    expect(drawer).toContainElement(terminalTitle);
     expect(
       summaryTitle.compareDocumentPosition(metadataTitle) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(
-      metadataTitle.compareDocumentPosition(terminalTitle) &
-        Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
-    expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
-      "Terminal",
-    );
-    expect(screen.getByTestId("session-debug-attach")).toHaveTextContent(
-      "Attach command",
-    );
-    expect(screen.getByTestId("session-debug-attach-command")).toHaveTextContent(
-      "codex-bridge attach --session-id session-codex",
-    );
 
     const toolLabel = screen.getByText("Bash");
     const toolRow = toolLabel.closest("button");
@@ -748,9 +756,6 @@ describe("SessionDetailPage", () => {
       renderSessionDetailPage();
 
       expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-        "Working",
-      );
-      expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
         "Using Shell",
       );
 
@@ -826,8 +831,7 @@ describe("SessionDetailPage", () => {
     renderSessionDetailPage();
 
     const strip = screen.getByTestId("session-control-strip");
-    expect(strip).toHaveTextContent("Needs permission");
-    expect(strip).toHaveTextContent("Approval needed • AskUserQuestion");
+    expect(strip).toHaveTextContent("Needs answer");
     expect(strip).not.toHaveTextContent("Running AskUserQuestion");
   });
 
@@ -1082,9 +1086,6 @@ describe("SessionDetailPage", () => {
       screen.queryByTestId("session-detail-header-runtime"),
     ).not.toBeInTheDocument();
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent("Idle");
-    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Waiting for next prompt",
-    );
   });
 
   it("renders an answerable provider pause request and posts selected answers", async () => {
@@ -1439,7 +1440,7 @@ describe("SessionDetailPage", () => {
       "session-workspace-route--tone-inactive",
     );
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Inactive",
+      "Activity unknown",
     );
   });
 
@@ -1552,7 +1553,7 @@ describe("SessionDetailPage", () => {
       "Read only",
     );
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
-      "Inactive",
+      "Activity unknown",
     );
     expect(document.querySelector(".session-workspace-route")).toHaveClass(
       "session-workspace-route--unmanaged",

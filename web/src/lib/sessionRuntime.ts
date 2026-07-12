@@ -11,8 +11,7 @@ export type KnownPresenceState =
   | "idle"
   | "needs_user"
   | "blocked"
-  | "stalled"
-  | "syncing_transcript";
+  | "stalled";
 export type RuntimeTruthTier = "none" | "stale" | "fresh" | "managed-local";
 export type RuntimeTone = "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed";
 
@@ -106,7 +105,7 @@ export interface SessionRuntimeState {
   isManagedLocalTruth: boolean;
   hasSignal: boolean;
   tone: RuntimeTone;
-  runtimeDisplay: SessionRuntimeDisplay;
+  stateFacts: SessionStateFacts;
 }
 
 export type SessionControlPathLabel = "Managed" | "Unmanaged";
@@ -114,7 +113,7 @@ export type SessionControlPathLabel = "Managed" | "Unmanaged";
 export function resolveSessionOwnershipLabel(
   runtime: SessionRuntimeState,
 ): SessionControlPathLabel {
-  return runtime.runtimeDisplay.control_path === "managed" ? "Managed" : "Unmanaged";
+  return runtime.stateFacts.control.ownership === "owned" ? "Managed" : "Unmanaged";
 }
 
 export function normalizePresenceState(state: string | null | undefined): KnownPresenceState | null {
@@ -124,8 +123,7 @@ export function normalizePresenceState(state: string | null | undefined): KnownP
     state === "idle" ||
     state === "needs_user" ||
     state === "blocked" ||
-    state === "stalled" ||
-    state === "syncing_transcript"
+    state === "stalled"
   ) {
     return state;
   }
@@ -135,21 +133,25 @@ export function normalizePresenceState(state: string | null | undefined): KnownP
 export function resolveSessionRuntimeState(
   session: TimelineRuntimeSession,
 ): SessionRuntimeState {
-  const serverDisplay = session.runtime_display;
+  const facts = session.session_state;
   const status = session.status ?? null;
-  const presenceState = normalizePresenceState(serverDisplay.state);
-  const presenceTool = serverDisplay.compact_tool_label ?? null;
+  const presenceState = facts.activity.state === "executing"
+    ? "running"
+    : facts.activity.state === "quiescent"
+      ? "idle"
+      : normalizePresenceState(facts.activity.state);
+  const presenceTool = facts.activity.tool ?? null;
   const lastLiveAt = session.last_live_at ?? session.presence_updated_at ?? null;
   const runtimeSource = session.runtime_source ?? null;
   const confidence = session.confidence ?? null;
-  const truthTier = normalizeRuntimeTruthTier(serverDisplay.truth_tier) ?? "none";
-  const tone = normalizeRuntimeTone(serverDisplay.tone) ?? "inactive";
-  const displayPhase = serverDisplay.phase_label;
-  const isLive = serverDisplay.is_live;
-  const isExecuting = serverDisplay.is_executing;
-  const needsAttention = serverDisplay.needs_attention;
-  const isIdle = serverDisplay.is_idle;
-  const isStalled = serverDisplay.is_stalled ?? false;
+  const truthTier = facts.activity.state === "unknown" ? "none" : "fresh";
+  const tone = normalizeRuntimeTone(facts.presentation.primary?.tone) ?? "inactive";
+  const displayPhase = facts.presentation.primary?.label ?? "";
+  const isExecuting = facts.activity.state === "thinking" || facts.activity.state === "executing";
+  const isLive = isExecuting;
+  const needsAttention = facts.pending_interaction != null;
+  const isIdle = facts.disposition.state === "closed" || facts.activity.state === "quiescent";
+  const isStalled = facts.activity.state === "stalled";
 
   return {
     status,
@@ -165,10 +167,10 @@ export function resolveSessionRuntimeState(
     needsAttention,
     isIdle,
     isStalled,
-    isManagedLocalTruth: serverDisplay.is_managed_local_truth,
-    hasSignal: serverDisplay.has_signal,
+    isManagedLocalTruth: facts.mode === "helm",
+    hasSignal: facts.presentation.primary != null,
     tone,
-    runtimeDisplay: serverDisplay,
+    stateFacts: facts,
   };
 }
 

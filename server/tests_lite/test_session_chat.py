@@ -108,7 +108,7 @@ def _mark_session_live(db, session, *, owner_id: int, phase: str = "idle") -> No
         plane = "opencode_process"
     else:
         plane = "claude_channel_bridge"
-    seed_managed_kernel_rows(db, session, control_plane=plane)
+    seed_managed_kernel_rows(db, session, control_plane=plane, can_terminate=True)
     db.commit()
     _mark_runtime_live(db, session, phase=phase)
 
@@ -754,7 +754,7 @@ def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(monkeypat
 
 
 @pytest.mark.parametrize("terminal_state", ["session_ended", "provider_disconnected"])
-def test_agents_send_live_rejects_runtime_closed_session(monkeypatch, tmp_path, terminal_state):
+def test_agents_send_live_rejects_ended_runtime_run(monkeypatch, tmp_path, terminal_state):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
     provider_session_id = f"managed-closed-{uuid4().hex[:8]}"
@@ -811,8 +811,8 @@ def test_agents_send_live_rejects_runtime_closed_session(monkeypatch, tmp_path, 
         )
         assert response.status_code == 409, response.text
         assert response.json()["detail"] == {
-            "error_code": "session_closed",
-            "message": "This session has ended.",
+            "error_code": "run_ended",
+            "message": "This run has ended.",
         }
     finally:
         api_app_ref.dependency_overrides = {}

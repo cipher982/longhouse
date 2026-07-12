@@ -317,7 +317,7 @@ def test_recent_activity_with_stale_control_lease_is_not_control_live():
     assert facts.lifecycle.reason == "control_observed"
 
 
-def test_explicit_provider_terminal_closes_session():
+def test_explicit_provider_terminal_ends_run_without_closing_session():
     terminal_at = NOW - timedelta(minutes=2)
     facts = build_session_liveness_facts(
         runtime_view=_runtime_view(
@@ -334,13 +334,13 @@ def test_explicit_provider_terminal_closes_session():
         last_activity_at=terminal_at,
     )
 
-    assert facts.lifecycle.state == "closed"
-    assert facts.process_state == "closed"
+    assert facts.lifecycle.state == "unknown"
+    assert facts.process_state == "unknown"
     assert facts.lifecycle.reason == "session_ended"
     assert facts.lifecycle.observed_at == terminal_at
 
 
-def test_explicit_terminal_reason_closes_with_specific_reason():
+def test_explicit_run_terminal_keeps_specific_reason():
     terminal_at = NOW - timedelta(minutes=2)
     facts = build_session_liveness_facts(
         runtime_view=_runtime_view(
@@ -359,11 +359,11 @@ def test_explicit_terminal_reason_closes_with_specific_reason():
         last_activity_at=terminal_at,
     )
 
-    assert facts.lifecycle.state == "closed"
+    assert facts.lifecycle.state == "unknown"
     assert facts.lifecycle.reason == "bridge_stop"
 
 
-def test_explicit_terminal_disconnected_closes_with_specific_reason():
+def test_explicit_terminal_disconnected_keeps_specific_reason():
     terminal_at = NOW - timedelta(minutes=2)
     facts = build_session_liveness_facts(
         runtime_view=_runtime_view(
@@ -382,12 +382,12 @@ def test_explicit_terminal_disconnected_closes_with_specific_reason():
         last_activity_at=terminal_at,
     )
 
-    assert facts.lifecycle.state == "closed"
-    assert facts.process_state == "closed"
+    assert facts.lifecycle.state == "unknown"
+    assert facts.process_state == "unknown"
     assert facts.lifecycle.reason == "terminal_disconnected"
 
 
-def test_explicit_process_gone_terminal_closes_managed_session():
+def test_explicit_process_gone_terminal_ends_managed_run():
     terminal_at = NOW - timedelta(minutes=2)
     facts = build_session_liveness_facts(
         runtime_view=_runtime_view(
@@ -405,8 +405,8 @@ def test_explicit_process_gone_terminal_closes_managed_session():
     )
 
     assert facts.control_path == "managed"
-    assert facts.lifecycle.state == "closed"
-    assert facts.process_state == "closed"
+    assert facts.lifecycle.state == "unknown"
+    assert facts.process_state == "unknown"
     assert facts.lifecycle.reason == "process_gone"
     assert facts.lifecycle.observed_at == terminal_at
 

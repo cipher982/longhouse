@@ -50,37 +50,22 @@ export function getSessionInteractionCapabilities({
   if (!session.capabilities) {
     throw new Error("Session workspace interactions require session.capabilities");
   }
-  const {
-    live_control_available: liveControlAvailable,
-    host_reattach_available: hostReattachAvailable,
-    reply_to_live_session_available: replyToLiveSessionAvailable,
-  } = session.capabilities;
-  const canChatFromBrowser = Boolean(replyToLiveSessionAvailable ?? liveControlAvailable);
-  const controlPath = session.runtime_display?.control_path;
-  const isManagedLocalSession =
-    controlPath === "managed"
-      ? true
-      : controlPath === "unmanaged"
-        ? false
-        : liveControlAvailable || hostReattachAvailable;
+  const facts = session.session_state;
+  const liveControlAvailable = facts.control.actions.send_input.state === "available";
+  const hostReattachAvailable = facts.control.actions.reattach.state === "available";
+  const canChatFromBrowser = liveControlAvailable;
+  const isManagedLocalSession = facts.control.ownership === "owned";
   const isManagedLocalCodex = session.provider === "codex" && isManagedLocalSession;
   const sourceOriginLabel = getSessionOriginLabel(session);
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
   const genericLaunchHint = getManagedLaunchHint(session.provider, providerLabel);
 
-  const serverInputMode = session.capabilities.input_mode;
   const mode: SessionInteractionMode =
-    serverInputMode === "live"
+    liveControlAvailable
       ? "managed_local"
-      : serverInputMode === "offline"
+      : isManagedLocalSession && facts.control.connection !== "connected"
         ? "managed_local_unavailable"
-        : serverInputMode === "read_only"
-          ? "unsupported"
-          : liveControlAvailable
-            ? "managed_local"
-            : hostReattachAvailable
-              ? "managed_local_unavailable"
-              : "unsupported";
+        : "unsupported";
   const isUnsupportedManagedSession = mode === "unsupported" && isManagedLocalSession;
 
   const managedLaunchSuggestion =
@@ -113,13 +98,16 @@ export function getSessionInteractionCapabilities({
       ? "Send"
       : "Reply";
 
-  const capabilityLabel =
-    session.capabilities.display_label?.trim() ||
-    (mode === "managed_local"
-      ? "Send"
-      : mode === "managed_local_unavailable"
-        ? "Control offline"
-        : "Read only");
+  const rawAccessLabel = facts.presentation.access?.label?.trim();
+  const capabilityLabel = facts.disposition.state === "closed"
+    ? "Closed"
+    : mode === "unsupported" && isManagedLocalSession
+      ? "Read only"
+    : rawAccessLabel === "Live control"
+    ? "Send"
+    : rawAccessLabel === "Search only"
+      ? "Read only"
+      : rawAccessLabel || (mode === "managed_local_unavailable" ? "Control unavailable" : "Read only");
 
   const capabilityVariant =
     mode === "managed_local"
@@ -173,17 +161,14 @@ export function getSessionInteractionCapabilities({
           }
         : null;
 
-  const serverComposerDisabledReason = session.capabilities.composer_disabled_reason?.trim();
-  const serverSendDisabledReason = session.capabilities.send_disabled_reason?.trim();
   const composerDisabledReason =
-    serverComposerDisabledReason ||
-    (mode === "managed_local_unavailable"
+    mode === "managed_local_unavailable"
       ? notice?.body ?? null
       : mode === "unsupported"
         ? managedLaunchSuggestion
           ? `This unmanaged ${providerLabel} session is read-only in Longhouse.`
           : notice?.body ?? null
-        : null);
+        : null;
 
   return {
     mode,
@@ -202,7 +187,7 @@ export function getSessionInteractionCapabilities({
     capabilityVariant,
     capabilityDescription,
     composerDisabledReason,
-    sendDisabledReason: serverSendDisabledReason || null,
+    sendDisabledReason: liveControlAvailable ? null : facts.control.actions.send_input.reason ?? null,
     primaryActionLabel: mode === "managed_local" ? "Open live dock" : "Unavailable",
     submitLabel,
     title,

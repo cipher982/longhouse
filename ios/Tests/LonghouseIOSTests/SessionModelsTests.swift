@@ -3,6 +3,12 @@ import Testing
 @testable import Longhouse
 
 struct SessionModelsTests {
+    @Test
+    func generatedPresenceStateKeepsOlderServerDecodeCompatibility() throws {
+        let decoded = try JSONDecoder().decode(APIPresenceState.self, from: Data(#""syncing_transcript""#.utf8))
+        #expect(decoded == .syncingTranscript)
+    }
+
     private func runtimeDisplay(activityRecency: String, lifecycle: String = "open") -> SessionRuntimeDisplay {
         SessionRuntimeDisplay(
             truthTier: "managed-local",
@@ -33,7 +39,13 @@ struct SessionModelsTests {
         lifecycle: String = "open",
         status: TimelineStatusPresentation? = nil
     ) -> SessionSummary {
-        SessionSummary(
+        let closed = lifecycle == "closed"
+        let facts = makeSessionStateFacts(
+            activity: closed ? "unknown" : "executing",
+            closed: closed,
+            tool: "Codex"
+        )
+        return SessionSummary(
             id: "timeline-stale-contract",
             title: "Managed idle session",
             presenceState: "idle",
@@ -47,7 +59,8 @@ struct SessionModelsTests {
                     status: $0,
                     borderTone: $0.tone
                 )
-            }
+            },
+            stateFacts: facts
         )
     }
 
@@ -55,7 +68,7 @@ struct SessionModelsTests {
     func timelineStaleAnnotationFollowsServerStatusTone() {
         let ready = timelineSummary(
             activityRecency: "stale",
-            status: TimelineStatusPresentation(label: "Ready", tone: "idle", seenAt: nil, seenAtPrefix: "Checked")
+            status: TimelineStatusPresentation(label: "Activity unknown", tone: "quiet", seenAt: nil, seenAtPrefix: "Checked")
         )
         let noSignal = timelineSummary(
             activityRecency: "stale",
@@ -74,9 +87,9 @@ struct SessionModelsTests {
         let legacy = timelineSummary(activityRecency: "stale")
 
         #expect(!ready.shouldAnnotateTimelineStatusAsStale)
-        #expect(noSignal.shouldAnnotateTimelineStatusAsStale)
+        #expect(!noSignal.shouldAnnotateTimelineStatusAsStale)
         #expect(!closed.shouldAnnotateTimelineStatusAsStale)
-        #expect(legacy.shouldAnnotateTimelineStatusAsStale)
+        #expect(!legacy.shouldAnnotateTimelineStatusAsStale)
     }
 
     private func apiSessionJSON(id: String = "session-card-contract") -> String {
@@ -183,7 +196,7 @@ struct SessionModelsTests {
                 of: #""terminal_reason": null"#,
                 with: #""terminal_reason": null, "pause_request": \#(pauseRequestJSON)"#
             )
-        let decoded = try JSONDecoder.snakeCase.decode(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
+        let decoded = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
         let pauseRequest = try #require(decoded.activePauseRequest)
 
         #expect(decoded.runtimeDisplay.needsAttention)
@@ -204,7 +217,7 @@ struct SessionModelsTests {
             .replacingOccurrences(of: #""phase_label": "Idle","#, with: #""phase_label": "Blocked","#)
             .replacingOccurrences(of: #""needs_attention": false,"#, with: #""needs_attention": true,"#)
             .replacingOccurrences(of: #""is_idle": true,"#, with: #""is_idle": false,"#)
-        let decoded = try JSONDecoder.snakeCase.decode(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
+        let decoded = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
 
         #expect(decoded.activePauseRequest == nil)
         #expect(decoded.shouldShowAttentionFallback)
@@ -217,7 +230,7 @@ struct SessionModelsTests {
                 of: #""summary_title": "Timeline contract","#,
                 with: #""summary_title": "Now wiring retries", "timeline_title": "Open menu bar sessions","#
             )
-        let decoded = try JSONDecoder.snakeCase.decode(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
+        let decoded = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
 
         #expect(decoded.displayTitle == "Open menu bar sessions")
     }
@@ -229,7 +242,7 @@ struct SessionModelsTests {
                 of: #""summary_title": "Timeline contract","#,
                 with: #""summary_title": null, "timeline_title": null, "first_user_message": "Fix the menu bar hover lag","#
             )
-        let decoded = try JSONDecoder.snakeCase.decode(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
+        let decoded = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
 
         #expect(decoded.displayTitle == "Fix the menu bar hover lag")
     }
@@ -372,7 +385,7 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let workspace = try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: json)
+        let workspace = try JSONDecoder.snakeCase.decodeSessionFixture(SessionWorkspaceResponse.self, from: json)
 
         #expect(workspace.session.id == "session-child")
         #expect(workspace.thread.rootSessionId == "session-root")
@@ -407,7 +420,7 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let event = try JSONDecoder.snakeCase.decode(SessionEvent.self, from: json)
+        let event = try JSONDecoder.snakeCase.decodeSessionFixture(SessionEvent.self, from: json)
 
         #expect(event.toolInputString("file_path") == "/tmp/example.swift")
         #expect(event.toolInputString("filePath") == nil)
@@ -474,9 +487,9 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let longhouse = try JSONDecoder.snakeCase.decode(SessionEvent.self, from: longhouseJSON)
-        let omitted = try JSONDecoder.snakeCase.decode(SessionEvent.self, from: omittedJSON)
-        let unknown = try JSONDecoder.snakeCase.decode(SessionEvent.self, from: unknownJSON)
+        let longhouse = try JSONDecoder.snakeCase.decodeSessionFixture(SessionEvent.self, from: longhouseJSON)
+        let omitted = try JSONDecoder.snakeCase.decodeSessionFixture(SessionEvent.self, from: omittedJSON)
+        let unknown = try JSONDecoder.snakeCase.decodeSessionFixture(SessionEvent.self, from: unknownJSON)
 
         #expect(longhouse.inputOrigin?.authoredVia == .longhouse)
         #expect(longhouse.inputOrigin?.sessionInputId == 7)
@@ -504,7 +517,7 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let event = try JSONDecoder.snakeCase.decode(APIEventResponse.self, from: json)
+        let event = try JSONDecoder.snakeCase.decodeSessionFixture(APIEventResponse.self, from: json)
 
         #expect(event.toolInputJson?["file_path"] == .string("/tmp/generated.swift"))
         #expect(event.toolInputJson?["filePath"] == nil)
@@ -566,7 +579,7 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let apiWorkspace = try JSONDecoder.snakeCase.decode(APISessionWorkspaceResponse.self, from: json)
+        let apiWorkspace = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionWorkspaceResponse.self, from: json)
         let workspace = apiWorkspace.sessionWorkspaceResponse
 
         #expect(workspace.session.id == "workspace-session")
@@ -627,10 +640,10 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let input = try JSONDecoder.snakeCase.decode(APISessionInputResponse.self, from: inputJSON).sessionInputResponse
-        let turns = try JSONDecoder.snakeCase.decode(APISessionTurnsListResponse.self, from: turnsJSON).sessionTurnsResponse
-        let draft = try JSONDecoder.snakeCase.decode(APISessionDraftReplyResponse.self, from: draftJSON).draftReplyResponse
-        let loop = try JSONDecoder.snakeCase.decode(APISessionLoopModeResponse.self, from: loopJSON).loopModeResponse
+        let input = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionInputResponse.self, from: inputJSON).sessionInputResponse
+        let turns = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionTurnsListResponse.self, from: turnsJSON).sessionTurnsResponse
+        let draft = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionDraftReplyResponse.self, from: draftJSON).draftReplyResponse
+        let loop = try JSONDecoder.snakeCase.decodeSessionFixture(APISessionLoopModeResponse.self, from: loopJSON).loopModeResponse
 
         #expect(input.outcome == .queued)
         #expect(input.visibleFailedInputCount == 0)
@@ -735,539 +748,14 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
 
         #expect(detail.effectiveLoopMode == .assist)
         #expect(detail.canSendLive)
-        #expect(detail.runtimeCapabilityLabel == "Live on this Mac")
+        #expect(detail.runtimeCapabilityLabel == "Send")
         #expect(detail.runtimeCapabilityTone == "success")
         #expect(detail.runtimePhaseLabel == "Idle")
         #expect(detail.controlHealthMessage == nil)
-    }
-
-    @Test
-    func sessionDetailPrefersServerRuntimeDisplay() throws {
-        let json = """
-        {
-          "id": "session-3",
-          "provider": "codex",
-          "project": "zerg",
-          "cwd": "/Users/example/git/zerg",
-          "git_branch": "main",
-          "summary": "Run live checks",
-          "summary_title": "Live Checks",
-          "presence_state": "running",
-          "presence_tool": "bash",
-          "user_state": "active",
-          "status": "working",
-          "last_activity_at": "2026-04-25T20:00:00Z",
-          "display_phase": "Running bash",
-          "active_tool": "bash",
-          "home_label": "On this Mac",
-          "origin_label": "On this Mac",
-          "capabilities": {
-            "live_control_available": true,
-            "host_reattach_available": true,
-            "reply_to_live_session_available": true,
-            "can_queue_next_input": true,
-            "display_label": "Live on this Mac",
-            "display_detail": "Longhouse can send prompts into this live session.",
-            "display_tone": "success"
-          },
-          "runtime_display": {
-            "truth_tier": "managed-local",
-            "signal_tier": "phase_signal",
-            "state": "running",
-            "tone": "running",
-            "headline": "Working",
-            "detail": "Using Shell",
-            "phase_label": "Using Shell",
-            "compact_tool_label": "Shell",
-            "is_live": true,
-            "is_executing": true,
-            "needs_attention": false,
-            "is_idle": false,
-            "is_stalled": false,
-            "is_managed_local_truth": true,
-            "has_signal": true,
-            "control_path": "managed",
-            "activity_recency": "live",
-            "lifecycle": "open",
-            "host_state": "online",
-            "terminal_reason": null
-          },
-          "loop_mode": "assist"
-        }
-        """.data(using: .utf8)!
-
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
-
-        #expect(detail.runtimeHeadline == "Working")
-        #expect(detail.runtimeDetail == "Using Shell")
-        #expect(detail.runtimeCapabilityLabel == "Live on this Mac")
-        #expect(detail.runtimePhaseLabel == "Using Shell")
-        #expect(detail.runtimeTone == "running")
-        #expect(detail.isSessionExecuting)
-    }
-
-    @Test
-    func sessionDetailUsesTranscriptSyncDisplayOverIdleFacts() throws {
-        let json = """
-        {
-          "id": "session-syncing",
-          "provider": "claude",
-          "project": "zerg",
-          "presence_state": "idle",
-          "user_state": "active",
-          "status": "idle",
-          "last_activity_at": "2026-04-25T20:00:00Z",
-          "display_phase": "Idle",
-          "capabilities": {
-            "live_control_available": true,
-            "host_reattach_available": true,
-            "reply_to_live_session_available": true
-          },
-          "runtime_display": {
-            "truth_tier": "managed-local",
-            "signal_tier": "phase_signal",
-            "state": "syncing_transcript",
-            "tone": "active",
-            "headline": "Working",
-            "detail": null,
-            "phase_label": "Working",
-            "compact_tool_label": null,
-            "is_live": false,
-            "is_executing": false,
-            "needs_attention": false,
-            "is_idle": false,
-            "is_stalled": false,
-            "is_managed_local_truth": true,
-            "has_signal": true,
-            "control_path": "managed",
-            "activity_recency": "live",
-            "lifecycle": "open",
-            "host_state": "online",
-            "terminal_reason": null
-          },
-          "loop_mode": "assist"
-        }
-        """.data(using: .utf8)!
-
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
-
-        #expect(detail.runtimePhaseState == "syncing_transcript")
-        #expect(detail.runtimePhaseLabel == "Working")
-        #expect(detail.runtimeHeadline == "Working")
-        #expect(detail.runtimeDetail == nil)
-        #expect(detail.runtimeTone == "active")
-        #expect(!detail.isSessionExecuting)
-    }
-
-    @Test
-    func sessionDetailRuntimeDisplayNilStateKeepsLiveControlReady() throws {
-        let json = """
-        {
-          "id": "session-stale-detail",
-          "provider": "codex",
-          "project": "zerg",
-          "user_state": "active",
-          "presence_state": "needs_user",
-          "status": "active",
-          "capabilities": {
-            "live_control_available": true,
-            "host_reattach_available": true,
-            "reply_to_live_session_available": true
-          },
-          "runtime_display": {
-            "truth_tier": "managed-local",
-            "signal_tier": "phase_signal",
-            "state": null,
-            "tone": "idle",
-            "headline": "Ready",
-            "detail": "Waiting for next prompt",
-            "phase_label": "Ready",
-            "compact_tool_label": null,
-            "is_live": false,
-            "is_executing": false,
-            "needs_attention": false,
-            "is_idle": true,
-            "is_stalled": false,
-            "is_managed_local_truth": true,
-            "has_signal": true,
-            "control_path": "managed",
-            "activity_recency": "stale",
-            "lifecycle": "open",
-            "host_state": "unknown",
-            "terminal_reason": null
-          }
-        }
-        """.data(using: .utf8)!
-
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
-
-        #expect(detail.runtimePhaseState == "idle")
-        #expect(detail.runtimeHeadline == "Ready")
-        #expect(detail.runtimeDetail == "Waiting for next prompt")
-        #expect(detail.runtimeTone == "idle")
-        #expect(detail.canSendLive)
-        #expect(!detail.isSessionExecuting)
-    }
-
-    @Test
-    func sessionDetailPrefersRuntimeDisplayOverRuntimeFacts() throws {
-        let jsonString = """
-        {
-          "id": "session-facts-detail",
-          "provider": "codex",
-          "project": "zerg",
-          "cwd": "/Users/example/git/zerg",
-          "git_branch": "main",
-          "summary": "Run live checks",
-          "summary_title": "Live Checks",
-          "presence_state": "running",
-          "presence_tool": "bash",
-          "user_state": "active",
-          "status": "working",
-          "last_activity_at": "2026-04-25T20:00:00Z",
-          "display_phase": "Running bash",
-          "active_tool": "bash",
-          "home_label": "On this Mac",
-          "origin_label": "On this Mac",
-          "capabilities": {
-            "live_control_available": true,
-            "host_reattach_available": true,
-            "reply_to_live_session_available": true,
-            "can_queue_next_input": true,
-            "display_label": "Live on this Mac",
-            "display_detail": "Longhouse can send prompts into this live session.",
-            "display_tone": "success"
-          },
-          "runtime_display": {
-            "truth_tier": "managed-local",
-            "signal_tier": "phase_signal",
-            "state": "running",
-            "tone": "running",
-            "headline": "Working",
-            "detail": "Using Shell",
-            "phase_label": "Using Shell",
-            "compact_tool_label": "Shell",
-            "is_live": true,
-            "is_executing": true,
-            "needs_attention": false,
-            "is_idle": false,
-            "is_stalled": false,
-            "is_managed_local_truth": true,
-            "has_signal": true,
-            "control_path": "managed",
-            "activity_recency": "live",
-            "lifecycle": "open",
-            "host_state": "online",
-            "terminal_reason": null
-          },
-          "loop_mode": "assist"
-        }
-        """
-
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: Data(jsonString.utf8))
-
-        #expect(detail.runtimePhaseLabel == "Using Shell")
-        #expect(detail.runtimeHeadline == "Working")
-        #expect(detail.runtimeDetail == "Using Shell")
-        #expect(detail.runtimeTone == "running")
-        #expect(detail.isSessionExecuting)
-
-        let noPhaseJson = jsonString.replacingOccurrences(
-            of: #""phase": {"kind": "running", "tool": "shell", "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"}"#,
-            with: #""phase": {"kind": null, "tool": null, "source": null, "observed_at": null, "expires_at": null}"#
-        )
-        let noPhaseDetail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: Data(noPhaseJson.utf8))
-
-        #expect(noPhaseDetail.runtimePhaseState == "running")
-        #expect(noPhaseDetail.runtimePhaseLabel == "Using Shell")
-        #expect(noPhaseDetail.runtimeHeadline == "Working")
-        #expect(noPhaseDetail.isSessionExecuting)
-    }
-
-    @Test
-    func closedRuntimeDisplayDoesNotNeedAttention() {
-        let summary = SessionSummary(
-            id: "session-closed-attention",
-            title: "Finished work",
-            presenceState: "needs_user",
-            provider: "claude",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "active",
-            displayPhase: "Idle",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "managed-local",
-                signalTier: "phase_signal",
-                state: "needs_user",
-                tone: "closed",
-                headline: "Closed",
-                detail: nil,
-                phaseLabel: "Closed",
-                compactToolLabel: nil,
-                isLive: false,
-                isExecuting: false,
-                needsAttention: true,
-                isIdle: false,
-                isStalled: false,
-                isManagedLocalTruth: true,
-                hasSignal: true,
-                controlPath: "managed",
-                activityRecency: "live",
-                lifecycle: "closed",
-                hostState: "online",
-                terminalReason: "provider_signal"
-            )
-        )
-
-        #expect(summary.isClosed)
-        #expect(!summary.needsAttention)
-        #expect(!summary.isExecuting)
-        #expect(summary.isIdle)
-        #expect(summary.displayPhaseLabel == "Closed")
-    }
-
-    @Test
-    func runtimeDisplayNilStateSuppressesStaleTopLevelAttention() {
-        let summary = SessionSummary(
-            id: "session-disconnected-stale-attention",
-            title: "Disconnected work",
-            presenceState: "needs_user",
-            provider: "codex",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "active",
-            displayPhase: "Idle",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "managed-local",
-                signalTier: "phase_signal",
-                state: nil,
-                tone: "inactive",
-                headline: "Not connected",
-                detail: nil,
-                phaseLabel: "Inactive",
-                compactToolLabel: nil,
-                isLive: false,
-                isExecuting: false,
-                needsAttention: false,
-                isIdle: false,
-                isStalled: false,
-                isManagedLocalTruth: true,
-                hasSignal: true,
-                controlPath: "managed",
-                activityRecency: "stale",
-                lifecycle: "open",
-                hostState: "unknown",
-                terminalReason: nil
-            )
-        )
-
-        #expect(!summary.isBlocked)
-        #expect(!summary.needsAttention)
-        #expect(!summary.isExecuting)
-        #expect(summary.runtimeTone == "inactive")
-        #expect(summary.displayPhaseLabel == "Inactive")
-    }
-
-    @Test
-    func timelineStatusMatchesUnmanagedRuntimeRecency() {
-        let stale = SessionSummary(
-            id: "session-stale-unmanaged",
-            title: "Imported session",
-            presenceState: "idle",
-            provider: "codex",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "idle",
-            displayPhase: "Idle",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "stale",
-                signalTier: "phase_signal",
-                state: nil,
-                tone: "inactive",
-                headline: "Inactive",
-                detail: nil,
-                phaseLabel: "Inactive",
-                compactToolLabel: nil,
-                isLive: false,
-                isExecuting: false,
-                needsAttention: false,
-                isIdle: true,
-                isStalled: false,
-                isManagedLocalTruth: false,
-                hasSignal: true,
-                controlPath: "unmanaged",
-                activityRecency: "stale",
-                lifecycle: "open",
-                hostState: "unknown",
-                terminalReason: nil
-            )
-        )
-        let live = SessionSummary(
-            id: "session-live-unmanaged",
-            title: "Imported session",
-            presenceState: "needs_user",
-            provider: "claude",
-            project: "acme-api",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "idle",
-            displayPhase: "Idle",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "fresh",
-                signalTier: "phase_signal",
-                state: "needs_user",
-                tone: "idle",
-                headline: "Inactive",
-                detail: nil,
-                phaseLabel: "Idle",
-                compactToolLabel: nil,
-                isLive: false,
-                isExecuting: false,
-                needsAttention: false,
-                isIdle: true,
-                isStalled: false,
-                isManagedLocalTruth: false,
-                hasSignal: true,
-                controlPath: "unmanaged",
-                activityRecency: "live",
-                lifecycle: "open",
-                hostState: "unknown",
-                terminalReason: nil
-            )
-        )
-
-        #expect(stale.timelineStatusLabel == "No live signal")
-        #expect(stale.timelineStatusSeenAt == nil)
-        #expect(live.timelineStatusLabel == "No live signal")
-    }
-
-    @Test
-    func timelineStatusKeepsManagedIdleSeparateFromUnmanagedActivity() {
-        let summary = SessionSummary(
-            id: "session-managed-idle",
-            title: "Managed session",
-            presenceState: "needs_user",
-            provider: "claude",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "idle",
-            displayPhase: "Idle",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "managed-local",
-                signalTier: "phase_signal",
-                state: "needs_user",
-                tone: "idle",
-                headline: "Inactive",
-                detail: nil,
-                phaseLabel: "Idle",
-                compactToolLabel: nil,
-                isLive: false,
-                isExecuting: false,
-                needsAttention: false,
-                isIdle: true,
-                isStalled: false,
-                isManagedLocalTruth: true,
-                hasSignal: true,
-                controlPath: "managed",
-                activityRecency: "live",
-                lifecycle: "open",
-                hostState: "online",
-                terminalReason: nil
-            )
-        )
-
-        #expect(summary.timelineStatusLabel == "No live signal")
-    }
-
-    @Test
-    func timelineCardPresentationOverridesLocalRuntimeDerivation() {
-        let summary = SessionSummary(
-            id: "session-backend-card",
-            title: "Backend-owned card",
-            presenceState: "needs_user",
-            provider: "claude",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "idle",
-            displayPhase: "Idle",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "managed-local",
-                signalTier: "phase_signal",
-                state: "needs_user",
-                tone: "idle",
-                headline: "Idle",
-                detail: nil,
-                phaseLabel: "Idle",
-                compactToolLabel: nil,
-                isLive: false,
-                isExecuting: false,
-                needsAttention: false,
-                isIdle: true,
-                isStalled: false,
-                isManagedLocalTruth: true,
-                hasSignal: true,
-                controlPath: "managed",
-                activityRecency: "live",
-                lifecycle: "open",
-                hostState: "online",
-                terminalReason: nil
-            ),
-            timelineCard: TimelineCardPresentation(
-                ownership: TimelineBadgePresentation(label: "Unmanaged", tone: "neutral"),
-                status: TimelineStatusPresentation(label: "Stale", tone: "inactive", seenAt: "2026-04-25T19:00:00Z", seenAtPrefix: "Updated"),
-                borderTone: "inactive"
-            )
-        )
-
-        #expect(summary.managementLabel == "Unmanaged")
-        #expect(summary.timelineStatusLabel == "Stale")
-        #expect(summary.timelineStatusSeenAt == "2026-04-25T19:00:00Z")
-        #expect(summary.timelineStatusTone == "inactive")
-        #expect(summary.timelineBorderTone == "inactive")
-    }
-
-    @Test
-    func runtimeDisplayDrivesPresentation() {
-        let managedPhase = SessionSummary(
-            id: "session-fact-phase",
-            title: "Managed phase",
-            presenceState: "running",
-            provider: "claude",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "working",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "managed-local",
-                signalTier: "phase_signal",
-                state: "running",
-                tone: "running",
-                headline: "Working",
-                detail: "Using Shell",
-                phaseLabel: "Using Shell",
-                compactToolLabel: "Shell",
-                isLive: true,
-                isExecuting: true,
-                needsAttention: false,
-                isIdle: false,
-                isStalled: false,
-                isManagedLocalTruth: true,
-                hasSignal: true,
-                controlPath: "managed",
-                activityRecency: "live",
-                lifecycle: "open",
-                hostState: "online",
-                terminalReason: nil
-            )
-        )
-
-        #expect(managedPhase.managementLabel == "Managed")
-        #expect(managedPhase.timelineStatusLabel == "No live signal")
-        #expect(managedPhase.displayPhaseLabel == "Using Shell")
-        #expect(managedPhase.timelineStatusTone == "inactive")
-        #expect(managedPhase.isExecuting)
     }
 
     @Test
@@ -1350,7 +838,7 @@ struct SessionModelsTests {
         }
         """
 
-        let decoded = try JSONDecoder.snakeCase.decode(APITimelineSessionsListResponse.self, from: Data(json.utf8))
+        let decoded = try JSONDecoder.snakeCase.decodeSessionFixture(APITimelineSessionsListResponse.self, from: Data(json.utf8))
         let card = try #require(decoded.sessions.first)
         let session = card.head
         let summary = card.sessionSummary
@@ -1392,58 +880,13 @@ struct SessionModelsTests {
           "has_real_sessions": true
         }
         """
-        let pendingDecoded = try JSONDecoder.snakeCase.decode(APITimelineSessionsListResponse.self, from: Data(pendingJSON.utf8))
+        let pendingDecoded = try JSONDecoder.snakeCase.decodeSessionFixture(APITimelineSessionsListResponse.self, from: Data(pendingJSON.utf8))
         let pendingSummary = try #require(pendingDecoded.sessions.first?.sessionSummary)
 
         #expect(pendingSummary.title == "Investigate stuck generated summary cards.")
         #expect(pendingSummary.summaryStatusValue == .pending)
         // No frozen/live summary title yet, so there is no subordinate drift line.
         #expect(pendingSummary.driftTitle == nil)
-    }
-
-    @Test
-    func sessionSummaryUsesTimelineCardStatusAndRuntimeDisplayPhase() {
-        let summary = SessionSummary(
-            id: "session-card-first",
-            title: "Timeline card first",
-            presenceState: "running",
-            provider: "codex",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "working",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "managed-local",
-                signalTier: "phase_signal",
-                state: "running",
-                tone: "running",
-                headline: "Working",
-                detail: "Using Shell",
-                phaseLabel: "Using Shell",
-                compactToolLabel: "Shell",
-                isLive: true,
-                isExecuting: true,
-                needsAttention: false,
-                isIdle: false,
-                isStalled: false,
-                isManagedLocalTruth: true,
-                hasSignal: true,
-                controlPath: "managed",
-                activityRecency: "live",
-                lifecycle: "open",
-                hostState: "online",
-                terminalReason: nil
-            ),
-            timelineCard: TimelineCardPresentation(
-                ownership: TimelineBadgePresentation(label: "Managed", tone: "neutral"),
-                status: TimelineStatusPresentation(label: "Idle", tone: "idle", seenAt: nil, seenAtPrefix: "Updated"),
-                borderTone: "idle"
-            )
-        )
-
-        #expect(summary.timelineStatusLabel == "Idle")
-        #expect(summary.timelineStatusTone == "idle")
-        #expect(summary.timelineBorderTone == "idle")
-        #expect(summary.displayPhaseLabel == "Using Shell")
     }
 
     @Test
@@ -1480,7 +923,8 @@ struct SessionModelsTests {
                 lifecycle: "open",
                 hostState: "offline",
                 terminalReason: nil
-            )
+            ),
+            stateFacts: makeSessionStateFacts(activity: "quiescent")
         )
 
         #expect(summary.managementLabel == "Managed")
@@ -1488,7 +932,7 @@ struct SessionModelsTests {
     }
 
     @Test
-    func runtimeDisplayNeedsAttentionIsAuthoritativeOverState() {
+    func missingFactsDoNotFabricateAttentionFromLegacyDisplay() {
         let summary = SessionSummary(
             id: "session-stalled-managed",
             title: "Finished work",
@@ -1523,59 +967,7 @@ struct SessionModelsTests {
         )
 
         #expect(!summary.needsAttention)
-    }
-
-    @Test
-    func attentionWidgetOrderKeepsClosedStaleAttentionOutOfAttentionGroup() {
-        let closed = SessionSummary(
-            id: "session-closed-process-gone",
-            title: "Finished work",
-            presenceState: "needs_user",
-            provider: "codex",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "active",
-            displayPhase: "Idle",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "managed-local",
-                signalTier: "phase_signal",
-                state: "needs_user",
-                tone: "idle",
-                headline: "Idle",
-                detail: "Waiting for next prompt",
-                phaseLabel: "Idle",
-                compactToolLabel: nil,
-                isLive: false,
-                isExecuting: false,
-                needsAttention: true,
-                isIdle: false,
-                isStalled: false,
-                isManagedLocalTruth: true,
-                hasSignal: true,
-                controlPath: "managed",
-                activityRecency: "stale",
-                lifecycle: "closed",
-                hostState: "offline",
-                terminalReason: "process_gone"
-            )
-        )
-        let openAttention = SessionSummary(
-            id: "session-open-attention",
-            title: "Needs reply",
-            presenceState: "needs_user",
-            provider: "claude",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:01:00Z",
-            status: "active",
-            displayPhase: "Idle",
-            runtimeDisplay: SessionRuntimeDisplay.widgetPlaceholder(state: "needs_user", phase: "Idle", tone: "idle")
-        )
-
-        let ordered = SessionSummary.attentionWidgetOrder([closed, openAttention], limit: 2)
-
-        #expect(!closed.needsAttention)
-        #expect(!openAttention.needsAttention)
-        #expect(ordered.map(\.id) == ["session-closed-process-gone", "session-open-attention"])
+        #expect(summary.stateFacts.dispositionState == "unknown")
     }
 
     @Test
@@ -1632,15 +1024,15 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
 
         #expect(detail.isReadOnly)
         #expect(detail.runtimeCapabilityLabel == "Read only")
         #expect(detail.runtimeCapabilityTone == "neutral")
-        #expect(detail.runtimeHeadline == "Read only")
-        #expect(detail.runtimeDetail == "This imported session is searchable, but Longhouse cannot steer it.")
-        #expect(detail.controlHealthMessage == "This imported session is searchable, but Longhouse cannot steer it.")
-        #expect(detail.runtimePhaseLabel == "Inactive")
+        #expect(detail.runtimeHeadline == "Activity unknown")
+        #expect(detail.runtimeDetail == nil)
+        #expect(detail.controlHealthMessage == "Read-only imported session.")
+        #expect(detail.runtimePhaseLabel == "Activity unknown")
     }
 
     @Test
@@ -1699,191 +1091,15 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
 
         #expect(!detail.canSendLive)
         #expect(!detail.isControlOffline)
         #expect(detail.isReadOnly)
         #expect(detail.runtimeCapabilityLabel == "Read only")
         #expect(detail.runtimeCapabilityTone == "neutral")
-        #expect(detail.runtimeHeadline == "Read only")
-        #expect(detail.controlHealthMessage == "This live Codex session is connected, but this control path cannot accept typed input.")
-    }
-
-    @Test
-    func sessionDetailNormalizesLegacyCapabilityLabels() throws {
-        let liveJSON = """
-        {
-          "id": "session-live-unmanaged",
-          "provider": "codex",
-          "project": "zerg",
-          "cwd": null,
-          "git_branch": null,
-          "summary": null,
-          "summary_title": null,
-          "presence_state": "idle",
-          "presence_tool": null,
-          "user_state": "active",
-          "status": "idle",
-          "last_activity_at": null,
-          "display_phase": null,
-          "active_tool": null,
-          "home_label": null,
-          "origin_label": null,
-          "capabilities": {
-            "live_control_available": true,
-            "host_reattach_available": true,
-            "reply_to_live_session_available": true,
-            "display_label": "Live control",
-            "display_detail": null,
-            "display_tone": "success"
-          },
-          "runtime_display": {
-            "truth_tier": "fresh",
-            "signal_tier": "none",
-            "state": null,
-            "tone": "inactive",
-            "headline": "Inactive",
-            "detail": null,
-            "phase_label": "Inactive",
-            "compact_tool_label": null,
-            "is_live": false,
-            "is_executing": false,
-            "needs_attention": false,
-            "is_idle": true,
-            "is_stalled": false,
-            "is_managed_local_truth": false,
-            "has_signal": false,
-            "control_path": "unmanaged",
-            "activity_recency": "none",
-            "lifecycle": "open",
-            "host_state": "unknown",
-            "terminal_reason": null
-          },
-          "loop_mode": "assist"
-        }
-        """.data(using: .utf8)!
-        let readOnlyJSON = """
-        {
-          "id": "session-readonly-unmanaged",
-          "provider": "gemini",
-          "project": "zerg",
-          "cwd": null,
-          "git_branch": null,
-          "summary": null,
-          "summary_title": null,
-          "presence_state": "idle",
-          "presence_tool": null,
-          "user_state": "active",
-          "status": "idle",
-          "last_activity_at": null,
-          "display_phase": null,
-          "active_tool": null,
-          "home_label": null,
-          "origin_label": null,
-          "capabilities": {
-            "live_control_available": false,
-            "host_reattach_available": false,
-            "reply_to_live_session_available": false,
-            "display_label": "Search only",
-            "display_detail": null,
-            "display_tone": "neutral"
-          },
-          "runtime_display": {
-            "truth_tier": "fresh",
-            "signal_tier": "none",
-            "state": null,
-            "tone": "neutral",
-            "headline": "Read only",
-            "detail": null,
-            "phase_label": "Read only",
-            "compact_tool_label": null,
-            "is_live": false,
-            "is_executing": false,
-            "needs_attention": false,
-            "is_idle": true,
-            "is_stalled": false,
-            "is_managed_local_truth": false,
-            "has_signal": false,
-            "control_path": "unmanaged",
-            "activity_recency": "none",
-            "lifecycle": "open",
-            "host_state": "unknown",
-            "terminal_reason": null
-          },
-          "loop_mode": "manual"
-        }
-        """.data(using: .utf8)!
-
-        let liveDetail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: liveJSON)
-        let readOnlyDetail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: readOnlyJSON)
-
-        #expect(liveDetail.runtimeCapabilityLabel == "Send")
-        #expect(liveDetail.runtimeCapabilityTone == "success")
-        #expect(readOnlyDetail.runtimeCapabilityLabel == "Read only")
-        #expect(readOnlyDetail.runtimeCapabilityTone == "neutral")
-        #expect(readOnlyDetail.runtimeHeadline == "Read only")
-    }
-
-    @Test
-    func sessionDetailOmitsRedundantIdleRuntimeDetail() throws {
-        let json = """
-        {
-          "id": "session-idle",
-          "provider": "codex",
-          "project": "zerg",
-          "cwd": "/Users/example/git/zerg",
-          "git_branch": "main",
-          "summary": "Idle session",
-          "summary_title": "Idle session",
-          "presence_state": "idle",
-          "presence_tool": null,
-          "user_state": "active",
-          "status": "idle",
-          "last_activity_at": null,
-          "display_phase": null,
-          "active_tool": null,
-          "home_label": "On this Mac",
-          "origin_label": "On this Mac",
-          "capabilities": {
-            "live_control_available": true,
-            "host_reattach_available": true,
-            "reply_to_live_session_available": true,
-            "display_label": "Live on this Mac",
-            "display_detail": "Longhouse can send prompts into this live session.",
-            "display_tone": "success"
-          },
-          "runtime_display": {
-            "truth_tier": "managed-local",
-            "signal_tier": "phase_signal",
-            "state": "needs_user",
-            "tone": "idle",
-            "headline": "Idle",
-            "detail": null,
-            "phase_label": "Idle",
-            "compact_tool_label": null,
-            "is_live": false,
-            "is_executing": false,
-            "needs_attention": false,
-            "is_idle": true,
-            "is_stalled": false,
-            "is_managed_local_truth": true,
-            "has_signal": true,
-            "control_path": "managed",
-            "activity_recency": "live",
-            "lifecycle": "open",
-            "host_state": "online",
-            "terminal_reason": null
-          },
-          "loop_mode": "manual"
-        }
-        """.data(using: .utf8)!
-
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
-
-        #expect(detail.runtimeHeadline == "Idle")
-        #expect(detail.runtimeDetail == nil)
-        #expect(detail.runtimePhaseLabel == "Idle")
+        #expect(detail.runtimeHeadline == "Activity unknown")
+        #expect(detail.controlHealthMessage == "Read-only imported session.")
     }
 
     @Test
@@ -1947,7 +1163,7 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
 
         #expect(detail.canSendLive)
         #expect(detail.defaultInputIntent == "steer")
@@ -2016,11 +1232,11 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
 
         #expect(!detail.canSendLive)
         #expect(detail.attachImagesEnabled == false)
-        #expect(detail.controlHealthMessage == "This session has ended.")
+        #expect(detail.controlHealthMessage == "This session is closed.")
     }
 
     @Test
@@ -2035,10 +1251,10 @@ struct SessionModelsTests {
           "git_branch": null,
           "summary": null,
           "summary_title": null,
-          "presence_state": "syncing_transcript",
+          "presence_state": null,
           "presence_tool": null,
           "user_state": "active",
-          "status": "syncing_transcript",
+          "status": "active",
           "last_activity_at": "2026-07-09T00:05:20Z",
           "display_phase": "Launching",
           "active_tool": null,
@@ -2063,7 +1279,7 @@ struct SessionModelsTests {
           "runtime_display": {
             "truth_tier": "fresh",
             "signal_tier": "none",
-            "state": "syncing_transcript",
+            "state": null,
             "tone": "active",
             "headline": "Launching",
             "detail": "Waiting for the machine to start the session.",
@@ -2087,12 +1303,12 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+        let detail = try JSONDecoder.snakeCase.decodeSessionFixture(SessionDetail.self, from: json)
 
         #expect(!detail.canSendLive)
         #expect(detail.canDraftBeforeSendReady)
         #expect(detail.runtimeCapabilityLabel == "Launching")
-        #expect(detail.controlHealthMessage == "Setting up Codex.")
+        #expect(detail.controlHealthMessage == "Session is still starting.")
         #expect(detail.launchSetupStatusLabel == "Setting up Codex")
     }
 
@@ -2107,7 +1323,7 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let response = try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: json)
+        let response = try JSONDecoder.snakeCase.decodeSessionFixture(SessionInputResponse.self, from: json)
         #expect(response.outcome == .sent)
         #expect(response.inputId == 42)
         #expect(response.queued.isEmpty)
@@ -2133,7 +1349,7 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let response = try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: json)
+        let response = try JSONDecoder.snakeCase.decodeSessionFixture(SessionInputResponse.self, from: json)
         #expect(response.outcome == .queued)
         #expect(response.queued.count == 1)
         #expect(response.queued.first?.status == .queued)
@@ -2157,7 +1373,7 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let caps = try JSONDecoder.snakeCase.decode(SessionCapabilities.self, from: json)
+        let caps = try JSONDecoder.snakeCase.decodeSessionFixture(SessionCapabilities.self, from: json)
         #expect(caps.canQueueNextInput == true)
         #expect(caps.canSteerActiveTurn == true)
     }
@@ -2182,7 +1398,7 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let response = try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: json)
+        let response = try JSONDecoder.snakeCase.decodeSessionFixture(SessionInputResponse.self, from: json)
         #expect(response.queued.first?.status == .failed)
         #expect(response.queued.first?.lastError == "provider unavailable")
         #expect(response.pendingInputCount == 0)
@@ -2209,7 +1425,7 @@ struct SessionModelsTests {
         }
         """.data(using: .utf8)!
 
-        let response = try JSONDecoder.snakeCase.decode(SessionInputResponse.self, from: json)
+        let response = try JSONDecoder.snakeCase.decodeSessionFixture(SessionInputResponse.self, from: json)
         #expect(response.pendingInputCount == 0)
         #expect(response.visibleFailedInputCount == 0)
     }

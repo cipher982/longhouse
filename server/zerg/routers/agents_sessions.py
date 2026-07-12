@@ -58,6 +58,7 @@ from zerg.services.session_listing import list_agent_sessions
 from zerg.services.session_messages import create_session_message
 from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_pause_requests import load_active_pause_request_map
+from zerg.services.session_pause_requests import load_hot_session_projection_map
 from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
@@ -1001,6 +1002,7 @@ def get_session(
         pending_response_turn_map = load_pending_response_turn_map(db, [session.id])
         control_state_map = load_managed_control_state_map(db, [session.id])
         launch_attempt_map = latest_launch_attempts(db, [session.id])
+        hot_projection_map = load_hot_session_projection_map([session.id])
     with timing.span("build_response"):
         effective_owner_id = owner_id
         if effective_owner_id is None:
@@ -1020,7 +1022,12 @@ def get_session(
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=effective_owner_id,
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
-            pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
+            pause_request=(
+                hot_projection_map[session.id][0]
+                if session.id in hot_projection_map
+                else serialize_pause_request_projection(pause_request_map.get(session.id))
+            ),
+            archive_state=(hot_projection_map[session.id][1] if session.id in hot_projection_map else "current"),
             launch_attempt=launch_attempt_map.get(session.id),
         )
     # Expose the provider-native id (when bound) so binding-convergence tooling

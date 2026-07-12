@@ -33,6 +33,7 @@ from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
 from zerg.services.managed_provider_contracts import provider_for_control_plane
 from zerg.services.managed_provider_contracts import steer_control_planes
+from zerg.utils.time import normalize_utc
 
 _STATE_PRIORITY = {
     "attached": 5,
@@ -134,6 +135,14 @@ class KernelSessionCapabilities:
     # When live_control_available is False, this gives the reason: e.g.
     # "no_run", "connection_released", "process_ended", "imported_only".
     staleness_reason: Optional[str]
+
+    # Stable identity for the acquired connection lease. Health renewals move
+    # freshness clocks but must not manufacture a new lease generation.
+    lease_generation: Optional[str] = None
+    control_owned: bool = False
+    run_started_at: Optional[datetime] = None
+    run_ended_at: Optional[datetime] = None
+    run_end_reason: Optional[str] = None
 
     @property
     def reply_to_live_session_available(self) -> bool:
@@ -418,6 +427,9 @@ def _payload_from_rows(
             can_tail_output=False,
             can_resume=False,
             staleness_reason=reason,
+            run_started_at=latest_run.started_at,
+            run_ended_at=latest_run.ended_at,
+            run_end_reason=latest_run.exit_status,
         )
     can_send = (
         bool(best.can_send_input)
@@ -477,6 +489,17 @@ def _payload_from_rows(
         can_tail_output=can_tail,
         can_resume=can_resume,
         staleness_reason=reason,
+        lease_generation=(
+            f"{best.id}:{normalize_utc(best.acquired_at).isoformat()}"
+            if best.id is not None and normalize_utc(best.acquired_at) is not None
+            else str(best.id)
+            if best.id is not None
+            else None
+        ),
+        control_owned=best.acquisition_kind in _CONTROL_ACQUISITION_KINDS,
+        run_started_at=latest_run.started_at,
+        run_ended_at=latest_run.ended_at,
+        run_end_reason=latest_run.exit_status,
     )
 
 

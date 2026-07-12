@@ -11,8 +11,7 @@ export type PresenceState =
   | "idle"
   | "needs_user"
   | "blocked"
-  | "stalled"
-  | "syncing_transcript";
+  | "stalled";
 export type PresenceStateInput = PresenceState | (string & {});
 
 export interface PresenceBadgeProps {
@@ -93,8 +92,7 @@ function isKnownPresenceState(state: PresenceStateInput | null | undefined): sta
     state === "idle" ||
     state === "needs_user" ||
     state === "blocked" ||
-    state === "stalled" ||
-    state === "syncing_transcript"
+    state === "stalled"
   );
 }
 
@@ -103,7 +101,7 @@ function normalizePresenceState(state: PresenceStateInput | null | undefined): P
 }
 
 function dotStateForPresence(state: PresenceState): PresenceState {
-  return state === "syncing_transcript" ? "thinking" : state;
+  return state;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,9 +304,7 @@ export function PresenceBadge({
             ? "Idle"
             : normalizedState === "stalled"
               ? "Stalled"
-              : normalizedState === "syncing_transcript"
-                ? "Working"
-                : normalizedState;
+              : normalizedState;
     return (
       <span
         className={className}
@@ -419,18 +415,6 @@ export function PresenceBadge({
     );
   }
 
-  if (normalizedState === "syncing_transcript") {
-    return (
-      <span className={className} style={containerStyle}>
-        <Dot state="thinking" size={dotSize} />
-        <span style={{ color: "#fb923c", fontWeight: 500, letterSpacing: "0.02em" }}>
-          Working
-        </span>
-        <TypingDots />
-      </span>
-    );
-  }
-
   // idle
   return (
     <span className={className} style={containerStyle}>
@@ -455,7 +439,7 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
   const normalizedState = normalizePresenceState(state);
   if (normalizedState === null) return null;
 
-  const isThinking = normalizedState === "thinking" || normalizedState === "syncing_transcript";
+  const isThinking = normalizedState === "thinking";
   const isRunning = normalizedState === "running";
   const isBlocked = normalizedState === "blocked";
   const isStalled = normalizedState === "stalled";

@@ -950,11 +950,35 @@ test.describe("Session Detail Page", () => {
             host_reattach_available: true,
             reply_to_live_session_available: true,
           };
+          const available = { state: "available" };
+          const unavailable = { state: "unavailable", reason: "not_granted" };
+          const managedSessionState = {
+            ...payload.session.session_state,
+            mode: "helm",
+            disposition: { state: "open", closed_at: null },
+            run: { lifecycle: "running" },
+            control: {
+              ownership: "owned",
+              connection: "connected",
+              actions: {
+                send_input: available,
+                interrupt: available,
+                terminate: available,
+                reattach: unavailable,
+                resume: unavailable,
+              },
+            },
+            presentation: {
+              ...payload.session.session_state.presentation,
+              access: { key: "live_control", label: "Live control", tone: "connected" },
+            },
+          };
 
           payload.session = {
             ...payload.session,
             ...managedSessionFields,
             capabilities: managedCapabilities,
+            session_state: managedSessionState,
           };
           payload.thread = {
             ...payload.thread,
@@ -962,7 +986,12 @@ test.describe("Session Detail Page", () => {
             sessions: Array.isArray(payload.thread?.sessions)
               ? payload.thread.sessions.map((item: Record<string, unknown>) =>
                   item.id === sessionId
-                    ? { ...item, ...managedSessionFields, capabilities: managedCapabilities }
+                    ? {
+                        ...item,
+                        ...managedSessionFields,
+                        capabilities: managedCapabilities,
+                        session_state: managedSessionState,
+                      }
                     : item,
                 )
               : payload.thread?.sessions,

@@ -176,7 +176,7 @@ private func mockSession(
             summary: "The provider is idle, but Longhouse still has a fresh send-capable control path to the terminal session.",
             provider: "claude",
             branch: "feat/tone-mapping",
-            statusLabel: "Ready",
+            statusLabel: "Activity unknown",
             statusTone: "idle",
             activityRecency: "stale",
             anchorSecondsAgo: 18 * 60,
@@ -281,7 +281,7 @@ private func mockSession(
         mockSession(
             id: "ready",
             project: "longhouse",
-            title: "Ready — backend has summary",
+            title: "Backend summary available",
             summary: "Wired summary_status into timeline payload. Single batched query joins session_tasks for the latest summary task per session, derives ready/pending/failed/unavailable in the projection layer, and threads the result through SessionResponse so iOS can render honestly.",
             summaryStatus: "ready",
             statusLabel: "Idle",

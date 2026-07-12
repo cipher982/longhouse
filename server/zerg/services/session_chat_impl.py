@@ -485,31 +485,53 @@ def _assert_live_session_send_available(
     *,
     owner_id: int | None = None,
 ) -> None:
+    _assert_live_session_action_available(db, source_session, action="send", owner_id=owner_id)
+
+
+def _assert_live_session_action_available(
+    db: Session,
+    source_session,
+    *,
+    action: str,
+    owner_id: int | None = None,
+) -> None:
     if database_module.live_catalog_enabled():
         from zerg.services.live_control_catalog import live_control_capability_available
-        from zerg.services.live_control_catalog import live_session_closed_for_input
+        from zerg.services.live_control_catalog import live_session_input_block_reason
 
-        if live_session_closed_for_input(db, source_session):
+        block_reason = live_session_input_block_reason(db, source_session)
+        if block_reason is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail={"error_code": "session_closed", "message": "This session has ended."},
+                detail={
+                    "error_code": block_reason,
+                    "message": "This session is closed." if block_reason == "session_closed" else "This run has ended.",
+                },
             )
-        if live_control_capability_available(db, session_id=source_session.id, capability="send"):
+        if live_control_capability_available(db, session_id=source_session.id, capability=action):
             return
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This session does not have a live Longhouse control channel.",
         )
-    if _session_is_closed_for_input(db, source_session):
+    from zerg.services.session_runtime import session_input_block_reason
+
+    block_reason = session_input_block_reason(db, getattr(source_session, "id", None))
+    if block_reason is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
-                "error_code": "session_closed",
-                "message": "This session has ended.",
+                "error_code": block_reason,
+                "message": "This session is closed." if block_reason == "session_closed" else "This run has ended.",
             },
         )
     capabilities = current_session_capabilities(db, source_session, owner_id=owner_id)
-    if capabilities.live_control_available:
+    allowed = {
+        "send": capabilities.can_send_input,
+        "interrupt": capabilities.can_interrupt,
+        "terminate": capabilities.can_terminate,
+    }.get(action, False)
+    if allowed:
         return
     if capabilities.host_reattach_available:
         raise HTTPException(

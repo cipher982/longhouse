@@ -192,11 +192,6 @@ def test_projection_satisfies_invariants(payload):
         assert display.truth_tier in {"stale", "none"}
         assert display.activity_recency in {"stale", "none"}
 
-    # The transcript handoff state excludes idle/executing.
-    if display.state == "syncing_transcript":
-        assert display.is_idle is False
-        assert display.is_executing is False
-
     # Explicit closed terminal_state must produce closed lifecycle.
     if runtime_view.terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
         assert display.lifecycle == "closed"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 from datetime import timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -23,7 +24,9 @@ from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.routers.session_chat import SessionInputRequest
+from zerg.routers.session_chat import PauseRequestResponseRequest
 from zerg.routers.session_chat import _create_session_input_response
+from zerg.routers.session_chat import _respond_to_live_pause_request
 from zerg.services.live_control_catalog import live_control_capability_available
 from zerg.services.live_control_catalog import load_live_control_session
 from zerg.services.live_control_catalog import wake_next_live_catalog_input
@@ -79,13 +82,14 @@ def _seed_live_control(db):
         LiveSessionConnection(
             run_id=str(run_id),
             control_plane="codex_bridge",
-            acquisition_kind="launch",
+            acquisition_kind="spawned_control",
             state="attached",
             device_id="cinder",
             can_send_input=1,
             can_interrupt=1,
             can_terminate=1,
             acquired_at=now,
+            last_health_at=now,
         )
     )
     db.commit()
@@ -107,7 +111,118 @@ def test_live_control_projection_never_needs_archive_models(tmp_path):
         connection = db.query(LiveSessionConnection).one()
         connection.state = "degraded"
         db.commit()
+        assert live_control_capability_available(db, session_id=session_id, capability="send") is False
+        assert live_control_capability_available(db, session_id=session_id, capability="interrupt") is False
+        assert live_control_capability_available(db, session_id=session_id, capability="terminate") is False
+
+        # Missing renewal evidence is fail-closed during rollout. Creation now
+        # stamps health, but legacy rows stay read-only until the next renewal.
+        connection.state = "attached"
+        connection.last_health_at = None
+        db.commit()
+        assert live_control_capability_available(db, session_id=session_id, capability="send") is False
+
+
+def test_live_control_grant_never_uses_stale_or_observe_only_run(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'live-run-isolation.db'}")
+    initialize_live_database(engine)
+    factory = make_sessionmaker(engine)
+    with factory() as db:
+        session_id = _seed_live_control(db)
+        thread = db.query(LiveSessionThread).one()
+        old_run = db.query(LiveSessionRun).one()
         assert live_control_capability_available(db, session_id=session_id, capability="send") is True
+
+        # A newer open run is authoritative even before its connection arrives;
+        # the prior run must not authorize a command for it.
+        now = datetime.now(timezone.utc)
+        newer_run = LiveSessionRun(
+            id=str(uuid4()),
+            thread_id=thread.id,
+            provider="codex",
+            host_id="cinder",
+            cwd="/workspace/longhouse",
+            launch_origin="longhouse_continued",
+            started_at=now,
+        )
+        db.add(newer_run)
+        db.commit()
+        assert live_control_capability_available(db, session_id=session_id, capability="send") is False
+
+        db.add(
+            LiveSessionConnection(
+                run_id=newer_run.id,
+                control_plane="log_tail",
+                acquisition_kind="observe_only",
+                state="attached",
+                device_id="cinder",
+                can_send_input=1,
+                acquired_at=now,
+                last_health_at=now,
+            )
+        )
+        old_run.ended_at = now
+        db.commit()
+        assert live_control_capability_available(db, session_id=session_id, capability="send") is False
+
+
+@pytest.mark.asyncio
+async def test_hot_pause_request_is_answerable_before_archive_convergence(tmp_path, monkeypatch):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'live-pause.db'}")
+    initialize_live_database(engine)
+    factory = make_sessionmaker(engine)
+    pause_id = str(uuid4())
+    request_key = "codex:runtime:request-1"
+    with factory() as db:
+        session_id = _seed_live_control(db)
+        session = load_live_control_session(db, session_id)
+        assert session is not None
+        db.add(
+            LiveRuntimeState(
+                runtime_key=f"codex:{session_id}",
+                session_id=session_id,
+                provider="codex",
+                device_id="cinder",
+                phase="blocked",
+                phase_source="codex_bridge",
+                timeline_anchor_at=datetime.now(timezone.utc),
+                runtime_version=1,
+                pending_interaction_id=request_key,
+                pending_interaction_kind="structured_question",
+                pending_interaction_opened_at=datetime.now(timezone.utc),
+                pending_interaction_updated_at=datetime.now(timezone.utc),
+                pending_interaction_can_respond=1,
+                pending_interaction_projection_json={
+                    "id": pause_id,
+                    "request_key": request_key,
+                    "session_id": str(session_id),
+                    "runtime_key": f"codex:{session_id}",
+                    "kind": "structured_question",
+                    "status": "pending",
+                    "provider": "codex",
+                    "can_respond": True,
+                    "questions": [{"id": "choice", "question": "Choose", "options": []}],
+                },
+            )
+        )
+        db.commit()
+
+        async def fake_answer(**kwargs):
+            assert kwargs["request_key"] == request_key
+            return SimpleNamespace(ok=True, response_data={"status": "resolved"}, error=None)
+
+        monkeypatch.setattr("zerg.routers.session_chat.answer_pause_request_on_managed_local_session", fake_answer)
+        response = await _respond_to_live_pause_request(
+            source_session=session,
+            owner_id=7,
+            pause_request_id=pause_id,
+            body=PauseRequestResponseRequest(decision="answer", answers={"choice": "fast"}),
+            db=db,
+        )
+        assert response.status == "resolved"
+        state = db.query(LiveRuntimeState).one()
+        assert state.pending_interaction_id is None
+        assert state.pending_interaction_projection_json is None
 
 
 @pytest.mark.asyncio

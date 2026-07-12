@@ -252,10 +252,9 @@ test.describe("Session hot plane", () => {
 
     const strip = page.getByTestId("session-control-strip");
     await expect(strip).toContainText("Needs answer", { timeout: 10_000 });
-    await expect(strip).toContainText("Waiting for your answer.", { timeout: 10_000 });
 
     const blockedSession = await getSession(request, sessionId);
-    expect(blockedSession.runtime_display?.state).toBe("blocked");
+    expect(blockedSession.runtime_display?.state).toBe("needs_user");
     expect(blockedSession.runtime_display?.needs_attention).toBe(true);
 
     await ingestSessionEvents(request, {
@@ -311,7 +310,7 @@ test.describe("Session hot plane", () => {
     });
 
     const clearedSession = await getSession(request, sessionId);
-    expect(clearedSession.runtime_display?.signal_tier).toBe("transcript_progress");
+    expect(clearedSession.runtime_display?.signal_tier).toBe("none");
     expect(clearedSession.runtime_display?.state).toBeNull();
     expect(clearedSession.runtime_display?.needs_attention).toBe(false);
   });

@@ -73,7 +73,7 @@ def _seed_managed_kernel_rows(db: Any, session: Any, *, control_plane: str) -> N
         device_id=getattr(session, "device_id", None),
         can_send_input=1,
         can_interrupt=1,
-        can_terminate=0,
+        can_terminate=1,
         can_tail_output=1,
         can_resume=0,
     )

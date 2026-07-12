@@ -6,6 +6,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from uuid import UUID
 from uuid import uuid4
@@ -17,9 +18,12 @@ from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
+from zerg.services.managed_control_state import DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
+from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
 _QUEUE_DRAINABLE_PHASES = frozenset({"idle", "needs_user", "blocked"})
+_CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
 
 
 @dataclass(frozen=True)
@@ -35,9 +39,18 @@ class LiveControlSession:
     git_repo: str | None
     git_branch: str | None
     ended_at: object | None
+    closed_at: object | None
+    close_reason: str | None
     loop_mode: str
     permission_mode: str
     primary_thread_id: UUID | None
+
+
+@dataclass(frozen=True)
+class LiveControlGrant:
+    connection_id: int
+    run_id: str
+    lease_generation: str
 
 
 def load_live_control_session(db: Session, session_id: UUID | str) -> LiveControlSession | None:
@@ -65,19 +78,21 @@ def load_live_control_session(db: Session, session_id: UUID | str) -> LiveContro
         git_repo=row.git_repo,
         git_branch=row.git_branch,
         ended_at=row.ended_at,
+        closed_at=row.closed_at,
+        close_reason=str(row.close_reason).strip() if row.close_reason else None,
         loop_mode=str(row.loop_mode or "assist"),
         permission_mode=str(row.permission_mode or "bypass"),
         primary_thread_id=thread_id,
     )
 
 
-def live_control_capability_available(
+def get_live_control_grant(
     db: Session,
     *,
     session_id: UUID | str,
     capability: str,
-) -> bool:
-    """Return whether an attached live kernel connection grants a capability."""
+) -> LiveControlGrant | None:
+    """Return the exact grant on the primary latest open run, or fail closed."""
 
     column = {
         "send": LiveSessionConnection.can_send_input,
@@ -86,25 +101,57 @@ def live_control_capability_available(
     }.get(capability)
     if column is None:
         raise ValueError(f"unknown live control capability: {capability}")
-    return (
-        db.query(LiveSessionConnection.id)
+    freshness_cutoff = datetime.now(timezone.utc) - timedelta(milliseconds=DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS)
+    latest_open_run = (
+        db.query(LiveSessionRun.id)
+        .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
+        .filter(
+            LiveSessionThread.session_id == str(session_id),
+            LiveSessionThread.is_primary == 1,
+            LiveSessionRun.ended_at.is_(None),
+        )
+        .order_by(LiveSessionRun.started_at.desc(), LiveSessionRun.id.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
+    row = (
+        db.query(LiveSessionConnection.id, LiveSessionConnection.run_id, LiveSessionConnection.acquired_at)
         .join(LiveSessionRun, LiveSessionRun.id == LiveSessionConnection.run_id)
         .join(LiveSessionThread, LiveSessionThread.id == LiveSessionRun.thread_id)
         .filter(
             LiveSessionThread.session_id == str(session_id),
-            LiveSessionConnection.state.in_(("attached", "degraded")),
+            LiveSessionThread.is_primary == 1,
+            LiveSessionRun.id == latest_open_run,
+            LiveSessionRun.ended_at.is_(None),
+            LiveSessionConnection.acquisition_kind.in_(_CONTROL_ACQUISITION_KINDS),
+            LiveSessionConnection.state == "attached",
             LiveSessionConnection.released_at.is_(None),
+            LiveSessionConnection.last_health_at.is_not(None),
+            LiveSessionConnection.last_health_at > freshness_cutoff,
             column == 1,
         )
         .limit(1)
         .first()
-        is not None
     )
+    if row is None:
+        return None
+    acquired_at = normalize_utc(row.acquired_at)
+    generation = f"{row.id}:{acquired_at.isoformat()}" if acquired_at is not None else str(row.id)
+    return LiveControlGrant(connection_id=int(row.id), run_id=str(row.run_id), lease_generation=generation)
 
 
-def live_session_closed_for_input(db: Session, session: LiveControlSession) -> bool:
-    if session.ended_at is not None:
-        return True
+def live_control_capability_available(
+    db: Session,
+    *,
+    session_id: UUID | str,
+    capability: str,
+) -> bool:
+    return get_live_control_grant(db, session_id=session_id, capability=capability) is not None
+
+
+def live_session_input_block_reason(db: Session, session: LiveControlSession) -> str | None:
+    if normalize_utc(session.closed_at) is not None:
+        return "session_closed"
     row = (
         db.query(LiveRuntimeState.terminal_state)
         .filter(LiveRuntimeState.session_id == session.id)
@@ -112,9 +159,18 @@ def live_session_closed_for_input(db: Session, session: LiveControlSession) -> b
         .first()
     )
     if row is None:
-        return False
+        return None
     terminal_state = str(row[0] or "").strip()
-    return terminal_state not in {"", "finished", "host_expired"}
+    if terminal_state == "user_closed":
+        return "session_closed"
+    if terminal_state in {"", "finished", "host_expired"}:
+        return None
+    return "run_ended"
+
+
+def live_session_closed_for_input(db: Session, session: LiveControlSession) -> bool:
+    """Compatibility predicate for whether the current run rejects new input."""
+    return live_session_input_block_reason(db, session) is not None
 
 
 async def wake_next_live_catalog_input(session_id: UUID | str) -> bool:

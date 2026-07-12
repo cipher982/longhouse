@@ -6,6 +6,8 @@ type SessionStateOptions = {
   access?: "live_control" | "reattach" | "observe_only" | "search_only" | null;
   pendingInteraction?: boolean;
   observedAt?: string | null;
+  tool?: string | null;
+  sendAvailable?: boolean;
 };
 
 export function makeSessionStateFacts(options: SessionStateOptions = {}): SessionStateFacts {
@@ -13,8 +15,11 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
   const access = options.access === undefined ? "search_only" : options.access;
   const available = { state: "available" as const };
   const unavailable = { state: "unavailable" as const, reason: "not_granted" };
+  const sendAvailable = options.sendAvailable ?? access === "live_control";
   const primary = options.closed
     ? { key: "closed", label: "Closed", tone: "closed", observed_at: options.observedAt }
+    : options.pendingInteraction
+      ? { key: "needs_answer", label: "Needs answer", tone: "blocked", observed_at: options.observedAt }
     : activity === "thinking"
       ? { key: "thinking", label: "Thinking", tone: "thinking", observed_at: options.observedAt }
       : activity === "executing"
@@ -40,12 +45,16 @@ export function makeSessionStateFacts(options: SessionStateOptions = {}): Sessio
       closed_at: options.closed ? (options.observedAt ?? "2026-03-21T12:00:00Z") : null,
     },
     run: options.closed ? { lifecycle: "ended" } : { lifecycle: "running" },
-    activity: { state: activity, observed_at: options.observedAt },
+    activity: {
+      state: activity,
+      observed_at: options.observedAt,
+      tool: options.tool ?? (activity === "executing" ? "Shell" : null),
+    },
     control: {
       ownership: access === "live_control" || access === "reattach" ? "owned" : "unowned",
       connection: access === "live_control" ? "connected" : access === "reattach" ? "disconnected" : "not_applicable",
       actions: {
-        send_input: access === "live_control" ? available : unavailable,
+        send_input: sendAvailable ? available : unavailable,
         interrupt: access === "live_control" ? available : unavailable,
         terminate: access === "live_control" ? available : unavailable,
         reattach: access === "reattach" ? available : unavailable,

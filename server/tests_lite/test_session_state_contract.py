@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -93,6 +94,7 @@ def _capabilities(
         can_tail_output=live or observe,
         can_resume=live or reattach,
         staleness_reason=None if live else "connection_released" if reattach else "imported_only",
+        lease_generation=f"7:{(NOW - timedelta(minutes=1)).isoformat()}" if live or reattach else None,
     )
 
 
@@ -290,6 +292,31 @@ def test_expired_control_demotes_actions_without_changing_activity():
     assert facts.presentation.primary.label == "Thinking"
     assert facts.presentation.access is not None
     assert facts.presentation.access.label == "Control unknown"
+
+
+def test_degraded_control_revokes_commands_without_changing_activity_or_ownership():
+    capabilities = replace(_capabilities(), connection_state="degraded")
+    facts = _facts(runtime=_runtime(phase="thinking"), capabilities=capabilities)
+
+    assert facts.mode == "helm"
+    assert facts.activity.state == "thinking"
+    assert facts.control.ownership == "owned"
+    assert facts.control.connection == "degraded"
+    assert facts.control.actions.send_input.state == "unavailable"
+    assert facts.control.actions.interrupt.state == "unavailable"
+    assert facts.control.actions.terminate.state == "unavailable"
+    assert facts.presentation.access is not None
+    assert facts.presentation.access.label == "Control degraded"
+
+
+def test_control_lease_generation_is_stable_current_evidence_not_activity():
+    first = _facts(runtime=_runtime(phase="thinking"))
+    second = _facts(runtime=_runtime(phase="idle"))
+
+    assert first.control.lease_generation == second.control.lease_generation
+    assert first.control.lease_generation == f"7:{(NOW - timedelta(minutes=1)).isoformat()}"
+    assert first.activity.state == "thinking"
+    assert second.activity.state == "quiescent"
 
 
 def test_unknown_provider_phase_is_preserved_but_not_coerced_to_idle():

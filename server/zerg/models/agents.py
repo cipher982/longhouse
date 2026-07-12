@@ -70,6 +70,8 @@ class AgentSession(AgentsBase):
     # Timing
     started_at = Column(DateTime(timezone=True), nullable=False, index=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)
+    closed_at = Column(DateTime(timezone=True), nullable=True)
+    close_reason = Column(String(32), nullable=True)
     last_activity_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     # Counts (denormalized for fast queries)
@@ -806,6 +808,12 @@ class SessionRuntimeState(AgentsBase):
     terminal_reason = Column(String(64), nullable=True)
     terminal_source = Column(String(64), nullable=True)
     terminal_at = Column(DateTime(timezone=True), nullable=True)
+    pending_interaction_id = Column(String(255), nullable=True)
+    pending_interaction_kind = Column(String(32), nullable=True)
+    pending_interaction_opened_at = Column(DateTime(timezone=True), nullable=True)
+    pending_interaction_updated_at = Column(DateTime(timezone=True), nullable=True)
+    pending_interaction_projection_json = Column(JSON(), nullable=True)
+    pending_interaction_can_respond = Column(Integer, nullable=False, server_default=text("0"))
     runtime_version = Column(Integer, nullable=False, server_default=text("0"))
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
 

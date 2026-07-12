@@ -2,6 +2,7 @@ import { render, waitFor, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAmbientSessionAttentionCue } from "../useAmbientSessionAttentionCue";
 import type { TimelineSessionCard } from "../../services/api/agents";
+import { makeSessionStateFacts } from "../../test/sessionState";
 
 function setDocumentHidden(hidden: boolean) {
   Object.defineProperty(document, "hidden", {
@@ -13,9 +14,7 @@ function setDocumentHidden(hidden: boolean) {
 function card(needsAttention: boolean): TimelineSessionCard {
   return {
     head: {
-      runtime_display: {
-        needs_attention: needsAttention,
-      },
+      session_state: makeSessionStateFacts({ pendingInteraction: needsAttention }),
     },
   } as TimelineSessionCard;
 }

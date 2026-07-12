@@ -2763,8 +2763,7 @@ final class SessionViewModel: ObservableObject {
             events.last(where: { $0.id == pending.latestEventId })
         } ?? latest
         guard let emittedAt = LonghouseDateParser.parse(eventForBeacon.timestamp) else { return }
-        let caps = detail?.capabilities
-        let managed = (caps?.liveControlAvailable == true) || (caps?.hostReattachAvailable == true)
+        let managed = detail?.stateFacts.controlOwnership == "owned"
         let realtimeTelemetry = pendingTelemetry?.latestEventId == eventForBeacon.id
             ? pendingTelemetry
             : nil
@@ -2788,26 +2787,24 @@ final class SessionViewModel: ObservableObject {
 
     var liveActivityFingerprint: String {
         guard let detail else { return "" }
-        let rd = detail.runtimeDisplay
+        let facts = detail.stateFacts
+        let pause = detail.activePauseRequest
         return [
             detail.id,
             detail.displayTitle,
-            rd.state ?? "",
-            rd.tone,
-            rd.headline,
-            rd.phaseLabel,
-            rd.compactToolLabel ?? "",
-            rd.lifecycle,
-            rd.controlPath,
-            rd.activityRecency,
-            rd.hostState,
-            String(rd.isLive),
-            String(rd.isExecuting),
-            String(rd.needsAttention),
-            String(rd.isStalled),
-            rd.pauseRequest?.id ?? "",
-            rd.pauseRequest?.status ?? "",
-            rd.pauseRequest?.title ?? "",
+            facts.dispositionState,
+            facts.runLifecycle ?? "",
+            facts.activityState,
+            facts.activityTool ?? "",
+            facts.activityObservedAt ?? "",
+            facts.controlOwnership,
+            facts.controlConnection,
+            facts.primary?.key ?? "",
+            facts.primary?.label ?? "",
+            facts.pendingInteractionKind ?? "",
+            pause?.id ?? "",
+            pause?.status ?? "",
+            pause?.title ?? "",
             detail.project ?? "",
             detail.provider,
         ].joined(separator: "|")

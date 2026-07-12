@@ -221,7 +221,7 @@ def _client(factory):
 
 
 @pytest.mark.parametrize("terminal_state", ["session_ended", "process_gone", "user_closed"])
-def test_terminal_signals_with_irreversible_states_close_session_and_timeline(tmp_path, terminal_state):
+def test_terminal_signals_separate_run_end_from_session_closure(tmp_path, terminal_state):
     factory = _make_db(tmp_path, f"terminal_closes_{terminal_state}.db")
     now = datetime.now(timezone.utc)
 
@@ -248,8 +248,14 @@ def test_terminal_signals_with_irreversible_states_close_session_and_timeline(tm
         db.commit()
         db.refresh(session)
 
-        assert session.ended_at is not None
-        assert session.ended_at.replace(tzinfo=timezone.utc) == now
+        if terminal_state == "user_closed":
+            assert session.ended_at is None
+            assert session.closed_at is not None
+            assert session.closed_at.replace(tzinfo=timezone.utc) == now
+            assert session.close_reason == "user_closed"
+        else:
+            assert session.ended_at is None
+            assert session.closed_at is None
     finally:
         db.close()
 
@@ -258,9 +264,10 @@ def test_terminal_signals_with_irreversible_states_close_session_and_timeline(tm
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == session_id
-        assert row["runtime_display"]["lifecycle"] == "closed"
-        assert row["timeline_card"]["status"]["label"] == "Closed"
-        assert row["timeline_card"]["status"]["tone"] == "closed"
+        expected_label = "Closed" if terminal_state == "user_closed" else "Ended"
+        assert row["session_state"]["disposition"]["state"] == ("closed" if terminal_state == "user_closed" else "open")
+        assert row["runtime_display"]["lifecycle"] == ("closed" if terminal_state == "user_closed" else "open")
+        assert row["timeline_card"]["status"]["label"] == expected_label
 
 
 @pytest.mark.parametrize("terminal_state", ["finished", "host_expired"])
@@ -300,10 +307,8 @@ def test_reversible_or_turn_terminal_signals_do_not_close_session(tmp_path, term
         assert resp.status_code == 200, resp.text
         row = resp.json()["sessions"][0]
         assert row["id"] == session_id
-        assert row["runtime_display"]["lifecycle"] == "unknown"
+        assert row["runtime_display"]["lifecycle"] == "open"
         assert row["timeline_card"]["status"]["label"] == "No live signal"
-        assert row["timeline_card"]["status"]["seen_at"] is not None
-        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Last signal"
 
 
 def test_run_terminal_signal_closes_run_connection_not_session(tmp_path):
@@ -594,7 +599,7 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
             "signal_tier": "phase_signal",
             "state": "running",
             "tone": "running",
-            "headline": "Active",
+            "headline": "Using Shell",
             "detail": None,
             "phase_label": "Using Shell",
             "compact_tool_label": "Shell",
@@ -1331,7 +1336,7 @@ def test_claude_channel_kernel_truth_marks_non_runner_session_online(tmp_path):
         assert data["capabilities"]["live_control_available"] is True
         assert data["capabilities"]["reply_to_live_session_available"] is True
         assert data["capabilities"]["can_queue_next_input"] is True
-        assert data["capabilities"]["display_label"] == "Live on this Mac"
+        assert data["capabilities"]["display_label"] == "Live control"
 
 
 def test_sessions_list_uses_fresh_managed_control_when_provider_phase_expires(tmp_path):
@@ -1364,12 +1369,12 @@ def test_sessions_list_uses_fresh_managed_control_when_provider_phase_expires(tm
         live = live_resp.json()["sessions"][0]
         assert live["capabilities"]["live_control_available"] is True
         assert live["runtime_display"]["state"] is None
-        assert live["runtime_display"]["phase_label"] == "Ready"
+        assert live["runtime_display"]["phase_label"] == "Activity unknown"
         assert live["timeline_card"]["status"] == {
-            "label": "Ready",
-            "tone": "idle",
+            "label": "Activity unknown",
+            "tone": "quiet",
             "seen_at": None,
-            "seen_at_prefix": "Checked",
+            "seen_at_prefix": "Updated",
         }
 
         db = factory()
@@ -1384,7 +1389,8 @@ def test_sessions_list_uses_fresh_managed_control_when_provider_phase_expires(tm
         assert stale_resp.status_code == 200, stale_resp.text
         stale = stale_resp.json()["sessions"][0]
         assert stale["capabilities"]["live_control_available"] is False
-        assert stale["timeline_card"]["status"]["label"] == "No live signal"
+        assert stale["timeline_card"]["status"]["label"] == "Activity unknown"
+        assert stale["session_state"]["presentation"]["access"]["label"] == "Control unknown"
 
 
 def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):
@@ -1626,7 +1632,7 @@ def test_sessions_list_keeps_progress_runtime_overlay_for_recent_closed_session(
         assert row["last_live_at"] is None
         assert row["confidence"] == "stale"
         assert row["timeline_card"]["status"]["label"] == "No live signal"
-        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Checked"
+        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Updated"
 
 
 def test_sessions_list_suppresses_stale_progress_running_phase(tmp_path):
@@ -1677,11 +1683,11 @@ def test_sessions_list_suppresses_stale_progress_running_phase(tmp_path):
         assert row["runtime_display"]["headline"] == "Inactive"
         assert row["runtime_display"]["phase_label"] == "Inactive"
         assert row["runtime_display"]["state"] is None
-        assert row["runtime_display"]["activity_recency"] == "stale"
+        assert row["runtime_display"]["activity_recency"] == "none"
         assert row["runtime_display"]["tone"] == "inactive"
 
 
-def test_sessions_list_uses_managed_ready_when_phase_signal_is_stale(tmp_path):
+def test_sessions_list_uses_activity_unknown_when_phase_signal_is_stale(tmp_path):
     factory = _make_db(tmp_path, "stale_phase_signal_timeline_status.db")
     now = datetime.now(timezone.utc)
 
@@ -1733,10 +1739,10 @@ def test_sessions_list_uses_managed_ready_when_phase_signal_is_stale(tmp_path):
         assert row["id"] == str(session.id)
         assert row["confidence"] == "stale"
         assert row["runtime_phase"] is None
-        assert row["timeline_card"]["status"]["label"] == "Ready"
-        assert row["timeline_card"]["status"]["tone"] == "idle"
+        assert row["timeline_card"]["status"]["label"] == "Activity unknown"
+        assert row["timeline_card"]["status"]["tone"] == "quiet"
         assert row["timeline_card"]["status"]["seen_at"] is None
-        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Checked"
+        assert row["timeline_card"]["status"]["seen_at_prefix"] == "Updated"
 
 
 def test_sessions_list_marks_materialized_needs_user_as_idle(tmp_path):
@@ -1938,7 +1944,7 @@ def test_sessions_list_keeps_stale_structured_question_visible(tmp_path):
         row = resp.json()["sessions"][0]
         assert row["runtime_phase"] is None
         assert row["presence_state"] is None
-        assert row["runtime_display"]["state"] is None
+        assert row["runtime_display"]["state"] == "needs_user"
         assert row["runtime_display"]["headline"] == "Needs answer"
         assert row["runtime_display"]["tone"] == "blocked"
         assert row["runtime_display"]["needs_attention"] is True
@@ -1946,7 +1952,7 @@ def test_sessions_list_keeps_stale_structured_question_visible(tmp_path):
         assert row["timeline_card"]["status"]["label"] == "Needs answer"
 
 
-def test_sessions_list_marks_recent_managed_idle_with_missing_assistant_as_syncing(tmp_path):
+def test_sessions_list_keeps_activity_idle_while_transcript_is_lagging(tmp_path):
     factory = _make_db(tmp_path, "materialized_runtime_syncing.db")
     now = datetime.now(timezone.utc)
 
@@ -1995,18 +2001,18 @@ def test_sessions_list_marks_recent_managed_idle_with_missing_assistant_as_synci
         row = resp.json()["sessions"][0]
         assert row["id"] == str(session.id)
         assert row["presence_state"] == "idle"
-        assert row["runtime_display"]["state"] == "syncing_transcript"
-        assert row["runtime_display"]["headline"] == "Working"
-        assert row["runtime_display"]["detail"] is None
-        assert row["runtime_display"]["phase_label"] == "Working"
-        assert row["runtime_display"]["tone"] == "active"
-        assert row["runtime_display"]["is_idle"] is False
-        assert row["timeline_card"]["status"]["label"] == "Working"
-        assert row["timeline_card"]["status"]["tone"] == "thinking"
+        assert row["runtime_display"]["state"] == "idle"
+        assert row["runtime_display"]["headline"] == "Idle"
+        assert row["runtime_display"]["phase_label"] == "Idle"
+        assert row["runtime_display"]["tone"] == "idle"
+        assert row["runtime_display"]["is_idle"] is True
+        assert row["session_state"]["transcript"]["convergence"] == "lagging"
+        assert row["timeline_card"]["status"]["label"] == "Idle"
+        assert row["timeline_card"]["status"]["tone"] == "idle"
         assert row["timeline_card"]["status"]["seen_at"] is not None
 
 
-def test_sessions_list_marks_managed_idle_after_pending_turn_materialization_as_syncing(tmp_path):
+def test_sessions_list_keeps_idle_after_pending_turn_materialization(tmp_path):
     factory = _make_db(tmp_path, "materialized_runtime_syncing_unanswered_user.db")
     now = datetime.now(timezone.utc)
 
@@ -2107,9 +2113,10 @@ def test_sessions_list_marks_managed_idle_after_pending_turn_materialization_as_
         assert row["assistant_messages"] == 113
         assert row["user_messages"] == 45
         assert row["presence_state"] == "idle"
-        assert row["runtime_display"]["state"] == "syncing_transcript"
-        assert row["runtime_display"]["phase_label"] == "Working"
-        assert row["runtime_display"]["is_idle"] is False
+        assert row["runtime_display"]["state"] == "idle"
+        assert row["runtime_display"]["phase_label"] == "Idle"
+        assert row["runtime_display"]["is_idle"] is True
+        assert row["session_state"]["transcript"]["convergence"] == "lagging"
 
 
 def test_sessions_list_does_not_infer_syncing_without_post_prompt_active_phase(tmp_path):
@@ -2319,7 +2326,7 @@ def test_active_sessions_recent_progress_fallback_is_non_executing(tmp_path):
         assert row["display_phase"] == "Inactive"
         assert row["runtime_phase"] is None
         assert row["confidence"] is None
-        assert row["runtime_display"]["truth_tier"] == "stale"
+        assert row["runtime_display"]["truth_tier"] == "none"
         assert row["runtime_display"]["headline"] == "Inactive"
         assert row["runtime_display"]["phase_label"] == "Inactive"
 
