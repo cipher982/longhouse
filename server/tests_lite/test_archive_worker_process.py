@@ -8,6 +8,7 @@ import sys
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from types import SimpleNamespace
 
 import pytest
 from cryptography.fernet import Fernet
@@ -371,6 +372,7 @@ async def test_supervisor_restarts_killed_worker_and_drains_next_row(tmp_path, m
         import zerg.database as database_module
         import zerg.routers.health as health_router
 
+        monkeypatch.setattr(health_router, "get_settings", lambda: SimpleNamespace(testing=True))
         monkeypatch.setattr(database_module, "get_live_engine", lambda: live_factory.kw["bind"])
         monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
         monkeypatch.setattr(health_router, "_write_serializer_stall_check", lambda: (False, {"status": "pass"}))

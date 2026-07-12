@@ -1,0 +1,153 @@
+"""Persistent, deadline-bounded client for the local catalogd socket."""
+
+from __future__ import annotations
+
+import asyncio
+import secrets
+import socket
+import struct
+import time
+from pathlib import Path
+from typing import Any
+
+from zerg.catalogd.protocol import HEADER_BYTES
+from zerg.catalogd.protocol import MAX_PAYLOAD_BYTES
+from zerg.catalogd.protocol import CatalogRpcRequest
+from zerg.catalogd.protocol import CatalogRpcResponse
+from zerg.catalogd.protocol import ProtocolError
+from zerg.catalogd.protocol import decode_frame
+from zerg.catalogd.protocol import encode_frame
+from zerg.catalogd.protocol import read_frame
+from zerg.catalogd.protocol import write_frame
+
+_SAFE_RETRY_METHODS = {"ping.v2", "schema.v2"}
+
+
+class CatalogUnavailable(RuntimeError):
+    pass
+
+
+class CatalogRemoteError(RuntimeError):
+    def __init__(self, response_error) -> None:
+        super().__init__(response_error.message)
+        self.code = response_error.code
+        self.retryable = response_error.retryable
+        self.retry_after_ms = response_error.retry_after_ms
+        self.details = response_error.details
+
+
+class CatalogClient:
+    def __init__(self, socket_path: Path, *, default_timeout_seconds: float = 0.25) -> None:
+        self.socket_path = socket_path
+        self.default_timeout_seconds = default_timeout_seconds
+        self._reader: asyncio.StreamReader | None = None
+        self._writer: asyncio.StreamWriter | None = None
+        self._lock = asyncio.Lock()
+
+    async def close(self) -> None:
+        async with self._lock:
+            await self._poison()
+
+    async def call(
+        self,
+        method: str,
+        params: dict[str, Any] | None = None,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        timeout = self.default_timeout_seconds if timeout_seconds is None else timeout_seconds
+        if timeout <= 0:
+            raise ValueError("timeout_seconds must be positive")
+        attempts = 2 if method in _SAFE_RETRY_METHODS else 1
+        deadline = asyncio.get_running_loop().time() + timeout
+        async with self._lock:
+            for attempt in range(attempts):
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise CatalogUnavailable(f"catalogd deadline exceeded for {method}")
+                try:
+                    return await self._call_once(method, params or {}, remaining)
+                except CatalogRemoteError:
+                    raise
+                except (OSError, EOFError, ProtocolError, asyncio.TimeoutError, asyncio.IncompleteReadError) as exc:
+                    await self._poison()
+                    if attempt + 1 == attempts:
+                        raise CatalogUnavailable(f"catalogd unavailable for {method}") from exc
+        raise AssertionError("unreachable")
+
+    async def _call_once(self, method: str, params: dict[str, Any], timeout_seconds: float) -> dict[str, Any]:
+        loop_deadline = asyncio.get_running_loop().time() + timeout_seconds
+        monotonic_deadline = time.monotonic_ns() + int(timeout_seconds * 1_000_000_000)
+        request = CatalogRpcRequest(
+            id=secrets.token_hex(16),
+            method=method,
+            deadline_mono_ns=str(monotonic_deadline),
+            params=params,
+        )
+        async with asyncio.timeout_at(loop_deadline):
+            if self._reader is None or self._writer is None:
+                self._reader, self._writer = await asyncio.open_unix_connection(self.socket_path)
+            await write_frame(self._writer, request)
+            response = await read_frame(self._reader)
+        if not isinstance(response, CatalogRpcResponse):
+            raise ProtocolError("invalid_request", "catalogd returned a request frame")
+        if response.id != request.id:
+            raise ProtocolError("invalid_request", "catalogd response id mismatch")
+        if response.error is not None:
+            raise CatalogRemoteError(response.error)
+        return response.result or {}
+
+    async def _poison(self) -> None:
+        writer = self._writer
+        self._reader = None
+        self._writer = None
+        if writer is None:
+            return
+        writer.close()
+        try:
+            await writer.wait_closed()
+        except OSError:
+            pass
+
+
+def call_catalogd_sync(
+    socket_path: Path,
+    method: str,
+    *,
+    timeout_seconds: float = 0.25,
+) -> dict[str, Any]:
+    """One-shot RPC for synchronous health/readiness handlers."""
+
+    request = CatalogRpcRequest(
+        id=secrets.token_hex(16),
+        method=method,
+        deadline_mono_ns=str(time.monotonic_ns() + int(timeout_seconds * 1_000_000_000)),
+        params={},
+    )
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(timeout_seconds)
+            connection.connect(str(socket_path))
+            connection.sendall(encode_frame(request))
+            header = _recv_exact(connection, HEADER_BYTES)
+            payload_length = struct.unpack(">I", header[4:])[0]
+            if payload_length > MAX_PAYLOAD_BYTES:
+                raise ProtocolError("invalid_request", "catalogd response exceeds frame limit")
+            response = decode_frame(header + _recv_exact(connection, payload_length))
+    except (EOFError, OSError, ProtocolError) as exc:
+        raise CatalogUnavailable(f"catalogd unavailable for {method}") from exc
+    if not isinstance(response, CatalogRpcResponse) or response.id != request.id:
+        raise CatalogUnavailable("catalogd returned a mismatched response")
+    if response.error is not None:
+        raise CatalogRemoteError(response.error)
+    return response.result or {}
+
+
+def _recv_exact(connection: socket.socket, length: int) -> bytes:
+    chunks = bytearray()
+    while len(chunks) < length:
+        chunk = connection.recv(length - len(chunks))
+        if not chunk:
+            raise EOFError("catalogd closed a partial response")
+        chunks.extend(chunk)
+    return bytes(chunks)

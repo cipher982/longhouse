@@ -277,6 +277,7 @@ def readyz_check():
 
     from zerg.database import default_engine
     from zerg.database import get_live_engine
+    from zerg.database import live_catalog_enabled
     from zerg.database import live_store_configured
 
     single_tenant_violation = getattr(_health_app_ref, "single_tenant_violation", None)
@@ -293,8 +294,31 @@ def readyz_check():
             content={"status": "unhealthy", "reason": "database engine not initialized"},
         )
 
+    catalogd_ready = False
+    if live_catalog_enabled() and not _settings.testing:
+        try:
+            from zerg.catalogd.client import call_catalogd_sync
+            from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
+            from zerg.catalogd.schema import CATALOG_SCHEMA_VERSION
+            from zerg.services.catalogd_supervisor import catalogd_paths
+
+            _database_path, catalog_socket = catalogd_paths()
+            ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=0.025)
+            catalogd_ready = (
+                ping.get("ready") is True
+                and ping.get("schema_version") == CATALOG_SCHEMA_VERSION
+                and ping.get("schema_generation") == CATALOG_SCHEMA_GENERATION
+            )
+        except Exception:
+            catalogd_ready = False
+        if not catalogd_ready:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unhealthy", "reason": "catalog_unavailable"},
+            )
+
     db_url = str(readiness_engine.url)
-    if db_url.startswith("sqlite"):
+    if not catalogd_ready and db_url.startswith("sqlite"):
         db_path = db_url.replace("sqlite:///", "").replace("sqlite://", "")
         if not db_path or db_path == ":memory:":
             return {"status": "ok"}
@@ -316,7 +340,7 @@ def readyz_check():
                 status_code=503,
                 content={"status": "unhealthy", "reason": "database unavailable"},
             )
-    else:
+    elif not catalogd_ready:
         try:
             with readiness_engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
@@ -475,6 +499,25 @@ def health_check(request: Request):
         checks["llm"] = {"status": "warn", "error": str(e)}
 
     # 2. Database connectivity
+    if catalog_mode and not _settings.testing:
+        try:
+            from zerg.catalogd.client import call_catalogd_sync
+            from zerg.services.catalogd_supervisor import catalogd_paths
+
+            _database_path, catalog_socket = catalogd_paths()
+            catalog_ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=0.05)
+            checks["catalogd"] = {
+                "status": "pass",
+                "ready": catalog_ping.get("ready") is True,
+                "schema_version": catalog_ping.get("schema_version"),
+                "commit_seq": catalog_ping.get("commit_seq"),
+            }
+        except Exception as exc:
+            checks["catalogd"] = {"status": "fail", "error": type(exc).__name__}
+            health_status["status"] = "unhealthy"
+            health_status["message"] = "Catalog service is unavailable"
+            critical_failure = True
+
     try:
         from zerg.database import default_engine
         from zerg.database import get_live_engine

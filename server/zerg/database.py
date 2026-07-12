@@ -201,6 +201,7 @@ try:
     from zerg.models.apns_device_registration import APNSDeviceRegistration  # noqa: F401
     from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration  # noqa: F401
     from zerg.models.apns_widget_push_state import APNSWidgetPushState  # noqa: F401
+    from zerg.models.device_token import DeviceToken  # noqa: F401
     from zerg.models.machine_presence import MachinePresence  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
@@ -209,8 +210,10 @@ try:
     from zerg.models.models import UserTask  # noqa: F401
     from zerg.models.notification_client_presence import NotificationClientPresence  # noqa: F401
     from zerg.models.notification_event import NotificationEvent  # noqa: F401
+    from zerg.models.refresh_session import RefreshSession  # noqa: F401
     from zerg.models.session_share import SessionShare  # noqa: F401
     from zerg.models.session_share import SessionShareEvent  # noqa: F401
+    from zerg.models.user import User as SplitUser  # noqa: F401
 except ImportError:
     # Handle case where models module might not be available during certain imports
     pass
@@ -882,6 +885,7 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.apns_device_registration import APNSDeviceRegistration  # noqa: F401
     from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration  # noqa: F401
     from zerg.models.apns_widget_push_state import APNSWidgetPushState  # noqa: F401
+    from zerg.models.device_token import DeviceToken  # noqa: F401
     from zerg.models.machine_presence import MachinePresence  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
@@ -889,8 +893,10 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.models import UserTask  # noqa: F401
     from zerg.models.notification_client_presence import NotificationClientPresence  # noqa: F401
     from zerg.models.notification_event import NotificationEvent  # noqa: F401
+    from zerg.models.refresh_session import RefreshSession  # noqa: F401
     from zerg.models.session_share import SessionShare  # noqa: F401
     from zerg.models.session_share import SessionShareEvent  # noqa: F401
+    from zerg.models.user import User as SplitUser  # noqa: F401
 
     target_engine = engine or default_engine or _ensure_default_engines_from_env()
 

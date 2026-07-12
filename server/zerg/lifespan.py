@@ -140,7 +140,13 @@ async def lifespan(app: FastAPI):
                 initialize_database()
         else:
             logger.info("Live catalog mode: cold database initialization is owned by archive worker")
-        if live_store_configured():
+        if catalog_mode and not _settings.testing:
+            with _timed_startup_step("catalogd_supervisor"):
+                from zerg.services.catalogd_supervisor import start_catalogd_supervisor
+
+                app.state.catalogd_ping = await start_catalogd_supervisor()
+            logger.info("Live catalog schema is owned by catalogd")
+        elif live_store_configured():
             with _timed_startup_step("initialize_live_database"):
                 initialize_live_database()
 
@@ -452,6 +458,13 @@ async def lifespan(app: FastAPI):
         logger.info("Application startup complete elapsed_ms=%.1f", elapsed_ms)
     except Exception as e:
         logger.error(f"Error during startup: {e}")
+        if catalog_mode and not _settings.testing:
+            try:
+                from zerg.services.catalogd_supervisor import stop_catalogd_supervisor
+
+                await stop_catalogd_supervisor()
+            except Exception:
+                logger.exception("Failed to stop catalogd after startup failure")
         raise
 
     yield  # Application is running
@@ -512,6 +525,14 @@ async def lifespan(app: FastAPI):
         from zerg.websocket.manager import topic_manager
 
         await topic_manager.shutdown()
+
+        if catalog_mode and not _settings.testing:
+            try:
+                from zerg.services.catalogd_supervisor import stop_catalogd_supervisor
+
+                await stop_catalogd_supervisor()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop catalogd supervisor")
 
         shutdown_observability()
         logger.info("Background services stopped")

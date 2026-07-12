@@ -280,6 +280,86 @@ def test_readyz_stays_hot_ready_when_archive_worker_is_degraded(tmp_path, monkey
     assert response["archive_worker"]["reason"] == "status_stale"
 
 
+def test_readyz_requires_catalogd_in_live_catalog_production(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    engine = make_engine(f"sqlite:///{tmp_path}/readyz_catalogd.db")
+    import zerg.database as database_module
+
+    monkeypatch.setattr(health_router, "get_settings", lambda: SimpleNamespace(testing=False))
+    monkeypatch.setattr(database_module, "get_live_engine", lambda: engine)
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(
+        "zerg.catalogd.client.call_catalogd_sync",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionError("down")),
+    )
+    monkeypatch.setattr(
+        "zerg.services.catalogd_supervisor.catalogd_paths",
+        lambda: (tmp_path / "live.db", tmp_path / "catalogd.sock"),
+    )
+
+    response = health_router.readyz_check()
+
+    assert response.status_code == 503
+    assert b"catalog_unavailable" in response.body
+
+
+def test_readyz_catalog_probe_has_hard_25ms_budget(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    engine = make_engine(f"sqlite:///{tmp_path}/readyz_catalogd_budget.db")
+    import zerg.database as database_module
+
+    observed = {}
+
+    def unavailable(*_args, **kwargs):
+        observed.update(kwargs)
+        raise ConnectionError("down")
+
+    monkeypatch.setattr(health_router, "get_settings", lambda: SimpleNamespace(testing=False))
+    monkeypatch.setattr(database_module, "get_live_engine", lambda: engine)
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr("zerg.catalogd.client.call_catalogd_sync", unavailable)
+    monkeypatch.setattr(
+        "zerg.services.catalogd_supervisor.catalogd_paths",
+        lambda: (tmp_path / "live.db", tmp_path / "catalogd.sock"),
+    )
+
+    response = health_router.readyz_check()
+
+    assert response.status_code == 503
+    assert observed["timeout_seconds"] == 0.025
+
+
+def test_readyz_does_not_require_catalogd_for_archive_route_process(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    engine = make_engine(f"sqlite:///{tmp_path}/archive_route_readyz.db")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE VIRTUAL TABLE events_fts USING fts5(content_text)"))
+    import zerg.database as database_module
+
+    monkeypatch.setattr(health_router, "get_settings", lambda: SimpleNamespace(testing=False))
+    monkeypatch.setattr(database_module, "default_engine", engine)
+    monkeypatch.setattr(database_module, "get_live_engine", lambda: engine)
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: False)
+    monkeypatch.setattr(
+        "zerg.catalogd.client.call_catalogd_sync",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("archive route must not probe catalogd")),
+    )
+    monkeypatch.setattr(health_router, "_write_serializer_stall_check", lambda: (False, {}))
+    monkeypatch.setattr(health_router, "_live_write_serializer_check", lambda: (False, {}))
+    monkeypatch.setattr(health_router, "_archive_worker_check", lambda: {"enabled": False})
+    monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
+
+    response = health_router.readyz_check()
+
+    assert response == {"status": "ok"}
+
+
 def test_health_reports_archive_wal_pressure_as_degraded(tmp_path, monkeypatch):
     _stub_build_identity(monkeypatch)
     engine = make_engine(f"sqlite:///{tmp_path}/health_archive_wal_pressure.db")

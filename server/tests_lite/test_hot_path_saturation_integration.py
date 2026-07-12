@@ -21,12 +21,11 @@ os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", Fernet.generate_key().decode())
 
-from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
-
 import zerg.services.managed_control_dispatcher as managed_control_dispatcher_module
 import zerg.services.remote_session_launch as remote_session_launch_module
 import zerg.services.session_chat_impl as session_chat_impl_module
 import zerg.services.session_turns as session_turns_module
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import Base
 from zerg.database import get_pool_status
 from zerg.database import initialize_live_database
@@ -328,6 +327,7 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
         assert health["checks"]["live_write_serializer"]["status"] == "pass"
         assert health["checks"]["db_pool"]["checked_out"] == 0
 
+        monkeypatch.setattr(health_router, "get_settings", lambda: SimpleNamespace(testing=True))
         readyz = await asyncio.wait_for(asyncio.to_thread(health_router.readyz_check), timeout=1.0)
         assert readyz["status"] == "ready_with_archive_degraded"
         assert readyz["reason"] == "archive_write_serializer_stalled"
