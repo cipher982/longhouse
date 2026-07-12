@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import event as sqlalchemy_event
 
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.server import CatalogDaemon
@@ -17,6 +18,11 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
+from zerg.models.agents import ArchiveChunk
+from zerg.services.archive_primary import insert_archive_chunk_manifests
+from zerg.services.archive_store import ArchiveRecord
+from zerg.services.archive_store import FilesystemArchiveStore
+from zerg.services.legacy_corpus_migration import STREAMING_EVENT_PAGE
 from zerg.services.legacy_corpus_migration import LegacyCorpusConverter
 from zerg.services.legacy_corpus_migration import _normalized_event_source
 from zerg.services.legacy_corpus_migration import _source_batches
@@ -89,10 +95,7 @@ def _event(session_id, *, raw_json: str | None, source_path: str | None, source_
 
 def test_source_batches_bound_dense_render_payloads():
     session_id = uuid4()
-    records = [
-        _SourceRecord(b"{}", "dense.jsonl", offset, 0, "legacy_source_lines")
-        for offset in range(3)
-    ]
+    records = [_SourceRecord(b"{}", "dense.jsonl", offset, 0, "legacy_source_lines") for offset in range(3)]
     groups = {}
     for offset in range(3):
         event = _event(session_id, raw_json="{}", source_path="dense.jsonl", source_offset=offset)
@@ -103,6 +106,138 @@ def test_source_batches_bound_dense_render_payloads():
 
     assert [len(batch.records) for batch in batches] == [1, 1, 1]
     assert [batch.range_start for batch in batches] == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_all_slim_high_row_session_streams_archive_and_events_in_bounded_batches(
+    legacy_db,
+    tmp_path: Path,
+    monkeypatch,
+):
+    row_count = 12_000
+    session = _session(provider="claude")
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    with legacy_db() as db:
+        db.add(session)
+        db.commit()
+
+        def archive_records():
+            for index in range(row_count):
+                raw = f'{{"index":{index},"message":"archived"}}'.encode()
+                yield ArchiveRecord(
+                    tenant_id="tenant-a",
+                    session_id=str(session.id),
+                    stream="source_lines",
+                    source_seq=index,
+                    raw_bytes=raw,
+                    provider="claude",
+                    source_path="giant.jsonl",
+                    source_offset=index * 64,
+                )
+
+        chunks = archive_store.write_record_chunks(archive_records(), target_uncompressed_bytes=128 * 1024)
+        insert_archive_chunk_manifests(db, chunks)
+        for start in range(0, row_count, 1_000):
+            stop = min(row_count, start + 1_000)
+            db.execute(
+                AgentSourceLine.__table__.insert(),
+                [
+                    {
+                        "session_id": session.id,
+                        "source_path": "giant.jsonl",
+                        "source_offset": index * 64,
+                        "branch_id": 0,
+                        "revision": 1,
+                        "is_branch_copy": 0,
+                        "raw_json": "",
+                        "raw_json_z": None,
+                        "raw_json_codec": 0,
+                        "line_hash": hashlib.sha256(f'{{"index":{index},"message":"archived"}}'.encode()).hexdigest(),
+                    }
+                    for index in range(start, stop)
+                ],
+            )
+            db.execute(
+                AgentEvent.__table__.insert(),
+                [
+                    {
+                        "session_id": session.id,
+                        "role": "user" if index % 2 == 0 else "assistant",
+                        "content_text": f"streamed event {index}",
+                        "timestamp": datetime(2026, 7, 12, 0, 0, index % 60, tzinfo=UTC),
+                        "source_path": "giant.jsonl",
+                        "source_offset": index * 64,
+                        "event_hash": hashlib.sha256(f"event:{index}".encode()).hexdigest(),
+                        "raw_json": None,
+                        "raw_json_codec": 0,
+                    }
+                    for index in range(start, stop)
+                ],
+            )
+            db.commit()
+        watermark = freeze_high_watermark(db)
+
+    def forbidden_materializing_path(*_args, **_kwargs):
+        raise AssertionError("giant all-slim conversion must not materialize legacy source/event rows")
+
+    monkeypatch.setattr(LegacyCorpusConverter, "_load_sources", forbidden_materializing_path)
+    loaded_event_high_watermark = 0
+
+    def track_event_identity_map(_target, context):
+        nonlocal loaded_event_high_watermark
+        loaded = sum(isinstance(value, AgentEvent) for value in context.session.identity_map.values())
+        loaded_event_high_watermark = max(loaded_event_high_watermark, loaded)
+
+    sqlalchemy_event.listen(AgentEvent, "load", track_event_identity_map)
+    catalog = FakeCatalog()
+    converter = LegacyCorpusConverter(
+        session_factory=legacy_db,
+        catalog=catalog,
+        object_root=tmp_path / "objects-v2",
+        tenant_id="tenant-a",
+        archive_store=archive_store,
+    )
+    try:
+        with legacy_db() as db:
+            result = await converter.convert_session(db, session.id, watermark)
+    finally:
+        sqlalchemy_event.remove(AgentEvent, "load", track_event_identity_map)
+
+    commits = [payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2"]
+    source_commits = [payload for payload in commits if payload["provenance_kind"] == "legacy_source_lines"]
+    event_commits = [payload for payload in commits if payload["provenance_kind"] == "legacy_normalized_event"]
+    assert len(source_commits) > 10
+    assert len(event_commits) >= row_count // 500
+    assert max(len(payload["record_hashes"]) for payload in commits) <= 1_000
+    assert result.source_covered == row_count
+    assert result.source_missing == 0
+    assert result.parity_matches is True
+    assert result.degradation_code is None
+    assert result.envelope_ids == ()
+    assert loaded_event_high_watermark <= STREAMING_EVENT_PAGE
+    with legacy_db() as db:
+        assert db.query(ArchiveChunk).count() == len(chunks)
+
+    retry_catalog = FakeCatalog(source_epoch_found=True)
+    retry_converter = LegacyCorpusConverter(
+        session_factory=legacy_db,
+        catalog=retry_catalog,
+        object_root=tmp_path / "objects-v2",
+        tenant_id="tenant-a",
+        archive_store=archive_store,
+    )
+    with legacy_db() as db:
+        retry = await retry_converter.convert_session(
+            db,
+            session.id,
+            watermark,
+            replace_existing_epochs=True,
+        )
+    retry_commits = [payload for method, payload in retry_catalog.calls if method == "storage.raw_object.commit.v2"]
+    assert retry.source_covered == row_count
+    assert retry.parity_matches is True
+    assert retry_commits
+    assert all(payload["predecessor_source_epoch"] is not None for payload in retry_commits)
 
 
 @pytest.mark.asyncio

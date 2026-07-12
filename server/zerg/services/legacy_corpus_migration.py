@@ -18,17 +18,22 @@ from uuid import UUID
 from uuid import uuid4
 from uuid import uuid5
 
+from sqlalchemy import and_
+from sqlalchemy import or_
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
+from zerg.data_plane import create_archive_store
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
+from zerg.models.agents import ArchiveChunk
 from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionMediaRef
 from zerg.services.archive_store import FilesystemArchiveStore
+from zerg.services.archive_transcript import archive_owning_session_ids
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.media_store import absolute_media_path
 from zerg.services.raw_json_compression import decode_raw_json
@@ -48,6 +53,9 @@ PARSER_REVISION = "legacy-normalized-v1"
 ORDERING_REVISION = "semantic-order-v2"
 MIGRATION_LAYOUT_REVISION = "bounded-v2"
 INVENTORY_BATCH = 500
+STREAMING_SOURCE_THRESHOLD = 10_000
+STREAMING_EVENT_PAGE = 500
+STREAMING_MATCH_PAGE = 250
 
 
 class CatalogCaller(Protocol):
@@ -131,6 +139,43 @@ class _SourceBatch:
     provenance_kind: str
     range_start: int
     records: tuple[_SourceRecord, ...]
+
+
+class _IncrementalProof:
+    """Length-delimited deterministic proof without retaining proof inputs."""
+
+    def __init__(self, *domain: str) -> None:
+        self._digest = hashlib.sha256()
+        for value in domain:
+            self.update(value)
+
+    def update(self, value: object) -> None:
+        if isinstance(value, tuple):
+            encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        else:
+            encoded = str(value).encode("utf-8")
+        self._digest.update(len(encoded).to_bytes(8, "big"))
+        self._digest.update(encoded)
+
+    def hexdigest(self) -> str:
+        return self._digest.hexdigest()
+
+
+class _EventParityProof:
+    """Order-independent bounded multiset proof for normalized event tuples."""
+
+    def __init__(self, session_id: UUID) -> None:
+        self._session_id = str(session_id)
+        self._count = 0
+        self._sum = 0
+
+    def update(self, value: tuple[object, ...]) -> None:
+        encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self._sum = (self._sum + int.from_bytes(hashlib.sha256(encoded).digest(), "big")) % (1 << 256)
+        self._count += 1
+
+    def hexdigest(self) -> str:
+        return _proof("events", self._session_id, str(self._count), f"{self._sum:064x}")
 
 
 def freeze_high_watermark(db: Session) -> LegacyHighWatermark:
@@ -310,6 +355,13 @@ class LegacyCorpusConverter:
         replace_existing_epochs: bool = False,
     ) -> MigrationResult:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        if self._should_stream_archived_session(db, session_id, watermark):
+            return await self._convert_streaming_archived(
+                db,
+                session,
+                watermark,
+                replace_existing_epochs=replace_existing_epochs,
+            )
         events = (
             db.query(AgentEvent)
             .filter(AgentEvent.session_id == session_id, AgentEvent.id <= watermark.event_id)
@@ -321,9 +373,9 @@ class LegacyCorpusConverter:
         source_keys = {(record.source_path, record.source_offset) for record in sources}
         synthetic_path = f"legacy-unmatched-events:{session_id}"
         for event in events:
-            event_key = (
-                (event.source_path, int(event.source_offset)) if event.source_path is not None and event.source_offset is not None else None
-            )
+            event_key = None
+            if event.source_path is not None and event.source_offset is not None:
+                event_key = (event.source_path, int(event.source_offset))
             if event_key is not None and event_key in source_keys:
                 continue
             normalized = _normalized_event_source((event,))
@@ -487,6 +539,449 @@ class LegacyCorpusConverter:
             envelope_ids=tuple(envelope_ids),
             media_hashes=tuple(sorted(media_hashes)),
         )
+
+    def _should_stream_archived_session(
+        self,
+        db: Session,
+        session_id: UUID,
+        watermark: LegacyHighWatermark,
+    ) -> bool:
+        counts = db.execute(
+            text(
+                "SELECT COUNT(*), "
+                "SUM(CASE WHEN raw_json_z IS NOT NULL OR COALESCE(raw_json, '') <> '' THEN 1 ELSE 0 END) "
+                "FROM source_lines WHERE session_id = :session_id AND id <= :high"
+            ),
+            {"session_id": str(session_id), "high": watermark.source_line_id},
+        ).one()
+        source_count = int(counts[0] or 0)
+        rows_with_inline_raw = int(counts[1] or 0)
+        return source_count >= STREAMING_SOURCE_THRESHOLD and rows_with_inline_raw == 0
+
+    async def _convert_streaming_archived(
+        self,
+        db: Session,
+        session: AgentSession,
+        watermark: LegacyHighWatermark,
+        *,
+        replace_existing_epochs: bool,
+    ) -> MigrationResult:
+        """Convert an all-slim giant session one archive/event page at a time."""
+
+        session_id = UUID(str(session.id))
+        owner_id = await self._active_owner_id()
+        generation = _stable_uuid("render", str(session_id), watermark.encode())
+        head_branch_id = _head_branch_id(db, session_id)
+        output_proof = _IncrementalProof("output", str(session_id))
+        expected_events = _EventParityProof(session_id)
+        rendered_events = _EventParityProof(session_id)
+        render_failures: list[str] = []
+
+        source_covered = await self._stream_archived_source_lines(
+            db,
+            session,
+            watermark,
+            generation=generation,
+            owner_id=owner_id,
+            output_proof=output_proof,
+            replace_existing_epochs=replace_existing_epochs,
+        )
+        source_expected = int(
+            db.execute(
+                text("SELECT COUNT(*) FROM source_lines WHERE session_id = :session_id AND id <= :high"),
+                {"session_id": str(session_id), "high": watermark.source_line_id},
+            ).scalar_one()
+        )
+        source_missing = max(0, source_expected - source_covered)
+        await self._stream_normalized_events(
+            db,
+            session,
+            watermark,
+            generation=generation,
+            owner_id=owner_id,
+            head_branch_id=head_branch_id,
+            output_proof=output_proof,
+            expected_events=expected_events,
+            rendered_events=rendered_events,
+            render_failures=render_failures,
+            replace_existing_epochs=replace_existing_epochs,
+        )
+
+        media_covered, media_missing, media_hashes = await self._migrate_media(db, session_id, watermark)
+        for media_hash in sorted(media_hashes):
+            output_proof.update(media_hash)
+        expected_event_hash = expected_events.hexdigest()
+        rendered_event_hash = rendered_events.hexdigest()
+        parity_matches = expected_event_hash == rendered_event_hash
+        parity_proof = _proof("parity", str(session_id), expected_event_hash, rendered_event_hash)
+        return MigrationResult(
+            session_id=session_id,
+            source_covered=source_covered,
+            source_missing=source_missing,
+            media_covered=media_covered,
+            media_missing=media_missing,
+            output_proof_hash=output_proof.hexdigest(),
+            parity_proof_hash=parity_proof,
+            parity_matches=parity_matches,
+            degradation_code="render_projection_failed" if render_failures else None,
+            degradation_message="; ".join(sorted(set(render_failures)))[:2048] if render_failures else None,
+            envelope_ids=(),
+            media_hashes=tuple(sorted(media_hashes)),
+        )
+
+    async def _stream_archived_source_lines(
+        self,
+        db: Session,
+        session: AgentSession,
+        watermark: LegacyHighWatermark,
+        *,
+        generation: UUID,
+        owner_id: str,
+        output_proof: _IncrementalProof,
+        replace_existing_epochs: bool,
+    ) -> int:
+        session_id = UUID(str(session.id))
+        archive_store = self.archive_store or create_archive_store()
+        connection = db.connection()
+        connection.exec_driver_sql("PRAGMA temp_store=FILE")
+        connection.exec_driver_sql(
+            "CREATE TEMP TABLE IF NOT EXISTS migration_source_counts ("
+            "source_path TEXT NOT NULL, source_offset INTEGER NOT NULL, line_hash TEXT NOT NULL, "
+            "row_count INTEGER NOT NULL, consumed INTEGER NOT NULL DEFAULT 0, "
+            "PRIMARY KEY(source_path, source_offset, line_hash)) WITHOUT ROWID"
+        )
+        connection.exec_driver_sql("DELETE FROM migration_source_counts")
+        connection.execute(
+            text(
+                "INSERT INTO migration_source_counts(source_path, source_offset, line_hash, row_count) "
+                "SELECT source_path, source_offset, line_hash, COUNT(*) FROM source_lines "
+                "WHERE session_id = :session_id AND id <= :high GROUP BY source_path, source_offset, line_hash"
+            ),
+            {"session_id": str(session_id), "high": watermark.source_line_id},
+        )
+        connection.exec_driver_sql(
+            "CREATE TEMP TABLE IF NOT EXISTS migration_archive_page ("
+            "source_path TEXT NOT NULL, source_offset INTEGER NOT NULL, line_hash TEXT NOT NULL, "
+            "PRIMARY KEY(source_path, source_offset, line_hash)) WITHOUT ROWID"
+        )
+        owner_ids = [UUID(value) for value in archive_owning_session_ids(db, session_id)]
+        manifests = (
+            db.query(ArchiveChunk.relative_path)
+            .filter(
+                ArchiveChunk.session_id.in_(owner_ids),
+                ArchiveChunk.stream == "source_lines",
+                ArchiveChunk.state == "sealed",
+            )
+            .order_by(ArchiveChunk.first_source_seq.asc(), ArchiveChunk.id.asc())
+            .yield_per(4)
+        )
+        covered = 0
+        source_plans: dict[str, tuple[UUID, UUID | None, int]] = {}
+        for (relative_path,) in manifests:
+            records = archive_store.read_chunk(relative_path)
+            archive_by_key: dict[tuple[str, int, str], object] = {}
+            for record in records:
+                if record.source_path is None or record.source_offset is None:
+                    continue
+                raw_hash = hashlib.sha256(record.raw_bytes).hexdigest()
+                archive_by_key.setdefault((record.source_path, int(record.source_offset), raw_hash), record)
+            keys = list(archive_by_key)
+            connection.exec_driver_sql("DELETE FROM migration_archive_page")
+            for start in range(0, len(keys), STREAMING_MATCH_PAGE):
+                page = keys[start : start + STREAMING_MATCH_PAGE]
+                connection.exec_driver_sql(
+                    "INSERT OR IGNORE INTO migration_archive_page VALUES (?, ?, ?)",
+                    page,
+                )
+            matched = connection.execute(
+                text(
+                    "SELECT c.source_path, c.source_offset, c.line_hash, c.row_count "
+                    "FROM migration_archive_page p JOIN migration_source_counts c "
+                    "USING(source_path, source_offset, line_hash) WHERE c.consumed = 0 "
+                    "ORDER BY c.source_path, c.source_offset, c.line_hash"
+                ),
+            ).all()
+            connection.exec_driver_sql(
+                "UPDATE migration_source_counts SET consumed = 1 WHERE consumed = 0 AND EXISTS ("
+                "SELECT 1 FROM migration_archive_page p WHERE p.source_path = migration_source_counts.source_path "
+                "AND p.source_offset = migration_source_counts.source_offset "
+                "AND p.line_hash = migration_source_counts.line_hash)"
+            )
+            matched_records: list[_SourceRecord] = []
+            for path, offset, line_hash, row_count in matched:
+                record = archive_by_key[(str(path), int(offset), str(line_hash))]
+                covered += int(row_count)
+                matched_records.append(
+                    _SourceRecord(
+                        data=record.raw_bytes,
+                        source_path=str(path),
+                        source_offset=int(offset),
+                        branch_id=0,
+                        provenance_kind="legacy_source_lines",
+                    )
+                )
+            groups: dict[str, list[_SourceRecord]] = defaultdict(list)
+            for record in matched_records:
+                groups[record.source_path].append(record)
+            for source_path, source_records in sorted(groups.items()):
+                batches = _source_batches(
+                    source_records,
+                    {},
+                )
+                plan = source_plans.get(source_path)
+                if plan is None:
+                    epoch, predecessor = await self._stream_epoch_plan(
+                        session_id,
+                        source_path,
+                        "legacy_source_lines",
+                        watermark,
+                        replace_existing_epochs=replace_existing_epochs,
+                    )
+                    plan = (epoch, predecessor, 0)
+                epoch, predecessor, next_ordinal = plan
+                for batch in batches:
+                    adjusted = _SourceBatch(
+                        source_path=source_path,
+                        provenance_kind=batch.provenance_kind,
+                        range_start=next_ordinal,
+                        records=batch.records,
+                    )
+                    next_ordinal += len(batch.records)
+                    await self._commit_stream_batch(
+                        session,
+                        adjusted,
+                        generation=generation,
+                        source_epoch=epoch,
+                        predecessor_source_epoch=predecessor,
+                        owner_id=owner_id,
+                        render_records=(),
+                        output_proof=output_proof,
+                    )
+                source_plans[source_path] = (epoch, predecessor, next_ordinal)
+            del records, archive_by_key, keys, matched, matched_records, groups
+        connection.exec_driver_sql("DROP TABLE migration_archive_page")
+        connection.exec_driver_sql("DROP TABLE migration_source_counts")
+        return covered
+
+    async def _stream_normalized_events(
+        self,
+        db: Session,
+        session: AgentSession,
+        watermark: LegacyHighWatermark,
+        *,
+        generation: UUID,
+        owner_id: str,
+        head_branch_id: int | None,
+        output_proof: _IncrementalProof,
+        expected_events: _EventParityProof,
+        rendered_events: _EventParityProof,
+        render_failures: list[str],
+        replace_existing_epochs: bool,
+    ) -> None:
+        session_id = UUID(str(session.id))
+        source_path = f"legacy-stream-events:{session_id}"
+        epoch_plans: dict[str, tuple[UUID, UUID | None, int]] = {}
+        last_timestamp: datetime | None = None
+        last_id = 0
+        while True:
+            query = db.query(AgentEvent).filter(
+                AgentEvent.session_id == session_id,
+                AgentEvent.id <= watermark.event_id,
+            )
+            if last_timestamp is not None:
+                query = query.filter(
+                    or_(
+                        AgentEvent.timestamp > last_timestamp,
+                        and_(AgentEvent.timestamp == last_timestamp, AgentEvent.id > last_id),
+                    )
+                )
+            events = query.order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc()).limit(STREAMING_EVENT_PAGE).all()
+            if not events:
+                break
+            source_records: list[_SourceRecord] = []
+            event_groups: dict[tuple[str, int], list[AgentEvent]] = {}
+            for event in events:
+                expected_events.update(_event_tuple(event, session_id, head_branch_id=head_branch_id))
+                normalized = _normalized_event_source((event,))
+                if normalized is None:
+                    render_failures.append(f"legacy event {event.id} cannot be normalized")
+                    continue
+                encoded = normalized.encode("utf-8")
+                event_path = source_path
+                for chunk_index, start in enumerate(range(0, len(encoded), MAX_RECORD_BYTES)):
+                    chunk_path = event_path if len(encoded) <= MAX_RECORD_BYTES else f"{event_path}:event={event.id}"
+                    source_records.append(
+                        _SourceRecord(
+                            data=encoded[start : start + MAX_RECORD_BYTES],
+                            source_path=chunk_path,
+                            source_offset=int(event.id) if chunk_index == 0 else chunk_index,
+                            branch_id=int(event.branch_id or 0),
+                            provenance_kind="legacy_normalized_event",
+                            event=event if chunk_index == 0 else None,
+                        )
+                    )
+                    if chunk_index == 0:
+                        event_groups[(chunk_path, int(event.id))] = [event]
+            for batch in _source_batches(source_records, event_groups):
+                plan = epoch_plans.get(batch.source_path)
+                if plan is None:
+                    legacy_fallback_path = f"legacy-unmatched-events:{session_id}"
+                    event_suffix = batch.source_path.removeprefix(f"{source_path}:event=")
+                    if event_suffix != batch.source_path:
+                        legacy_fallback_path = f"{legacy_fallback_path}:{event_suffix}"
+                    epoch, predecessor = await self._stream_epoch_plan(
+                        session_id,
+                        batch.source_path,
+                        "legacy_normalized_event",
+                        watermark,
+                        replace_existing_epochs=replace_existing_epochs,
+                        fallback_predecessor_path=legacy_fallback_path,
+                    )
+                    plan = (epoch, predecessor, 0)
+                epoch, predecessor, range_start = plan
+                adjusted = _SourceBatch(
+                    source_path=batch.source_path,
+                    provenance_kind=batch.provenance_kind,
+                    range_start=range_start,
+                    records=batch.records,
+                )
+                epoch_plans[batch.source_path] = (epoch, predecessor, range_start + len(batch.records))
+                render_records = tuple(
+                    _render_record(
+                        event,
+                        adjusted.range_start + index,
+                        index,
+                        session_id,
+                        head_branch_id=head_branch_id,
+                    )
+                    for index, record in enumerate(adjusted.records)
+                    for event in event_groups.get((record.source_path, record.source_offset), ())
+                )
+                sealed_render = await self._commit_stream_batch(
+                    session,
+                    adjusted,
+                    generation=generation,
+                    source_epoch=epoch,
+                    predecessor_source_epoch=predecessor,
+                    owner_id=owner_id,
+                    render_records=render_records,
+                    output_proof=output_proof,
+                    render_failures=render_failures,
+                )
+                if sealed_render:
+                    for record in sorted(render_records, key=_render_order_key):
+                        rendered_events.update(_render_tuple(record))
+            last_timestamp = events[-1].timestamp
+            last_id = int(events[-1].id)
+            for event in events:
+                db.expunge(event)
+
+    async def _stream_epoch_plan(
+        self,
+        session_id: UUID,
+        source_path: str,
+        provenance_kind: str,
+        watermark: LegacyHighWatermark,
+        *,
+        replace_existing_epochs: bool,
+        fallback_predecessor_path: str | None = None,
+    ) -> tuple[UUID, UUID | None]:
+        original = _legacy_source_epoch(session_id, source_path, provenance_kind, watermark)
+        if not replace_existing_epochs:
+            return original, None
+        manifest = await self.catalog.call(
+            "storage.source_epoch.manifest.v2",
+            {"source_epoch": str(original), "after_position": None, "limit": 1},
+            timeout_seconds=5.0,
+        )
+        predecessor = original
+        if manifest.get("found") is not True:
+            if fallback_predecessor_path is None:
+                return original, None
+            fallback = _legacy_source_epoch(session_id, fallback_predecessor_path, provenance_kind, watermark)
+            fallback_manifest = await self.catalog.call(
+                "storage.source_epoch.manifest.v2",
+                {"source_epoch": str(fallback), "after_position": None, "limit": 1},
+                timeout_seconds=5.0,
+            )
+            if fallback_manifest.get("found") is not True:
+                return original, None
+            predecessor = fallback
+        replacement = _stable_uuid(
+            "source-replacement",
+            MIGRATION_LAYOUT_REVISION,
+            str(session_id),
+            source_path,
+            provenance_kind,
+            watermark.encode(),
+        )
+        return replacement, predecessor
+
+    async def _commit_stream_batch(
+        self,
+        session: AgentSession,
+        batch: _SourceBatch,
+        *,
+        generation: UUID,
+        source_epoch: UUID,
+        predecessor_source_epoch: UUID | None,
+        owner_id: str,
+        render_records: tuple[RenderRecord, ...],
+        output_proof: _IncrementalProof,
+        render_failures: list[str] | None = None,
+    ) -> bool:
+        opaque_id = _opaque_source_id(UUID(str(session.id)), batch.source_path, batch.provenance_kind)
+        raw_spec = RawObjectSpec(
+            tenant_id=self.tenant_id,
+            machine_id=session.device_id or "legacy",
+            session_id=UUID(str(session.id)),
+            provider=session.provider,
+            opaque_source_id=opaque_id,
+            source_epoch=source_epoch,
+            range_kind="record_ordinal",
+            range_start=batch.range_start,
+            range_end=batch.range_start + len(batch.records),
+            records=_raw_records(batch),
+            provenance_kind=batch.provenance_kind,
+        )
+        sealed_raw = await asyncio.to_thread(seal_raw_object, self.object_root, raw_spec)
+        render_spec = RenderObjectSpec(
+            session_id=UUID(str(session.id)),
+            render_generation=generation,
+            parser_revision=PARSER_REVISION,
+            ordering_revision=ORDERING_REVISION,
+            machine_id=session.device_id or "legacy",
+            provider=session.provider,
+            opaque_source_id=opaque_id,
+            source_epoch=source_epoch,
+            source_envelope_id=sealed_raw.envelope_id,
+            records=tuple(sorted(render_records, key=_render_order_key)),
+        )
+        try:
+            sealed_render = await asyncio.to_thread(seal_render_object, self.object_root, render_spec)
+        except RenderObjectValidationError as exc:
+            sealed_render = None
+            if render_failures is not None:
+                render_failures.append(str(exc))
+        committed = await self.catalog.call(
+            "storage.raw_object.commit.v2",
+            _raw_commit(
+                session=session,
+                raw_spec=raw_spec,
+                sealed_raw=sealed_raw,
+                render_spec=render_spec,
+                sealed_render=sealed_render,
+                tenant_id=self.tenant_id,
+                owner_id=owner_id,
+                predecessor_source_epoch=predecessor_source_epoch,
+            ),
+            timeout_seconds=10.0,
+        )
+        output_proof.update(sealed_raw.object_hash)
+        output_proof.update(str(committed["receipt"]["commit_seq"]))
+        if sealed_render is not None:
+            output_proof.update(sealed_render.object_hash)
+        return sealed_render is not None
 
     def _load_sources(
         self,
@@ -759,6 +1254,12 @@ def _source_batches(
         if current:
             batches.append(_SourceBatch(source_path, provenance_kind, range_start, tuple(current)))
     return batches
+
+
+def _head_branch_id(db: Session, session_id: UUID) -> int | None:
+    query = db.query(AgentSessionBranch.id)
+    query = query.filter(AgentSessionBranch.session_id == session_id, AgentSessionBranch.is_head == 1)
+    return query.scalar()
 
 
 def _estimated_render_bytes(event: AgentEvent) -> int:
