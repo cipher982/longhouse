@@ -896,7 +896,7 @@ async def get_timeline_session_mobile_tail(
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(50, ge=1, le=200, description="Max projected tail items"),
     offset: int = Query(0, ge=0, description="Items before the latest tail window"),
-    snapshot_event_id: Optional[int] = Query(
+    snapshot_event_id: Optional[str] = Query(
         None,
         description="Previous snapshot marker for older-page drift detection",
     ),
@@ -923,6 +923,12 @@ async def get_timeline_session_mobile_tail(
         }
 
     def build_legacy_tail() -> SessionMobileTailResponse:
+        legacy_snapshot_event_id: int | None = None
+        if snapshot_event_id is not None:
+            try:
+                legacy_snapshot_event_id = int(snapshot_event_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="snapshot_event_id must be a legacy integer") from exc
         with legacy_session_factory() as db:
             return build_session_mobile_tail(
                 db=db,
@@ -930,7 +936,7 @@ async def get_timeline_session_mobile_tail(
                 branch_mode=branch_mode,
                 limit=limit,
                 offset=offset,
-                snapshot_event_id=snapshot_event_id,
+                snapshot_event_id=legacy_snapshot_event_id,
                 timing=timing,
                 owner_id=int(current_user.id),
             )
