@@ -88,7 +88,7 @@ async def test_storage_v2_archive_bundle_reads_catalog_and_exact_raw_objects(mon
         continued_from_session_id=None,
         continuation_kind=None,
         origin_label="On this Mac",
-        session_state=SimpleNamespace(mode=SimpleNamespace(value="helm")),
+        session_state=SimpleNamespace(mode="helm"),
         is_sidechain=False,
     )
     monkeypatch.setattr("zerg.services.session_archive.get_catalogd_client", lambda: _Catalog(session_id))

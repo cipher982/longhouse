@@ -255,7 +255,7 @@ async def build_storage_v2_archive_bundle(
             continued_from_session_id=projected.continued_from_session_id,
             continuation_kind=projected.continuation_kind,
             origin_label=projected.origin_label,
-            execution_home=projected.session_state.mode.value,
+            execution_home=str(getattr(projected.session_state.mode, "value", projected.session_state.mode)),
             managed_transport=managed_transport,
             summary_title=storage_session.get("summary_title"),
             summary=catalog_facts.get("summary"),
