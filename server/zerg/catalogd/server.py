@@ -361,6 +361,8 @@ class CatalogDaemon:
             return await self._complete_migration_session(request)
         if request.method == "migration.session.fail.v2":
             return await self._fail_migration_session(request)
+        if request.method == "migration.render.repair.v2":
+            return await self._repair_migration_render(request)
         if request.method == "migration.run.reconcile.v2":
             return await self._reconcile_migration_run(request)
         if request.method == "migration.run.summary.v2":
@@ -1920,7 +1922,7 @@ class CatalogDaemon:
             "parity_proof_hash",
             "completed_at",
         }
-        optional = {"degradation_code", "degradation_message"}
+        optional = {"degradation_code", "degradation_message", "render_generation_id"}
         if not required.issubset(request.params) or set(request.params) - required - optional:
             return self._error(request, "invalid_request", "migration.session.complete.v2 has invalid parameters")
         try:
@@ -1934,6 +1936,11 @@ class CatalogDaemon:
                 "media_missing": _bounded_count(request.params["media_missing"], "media_missing"),
                 "output_proof_hash": _proof_hash(request.params["output_proof_hash"], "output_proof_hash"),
                 "parity_proof_hash": _proof_hash(request.params["parity_proof_hash"], "parity_proof_hash"),
+                "render_generation_id": (
+                    _canonical_uuid(request.params["render_generation_id"], "render_generation_id")
+                    if request.params.get("render_generation_id") is not None
+                    else None
+                ),
                 "degradation_code": (
                     _bounded_text(request.params["degradation_code"], "degradation_code", 64)
                     if request.params.get("degradation_code") is not None
@@ -1952,7 +1959,7 @@ class CatalogDaemon:
         result = await self._run_store(self._store.complete_legacy_migration_session, **params)
         if result.get("session_missing"):
             return self._error(request, "not_found", "migration session does not exist")
-        if result.get("claim_conflict") or result.get("coverage_conflict"):
+        if result.get("claim_conflict") or result.get("coverage_conflict") or result.get("render_generation_conflict"):
             return self._error(request, "conflict", "migration completion conflicts with durable claim or inventory")
         return CatalogRpcResponse(id=request.id, result=result)
 
@@ -1981,6 +1988,41 @@ class CatalogDaemon:
             return self._error(request, "not_found", "migration session does not exist")
         if result.get("claim_conflict"):
             return self._error(request, "conflict", "migration failure does not match the active claim")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _repair_migration_render(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"run_id", "session_ids", "parser_revision", "ordering_revision", "observed_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "migration.render.repair.v2 has invalid parameters")
+        try:
+            run_id = _canonical_uuid(request.params["run_id"], "run_id")
+            session_ids = request.params["session_ids"]
+            if not isinstance(session_ids, list) or not 1 <= len(session_ids) <= 100 or len(set(session_ids)) != len(session_ids):
+                raise ValueError("session_ids must contain 1 to 100 unique UUIDs")
+            parsed_session_ids = tuple(_canonical_uuid(value, "session_id") for value in session_ids)
+            parser_revision = _bounded_text(request.params["parser_revision"], "parser_revision", 128)
+            ordering_revision = _bounded_text(request.params["ordering_revision"], "ordering_revision", 128)
+            observed_at = _parse_datetime(request.params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.repair_legacy_migration_render,
+            run_id=run_id,
+            session_ids=parsed_session_ids,
+            parser_revision=parser_revision,
+            ordering_revision=ordering_revision,
+            observed_at=observed_at,
+        )
+        if result.get("run_missing"):
+            return self._error(request, "not_found", "migration run does not exist")
+        if result.get("sessions_conflict"):
+            return self._error(
+                request,
+                "conflict",
+                "repair targets must be render_projection_failed migration sessions",
+                details={"session_ids": result["sessions_conflict"]},
+            )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _summarize_migration_run(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
@@ -2441,8 +2483,8 @@ def _validate_render_manifest(value: object, *, render_state: str) -> dict | Non
         if render_state == "ready":
             raise ValueError("ready render_state requires render_manifest")
         return None
-    if render_state != "ready" or not isinstance(value, dict):
-        raise ValueError("render_manifest is allowed only for ready render_state")
+    if render_state not in {"ready", "pending"} or not isinstance(value, dict):
+        raise ValueError("render_manifest is allowed only for ready or pending render_state")
     expected = {
         "generation_id",
         "parser_revision",

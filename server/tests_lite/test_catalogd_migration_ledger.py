@@ -270,6 +270,91 @@ async def test_explicit_coverage_degradation_is_terminal_not_reclaimed(daemon_pa
 
 
 @pytest.mark.asyncio
+async def test_render_repair_rpc_only_requeues_explicit_render_failures(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    run_id, session_id, claim_token = str(uuid4()), str(uuid4()), str(uuid4())
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        await client.call(
+            "migration.run.create.v2",
+            {
+                "run_id": run_id,
+                "legacy_high_watermark": "frozen",
+                "expected_session_count": 1,
+                "created_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "migration.session.register.batch.v2",
+            {
+                "run_id": run_id,
+                "sessions": [{"session_id": session_id, "source_expected": 1, "media_expected": 0}],
+                "registered_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "migration.session.claim.v2",
+            {
+                "run_id": run_id,
+                "worker_id": "worker",
+                "claim_token": claim_token,
+                "now": now.isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        failed = await client.call(
+            "migration.session.complete.v2",
+            {
+                "run_id": run_id,
+                "session_id": session_id,
+                "claim_token": claim_token,
+                "source_covered": 1,
+                "source_missing": 0,
+                "media_covered": 0,
+                "media_missing": 0,
+                "output_proof_hash": "a" * 64,
+                "parity_proof_hash": "b" * 64,
+                "degradation_code": "render_projection_failed",
+                "degradation_message": "oversized legacy render field",
+                "completed_at": now.isoformat(),
+            },
+        )
+        assert failed["session"]["state"] == "degraded"
+
+        repaired = await client.call(
+            "migration.render.repair.v2",
+            {
+                "run_id": run_id,
+                "session_ids": [session_id],
+                "parser_revision": "legacy-normalized-v1",
+                "ordering_revision": "semantic-order-v2",
+                "observed_at": (now + timedelta(seconds=1)).isoformat(),
+            },
+        )
+        assert repaired["repaired"] == 1
+        claimed = await client.call(
+            "migration.session.claim.v2",
+            {
+                "run_id": run_id,
+                "worker_id": "repair-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=2)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        assert claimed["claimed"][0]["session_id"] == session_id
+        assert claimed["claimed"][0]["attempts"] == 2
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_migration_reconcile_classifies_legacy_gaps_and_releases_stopped_claims(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)

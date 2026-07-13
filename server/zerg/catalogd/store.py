@@ -3773,6 +3773,7 @@ class CatalogStore:
                 connection.execute(update(storage_session).where(storage_session.c.session_id == session_key).values(**session_values))
             if render_manifest is not None:
                 generation_key = str(render_manifest["generation_id"])
+                publish_render = render_state == "ready"
                 if existing_generation is None:
                     connection.execute(
                         insert(render_generation).values(
@@ -3780,7 +3781,7 @@ class CatalogStore:
                             session_id=session_key,
                             parser_revision=render_manifest["parser_revision"],
                             ordering_revision=render_manifest["ordering_revision"],
-                            state="current",
+                            state="current" if publish_render else "pending",
                             source_chain_hash=hashlib.sha256(bytes.fromhex(envelope_id)).hexdigest(),
                             object_count=1,
                             event_count=render_manifest["event_count"],
@@ -3796,7 +3797,7 @@ class CatalogStore:
                         update(render_generation)
                         .where(render_generation.c.generation_id == generation_key)
                         .values(
-                            state="current",
+                            state="current" if publish_render else "pending",
                             source_chain_hash=hashlib.sha256(
                                 bytes.fromhex(str(existing_generation["source_chain_hash"])) + bytes.fromhex(envelope_id)
                             ).hexdigest(),
@@ -3808,15 +3809,16 @@ class CatalogStore:
                             updated_at=commit_time,
                         )
                     )
-                connection.execute(
-                    update(render_generation)
-                    .where(
-                        render_generation.c.session_id == session_key,
-                        render_generation.c.generation_id != generation_key,
-                        render_generation.c.state == "current",
+                if publish_render:
+                    connection.execute(
+                        update(render_generation)
+                        .where(
+                            render_generation.c.session_id == session_key,
+                            render_generation.c.generation_id != generation_key,
+                            render_generation.c.state == "current",
+                        )
+                        .values(state="superseded", superseded_at=commit_time, commit_seq=commit_seq, updated_at=commit_time)
                     )
-                    .values(state="superseded", superseded_at=commit_time, commit_seq=commit_seq, updated_at=commit_time)
-                )
                 connection.execute(
                     insert(render_object).values(
                         object_id=render_manifest["object_id"],
@@ -3844,20 +3846,23 @@ class CatalogStore:
                         created_at=commit_time,
                     )
                 )
-                projection_values: dict[str, Any] = {
-                    "current_render_generation": generation_key,
-                    "render_state": "ready",
-                    "user_messages": int((existing_session or {}).get("user_messages") or 0) + render_manifest["user_messages"],
-                    "assistant_messages": int((existing_session or {}).get("assistant_messages") or 0)
-                    + render_manifest["assistant_messages"],
-                    "tool_calls": int((existing_session or {}).get("tool_calls") or 0) + render_manifest["tool_calls"],
-                }
-                if not (existing_session or {}).get("first_user_message_preview") and render_manifest["first_user_message_preview"]:
-                    projection_values["first_user_message_preview"] = render_manifest["first_user_message_preview"]
-                if render_manifest["last_visible_text_preview"]:
-                    projection_values["last_visible_text_preview"] = render_manifest["last_visible_text_preview"]
-                connection.execute(update(storage_session).where(storage_session.c.session_id == session_key).values(**projection_values))
-            if predecessor_row is not None:
+                if publish_render:
+                    projection_values: dict[str, Any] = {
+                        "current_render_generation": generation_key,
+                        "render_state": "ready",
+                        "user_messages": int((existing_session or {}).get("user_messages") or 0) + render_manifest["user_messages"],
+                        "assistant_messages": int((existing_session or {}).get("assistant_messages") or 0)
+                        + render_manifest["assistant_messages"],
+                        "tool_calls": int((existing_session or {}).get("tool_calls") or 0) + render_manifest["tool_calls"],
+                    }
+                    if not (existing_session or {}).get("first_user_message_preview") and render_manifest["first_user_message_preview"]:
+                        projection_values["first_user_message_preview"] = render_manifest["first_user_message_preview"]
+                    if render_manifest["last_visible_text_preview"]:
+                        projection_values["last_visible_text_preview"] = render_manifest["last_visible_text_preview"]
+                    connection.execute(
+                        update(storage_session).where(storage_session.c.session_id == session_key).values(**projection_values)
+                    )
+            if predecessor_row is not None and render_state == "ready":
                 generation_to_recompute = (
                     str(render_manifest["generation_id"])
                     if render_manifest is not None
@@ -5353,6 +5358,7 @@ class CatalogStore:
         media_missing: int,
         output_proof_hash: str,
         parity_proof_hash: str,
+        render_generation_id: UUID | None,
         degradation_code: str | None,
         degradation_message: str | None,
         completed_at: datetime,
@@ -5395,8 +5401,81 @@ class CatalogStore:
                 row["media_expected"]
             ):
                 return {"coverage_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+            generation = RenderGeneration.__table__
+            generation_key = str(render_generation_id) if render_generation_id is not None else None
+            if generation_key is not None:
+                generation_row = (
+                    connection.execute(
+                        select(generation).where(
+                            generation.c.generation_id == generation_key,
+                            generation.c.session_id == session_key,
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if generation_row is None or generation_row["state"] != "pending":
+                    return {"render_generation_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
             state = "verified" if degradation_code is None else "degraded"
             commit_seq = _advance_commit_seq(connection, completed_at)
+            if generation_key is not None:
+                connection.execute(
+                    update(generation)
+                    .where(
+                        generation.c.session_id == session_key,
+                        generation.c.generation_id != generation_key,
+                        generation.c.state == "current",
+                    )
+                    .values(
+                        state="superseded",
+                        superseded_at=completed_at,
+                        commit_seq=commit_seq,
+                        updated_at=completed_at,
+                    )
+                )
+                _recompute_render_generation_projection(
+                    connection,
+                    session_id=session_key,
+                    generation_id=generation_key,
+                    commit_seq=commit_seq,
+                    commit_time=completed_at,
+                )
+                connection.execute(
+                    update(StorageSession.__table__)
+                    .where(StorageSession.__table__.c.session_id == session_key)
+                    .values(render_state="ready", commit_seq=commit_seq, updated_at=completed_at)
+                )
+                projector = ProjectorState.__table__
+                projector_row = (
+                    connection.execute(
+                        select(projector).where(
+                            projector.c.projector == "search-v2",
+                            projector.c.session_id == session_key,
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if projector_row is None:
+                    connection.execute(
+                        insert(projector).values(
+                            projector="search-v2",
+                            session_id=session_key,
+                            desired_revision=commit_seq,
+                            completed_revision=0,
+                            status="idle",
+                            failure_count=0,
+                            commit_seq=commit_seq,
+                            created_at=completed_at,
+                            updated_at=completed_at,
+                        )
+                    )
+                else:
+                    connection.execute(
+                        update(projector)
+                        .where(projector.c.projector == "search-v2", projector.c.session_id == session_key)
+                        .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=completed_at)
+                    )
             connection.execute(
                 update(rows)
                 .where(rows.c.run_id == run_key, rows.c.session_id == session_key)
@@ -5486,6 +5565,126 @@ class CatalogStore:
                 "changed": True,
                 "exact_replay": False,
                 "session": _legacy_migration_session_dto(updated),
+                "commit_seq": str(commit_seq),
+            }
+
+    def repair_legacy_migration_render(
+        self,
+        *,
+        run_id: UUID,
+        session_ids: tuple[UUID, ...],
+        parser_revision: str,
+        ordering_revision: str,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        """Requeue explicitly failed migration renders without direct catalog SQL."""
+
+        runs = LegacyMigrationRun.__table__
+        rows = LegacyMigrationSession.__table__
+        generations = RenderGeneration.__table__
+        objects = RenderObject.__table__
+        sessions = StorageSession.__table__
+        projectors = ProjectorState.__table__
+        run_key = str(run_id)
+        session_keys = tuple(str(value) for value in session_ids)
+        with _write_transaction(self.engine) as connection:
+            if connection.execute(select(runs.c.run_id).where(runs.c.run_id == run_key)).first() is None:
+                return {"run_missing": True, "commit_seq": str(_current_commit_seq(connection))}
+            selected = list(
+                connection.execute(select(rows).where(rows.c.run_id == run_key, rows.c.session_id.in_(session_keys))).mappings().all()
+            )
+            eligible = {
+                str(row["session_id"]) for row in selected if row["state"] == "degraded" and row["error_code"] == "render_projection_failed"
+            }
+            conflicts = sorted(set(session_keys) - eligible)
+            if conflicts:
+                return {"sessions_conflict": conflicts, "commit_seq": str(_current_commit_seq(connection))}
+            generation_rows = list(
+                connection.execute(
+                    select(generations).where(
+                        generations.c.session_id.in_(session_keys),
+                        generations.c.parser_revision == parser_revision,
+                        generations.c.ordering_revision == ordering_revision,
+                        generations.c.state.in_(("pending", "current")),
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            generation_ids = tuple(str(row["generation_id"]) for row in generation_rows)
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            if generation_ids:
+                connection.execute(delete(objects).where(objects.c.generation_id.in_(generation_ids)))
+                connection.execute(delete(generations).where(generations.c.generation_id.in_(generation_ids)))
+            connection.execute(
+                update(sessions)
+                .where(sessions.c.session_id.in_(session_keys))
+                .values(
+                    current_render_generation=None,
+                    render_state="pending",
+                    user_messages=0,
+                    assistant_messages=0,
+                    tool_calls=0,
+                    first_user_message_preview=None,
+                    last_visible_text_preview=None,
+                    commit_seq=commit_seq,
+                    updated_at=observed_at,
+                )
+            )
+            connection.execute(
+                update(rows)
+                .where(rows.c.run_id == run_key, rows.c.session_id.in_(session_keys))
+                .values(
+                    state="pending",
+                    source_covered=0,
+                    source_missing=0,
+                    media_covered=0,
+                    media_missing=0,
+                    output_proof_hash=None,
+                    parity_proof_hash=None,
+                    error_code=None,
+                    error_message=None,
+                    claim_token=None,
+                    worker_id=None,
+                    lease_expires_at=None,
+                    retry_at=None,
+                    verified_at=None,
+                    commit_seq=commit_seq,
+                    updated_at=observed_at,
+                )
+            )
+            for session_key in session_keys:
+                projector_row = connection.execute(
+                    select(projectors).where(
+                        projectors.c.projector == "search-v2",
+                        projectors.c.session_id == session_key,
+                    )
+                ).first()
+                if projector_row is None:
+                    connection.execute(
+                        insert(projectors).values(
+                            projector="search-v2",
+                            session_id=session_key,
+                            desired_revision=commit_seq,
+                            completed_revision=0,
+                            status="idle",
+                            failure_count=0,
+                            commit_seq=commit_seq,
+                            created_at=observed_at,
+                            updated_at=observed_at,
+                        )
+                    )
+                else:
+                    connection.execute(
+                        update(projectors)
+                        .where(projectors.c.projector == "search-v2", projectors.c.session_id == session_key)
+                        .values(desired_revision=commit_seq, commit_seq=commit_seq, updated_at=observed_at)
+                    )
+            _refresh_legacy_migration_run(connection, run_key, commit_seq, observed_at)
+            return {
+                "repaired": len(session_keys),
+                "session_ids": list(session_keys),
+                "retired_generations": len(generation_ids),
                 "commit_seq": str(commit_seq),
             }
 

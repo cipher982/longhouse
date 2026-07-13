@@ -16,6 +16,8 @@ from zerg.config import get_settings
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.services.catalogd_supervisor import catalogd_paths
+from zerg.services.legacy_corpus_migration import ORDERING_REVISION
+from zerg.services.legacy_corpus_migration import PARSER_REVISION
 from zerg.services.legacy_corpus_migration import LegacyCorpusConverter
 from zerg.services.legacy_corpus_migration import create_inventory_run
 from zerg.services.legacy_corpus_migration import freeze_high_watermark
@@ -124,6 +126,40 @@ def status(
     async def execute() -> dict:
         try:
             return await catalog.call("migration.run.summary.v2", {"run_id": str(run_id)}, timeout_seconds=5.0)
+        finally:
+            await catalog.close()
+
+    try:
+        _print(asyncio.run(execute()))
+    finally:
+        engine.dispose()
+
+
+@app.command("repair-render")
+def repair_render(
+    run_id: UUID = typer.Option(..., "--run-id"),
+    session_ids: list[UUID] = typer.Option(..., "--session-id"),
+    database_url: str | None = typer.Option(None, "--database-url"),
+) -> None:
+    """Requeue bounded render_projection_failed sessions through catalogd."""
+
+    if not 1 <= len(session_ids) <= 100:
+        raise typer.BadParameter("provide 1 to 100 --session-id values")
+    _, engine, _, catalog = _context(database_url)
+
+    async def execute() -> dict:
+        try:
+            return await catalog.call(
+                "migration.render.repair.v2",
+                {
+                    "run_id": str(run_id),
+                    "session_ids": [str(value) for value in session_ids],
+                    "parser_revision": PARSER_REVISION,
+                    "ordering_revision": ORDERING_REVISION,
+                    "observed_at": datetime.now(UTC).isoformat(),
+                },
+                timeout_seconds=30.0,
+            )
         finally:
             await catalog.close()
 

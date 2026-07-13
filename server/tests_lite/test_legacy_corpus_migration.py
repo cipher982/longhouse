@@ -349,7 +349,7 @@ async def test_oversized_unmatched_event_is_split_into_exact_bounded_raw_records
     )
     assert len(commits) == 2
     assert restored == expected
-    assert [payload["render_state"] for payload in commits] == ["failed", "ready"]
+    assert [payload["render_state"] for payload in commits] == ["failed", "pending"]
     assert result.degradation_code == "render_projection_failed"
 
 
@@ -850,12 +850,49 @@ async def test_converter_commits_through_real_catalog_contract(legacy_db, tmp_pa
             object_root=tmp_path / "objects-v2",
             tenant_id="tenant-a",
         )
+        run_id = uuid4()
+        claim_token = uuid4()
+        now = datetime.now(UTC)
+        await client.call(
+            "migration.run.create.v2",
+            {
+                "run_id": str(run_id),
+                "legacy_high_watermark": watermark.encode(),
+                "expected_session_count": 1,
+                "created_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "migration.session.register.batch.v2",
+            {
+                "run_id": str(run_id),
+                "sessions": [{"session_id": str(session.id), "source_expected": 1, "media_expected": 0}],
+                "registered_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "migration.session.claim.v2",
+            {
+                "run_id": str(run_id),
+                "worker_id": "test-worker",
+                "claim_token": str(claim_token),
+                "now": now.isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
         with legacy_db() as db:
             result = await converter.convert_session(db, session.id, watermark)
-        stored = await client.call("storage.session.read.v2", {"session_id": str(session.id)})
+        staged = await client.call("storage.session.read.v2", {"session_id": str(session.id)})
         assert result.source_covered == 1
-        assert stored["found"] is True
-        assert stored["session"]["current_render_generation"] is not None
+        assert staged["found"] is True
+        assert staged["session"]["current_render_generation"] is None
+        assert staged["session"]["render_state"] == "pending"
+
+        await converter._complete(run_id, claim_token, result)
+        stored = await client.call("storage.session.read.v2", {"session_id": str(session.id)})
+        assert stored["session"]["current_render_generation"] == str(result.render_generation_id)
+        assert stored["session"]["render_state"] == "ready"
     finally:
         await client.close()
         await daemon.close()

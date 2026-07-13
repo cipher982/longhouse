@@ -129,6 +129,7 @@ class MigrationResult:
     degradation_message: str | None
     envelope_ids: tuple[str, ...]
     media_hashes: tuple[str, ...]
+    render_generation_id: UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -549,6 +550,7 @@ class LegacyCorpusConverter:
             degradation_message="; ".join(sorted(set(render_failures)))[:2048] if render_failures else None,
             envelope_ids=tuple(envelope_ids),
             media_hashes=tuple(sorted(media_hashes)),
+            render_generation_id=generation,
         )
 
     async def _convert_streaming_archived(
@@ -616,6 +618,7 @@ class LegacyCorpusConverter:
             degradation_message="; ".join(sorted(set(render_failures)))[:2048] if render_failures else None,
             envelope_ids=(),
             media_hashes=tuple(sorted(media_hashes)),
+            render_generation_id=generation,
         )
 
     async def _stream_archived_source_lines(
@@ -1330,6 +1333,11 @@ class LegacyCorpusConverter:
                 "media_missing": result.media_missing,
                 "output_proof_hash": result.output_proof_hash,
                 "parity_proof_hash": result.parity_proof_hash,
+                "render_generation_id": (
+                    str(result.render_generation_id)
+                    if result.parity_matches and result.degradation_code != "render_projection_failed"
+                    else None
+                ),
                 "degradation_code": result.degradation_code,
                 "degradation_message": result.degradation_message,
                 "completed_at": datetime.now(UTC).isoformat(),
@@ -1520,9 +1528,11 @@ def _raw_commit(
         "uncompressed_size": sealed_raw.uncompressed_size,
         "compressed_size": sealed_raw.compressed_size,
         "provenance_kind": raw_spec.provenance_kind,
-        "render_state": "ready" if sealed_render is not None else "failed",
+        # Migration render objects remain invisible until the terminal parity
+        # proof publishes the complete generation in the ledger transaction.
+        "render_state": "pending" if sealed_render is not None else "failed",
         "media_refs": [],
-        "projectors": ["search-v2"],
+        "projectors": [],
         "render_manifest": render_manifest,
         "session_facts": {
             "environment": session.environment,
