@@ -10,12 +10,41 @@ describe("providers launch support", () => {
     expect(providers.map((provider) => provider.id)).toEqual([
       "claude",
       "codex",
-      "antigravity",
-      "opencode",
       "cursor",
+      "opencode",
+      "antigravity",
     ]);
     expect(providers.every((provider) => provider.archiveVisibility === "live")).toBe(true);
     expect(providers.every((provider) => provider.cloudSessionStart === "live")).toBe(true);
+    expect(providers.every((provider) => provider.launchAndSend)).toBe(true);
+  });
+
+  it("mirrors the managed provider contract capability matrix", () => {
+    expect(getLaunchProviderSupport("claude")).toMatchObject({
+      interrupt: true,
+      steerMidTurn: true,
+      resume: true,
+    });
+    expect(getLaunchProviderSupport("codex")).toMatchObject({
+      interrupt: true,
+      steerMidTurn: true,
+      resume: true,
+    });
+    expect(getLaunchProviderSupport("cursor")).toMatchObject({
+      interrupt: true,
+      steerMidTurn: false,
+      resume: true,
+    });
+    expect(getLaunchProviderSupport("opencode")).toMatchObject({
+      interrupt: true,
+      steerMidTurn: false,
+      resume: false,
+    });
+    expect(getLaunchProviderSupport("antigravity")).toMatchObject({
+      interrupt: false,
+      steerMidTurn: false,
+      resume: false,
+    });
   });
 
   it("records hooks and telemetry differences for the landing truth pass", () => {
@@ -29,14 +58,6 @@ describe("providers launch support", () => {
     });
     expect(getLaunchProviderSupport("antigravity")).toMatchObject({
       hooksSupport: "live",
-      telemetryQuality: "structured",
-    });
-    expect(getLaunchProviderSupport("opencode")).toMatchObject({
-      hooksSupport: "none",
-      telemetryQuality: "structured",
-    });
-    expect(getLaunchProviderSupport("cursor")).toMatchObject({
-      hooksSupport: "none",
       telemetryQuality: "structured",
     });
   });

@@ -9,7 +9,7 @@ const faqs: FAQ[] = [
   {
     question: "Do I need hosted to try it?",
     answer:
-      "No. Self-hosting is the first path. Install Longhouse locally, import existing sessions, and prove the product before deciding whether you want us to run the always-on box later.",
+      "No. Self-hosting is the first path. Install Longhouse locally, import existing sessions, and prove the product before deciding whether you want us to run the always-on box for you.",
   },
   {
     question: "What runs on my machine versus the always-on box?",
@@ -19,7 +19,7 @@ const faqs: FAQ[] = [
   {
     question: "What happens when my laptop sleeps?",
     answer:
-      "If your laptop is running both pieces, Longhouse stops because the machine slept. That is not a hidden failure. It just means durability belongs on a machine that stays on.",
+      "If your laptop runs both pieces, everything stops when it sleeps. Put the Runtime Host on a machine that stays on — a VPS, Mac mini, or homelab box — and sessions keep running with the lid closed.",
   },
   {
     question: "Are imported sessions different from sessions started through Longhouse?",
@@ -29,12 +29,12 @@ const faqs: FAQ[] = [
   {
     question: "Which providers are strongest today?",
     answer:
-      "Claude is the strongest continuation path today. Codex launches through Longhouse and lands in the archive. Antigravity is the Google CLI path Longhouse supports for launch and archive.",
+      "Claude Code and Codex have the deepest control paths: launch, send, interrupt, steer mid-turn, and resume. Cursor and OpenCode support most of that; Antigravity supports launch and send. The provider table above is the exact contract.",
   },
   {
     question: "Where is my data stored?",
     answer:
-      "When you self-host, everything lives in SQLite on your machine or the box you control. Hosted is the same product with us running the Runtime Host for you later if you want that convenience.",
+      "When you self-host, everything lives in SQLite on your machine or the box you control. Hosted is the same product with us running the Runtime Host for you.",
   },
 ];
 
@@ -48,7 +48,7 @@ export function TrustSection() {
   return (
     <section className="landing-trust">
       <div className="landing-section-inner">
-        <h2 className="landing-faq-heading">Questions you&rsquo;re probably asking</h2>
+        <h2 className="landing-faq-heading">Common questions</h2>
 
         <div className="landing-faq-list">
           {faqs.map((faq, index) => (

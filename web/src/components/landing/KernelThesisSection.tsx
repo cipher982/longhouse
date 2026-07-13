@@ -21,9 +21,9 @@ export function KernelThesisSection() {
 
           <ul className="landing-thesis-points">
             <li>
-              <strong>It just syncs.</strong> Install Longhouse and every Claude
-              Code, Codex, Antigravity, and OpenCode session flows into one
-              searchable timeline — live. No import, no setup.
+              <strong>It just syncs.</strong> Install Longhouse and every session —
+              Claude Code, Codex, Cursor, and more — flows into one searchable
+              timeline, live. No import, no setup.
             </li>
             <li>
               <strong>It stays on.</strong> Run it on your laptop to try it, then

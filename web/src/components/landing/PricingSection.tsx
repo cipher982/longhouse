@@ -36,11 +36,11 @@ export function PricingSection() {
       label: "Start here",
       name: "Self-Hosted",
       callout: "Free",
-      description: "Put Longhouse where durability should live and get first value without signing up first.",
+      description: "Run everything on hardware you control. No account required.",
       features: [
         "Run it on your laptop first, or on a VPS / Mac mini / homelab box for durability",
         "Free and open source",
-        "Import existing Claude, Codex, Antigravity, and OpenCode sessions immediately",
+        "Existing sessions from every supported provider import immediately",
         "Browser, CLI, and /api/agents/* included",
       ],
       ctaText: "Self-Host Free",

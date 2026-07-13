@@ -42,7 +42,7 @@ export function HeroSection() {
   return (
     <section className="landing-hero" id="landing-install">
       <div className="landing-hero-content">
-        <p className="landing-hero-kicker">Self-hosted · cross-provider · yours</p>
+        <p className="landing-hero-kicker">Self-hosted · cross-provider · open source</p>
 
         <h1 className="landing-hero-headline">
           Start a coding agent. Walk away.{" "}
@@ -50,9 +50,9 @@ export function HeroSection() {
         </h1>
 
         <p className="landing-hero-subhead">
-          Longhouse runs on a machine you own and keeps a live control path to every Claude,
-          Codex, Antigravity, and OpenCode session. Launch on your desk, find it later from
-          anywhere, send it the next instruction — without uploading your work to anyone's cloud.
+          Longhouse runs on a machine you own and keeps a live control path to every
+          session — Claude Code, Codex, Cursor, and more. Launch at your desk, find it
+          from anywhere, send the next instruction. Nothing uploads to anyone else&rsquo;s cloud.
         </p>
 
         {/* ── Install paths ── */}
@@ -119,7 +119,7 @@ export function HeroSection() {
         {/* ── Secondary links ── */}
         <div className="hero-install-extras">
           <span className="hero-install-extra">
-            On macOS, both install choices end at <code>Longhouse.app</code>.
+            Both macOS paths install the same <code>Longhouse.app</code>.
           </span>
           <span className="hero-install-extra">
             Or: <code>uv tool install longhouse</code>

@@ -2,49 +2,37 @@ import { test, expect } from '@playwright/test';
 
 type ProviderExpectation = {
   name: string;
-  description: string;
-  status: string;
+  // sync, launch & send, interrupt, steer mid-turn, resume
+  cells: Array<'yes' | 'no'>;
 };
 
 const EXPECTED_PROVIDERS: ProviderExpectation[] = [
-  {
-    name: 'Claude Code',
-    description: 'Launch, send, steer, interrupt, and resume',
-    status: 'Full control',
-  },
-  {
-    name: 'Codex CLI',
-    description: 'Launch, send, steer, interrupt, and resume',
-    status: 'Full control',
-  },
-  {
-    name: 'Cursor Agent',
-    description: 'Launch, send, interrupt, terminate, and resume',
-    status: 'No mid-turn steering',
-  },
-  {
-    name: 'OpenCode',
-    description: 'Launch, send, interrupt, and terminate',
-    status: 'No steering or resume',
-  },
-  {
-    name: 'Antigravity CLI',
-    description: 'Local launch and send',
-    status: 'Limited control',
-  },
+  { name: 'Claude Code', cells: ['yes', 'yes', 'yes', 'yes', 'yes'] },
+  { name: 'Codex CLI', cells: ['yes', 'yes', 'yes', 'yes', 'yes'] },
+  { name: 'Cursor Agent', cells: ['yes', 'yes', 'yes', 'no', 'yes'] },
+  { name: 'OpenCode', cells: ['yes', 'yes', 'yes', 'no', 'no'] },
+  { name: 'Antigravity CLI', cells: ['yes', 'yes', 'no', 'no', 'no'] },
 ];
 
 test.describe('Landing integrations claims', () => {
-  test('provider cards match claimed statuses and descriptions', async ({ page }) => {
+  test('provider capability matrix matches the claimed contract', async ({ page }) => {
     await page.goto('/');
     await expect(page.locator('#providers')).toBeVisible({ timeout: 10_000 });
 
-    for (const provider of EXPECTED_PROVIDERS) {
-      const row = page.locator('.landing-provider-row', { hasText: provider.name }).first();
-      await expect(row).toBeVisible();
-      await expect(row.locator('.landing-provider-row-name')).toHaveText(provider.name);
-      await expect(row.locator('.landing-provider-row-desc')).toHaveText(provider.description);
-      await expect(row.locator('.landing-provider-row-status')).toHaveText(provider.status);
+    const table = page.locator('.landing-providers-table');
+    await expect(table).toBeVisible();
+
+    const rows = table.locator('tbody tr');
+    await expect(rows).toHaveCount(EXPECTED_PROVIDERS.length);
+
+    for (const [index, provider] of EXPECTED_PROVIDERS.entries()) {
+      const row = rows.nth(index);
+      await expect(row.locator('th')).toHaveText(provider.name);
+      const cells = row.locator('td.landing-providers-cell');
+      await expect(cells).toHaveCount(provider.cells.length);
+      for (const [cellIndex, expected] of provider.cells.entries()) {
+        await expect(cells.nth(cellIndex)).toHaveClass(new RegExp(`\\b${expected}\\b`));
+      }
     }
   });
 });

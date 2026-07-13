@@ -907,20 +907,47 @@
     line-height: var(--font-line-height-relaxed);
   }
 
-  .landing-providers-rows {
-    list-style: none;
-    margin: 0 0 var(--space-6);
-    padding: 0;
-    border-top: 1px solid rgba(201, 166, 107, 0.12);
+  .landing-providers-tablewrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
   }
 
-  .landing-provider-row {
-    display: grid;
-    grid-template-columns: 44px 160px 1fr auto;
-    align-items: center;
-    gap: var(--space-4);
-    padding: var(--space-4) var(--space-2);
+  .landing-providers-table {
+    width: 100%;
+    min-width: 560px;
+    border-collapse: collapse;
+  }
+
+  .landing-providers-table th,
+  .landing-providers-table td {
+    padding: var(--space-4) var(--space-3);
     border-bottom: 1px solid rgba(201, 166, 107, 0.12);
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .landing-providers-table thead th {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--color-text-secondary);
+  }
+
+  .landing-providers-th-provider,
+  .landing-providers-cell-provider {
+    text-align: left !important;
+  }
+
+  .landing-providers-cell-provider {
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+  }
+
+  .landing-providers-provider-label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
   }
 
   .landing-provider-row-glyph {
@@ -928,50 +955,52 @@
     display: flex;
   }
 
-  .landing-provider-row-name {
-    font-weight: var(--font-weight-semibold);
-    color: var(--color-text-primary);
-  }
-
-  .landing-provider-row-desc {
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-sm);
-    line-height: 1.5;
-  }
-
-  .landing-provider-row-status {
-    justify-self: end;
-    white-space: nowrap;
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-full);
-    background: rgba(201, 166, 107, 0.14);
+  .landing-providers-cell.yes {
     color: var(--color-brand-primary);
+    font-weight: var(--font-weight-semibold);
   }
 
-  .landing-providers-foot {
-    max-width: 64ch;
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-sm);
-    line-height: 1.6;
+  .landing-providers-cell.no {
+    color: var(--color-text-tertiary, var(--color-text-secondary));
+    opacity: 0.55;
   }
 
+  .landing-visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* Narrow viewports: the lead copy already states that sync and launch/send
+     are universal, so drop those two all-supported columns and keep the
+     differentiating controls visible without horizontal scroll. */
   @media (width <= 700px) {
-    .landing-provider-row {
-      grid-template-columns: 34px 1fr;
-      grid-template-areas:
-        "glyph name"
-        "desc desc"
-        "status status";
-      gap: var(--space-2);
+    .landing-providers-table {
+      min-width: 0;
     }
-    .landing-provider-row-glyph { grid-area: glyph; }
-    .landing-provider-row-name { grid-area: name; }
-    .landing-provider-row-desc { grid-area: desc; }
-    .landing-provider-row-status { grid-area: status; justify-self: start; }
+
+    .landing-providers-table th:nth-child(2),
+    .landing-providers-table td:nth-child(2),
+    .landing-providers-table th:nth-child(3),
+    .landing-providers-table td:nth-child(3) {
+      display: none;
+    }
+
+    .landing-providers-table th,
+    .landing-providers-table td {
+      padding: var(--space-3) var(--space-1);
+    }
+
+    .landing-providers-table thead th {
+      white-space: normal;
+      overflow-wrap: break-word;
+    }
   }
 
   /* --------------------------------------------------------

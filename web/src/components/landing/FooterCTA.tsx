@@ -63,7 +63,7 @@ export function FooterCTA() {
           <nav className="landing-footer-nav">
             <div className="landing-footer-nav-group">
               <h4>Product</h4>
-              <a href="#journey">How it works</a>
+              <a href="#how-it-works">How it works</a>
               <a href="#surface">CLI & API</a>
               <a href="#providers">Providers</a>
               <a href="#pricing">Deployment</a>

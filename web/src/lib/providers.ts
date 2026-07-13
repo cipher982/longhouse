@@ -11,8 +11,15 @@ export type LaunchProviderId = "claude" | "codex" | "opencode" | "antigravity" |
 export type LaunchProviderSupport = {
   id: LaunchProviderId;
   marketingName: string;
-  cardDescription: string;
-  statusLabel: string;
+  /**
+   * Landing capability matrix. Mirrors
+   * server/zerg/config/managed_provider_contracts.json — launchAndSend folds
+   * launch_local + send_input, interrupt folds interrupt + terminate.
+   */
+  launchAndSend: boolean;
+  interrupt: boolean;
+  steerMidTurn: boolean;
+  resume: boolean;
   archiveVisibility: "live";
   cloudSessionStart: "live";
   hooksSupport: "live" | "none";
@@ -23,8 +30,10 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   claude: {
     id: "claude",
     marketingName: "Claude Code",
-    cardDescription: "Launch, send, steer, interrupt, and resume",
-    statusLabel: "Full control",
+    launchAndSend: true,
+    interrupt: true,
+    steerMidTurn: true,
+    resume: true,
     archiveVisibility: "live",
     cloudSessionStart: "live",
     hooksSupport: "live",
@@ -33,8 +42,10 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   codex: {
     id: "codex",
     marketingName: "Codex CLI",
-    cardDescription: "Launch, send, steer, interrupt, and resume",
-    statusLabel: "Full control",
+    launchAndSend: true,
+    interrupt: true,
+    steerMidTurn: true,
+    resume: true,
     archiveVisibility: "live",
     cloudSessionStart: "live",
     hooksSupport: "none",
@@ -43,8 +54,10 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   opencode: {
     id: "opencode",
     marketingName: "OpenCode",
-    cardDescription: "Launch, send, interrupt, and terminate",
-    statusLabel: "No steering or resume",
+    launchAndSend: true,
+    interrupt: true,
+    steerMidTurn: false,
+    resume: false,
     archiveVisibility: "live",
     cloudSessionStart: "live",
     hooksSupport: "none",
@@ -53,8 +66,10 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   antigravity: {
     id: "antigravity",
     marketingName: "Antigravity CLI",
-    cardDescription: "Local launch and send",
-    statusLabel: "Limited control",
+    launchAndSend: true,
+    interrupt: false,
+    steerMidTurn: false,
+    resume: false,
     archiveVisibility: "live",
     cloudSessionStart: "live",
     hooksSupport: "live",
@@ -63,8 +78,10 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   cursor: {
     id: "cursor",
     marketingName: "Cursor Agent",
-    cardDescription: "Launch, send, interrupt, terminate, and resume",
-    statusLabel: "No mid-turn steering",
+    launchAndSend: true,
+    interrupt: true,
+    steerMidTurn: false,
+    resume: true,
     archiveVisibility: "live",
     cloudSessionStart: "live",
     hooksSupport: "none",
@@ -122,13 +139,13 @@ export function getLaunchProviderSupport(provider: string): LaunchProviderSuppor
   return (LAUNCH_PROVIDER_SUPPORT as Record<string, LaunchProviderSupport | undefined>)[key] ?? null;
 }
 
-/** Ordered list for landing/docs surfaces that need a consistent capability story. */
+/** Ordered list for landing/docs surfaces, sorted by capability depth. */
 export function getLaunchProviderSupportList(): LaunchProviderSupport[] {
   return [
     LAUNCH_PROVIDER_SUPPORT.claude,
     LAUNCH_PROVIDER_SUPPORT.codex,
-    LAUNCH_PROVIDER_SUPPORT.antigravity,
-    LAUNCH_PROVIDER_SUPPORT.opencode,
     LAUNCH_PROVIDER_SUPPORT.cursor,
+    LAUNCH_PROVIDER_SUPPORT.opencode,
+    LAUNCH_PROVIDER_SUPPORT.antigravity,
   ];
 }
