@@ -291,6 +291,62 @@ async def test_projector_state_coalesces_claims_completion_failure_and_restart(d
 
 
 @pytest.mark.asyncio
+async def test_search_projector_claims_newest_revision_first_without_changing_other_projectors(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        session_ids = [str(uuid4()) for _ in range(4)]
+        for projector, rows in (
+            ("search-v2", ((session_ids[0], 10), (session_ids[1], 20))),
+            ("render-v2", ((session_ids[2], 10), (session_ids[3], 20))),
+        ):
+            for offset, (session_id, desired_revision) in enumerate(rows):
+                await client.call(
+                    "projector.state.advance.v2",
+                    {
+                        "projector": projector,
+                        "session_id": session_id,
+                        "desired_revision": desired_revision,
+                        "observed_at": (now + timedelta(seconds=offset)).isoformat(),
+                    },
+                )
+
+        search_claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "search-v2",
+                "worker_id": "search-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=2)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        render_claim = await client.call(
+            "projector.state.claim.v2",
+            {
+                "projector": "render-v2",
+                "worker_id": "render-worker",
+                "claim_token": str(uuid4()),
+                "now": (now + timedelta(seconds=2)).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+
+        assert search_claim["claimed"][0]["session_id"] == session_ids[1]
+        assert search_claim["claimed"][0]["claimed_revision"] == "20"
+        assert render_claim["claimed"][0]["session_id"] == session_ids[2]
+        assert render_claim["claimed"][0]["claimed_revision"] == "10"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 async def test_projector_store_replacement_requeues_completed_state_exactly_once(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
