@@ -432,6 +432,17 @@ def _default_database_enabled_for_process(settings) -> bool:
         return True
 
 
+def _live_database_enabled_for_process(settings) -> bool:
+    """Only tests own the compatibility Live Store through SQLAlchemy.
+
+    Production Runtime Hosts delegate the catalog file exclusively to
+    ``catalogd``. Explicit CLI maintenance commands construct their own engine
+    at the command boundary instead of relying on these process globals.
+    """
+
+    return bool(settings.live_database_url and (settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}))
+
+
 # Default engine and sessionmaker instances for app usage
 if _default_database_enabled_for_process(_settings):
     default_engine = make_engine(_settings.database_url)
@@ -451,7 +462,7 @@ else:
     _write_engine = None
     _write_session_factory = None
 
-if _settings.live_database_url:
+if _live_database_enabled_for_process(_settings):
     live_engine = make_live_engine(_settings.live_database_url)
     live_session_factory = make_sessionmaker(live_engine)
     live_write_engine = make_live_write_engine(_settings.live_database_url)
@@ -494,7 +505,7 @@ def _ensure_default_engines_from_env() -> Engine | None:
     _write_engine = make_write_engine(refreshed.database_url)
     _write_session_factory = make_sessionmaker(_write_engine)
 
-    if refreshed.live_database_url and live_engine is None:
+    if refreshed.live_database_url and live_engine is None and _live_database_enabled_for_process(refreshed):
         live_engine = make_live_engine(refreshed.live_database_url)
         live_session_factory = make_sessionmaker(live_engine)
         live_write_engine = make_live_write_engine(refreshed.live_database_url)
@@ -518,7 +529,7 @@ def configure_write_serializer() -> None:
 
 def configure_live_write_serializer() -> None:
     """Configure the independent Live Store write serializer if enabled."""
-    if not live_store_configured():
+    if not live_store_configured() or live_catalog_enabled():
         return
 
     from zerg.services.write_serializer import get_live_write_serializer
@@ -633,7 +644,7 @@ def get_catalog_session_factory() -> sessionmaker:
     if live_catalog_enabled() or (_archive_route_process and live_store_configured()):
         factory = get_live_session_factory()
         if factory is None:
-            raise RuntimeError("Live catalog is enabled but its session factory is unavailable")
+            raise RuntimeError("Live catalog is catalogd-owned; the API process has no SQLite session factory")
         return factory
     return get_session_factory()
 

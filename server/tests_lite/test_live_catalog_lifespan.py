@@ -28,7 +28,7 @@ async def test_live_catalog_lifespan_never_initializes_or_configures_archive(mon
 
     app = FastAPI()
     async with lifespan_module.lifespan(app):
-        assert calls == ["live_init", "live_writer"]
+        assert calls == ["live_init"]
 
 
 @pytest.mark.asyncio
@@ -130,13 +130,12 @@ async def test_production_live_catalog_lifespan_delegates_schema_to_catalogd(mon
 
     app = FastAPI()
     async with lifespan_module.lifespan(app):
-        assert calls[:7] == [
+        assert calls[:6] == [
             "catalogd_start",
             "searchd_start",
             "raw_workers_start",
             "render_workers_start",
             "search_projector_start",
-            "live_writer",
             "runner_start",
         ]
         assert app.state.catalogd_ping["ready"] is True

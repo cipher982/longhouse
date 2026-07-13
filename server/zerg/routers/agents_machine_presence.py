@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 import zerg.database as database_module
 from zerg.database import catalog_db_dependency
+from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
 from zerg.models.machine_presence import MachinePresence
@@ -31,6 +32,16 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 _catalog_db_dependency = catalog_db_dependency()
 
 _HOT_MACHINE_PRESENCE_QUEUE_TIMEOUT_SECONDS = 2.0
+
+
+def _machine_presence_db():
+    if database_module.live_catalog_enabled():
+        yield None
+        return
+    yield from _catalog_db_dependency()
+
+
+_machine_presence_db_dependency = get_db if _catalog_db_dependency is get_db else _machine_presence_db
 
 MachinePresenceState = Literal["active", "idle_5m", "idle_10m", "locked", "unknown"]
 
@@ -80,13 +91,21 @@ class MachinePresencePolicyResponse(UTCBaseModel):
     min_interval_seconds: int = 60
 
 
-def _machine_presence_identity(db: Session, token: DeviceToken | None) -> tuple[int, str]:
+def _machine_presence_identity(db: Session | None, token: DeviceToken | None) -> tuple[int, str]:
     if token is not None and not isinstance(token, DeviceToken):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Machine presence requires a device token",
         )
-    owner_id = _resolve_agents_owner_id(db, token)
+    owner_id = getattr(token, "owner_id", None)
+    if owner_id is None and db is not None:
+        owner_id = _resolve_agents_owner_id(db, token)
+    if owner_id is None:
+        from zerg.services.catalog_read_gateway import active_owner_id
+
+        owner_id = active_owner_id()
+    if owner_id is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Machine owner is unavailable")
     device_id = (str(token.device_id or f"device:{token.id}") if isinstance(token, DeviceToken) else "auth-disabled-local")[:255]
     return owner_id, device_id
 
@@ -102,21 +121,31 @@ def _machine_presence_collection_enabled(db: Session, *, owner_id: int) -> bool:
 
 @router.get("/machine-presence/policy", response_model=MachinePresencePolicyResponse)
 async def get_machine_presence_policy(
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_machine_presence_db_dependency),
     token: DeviceToken | None = Depends(verify_agents_token),
 ) -> MachinePresencePolicyResponse:
     owner_id, _device_id = _machine_presence_identity(db, token)
+    if database_module.live_catalog_enabled():
+        result = await _catalog_call("machine.presence.policy.v2", {"owner_id": owner_id})
+        return MachinePresencePolicyResponse(enabled=result.get("enabled") is not False)
+    assert db is not None
     return MachinePresencePolicyResponse(enabled=_machine_presence_collection_enabled(db, owner_id=owner_id))
 
 
 @router.post("/machine-presence", response_model=MachinePresenceResponse)
 async def update_machine_presence(
     payload: MachinePresenceIn,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_machine_presence_db_dependency),
     token: DeviceToken | None = Depends(verify_agents_token),
 ) -> MachinePresenceResponse:
     owner_id, device_id = _machine_presence_identity(db, token)
-    if not _machine_presence_collection_enabled(db, owner_id=owner_id):
+    if database_module.live_catalog_enabled():
+        policy = await _catalog_call("machine.presence.policy.v2", {"owner_id": owner_id})
+        enabled = policy.get("enabled") is not False
+    else:
+        assert db is not None
+        enabled = _machine_presence_collection_enabled(db, owner_id=owner_id)
+    if not enabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Machine presence collection is disabled",
@@ -130,6 +159,26 @@ async def update_machine_presence(
         else payload.state
     )
     coarse_idle_seconds = _coarse_idle_seconds(state)
+
+    if database_module.live_catalog_enabled():
+        result = await _catalog_call(
+            "machine.presence.upsert.v2",
+            {
+                "owner_id": owner_id,
+                "device_id": device_id,
+                "state": state,
+                "source": payload.source,
+                "idle_seconds": coarse_idle_seconds,
+                "measured_at": measured_at.isoformat(),
+                "received_at": now.isoformat(),
+            },
+        )
+        presence = result.get("presence")
+        if not isinstance(presence, dict):
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Catalog presence response is invalid")
+        return MachinePresenceResponse.model_validate(presence)
+
+    assert db is not None
 
     def _write(write_db: Session) -> MachinePresenceResponse:
         row = (
@@ -178,3 +227,17 @@ async def update_machine_presence(
         )
     except WriteQueueTimeoutError:
         raise_hot_write_backpressure(ws, admission_state="machine_presence_queue_timeout")
+
+
+async def _catalog_call(method: str, params: dict) -> dict:
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    client = get_catalogd_client()
+    if client is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Catalog is unavailable")
+    try:
+        return await client.call(method, params, timeout_seconds=1.0)
+    except (CatalogRemoteError, CatalogUnavailable) as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Catalog is unavailable") from exc

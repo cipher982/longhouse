@@ -27,7 +27,6 @@ from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
 from zerg.database import archive_database_is_read_only
-from zerg.database import catalog_db_dependency
 from zerg.database import live_store_configured
 from zerg.dependencies.auth import _auth_compat_db
 from zerg.dependencies.auth import get_current_user
@@ -38,8 +37,6 @@ from zerg.services.write_serializer import get_catalog_write_serializer
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
-_catalog_db_dependency = catalog_db_dependency()
-
 # Preserve the established patch seam while routing it to the catalog owner.
 get_write_serializer = get_catalog_write_serializer
 
@@ -64,6 +61,26 @@ def generate_device_token() -> str:
     """
     random_bytes = secrets.token_urlsafe(32)  # 256 bits
     return f"zdt_{random_bytes}"
+
+
+async def _catalog_mutation(method: str, params: dict) -> dict:
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+
+    client = get_catalogd_client()
+    if client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+        )
+    try:
+        return await client.call(method, params, timeout_seconds=1.0)
+    except (CatalogRemoteError, CatalogUnavailable) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": "catalog_unavailable", "message": "Catalog mutation is temporarily unavailable."},
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -367,13 +384,39 @@ async def list_device_tokens(
 @router.post("/apns-register", response_model=APNSRegisterResponse)
 async def register_apns_device(
     request: APNSRegisterRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_auth_compat_db),
     current_user=Depends(get_current_user),
 ) -> APNSRegisterResponse:
     """Register or refresh an APNs device token for the current browser user."""
     normalized_token = str(request.device_token or "").strip().lower()
     build_id = str(request.app_build_id or "").strip() or None
     now = datetime.now(timezone.utc)
+    if live_store_configured() and not get_settings().testing:
+        result = await _catalog_mutation(
+            "notification.apns.device.upsert.v2",
+            {
+                "registration_id": str(uuid4()),
+                "owner_id": int(current_user.id),
+                "platform": request.platform,
+                "device_token": normalized_token,
+                "push_environment": request.push_environment,
+                "app_build_id": build_id,
+                "observed_at": now.isoformat(),
+            },
+        )
+        registration = result.get("registration")
+        if not isinstance(registration, dict):
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Catalog response is invalid")
+        return APNSRegisterResponse(
+            id=registration["id"],
+            platform=registration["platform"],
+            device_token_suffix=normalized_token[-12:],
+            push_environment=registration["push_environment"],
+            app_build_id=registration.get("app_build_id"),
+            last_seen_at=registration["last_seen_at"],
+        )
+    if db is None:
+        raise RuntimeError("legacy APNs registration requires a test database")
     ws = get_write_serializer()
 
     def _register_device(wdb: Session) -> tuple[str, str, str, str | None, datetime]:
@@ -433,7 +476,7 @@ async def register_apns_device(
 @router.post("/apns-live-activity/register", response_model=APNSLiveActivityRegisterResponse)
 async def register_apns_live_activity(
     request: APNSLiveActivityRegisterRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_auth_compat_db),
     current_user=Depends(get_current_user),
 ) -> APNSLiveActivityRegisterResponse:
     """Register or refresh an ActivityKit update token for one watched session."""
@@ -443,6 +486,34 @@ async def register_apns_live_activity(
     session_id = str(request.session_id or "").strip()
     build_id = str(request.app_build_id or "").strip() or None
     now = datetime.now(timezone.utc)
+    if live_store_configured() and not get_settings().testing:
+        result = await _catalog_mutation(
+            "notification.apns.live_activity.upsert.v2",
+            {
+                "registration_id": str(uuid4()),
+                "owner_id": int(current_user.id),
+                "session_id": session_id,
+                "activity_id": activity_id,
+                "push_token": normalized_token,
+                "push_environment": request.push_environment,
+                "app_build_id": build_id,
+                "observed_at": now.isoformat(),
+            },
+        )
+        registration = result.get("registration")
+        if not isinstance(registration, dict):
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Catalog response is invalid")
+        return APNSLiveActivityRegisterResponse(
+            id=registration["id"],
+            session_id=registration["session_id"],
+            activity_id=registration["activity_id"],
+            push_token_suffix=normalized_token[-12:],
+            push_environment=registration["push_environment"],
+            app_build_id=registration.get("app_build_id"),
+            last_seen_at=registration["last_seen_at"],
+        )
+    if db is None:
+        raise RuntimeError("legacy APNs Live Activity registration requires a test database")
     ws = get_write_serializer()
 
     def _register_live_activity(wdb: Session) -> tuple[str, str, str, str, str | None, datetime]:
@@ -523,13 +594,25 @@ async def register_apns_live_activity(
 @router.post("/apns-live-activity/end", status_code=status.HTTP_204_NO_CONTENT)
 async def end_apns_live_activity(
     request: APNSLiveActivityEndRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_auth_compat_db),
     current_user=Depends(get_current_user),
 ) -> None:
     """Mark an ActivityKit update token as ended after the user stops watching."""
 
     activity_id = str(request.activity_id or "").strip()
     now = datetime.now(timezone.utc)
+    if live_store_configured() and not get_settings().testing:
+        await _catalog_mutation(
+            "notification.apns.live_activity.end.v2",
+            {
+                "owner_id": int(current_user.id),
+                "activity_id": activity_id,
+                "ended_at": now.isoformat(),
+            },
+        )
+        return None
+    if db is None:
+        raise RuntimeError("legacy APNs Live Activity end requires a test database")
     ws = get_write_serializer()
 
     def _end_live_activity(wdb: Session) -> None:

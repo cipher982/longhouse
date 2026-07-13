@@ -52,8 +52,10 @@ def _enforce_single_tenant_startup(app: FastAPI) -> None:
         return
 
     from zerg.database import catalog_db_session
+    from zerg.services.single_tenant import OSS_DEFAULT_EMAIL
     from zerg.services.single_tenant import SingleTenantViolation
     from zerg.services.single_tenant import bootstrap_owner_user
+    from zerg.services.single_tenant import get_owner_email
     from zerg.services.single_tenant import validate_single_tenant
     from zerg.services.single_tenant import validate_single_tenant_config
 
@@ -64,6 +66,30 @@ def _enforce_single_tenant_startup(app: FastAPI) -> None:
         raise RuntimeError(config_error)
 
     try:
+        if live_catalog_enabled():
+            from zerg.catalogd.client import CatalogRemoteError
+            from zerg.catalogd.client import call_catalogd_sync
+            from zerg.services.catalogd_supervisor import catalogd_paths
+
+            owner_email = get_owner_email()
+            provider = "local" if owner_email in {OSS_DEFAULT_EMAIL, "owner@longhouse.local"} else "google"
+            provider_user_id = "local-user-1" if owner_email == OSS_DEFAULT_EMAIL else None
+            _database_path, socket_path = catalogd_paths()
+            try:
+                call_catalogd_sync(
+                    socket_path,
+                    "auth.single_tenant.ensure.v2",
+                    params={
+                        "email": owner_email,
+                        "provider": provider,
+                        "provider_user_id": provider_user_id,
+                    },
+                    timeout_seconds=1.0,
+                )
+            except CatalogRemoteError as exc:
+                reason = (exc.details or {}).get("reason") if isinstance(exc.details, dict) else None
+                raise SingleTenantViolation(f"Single-tenant violation: {reason or exc.code}") from exc
+            return
         with catalog_db_session() as db:
             validate_single_tenant(db)
             bootstrap_owner_user(db)
@@ -184,8 +210,9 @@ async def lifespan(app: FastAPI):
         if not catalog_mode:
             with _timed_startup_step("configure_write_serializer"):
                 configure_write_serializer()
-        with _timed_startup_step("configure_live_write_serializer"):
-            configure_live_write_serializer()
+        if not catalog_mode:
+            with _timed_startup_step("configure_live_write_serializer"):
+                configure_live_write_serializer()
 
         try:
             from zerg.database import default_engine

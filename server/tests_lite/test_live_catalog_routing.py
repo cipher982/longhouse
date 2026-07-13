@@ -8,6 +8,7 @@ import pytest
 from fastapi import HTTPException
 
 import zerg.database as database_module
+from zerg.database import _live_database_enabled_for_process
 from zerg.database import catalog_db_dependency
 from zerg.database import get_catalog_session_factory
 from zerg.database import get_db
@@ -51,6 +52,12 @@ def test_catalog_dependency_stays_overrideable_during_tests(monkeypatch):
     monkeypatch.setattr(database_module._settings, "testing", True)
     monkeypatch.setenv("TESTING", "1")
     assert catalog_db_dependency() is get_db
+
+
+def test_production_catalog_mode_does_not_construct_api_sqlite_engines(monkeypatch):
+    settings = type("Settings", (), {"live_database_url": "sqlite:////data/longhouse-live.db", "testing": False})()
+    monkeypatch.setenv("TESTING", "0")
+    assert _live_database_enabled_for_process(settings) is False
 
 
 def test_archive_route_process_keeps_catalog_auth_on_live_database(monkeypatch):

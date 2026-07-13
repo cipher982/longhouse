@@ -288,15 +288,16 @@ def readyz_check():
             content={"status": "unhealthy", "reason": single_tenant_violation},
         )
 
-    readiness_engine = (get_live_engine() if live_store_configured() else None) or default_engine
-    if readiness_engine is None:
+    catalog_mode = live_catalog_enabled()
+    readiness_engine = None if catalog_mode else ((get_live_engine() if live_store_configured() else None) or default_engine)
+    if readiness_engine is None and not catalog_mode:
         return JSONResponse(
             status_code=503,
             content={"status": "unhealthy", "reason": "database engine not initialized"},
         )
 
     catalogd_ready = False
-    if live_catalog_enabled() and not _settings.testing:
+    if catalog_mode and not _settings.testing:
         try:
             from zerg.catalogd.client import call_catalogd_sync
             from zerg.catalogd.schema import CATALOG_SCHEMA_GENERATION
@@ -318,7 +319,7 @@ def readyz_check():
                 content={"status": "unhealthy", "reason": "catalog_unavailable"},
             )
 
-    db_url = str(readiness_engine.url)
+    db_url = str(readiness_engine.url) if readiness_engine is not None else ""
     if not catalogd_ready and db_url.startswith("sqlite"):
         db_path = db_url.replace("sqlite:///", "").replace("sqlite://", "")
         if not db_path or db_path == ":memory:":
@@ -354,7 +355,9 @@ def readyz_check():
     catalog_mode = live_catalog_enabled()
     writer_stale, writer_metrics = (False, {"status": "retired"}) if catalog_mode else _write_serializer_stall_check()
     archive_degraded = writer_stale and _writer_stall_is_archive_degraded(writer_metrics)
-    live_writer_stale, live_writer_metrics = _live_write_serializer_check()
+    live_writer_stale, live_writer_metrics = (
+        (False, {"status": "retired", "owner": "catalogd"}) if catalog_mode else _live_write_serializer_check()
+    )
     if live_writer_stale:
         return JSONResponse(
             status_code=503,
@@ -541,20 +544,19 @@ def health_check(request: Request):
         from zerg.database import live_store_configured
         from zerg.services.db_diagnostics import collect_sqlite_store_stats
 
-        live_db = None
-        if live_store_configured():
-            live_session_factory = get_live_session_factory()
-            if live_session_factory is not None:
-                live_db = live_session_factory()
+        diagnostics_db = None
+        if _settings.testing:
+            factory = get_live_session_factory()
+            diagnostics_db = factory() if factory is not None else None
         try:
             live_store = collect_sqlite_store_stats(
                 _settings.live_database_url,
                 archive_database_url=_settings.database_url,
-                db=live_db,
+                db=diagnostics_db,
             )
         finally:
-            if live_db is not None:
-                live_db.close()
+            if diagnostics_db is not None:
+                diagnostics_db.close()
 
         live_status = live_store.get("status")
         live_warnings = live_store.get("warnings") or []
@@ -693,7 +695,9 @@ def health_check(request: Request):
         health_status["status"] = "unhealthy"
         health_status["message"] = "Write serializer is stalled"
         critical_failure = True
-    _live_writer_stale, live_writer_metrics = _live_write_serializer_check()
+    _live_writer_stale, live_writer_metrics = (
+        (False, {"status": "retired", "owner": "catalogd"}) if catalog_mode else _live_write_serializer_check()
+    )
     checks["live_write_serializer"] = live_writer_metrics
     if _live_writer_stale:
         health_status["status"] = "unhealthy"

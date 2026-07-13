@@ -221,6 +221,8 @@ class CatalogDaemon:
             return await self._get_user(request)
         if request.method == "auth.owner.get.v2":
             return await self._get_active_owner(request)
+        if request.method == "auth.single_tenant.ensure.v2":
+            return await self._ensure_single_tenant_owner(request)
         if request.method == "auth.user.resolve_cp.v2":
             return await self._resolve_cp_user(request)
         if request.method == "auth.user.resolve_local.v2":
@@ -245,6 +247,16 @@ class CatalogDaemon:
             return await self._upsert_notification_presence(request)
         if request.method == "notification.presence.visible.read.v2":
             return await self._read_visible_notification_presence(request)
+        if request.method == "machine.presence.policy.v2":
+            return await self._read_machine_presence_policy(request)
+        if request.method == "machine.presence.upsert.v2":
+            return await self._upsert_machine_presence(request)
+        if request.method == "notification.apns.device.upsert.v2":
+            return await self._upsert_apns_device(request)
+        if request.method == "notification.apns.live_activity.upsert.v2":
+            return await self._upsert_apns_live_activity(request)
+        if request.method == "notification.apns.live_activity.end.v2":
+            return await self._end_apns_live_activity(request)
         if request.method == "session.runtime.apply.v2":
             return await self._apply_session_runtime(request)
         if request.method == "control.command_result.apply.v2":
@@ -436,6 +448,25 @@ class CatalogDaemon:
             id=request.id,
             result=await self._run_read_store(self._store.get_active_owner),
         )
+
+    async def _ensure_single_tenant_owner(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"email", "provider", "provider_user_id"}:
+            return self._error(request, "invalid_request", "auth.single_tenant.ensure.v2 has invalid parameters")
+        params = dict(request.params)
+        if not _is_string(params["email"], maximum=320) or not _is_string(params["provider"], maximum=64):
+            return self._error(request, "invalid_request", "email and provider must be non-empty bounded strings")
+        if params["provider_user_id"] is not None and not _is_string(params["provider_user_id"], maximum=255):
+            return self._error(request, "invalid_request", "provider_user_id must be a non-empty string or null")
+        assert self._store is not None
+        result = await self._run_store(self._store.ensure_single_tenant_owner, **params)
+        if conflict := result.get("conflict"):
+            return self._error(
+                request,
+                "conflict",
+                "single-tenant catalog invariant failed",
+                details={"reason": conflict},
+            )
+        return CatalogRpcResponse(id=request.id, result=result)
 
     async def _resolve_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         expected = {"token_hash", "touch_last_used", "touch_interval_seconds"}
@@ -845,6 +876,127 @@ class CatalogDaemon:
             self._store.recent_visible_web_presence,
             owner_id=owner_id,
             threshold=threshold,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_machine_presence_policy(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id"}:
+            return self._error(request, "invalid_request", "machine.presence.policy.v2 requires owner_id")
+        owner_id = request.params["owner_id"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        assert self._store is not None
+        result = await self._run_read_store(self._store.read_machine_presence_policy, owner_id=owner_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _upsert_machine_presence(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"owner_id", "device_id", "state", "source", "idle_seconds", "measured_at", "received_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "machine.presence.upsert.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if params["state"] not in {"active", "idle_5m", "idle_10m", "locked", "unknown"}:
+            return self._error(request, "invalid_request", "machine presence state is invalid")
+        idle_seconds = params["idle_seconds"]
+        if idle_seconds is not None and (type(idle_seconds) is not int or not 0 <= idle_seconds <= 86_400):
+            return self._error(request, "invalid_request", "idle_seconds is invalid")
+        try:
+            params["device_id"] = _bounded_text(params["device_id"], "device_id", 255)
+            params["source"] = _bounded_text(params["source"], "source", 64)
+            params["measured_at"] = _parse_datetime(params["measured_at"], "measured_at")
+            params["received_at"] = _parse_datetime(params["received_at"], "received_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.upsert_machine_presence, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _upsert_apns_device(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "registration_id",
+            "owner_id",
+            "platform",
+            "device_token",
+            "push_environment",
+            "app_build_id",
+            "observed_at",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "notification.apns.device.upsert.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if params["platform"] not in {"ios", "ios_widget"} or params["push_environment"] not in {
+            "sandbox",
+            "production",
+        }:
+            return self._error(request, "invalid_request", "APNs platform or environment is invalid")
+        try:
+            params["registration_id"] = str(_canonical_uuid(params["registration_id"], "registration_id"))
+            params["device_token"] = _bounded_text(params["device_token"], "device_token", 255)
+            if params["app_build_id"] is not None:
+                params["app_build_id"] = _bounded_text(params["app_build_id"], "app_build_id", 255)
+            params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.upsert_apns_device, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _upsert_apns_live_activity(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "registration_id",
+            "owner_id",
+            "session_id",
+            "activity_id",
+            "push_token",
+            "push_environment",
+            "app_build_id",
+            "observed_at",
+        }
+        if set(request.params) != expected:
+            return self._error(
+                request,
+                "invalid_request",
+                "notification.apns.live_activity.upsert.v2 has invalid parameters",
+            )
+        params = dict(request.params)
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if params["push_environment"] not in {"sandbox", "production"}:
+            return self._error(request, "invalid_request", "APNs environment is invalid")
+        try:
+            params["registration_id"] = str(_canonical_uuid(params["registration_id"], "registration_id"))
+            params["session_id"] = str(_canonical_uuid(params["session_id"], "session_id"))
+            params["activity_id"] = _bounded_text(params["activity_id"], "activity_id", 255)
+            params["push_token"] = _bounded_text(params["push_token"], "push_token", 255)
+            if params["app_build_id"] is not None:
+                params["app_build_id"] = _bounded_text(params["app_build_id"], "app_build_id", 255)
+            params["observed_at"] = _parse_datetime(params["observed_at"], "observed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.upsert_apns_live_activity, **params)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _end_apns_live_activity(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "activity_id", "ended_at"}:
+            return self._error(request, "invalid_request", "notification.apns.live_activity.end.v2 has invalid parameters")
+        owner_id = request.params["owner_id"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        try:
+            activity_id = _bounded_text(request.params["activity_id"], "activity_id", 255)
+            ended_at = _parse_datetime(request.params["ended_at"], "ended_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.end_apns_live_activity,
+            owner_id=owner_id,
+            activity_id=activity_id,
+            ended_at=ended_at,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

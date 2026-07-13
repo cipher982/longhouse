@@ -41,6 +41,7 @@ from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
 from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
 from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import catalog_meta
+from zerg.models.live_store import LiveAPNSDeviceRegistration
 from zerg.models.live_store import LiveAPNSLiveActivityRegistration
 from zerg.models.live_store import LiveArchiveOutbox
 from zerg.models.live_store import LiveControlLease
@@ -49,6 +50,7 @@ from zerg.models.live_store import LiveHeartbeatStamp
 from zerg.models.live_store import LiveInteractionRequest
 from zerg.models.live_store import LiveLaunchReadiness
 from zerg.models.live_store import LiveMachineControlOperation
+from zerg.models.live_store import LiveMachinePresence
 from zerg.models.live_store import LiveNotificationClientPresence
 from zerg.models.live_store import LiveRefreshSession
 from zerg.models.live_store import LiveRuntimeState
@@ -445,6 +447,67 @@ class CatalogStore:
                 "commit_seq": str(_current_commit_seq(connection)),
             }
 
+    def ensure_single_tenant_owner(
+        self,
+        *,
+        email: str,
+        provider: str,
+        provider_user_id: str | None,
+    ) -> dict[str, Any]:
+        user_table = LiveUser.__table__
+        now = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            owners = (
+                connection.execute(
+                    select(user_table)
+                    .where(or_(user_table.c.provider != "service", user_table.c.provider.is_(None)))
+                    .order_by(user_table.c.id.asc())
+                    .limit(2)
+                )
+                .mappings()
+                .all()
+            )
+            if len(owners) > 1:
+                return {"conflict": "multiple_owners", "commit_seq": str(_current_commit_seq(connection))}
+            if owners:
+                owner = owners[0]
+                if str(owner["email"]).casefold() != email.casefold():
+                    return {"conflict": "owner_email_mismatch", "commit_seq": str(_current_commit_seq(connection))}
+                if owner["role"] != "ADMIN":
+                    connection.execute(update(user_table).where(user_table.c.id == owner["id"]).values(role="ADMIN", updated_at=now))
+                    commit_seq = _advance_commit_seq(connection, now)
+                    owner = connection.execute(select(user_table).where(user_table.c.id == owner["id"])).mappings().one()
+                else:
+                    commit_seq = _current_commit_seq(connection)
+                return {
+                    "created": False,
+                    "user": _user_dto(owner),
+                    "commit_seq": str(commit_seq),
+                }
+            user_id = connection.execute(
+                insert(user_table)
+                .values(
+                    provider=provider,
+                    provider_user_id=provider_user_id,
+                    email=email,
+                    email_verified=True,
+                    is_active=True,
+                    role="ADMIN",
+                    prefs={},
+                    context={},
+                    created_at=now,
+                    updated_at=now,
+                )
+                .returning(user_table.c.id)
+            ).scalar_one()
+            commit_seq = _advance_commit_seq(connection, now)
+            owner = connection.execute(select(user_table).where(user_table.c.id == user_id)).mappings().one()
+            return {
+                "created": True,
+                "user": _user_dto(owner),
+                "commit_seq": str(commit_seq),
+            }
+
     def upsert_notification_presence(
         self,
         *,
@@ -537,6 +600,185 @@ class CatalogStore:
                 "visible": found is not None,
                 "commit_seq": str(_current_commit_seq(connection)),
             }
+
+    def read_machine_presence_policy(self, *, owner_id: int) -> dict[str, Any]:
+        user_table = LiveUser.__table__
+        with _read_snapshot(self.engine) as connection:
+            prefs = connection.execute(select(user_table.c.prefs).where(user_table.c.id == owner_id)).scalar_one_or_none()
+            decoded = _decode_json_object(prefs) if prefs is not None else {}
+            enabled = decoded.get("machine_presence_enabled")
+            return {
+                "found": prefs is not None,
+                "enabled": enabled if isinstance(enabled, bool) else True,
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def upsert_machine_presence(
+        self,
+        *,
+        owner_id: int,
+        device_id: str,
+        state: str,
+        source: str,
+        idle_seconds: int | None,
+        measured_at: datetime,
+        received_at: datetime,
+    ) -> dict[str, Any]:
+        table = LiveMachinePresence.__table__
+        values = {
+            "state": state,
+            "source": source,
+            "idle_seconds": idle_seconds,
+            "measured_at": measured_at,
+            "received_at": received_at,
+            "updated_at": received_at,
+        }
+        with _write_transaction(self.engine) as connection:
+            row = connection.execute(select(table.c.id).where(table.c.owner_id == owner_id, table.c.device_id == device_id)).first()
+            if row is None:
+                connection.execute(
+                    insert(table).values(
+                        owner_id=owner_id,
+                        device_id=device_id,
+                        created_at=received_at,
+                        **values,
+                    )
+                )
+            else:
+                connection.execute(update(table).where(table.c.owner_id == owner_id, table.c.device_id == device_id).values(**values))
+            commit_seq = _advance_commit_seq(connection, received_at)
+            return {
+                "presence": {
+                    "owner_id": owner_id,
+                    "device_id": device_id,
+                    "state": state,
+                    "source": source,
+                    "idle_seconds": idle_seconds,
+                    "measured_at": measured_at.isoformat(),
+                    "received_at": received_at.isoformat(),
+                },
+                "commit_seq": str(commit_seq),
+            }
+
+    def upsert_apns_device(
+        self,
+        *,
+        registration_id: str,
+        owner_id: int,
+        platform: str,
+        device_token: str,
+        push_environment: str,
+        app_build_id: str | None,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        table = LiveAPNSDeviceRegistration.__table__
+        with _write_transaction(self.engine) as connection:
+            row = (
+                connection.execute(select(table).where(table.c.owner_id == owner_id, table.c.device_token == device_token))
+                .mappings()
+                .first()
+            )
+            stored_id = str(row["id"]) if row is not None else registration_id
+            values = {
+                "platform": platform,
+                "push_environment": push_environment,
+                "app_build_id": app_build_id,
+                "last_seen_at": observed_at,
+                "updated_at": observed_at,
+                "revoked_at": None,
+            }
+            if row is None:
+                connection.execute(
+                    insert(table).values(
+                        id=stored_id,
+                        owner_id=owner_id,
+                        device_token=device_token,
+                        created_at=observed_at,
+                        **values,
+                    )
+                )
+            else:
+                connection.execute(update(table).where(table.c.id == stored_id).values(**values))
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "registration": {
+                    "id": stored_id,
+                    "platform": platform,
+                    "push_environment": push_environment,
+                    "app_build_id": app_build_id,
+                    "last_seen_at": observed_at.isoformat(),
+                },
+                "commit_seq": str(commit_seq),
+            }
+
+    def upsert_apns_live_activity(
+        self,
+        *,
+        registration_id: str,
+        owner_id: int,
+        session_id: str,
+        activity_id: str,
+        push_token: str,
+        push_environment: str,
+        app_build_id: str | None,
+        observed_at: datetime,
+    ) -> dict[str, Any]:
+        table = LiveAPNSLiveActivityRegistration.__table__
+        with _write_transaction(self.engine) as connection:
+            row = (
+                connection.execute(select(table).where(table.c.owner_id == owner_id, table.c.activity_id == activity_id)).mappings().first()
+            )
+            if row is None:
+                row = (
+                    connection.execute(select(table).where(table.c.owner_id == owner_id, table.c.push_token == push_token))
+                    .mappings()
+                    .first()
+                )
+            stored_id = str(row["id"]) if row is not None else registration_id
+            values = {
+                "session_id": session_id,
+                "activity_id": activity_id,
+                "push_token": push_token,
+                "push_environment": push_environment,
+                "app_build_id": app_build_id,
+                "last_seen_at": observed_at,
+                "updated_at": observed_at,
+                "ended_at": None,
+            }
+            if row is None:
+                connection.execute(
+                    insert(table).values(
+                        id=stored_id,
+                        owner_id=owner_id,
+                        created_at=observed_at,
+                        **values,
+                    )
+                )
+            else:
+                connection.execute(update(table).where(table.c.id == stored_id).values(**values))
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "registration": {
+                    "id": stored_id,
+                    "session_id": session_id,
+                    "activity_id": activity_id,
+                    "push_environment": push_environment,
+                    "app_build_id": app_build_id,
+                    "last_seen_at": observed_at.isoformat(),
+                },
+                "commit_seq": str(commit_seq),
+            }
+
+    def end_apns_live_activity(self, *, owner_id: int, activity_id: str, ended_at: datetime) -> dict[str, Any]:
+        table = LiveAPNSLiveActivityRegistration.__table__
+        with _write_transaction(self.engine) as connection:
+            count = connection.execute(
+                update(table)
+                .where(table.c.owner_id == owner_id, table.c.activity_id == activity_id, table.c.ended_at.is_(None))
+                .values(ended_at=ended_at, updated_at=ended_at)
+            ).rowcount
+            commit_seq = _advance_commit_seq(connection, ended_at) if count else _current_commit_seq(connection)
+            return {"found": bool(count), "commit_seq": str(commit_seq)}
 
     def resolve_device(
         self,
@@ -6593,6 +6835,8 @@ def _jsonable_catalog_value(value: Any) -> Any:
 
 
 def _decode_json_object(value: object) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
     try:
         decoded = json.loads(str(value or "{}"))
     except json.JSONDecodeError as exc:

@@ -27,15 +27,21 @@ _SAFE_RETRY_METHODS = {
     "auth.device.list.v2",
     "auth.device.validate.v2",
     "auth.owner.get.v2",
+    "auth.single_tenant.ensure.v2",
     "machine.enrollment.list.v2",
     # apply is idempotent on (device_id, received_at) and rejects a key reused
     # with different content, so a lost response can safely replay once.
     "machine.heartbeat.apply.v2",
+    "machine.presence.policy.v2",
+    "machine.presence.upsert.v2",
     "machine.operation.prepare.v2",
     "machine.operation.read.v2",
     "machine.workspace.list.v2",
     "notification.presence.upsert.v2",
     "notification.presence.visible.read.v2",
+    "notification.apns.device.upsert.v2",
+    "notification.apns.live_activity.upsert.v2",
+    "notification.apns.live_activity.end.v2",
     # Both control mutations are caller-keyed and exact/idempotent. A replay
     # returns the reserved grant or observes the already-terminal operation.
     "control.command.prepare.v2",
