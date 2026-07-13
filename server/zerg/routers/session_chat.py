@@ -225,6 +225,8 @@ async def _write_hot_managed_local_launch_readiness(
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=_MANAGED_LOCAL_HOT_LAUNCH_LEASE_SECS)
     if database_module.live_catalog_enabled():
+        from zerg.catalogd.client import CatalogRemoteError
+        from zerg.catalogd.client import CatalogUnavailable
         from zerg.services.catalogd_supervisor import get_catalogd_client
 
         catalogd = get_catalogd_client()
@@ -260,11 +262,34 @@ async def _write_hot_managed_local_launch_readiness(
         try:
             await catalogd.call("session.launch.local.create.v2", {"launch": launch})
             return
+        except CatalogUnavailable as exc:
+            raise ManagedLocalLaunchError(
+                "Managed local launch is blocked because catalogd is unavailable; retry shortly.",
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            ) from exc
+        except CatalogRemoteError as exc:
+            if exc.code == "conflict":
+                raise ManagedLocalLaunchError(
+                    str(exc) or "Managed local launch conflicts with an existing launch identity.",
+                    status_code=status.HTTP_409_CONFLICT,
+                ) from exc
+            if exc.retryable:
+                raise ManagedLocalLaunchError(
+                    str(exc) or "Managed local launch is blocked because catalogd is temporarily unavailable; retry shortly.",
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                ) from exc
+            # Server-built launch payloads that fail catalog validation are
+            # programmer/contract bugs, not client retries.
+            logger.exception("Managed local catalog launch rejected by catalogd")
+            raise ManagedLocalLaunchError(
+                str(exc) or "Managed local launch is blocked because catalogd rejected launch state.",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ) from exc
         except Exception as exc:
             logger.exception("Managed local catalog launch transaction failed")
             raise ManagedLocalLaunchError(
-                "Managed local launch is blocked because catalogd could not persist launch state; retry shortly.",
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Managed local launch is blocked because catalogd could not persist launch state.",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             ) from exc
     if not database_module.live_store_configured():
         raise ManagedLocalLaunchError(
