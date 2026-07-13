@@ -113,7 +113,7 @@ class RunnerJobDispatcher:
         with self._pending_lock:
             return self._pending_jobs.pop(job_id, None)
 
-    def _reclaim_stale_active_job(self, db: Session, runner_id: int) -> bool:
+    def _reclaim_stale_active_job(self, db: Session | None, runner_id: int) -> bool:
         """Reclaim an active runner slot if its tracked job is terminal or stale."""
         job_id = self.get_active_job_id(runner_id)
         if not job_id:
@@ -157,7 +157,7 @@ class RunnerJobDispatcher:
 
     async def dispatch_job(
         self,
-        db: Session,
+        db: Session | None,
         owner_id: int,
         runner_id: int,
         command: str,

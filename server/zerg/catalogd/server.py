@@ -227,6 +227,8 @@ class CatalogDaemon:
             return await self._resolve_local_user(request)
         if request.method == "auth.user.update.v2":
             return await self._update_user(request)
+        if request.method == "runner.operation.v2":
+            return await self._runner_operation(request)
         if request.method == "auth.refresh.create.v2":
             return await self._create_refresh(request)
         if request.method == "auth.refresh.rotate.v2":
@@ -2175,6 +2177,22 @@ class CatalogDaemon:
             raise CatalogDaemonError("catalog executor is not ready")
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(self._executor, lambda: operation(*args, **kwargs))
+
+    async def _runner_operation(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"operation", "params"}:
+            return self._error(request, "invalid_request", "runner.operation.v2 has invalid parameters")
+        operation = request.params["operation"]
+        params = request.params["params"]
+        if not isinstance(operation, str) or not operation or len(operation) > 64 or not isinstance(params, dict):
+            return self._error(request, "invalid_request", "runner operation payload is invalid")
+        from zerg.catalogd.runner_store import execute_runner_operation
+
+        assert self._engine is not None
+        try:
+            result = await self._run_store(execute_runner_operation, self._engine, operation, params)
+        except (KeyError, TypeError, ValueError) as exc:
+            return self._error(request, "invalid_request", str(exc))
+        return CatalogRpcResponse(id=request.id, result=result)
 
     async def _create_backup_snapshot(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"output_dir", "data_root"}:

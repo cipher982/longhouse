@@ -16,6 +16,56 @@ _maintenance_task: asyncio.Task | None = None
 
 
 async def _reconcile_runner_health_once() -> None:
+    from zerg.database import live_catalog_enabled
+
+    if live_catalog_enabled():
+        from zerg.crud import runner_crud
+        from zerg.services import runner_catalog
+        from zerg.services.runner_connection_manager import get_runner_connection_manager
+        from zerg.services.runner_health import assess_runner_health
+        from zerg.services.runner_health import runner_requires_proactive_attention
+        from zerg.services.runner_health_reconciler import ALERT_AFTER
+        from zerg.services.runner_health_reconciler import _build_external_alert_copy
+        from zerg.services.runner_health_reconciler import _open_incident_context
+        from zerg.services.runner_health_reconciler import _send_email_alert
+        from zerg.utils.time import utc_now_naive
+
+        connection_manager = get_runner_connection_manager()
+        now = utc_now_naive()
+        for runner in runner_crud.get_runners(None, owner_id=0, limit=10_000):
+            health = assess_runner_health(
+                runner,
+                now=now,
+                is_connected=connection_manager.is_online(runner.owner_id, runner.id),
+            )
+            applied = runner_catalog.operation(
+                "health_apply",
+                runner_id=runner.id,
+                effective_status=health.effective_status,
+                reason_code=health.status_reason,
+                summary=health.status_summary,
+                proactive_attention=runner_requires_proactive_attention(health.availability_policy),
+                context=_open_incident_context(runner, health, now),
+                observed_at=now.isoformat(),
+            )
+            incident = runner_catalog.incident(applied.get("incident"))
+            owner = runner_catalog.user(applied.get("owner"))
+            if (
+                incident is not None
+                and incident.status == "open"
+                and incident.alert_sent_at is None
+                and owner is not None
+                and now - incident.opened_at >= ALERT_AFTER
+            ):
+                subject, body = _build_external_alert_copy(runner, health, incident, now)
+                if _send_email_alert(owner, subject, body):
+                    runner_catalog.operation(
+                        "health_alert_sent",
+                        incident_id=incident.id,
+                        observed_at=now.isoformat(),
+                    )
+        return
+
     from zerg.database import get_catalog_session_factory
     from zerg.services.runner_health_reconciler import reconcile_runner_health
 

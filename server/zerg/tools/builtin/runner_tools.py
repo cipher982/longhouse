@@ -18,6 +18,7 @@ from zerg.config import get_settings
 from zerg.connectors.context import get_credential_resolver
 from zerg.crud import runner_crud
 from zerg.database import get_catalog_session_factory
+from zerg.database import live_catalog_enabled
 from zerg.services.command_validator import CommandValidator
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_health import assess_runner_health
@@ -59,7 +60,7 @@ def _resolve_target(owner_id: int, target: str) -> tuple[int, str] | None:
     Returns:
         Tuple of (runner_id, runner_name) or None if not found
     """
-    db = get_catalog_session_factory()()
+    db = None if live_catalog_enabled() else get_catalog_session_factory()()
 
     try:
         # Check for explicit ID format
@@ -80,7 +81,8 @@ def _resolve_target(owner_id: int, target: str) -> tuple[int, str] | None:
 
         return None
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 def _resolve_execution_context() -> tuple[int | None, str | None, int | None]:
@@ -204,7 +206,7 @@ def runner_exec(
     runner_id, runner_name = resolved
 
     # Check runner status and get runner capabilities
-    db = get_catalog_session_factory()()
+    db = None if live_catalog_enabled() else get_catalog_session_factory()()
     try:
         runner = runner_crud.get_runner(db, runner_id)
         if not runner:
@@ -287,7 +289,8 @@ def runner_exec(
             f"Unexpected error: {str(e)}",
         )
     finally:
-        db.close()
+        if db is not None:
+            db.close()
 
 
 TOOLS: List[StructuredTool] = [

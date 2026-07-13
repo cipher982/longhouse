@@ -18,6 +18,7 @@ from typing import List
 from zerg.connectors.context import get_credential_resolver
 from zerg.crud import runner_crud
 from zerg.database import db_session
+from zerg.database import live_catalog_enabled
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_doctor import diagnose_runner
 from zerg.services.runner_health import build_runner_response
@@ -44,6 +45,12 @@ def _runner_docker_image() -> str:
     return get_settings().runner_docker_image
 
 
+def _runner_db_context():
+    from contextlib import nullcontext
+
+    return nullcontext(None) if live_catalog_enabled() else db_session()
+
+
 def runner_list() -> Dict[str, Any]:
     """List the current user's runners (names, ids, status, last seen).
 
@@ -55,7 +62,7 @@ def runner_list() -> Dict[str, Any]:
 
     owner_id = resolver.owner_id
 
-    with db_session() as db:
+    with _runner_db_context() as db:
         runners = runner_crud.get_runners(db=db, owner_id=owner_id, limit=200)
         connection_manager = get_runner_connection_manager()
         data = [
@@ -73,7 +80,7 @@ def runner_list() -> Dict[str, Any]:
         suggested_next_step = None
         if total > 0 and online == 0 and actionable_offline:
             suggested_next_step = (
-                "No runners are online. Use runner_doctor(target=...) on an offline runner or create a fresh enroll token."
+                "No runners are online. Use runner_doctor(target=...) on an offline runner " "or create a fresh enroll token."
             )
         elif total > 0 and online == 0:
             suggested_next_step = "No runners are online right now. That may be fine if these runners are on-demand."
@@ -97,7 +104,7 @@ def runner_doctor(target: str) -> Dict[str, Any]:
     if not target or not str(target).strip():
         return {"ok": False, "error": {"type": "validation_error", "message": "target is required"}}
 
-    with db_session() as db:
+    with _runner_db_context() as db:
         target_text = str(target).strip()
         runner = None
         if target_text.startswith("runner:"):
@@ -140,7 +147,7 @@ def runner_create_enroll_token(ttl_minutes: int = 10) -> Dict[str, Any]:
 
     owner_id = resolver.owner_id
 
-    with db_session() as db:
+    with _runner_db_context() as db:
         token_record, plaintext_token = runner_crud.create_enroll_token(
             db=db,
             owner_id=owner_id,
@@ -155,7 +162,8 @@ def runner_create_enroll_token(ttl_minutes: int = 10) -> Dict[str, Any]:
         f"# Step 1: Register runner (one-time)\n"
         f"curl -X POST {api_url}/api/runners/register \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
-        f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner", "capabilities": ["{requested_capabilities}"]}}\'\n\n'
+        f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner", '
+        f'"capabilities": ["{requested_capabilities}"]}}\'\n\n'
         f"# Step 2: Save the runner_secret from the response, then run:\n"
         f"docker run -d --name longhouse-runner \\\n"
         f"  -e LONGHOUSE_URL={api_url} \\\n"

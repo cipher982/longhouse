@@ -26,7 +26,7 @@ class RunnerAuthResult:
 
 
 def authenticate_runner_identity(
-    db: Session,
+    db: Session | None,
     *,
     runner_id: int | None = None,
     runner_name: str | None = None,
@@ -50,7 +50,18 @@ def authenticate_runner_identity(
     computed_hash = runner_crud.hash_token(secret)
     runner: Runner | None = None
 
-    if runner_id:
+    if db is None:
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation(
+            "authenticate",
+            runner_id=runner_id,
+            runner_name=runner_name,
+            secret_hash=computed_hash,
+        )
+        runner = runner_catalog.runner(result["runner"])
+
+    elif runner_id:
         runner = runner_crud.get_runner(db, runner_id)
         if not runner:
             return RunnerAuthResult(

@@ -21,6 +21,15 @@ from zerg.models.models import RunnerJob
 from zerg.services.runner_health import infer_runner_availability_policy
 from zerg.utils.time import utc_now_naive
 
+
+def _remote(db: Session | None) -> bool:
+    if db is not None:
+        return False
+    from zerg.database import live_catalog_enabled
+
+    return live_catalog_enabled()
+
+
 # ---------------------------------------------------------------------------
 # Token/Secret Helpers
 # ---------------------------------------------------------------------------
@@ -62,7 +71,7 @@ def prune_enroll_tokens(db: Session, owner_id: int) -> int:
 
 
 def create_enroll_token(
-    db: Session,
+    db: Session | None,
     owner_id: int,
     ttl_minutes: int = 10,
 ) -> tuple[RunnerEnrollToken, str]:
@@ -78,6 +87,12 @@ def create_enroll_token(
     Returns:
         Tuple of (token_record, plaintext_token)
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation("create_enroll_token", owner_id=owner_id, ttl_minutes=ttl_minutes)
+        return runner_catalog.token(result["token"]), str(result["plaintext_token"])
+    assert db is not None
     prune_enroll_tokens(db, owner_id)
 
     token = generate_token()
@@ -183,18 +198,29 @@ def create_runner(
     return db_runner
 
 
-def get_runner(db: Session, runner_id: int) -> Optional[Runner]:
+def get_runner(db: Session | None, runner_id: int) -> Optional[Runner]:
     """Get a runner by ID."""
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        return runner_catalog.runner(runner_catalog.operation("get", runner_id=runner_id)["runner"])
+    assert db is not None
     return db.query(Runner).filter(Runner.id == runner_id).first()
 
 
-def get_runner_by_name(db: Session, owner_id: int, name: str) -> Optional[Runner]:
+def get_runner_by_name(db: Session | None, owner_id: int, name: str) -> Optional[Runner]:
     """Get a runner by owner and name."""
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation("get_by_name", owner_id=owner_id, name=name)
+        return runner_catalog.runner(result["runner"])
+    assert db is not None
     return db.query(Runner).filter(Runner.owner_id == owner_id, Runner.name == name).first()
 
 
 def get_runners(
-    db: Session,
+    db: Session | None,
     owner_id: int,
     skip: int = 0,
     limit: int = 100,
@@ -210,11 +236,17 @@ def get_runners(
     Returns:
         List of runners
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation("list", owner_id=owner_id, skip=skip, limit=limit)
+        return [runner_catalog.runner(item) for item in result["runners"]]
+    assert db is not None
     return db.query(Runner).filter(Runner.owner_id == owner_id).offset(skip).limit(limit).all()
 
 
 def update_runner(
-    db: Session,
+    db: Session | None,
     runner_id: int,
     name: Optional[str] = None,
     availability_policy: Optional[str] = None,
@@ -233,6 +265,19 @@ def update_runner(
     Returns:
         Updated runner or None if not found
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation(
+            "update",
+            runner_id=runner_id,
+            name=name,
+            availability_policy=availability_policy,
+            labels=labels,
+            capabilities=capabilities,
+        )
+        return runner_catalog.runner(result["runner"])
+    assert db is not None
     db_runner = get_runner(db, runner_id)
     if not db_runner:
         return None
@@ -272,7 +317,7 @@ def normalize_capabilities(capabilities: Optional[list[str]]) -> list[str]:
     return normalized
 
 
-def revoke_runner(db: Session, runner_id: int) -> Optional[Runner]:
+def revoke_runner(db: Session | None, runner_id: int) -> Optional[Runner]:
     """Revoke a runner (mark as revoked, cannot reconnect).
 
     Args:
@@ -282,6 +327,11 @@ def revoke_runner(db: Session, runner_id: int) -> Optional[Runner]:
     Returns:
         Revoked runner or None if not found
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        return runner_catalog.runner(runner_catalog.operation("revoke", runner_id=runner_id)["runner"])
+    assert db is not None
     db_runner = get_runner(db, runner_id)
     if not db_runner:
         return None
@@ -293,7 +343,7 @@ def revoke_runner(db: Session, runner_id: int) -> Optional[Runner]:
     return db_runner
 
 
-def delete_runner(db: Session, runner_id: int) -> bool:
+def delete_runner(db: Session | None, runner_id: int) -> bool:
     """Delete a runner permanently.
 
     Args:
@@ -303,6 +353,11 @@ def delete_runner(db: Session, runner_id: int) -> bool:
     Returns:
         True if deleted, False if not found
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        return bool(runner_catalog.operation("delete", runner_id=runner_id)["deleted"])
+    assert db is not None
     db_runner = get_runner(db, runner_id)
     if not db_runner:
         return False
@@ -313,7 +368,7 @@ def delete_runner(db: Session, runner_id: int) -> bool:
     return True
 
 
-def rotate_runner_secret(db: Session, runner_id: int) -> tuple[Runner, str] | None:
+def rotate_runner_secret(db: Session | None, runner_id: int) -> tuple[Runner, str] | None:
     """Rotate a runner's authentication secret.
 
     Generates a new secret, stores only its hash, and returns the plaintext
@@ -326,6 +381,13 @@ def rotate_runner_secret(db: Session, runner_id: int) -> tuple[Runner, str] | No
     Returns:
         Tuple of (updated runner, plaintext_secret) or None if not found
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation("rotate_secret", runner_id=runner_id)
+        remote_runner = runner_catalog.runner(result["runner"])
+        return (remote_runner, str(result["runner_secret"])) if remote_runner is not None else None
+    assert db is not None
     db_runner = get_runner(db, runner_id)
     if not db_runner:
         return None
@@ -349,7 +411,7 @@ def rotate_runner_secret(db: Session, runner_id: int) -> tuple[Runner, str] | No
 
 
 def create_runner_job(
-    db: Session,
+    db: Session | None,
     owner_id: int,
     runner_id: int,
     command: str,
@@ -371,6 +433,20 @@ def create_runner_job(
     Returns:
         Created job record with status='queued'
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation(
+            "job_create",
+            owner_id=owner_id,
+            runner_id=runner_id,
+            command=command,
+            timeout_secs=timeout_secs,
+            correlation_id=correlation_id,
+            run_id=run_id,
+        )
+        return runner_catalog.job(result["job"])
+    assert db is not None
     import uuid
 
     job = RunnerJob(
@@ -391,7 +467,7 @@ def create_runner_job(
     return job
 
 
-def get_job(db: Session, job_id: str) -> Optional[RunnerJob]:
+def get_job(db: Session | None, job_id: str) -> Optional[RunnerJob]:
     """Get a job by ID.
 
     Args:
@@ -401,10 +477,15 @@ def get_job(db: Session, job_id: str) -> Optional[RunnerJob]:
     Returns:
         Job record or None if not found
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        return runner_catalog.job(runner_catalog.operation("job_get", job_id=job_id)["job"])
+    assert db is not None
     return db.query(RunnerJob).filter(RunnerJob.id == job_id).first()
 
 
-def update_job_started(db: Session, job_id: str) -> Optional[RunnerJob]:
+def update_job_started(db: Session | None, job_id: str) -> Optional[RunnerJob]:
     """Mark a job as running and set started_at.
 
     Args:
@@ -414,6 +495,11 @@ def update_job_started(db: Session, job_id: str) -> Optional[RunnerJob]:
     Returns:
         Updated job record or None if not found
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        return runner_catalog.job(runner_catalog.operation("job_started", job_id=job_id)["job"])
+    assert db is not None
     job = get_job(db, job_id)
     if not job:
         return None
@@ -428,7 +514,7 @@ def update_job_started(db: Session, job_id: str) -> Optional[RunnerJob]:
 
 
 def update_job_output(
-    db: Session,
+    db: Session | None,
     job_id: str,
     stream: str,
     data: str,
@@ -447,6 +533,12 @@ def update_job_output(
     Returns:
         Updated job record or None if not found
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation("job_output", job_id=job_id, stream=stream, data=data)
+        return runner_catalog.job(result["job"])
+    assert db is not None
     job = get_job(db, job_id)
     if not job:
         return None
@@ -489,7 +581,7 @@ def update_job_output(
 
 
 def update_job_completed(
-    db: Session,
+    db: Session | None,
     job_id: str,
     exit_code: int,
     duration_ms: int,
@@ -505,6 +597,12 @@ def update_job_completed(
     Returns:
         Updated job record or None if not found
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation("job_completed", job_id=job_id, exit_code=exit_code, duration_ms=duration_ms)
+        return runner_catalog.job(result["job"])
+    assert db is not None
     job = get_job(db, job_id)
     if not job:
         return None
@@ -524,7 +622,7 @@ def update_job_completed(
 
 
 def update_job_error(
-    db: Session,
+    db: Session | None,
     job_id: str,
     error: str,
 ) -> Optional[RunnerJob]:
@@ -538,6 +636,11 @@ def update_job_error(
     Returns:
         Updated job record or None if not found
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        return runner_catalog.job(runner_catalog.operation("job_error", job_id=job_id, error=error)["job"])
+    assert db is not None
     job = get_job(db, job_id)
     if not job:
         return None
@@ -552,7 +655,7 @@ def update_job_error(
     return job
 
 
-def update_job_timeout(db: Session, job_id: str) -> Optional[RunnerJob]:
+def update_job_timeout(db: Session | None, job_id: str) -> Optional[RunnerJob]:
     """Mark a job as timed out.
 
     Args:
@@ -562,6 +665,11 @@ def update_job_timeout(db: Session, job_id: str) -> Optional[RunnerJob]:
     Returns:
         Updated job record or None if not found
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        return runner_catalog.job(runner_catalog.operation("job_timeout", job_id=job_id)["job"])
+    assert db is not None
     job = get_job(db, job_id)
     if not job:
         return None
@@ -576,7 +684,7 @@ def update_job_timeout(db: Session, job_id: str) -> Optional[RunnerJob]:
 
 
 def get_runner_jobs(
-    db: Session,
+    db: Session | None,
     runner_id: int,
     skip: int = 0,
     limit: int = 100,
@@ -592,6 +700,45 @@ def get_runner_jobs(
     Returns:
         List of runner jobs
     """
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation("jobs", runner_id=runner_id, skip=skip, limit=limit)
+        return [runner_catalog.job(item) for item in result["jobs"]]
+    assert db is not None
     return (
         db.query(RunnerJob).filter(RunnerJob.runner_id == runner_id).order_by(RunnerJob.created_at.desc()).offset(skip).limit(limit).all()
     )
+
+
+def update_runner_connection(
+    db: Session | None,
+    runner_id: int,
+    *,
+    status: str,
+    last_seen_at=None,
+    metadata: dict[str, Any] | None = None,
+) -> Optional[Runner]:
+    if _remote(db):
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation(
+            "set_connection",
+            runner_id=runner_id,
+            status=status,
+            last_seen_at=last_seen_at.isoformat() if last_seen_at is not None else None,
+            metadata=metadata,
+        )
+        return runner_catalog.runner(result["runner"])
+    assert db is not None
+    runner = get_runner(db, runner_id)
+    if runner is None:
+        return None
+    runner.status = status
+    if last_seen_at is not None:
+        runner.last_seen_at = last_seen_at
+    if metadata is not None:
+        runner.runner_metadata = metadata
+    db.commit()
+    db.refresh(runner)
+    return runner

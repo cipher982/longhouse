@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from zerg.crud import runner_crud
 from zerg.database import catalog_db_dependency
 from zerg.database import get_catalog_session_factory
+from zerg.database import get_db
 from zerg.database import live_catalog_enabled
 from zerg.database import reset_test_worker_id
 from zerg.database import set_test_worker_id
@@ -65,6 +66,18 @@ from zerg.utils.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
 _catalog_db_dependency = catalog_db_dependency()
+
+
+def _runner_db():
+    """Runner rows are RPC-owned in catalog mode; retain ordinary DB overrides in tests."""
+
+    if live_catalog_enabled():
+        yield None
+        return
+    yield from _catalog_db_dependency()
+
+
+_runner_db_dependency = get_db if _catalog_db_dependency is get_db else _runner_db
 
 
 def _runner_write_serializer():
@@ -106,8 +119,10 @@ async def _safe_close_runner_websocket(
         logger.debug("Ignoring runner websocket close race: %s", exc)
 
 
-def _rollback_after_write_failure(db: Session, *, operation: str) -> None:
+def _rollback_after_write_failure(db: Session | None, *, operation: str) -> None:
     """Rollback helper for write-path failures that should not crash cleanup paths."""
+    if db is None:
+        return
     try:
         db.rollback()
     except Exception as rollback_exc:
@@ -115,7 +130,7 @@ def _rollback_after_write_failure(db: Session, *, operation: str) -> None:
 
 
 async def _handle_exec_chunk(
-    db: Session,
+    db: Session | None,
     message: dict,
     runner_id: int,
     owner_id: int,
@@ -145,11 +160,14 @@ async def _handle_exec_chunk(
         }
 
     try:
-        ws = _runner_write_serializer()
-        if ws.is_configured:
-            updated_job = await ws.execute(_write_chunk, label="runner-output", auto_commit=False)
+        if db is None:
+            updated_job = _write_chunk(None)
         else:
-            updated_job = _write_chunk(db)
+            ws = _runner_write_serializer()
+            if ws.is_configured:
+                updated_job = await ws.execute(_write_chunk, label="runner-output", auto_commit=False)
+            else:
+                updated_job = _write_chunk(db)
     except Exception as exc:
         _rollback_after_write_failure(db, operation="exec_chunk persistence")
         logger.error("Failed to persist exec_chunk for runner %s, job %s: %s", runner_id, job_id, exc)
@@ -161,7 +179,7 @@ async def _handle_exec_chunk(
 
 
 async def _handle_exec_done(
-    db: Session,
+    db: Session | None,
     message: dict,
     runner_id: int,
     owner_id: int,
@@ -190,11 +208,14 @@ async def _handle_exec_done(
         }
 
     try:
-        ws = _runner_write_serializer()
-        if ws.is_configured:
-            persisted = await ws.execute(_persist_completion, label="runner-job-complete", auto_commit=False)
+        if db is None:
+            persisted = _persist_completion(None)
         else:
-            persisted = _persist_completion(db)
+            ws = _runner_write_serializer()
+            if ws.is_configured:
+                persisted = await ws.execute(_persist_completion, label="runner-job-complete", auto_commit=False)
+            else:
+                persisted = _persist_completion(db)
     except Exception as exc:
         _rollback_after_write_failure(db, operation="exec_done persistence")
         logger.error("Failed to persist exec_done from runner %s, job %s: %s", runner_id, job_id, exc)
@@ -229,7 +250,7 @@ async def _handle_exec_done(
 
 
 async def _handle_exec_error(
-    db: Session,
+    db: Session | None,
     message: dict,
     runner_id: int,
     owner_id: int,
@@ -252,11 +273,14 @@ async def _handle_exec_error(
         return updated_job is not None
 
     try:
-        ws = _runner_write_serializer()
-        if ws.is_configured:
-            persisted = await ws.execute(_persist_error, label="runner-job-error", auto_commit=False)
+        if db is None:
+            persisted = _persist_error(None)
         else:
-            persisted = _persist_error(db)
+            ws = _runner_write_serializer()
+            if ws.is_configured:
+                persisted = await ws.execute(_persist_error, label="runner-job-error", auto_commit=False)
+            else:
+                persisted = _persist_error(db)
     except Exception as exc:
         _rollback_after_write_failure(db, operation="exec_error persistence")
         logger.error("Failed to persist exec_error from runner %s, job %s: %s", runner_id, job_id, exc)
@@ -449,7 +473,7 @@ def get_uninstall_script() -> Response:
 def create_enroll_token(
     request: Request,
     response: Response,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> EnrollTokenResponse:
     """Create a new enrollment token for registering a runner.
@@ -486,7 +510,8 @@ def create_enroll_token(
         f"# Step 1: Register runner (one-time)\n"
         f"curl -X POST {api_url}/api/runners/register \\\n"
         f"  -H 'Content-Type: application/json' \\\n"
-        f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner", "capabilities": ["{requested_capabilities}"]}}\'\n\n'
+        f'  -d \'{{"enroll_token": "{plaintext_token}", "name": "my-runner", '
+        f'"capabilities": ["{requested_capabilities}"]}}\'\n\n'
         f"# Step 2: Save the runner_secret from the response, then run:\n"
         f"docker run -d --name longhouse-runner \\\n"
         f"  -e LONGHOUSE_URL={api_url} \\\n"
@@ -513,7 +538,7 @@ def create_enroll_token(
 @router.post("/register", response_model=RunnerRegisterResponse)
 async def register_runner(
     request: RunnerRegisterRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
 ) -> RunnerRegisterResponse:
     """Register a new runner using an enrollment token.
 
@@ -523,6 +548,42 @@ async def register_runner(
     Token consumption is committed BEFORE runner creation to prevent
     token reuse even if runner creation fails.
     """
+    if db is None:
+        if not request.name:
+            request.name = f"runner-{secrets.token_hex(4)}"
+        from zerg.services import runner_catalog
+
+        result = runner_catalog.operation(
+            "register",
+            enroll_token=request.enroll_token,
+            name=request.name,
+            availability_policy=request.availability_policy,
+            labels=request.labels,
+            capabilities=request.capabilities,
+            metadata=request.metadata,
+        )
+        if result["status"] == "invalid_token":
+            raise HTTPException(status_code=400, detail="Invalid or expired enrollment token")
+        runner = runner_catalog.runner(result["runner"])
+        assert runner is not None
+        if result["status"] == "revoked":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Runner '{request.name}' is revoked. Delete it before re-enrolling.",
+            )
+        if result["status"] == "reenrolled":
+            connection_manager = get_runner_connection_manager()
+            ws = connection_manager.get_connection(runner.owner_id, runner.id)
+            if ws:
+                await _safe_close_runner_websocket(websocket=ws, code=1008, reason="Runner re-enrolled with new secret")
+                connection_manager.unregister(runner.owner_id, runner.id, ws)
+        return RunnerRegisterResponse(
+            runner_id=runner.id,
+            runner_secret=str(result["runner_secret"]),
+            name=runner.name,
+            runner_capabilities_csv=",".join(runner.capabilities or ["exec.readonly"]),
+        )
+
     # Validate and consume token (commit immediately)
     token_record = runner_crud.validate_and_consume_enroll_token(
         db=db,
@@ -621,7 +682,7 @@ async def register_runner(
 @router.get("/status", response_model=RunnerStatusResponse)
 def get_runner_status(
     response: Response,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerStatusResponse:
     """Get runner health summary for status indicators.
@@ -667,7 +728,7 @@ def get_runner_status(
 
 @router.get("/", response_model=RunnerListResponse)
 def list_runners(
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerListResponse:
     """List all runners for the authenticated user."""
@@ -691,7 +752,7 @@ def list_runners(
 )
 def delete_runner(
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> Response:
     """Delete a stale runner permanently.
@@ -727,7 +788,7 @@ def delete_runner(
 @router.get("/{runner_id}", response_model=RunnerResponse)
 def get_runner(
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerResponse:
     """Get details of a specific runner."""
@@ -749,7 +810,7 @@ def get_runner(
 @router.post("/preflight", response_model=RunnerPreflightResponse)
 def runner_preflight(
     request: RunnerPreflightRequest,
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
 ) -> RunnerPreflightResponse:
     """Authenticate runner credentials for local doctor flows."""
     auth = authenticate_runner_identity(
@@ -797,7 +858,7 @@ def list_runner_jobs(
     runner_id: int = Path(..., gt=0),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerJobListResponse:
     """List recent jobs for a specific runner."""
@@ -815,7 +876,7 @@ def list_runner_jobs(
 @router.get("/{runner_id}/doctor", response_model=RunnerDoctorResponse)
 def get_runner_doctor(
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerDoctorResponse:
     """Run server-side doctor diagnostics for a specific runner."""
@@ -838,7 +899,7 @@ def get_runner_doctor(
 def update_runner(
     update: RunnerUpdate,
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerResponse:
     """Update a runner's configuration (name, labels, capabilities)."""
@@ -897,7 +958,7 @@ def update_runner(
 @router.post("/{runner_id}/revoke", response_model=RunnerSuccessResponse)
 def revoke_runner(
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerSuccessResponse:
     """Revoke a runner (mark as revoked, prevent reconnection).
@@ -931,7 +992,7 @@ def revoke_runner(
 async def rotate_runner_secret(
     response: Response,
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(_catalog_db_dependency),
+    db: Session | None = Depends(_runner_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerRotateSecretResponse:
     """Rotate a runner's authentication secret.
@@ -983,9 +1044,6 @@ async def rotate_runner_secret(
         connection_manager.unregister(current_user.id, runner_id, ws)
 
     # Update runner status to offline since we disconnected it
-    updated_runner.status = "offline"
-    db.commit()
-
     return RunnerRotateSecretResponse(
         runner_id=runner_id,
         runner_secret=new_secret,
@@ -1000,7 +1058,7 @@ async def rotate_runner_secret(
 
 async def _runner_websocket_with_db(
     websocket: WebSocket,
-    db: Session,
+    db: Session | None,
 ) -> None:
     """WebSocket endpoint for runner connections.
 
@@ -1091,10 +1149,14 @@ async def _runner_websocket_with_db(
                     r.runner_metadata = _meta
 
         try:
-            ws = _runner_write_serializer()
-            await ws.execute_or_direct(_mark_online, db, label="runner-online")
+            if db is None:
+                runner_crud.update_runner_connection(None, _rid, status="online", last_seen_at=utc_now_naive(), metadata=_meta)
+            else:
+                ws = _runner_write_serializer()
+                await ws.execute_or_direct(_mark_online, db, label="runner-online")
         except Exception as e:
-            db.rollback()
+            if db is not None:
+                db.rollback()
             logger.error(f"Failed to mark runner {runner_id} online: {e}")
             await _safe_close_runner_websocket(websocket, code=1011, reason="Server DB error")
             return
@@ -1153,8 +1215,11 @@ async def _runner_websocket_with_db(
                 try:
                     # Roll back any dirty state from websocket message processing.
                     _rollback_after_write_failure(db, operation="runner websocket cleanup")
-                    ws = _runner_write_serializer()
-                    await ws.execute_or_direct(_mark_offline, db, label="runner-offline")
+                    if db is None:
+                        runner_crud.update_runner_connection(None, _rid, status="offline")
+                    else:
+                        ws = _runner_write_serializer()
+                        await ws.execute_or_direct(_mark_offline, db, label="runner-offline")
                     logger.info(f"Runner {runner_id} marked offline")
                 except Exception as e:
                     logger.warning(f"Failed to mark runner {runner_id} offline during cleanup: {e}")
@@ -1168,11 +1233,12 @@ async def runner_websocket(
 ) -> None:
     worker_id = websocket.query_params.get("worker")
     worker_token = set_test_worker_id(worker_id) if worker_id else None
-    db = get_catalog_session_factory()()
+    db = None if live_catalog_enabled() else get_catalog_session_factory()()
 
     try:
         await _runner_websocket_with_db(websocket, db)
     finally:
-        db.close()
+        if db is not None:
+            db.close()
         if worker_token is not None:
             reset_test_worker_id(worker_token)
