@@ -24,6 +24,21 @@ _WORKLOG_SNAPSHOT_MAX_PAGES = 200
 _WORKLOG_SNAPSHOT_TTL_SECONDS = 120.0
 _WORKLOG_SNAPSHOT_LIMIT = 8
 
+_PUBLISH_AGGREGATES_SQL = """
+    SELECT
+        SUM(CASE WHEN e.role = 'user' THEN 1 ELSE 0 END) AS user_messages,
+        SUM(CASE WHEN e.role = 'assistant' AND e.tool_name IS NULL THEN 1 ELSE 0 END) AS assistant_messages,
+        SUM(CASE WHEN e.tool_name IS NOT NULL THEN 1 ELSE 0 END) AS tool_calls,
+        MAX(CASE
+            WHEN e.branch_kind IS NOT NULL AND e.branch_kind NOT IN ('root', 'primary')
+            THEN 1 ELSE 0
+        END) AS is_sidechain
+    FROM projection_membership m
+    JOIN events e ON e.source_object_id = m.object_id
+    WHERE m.session_id = ? AND m.generation_id = ? AND m.desired_revision = ?
+      AND e.session_id = ? AND e.generation_id = ?
+"""
+
 
 class WorklogPageTooLarge(RuntimeError):
     pass
@@ -403,20 +418,8 @@ class SearchStore:
                     "indexed_object_set_hash": indexed_object_set_hash,
                 }
             aggregates = self.connection.execute(
-                """
-                SELECT
-                    SUM(CASE WHEN e.role = 'user' THEN 1 ELSE 0 END) AS user_messages,
-                    SUM(CASE WHEN e.role = 'assistant' AND e.tool_name IS NULL THEN 1 ELSE 0 END) AS assistant_messages,
-                    SUM(CASE WHEN e.tool_name IS NOT NULL THEN 1 ELSE 0 END) AS tool_calls,
-                    MAX(CASE
-                        WHEN e.branch_kind IS NOT NULL AND e.branch_kind NOT IN ('root', 'primary')
-                        THEN 1 ELSE 0
-                    END) AS is_sidechain
-                FROM projection_membership m
-                JOIN events e ON e.source_object_id = m.object_id
-                WHERE m.session_id = ? AND m.generation_id = ? AND m.desired_revision = ?
-                """,
-                (session_id, generation_id, desired_revision),
+                _PUBLISH_AGGREGATES_SQL,
+                (session_id, generation_id, desired_revision, session_id, generation_id),
             ).fetchone()
             self.connection.execute(
                 """

@@ -12,6 +12,7 @@ import pytest
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.client import CatalogRemoteError
 from zerg.searchd.server import SearchDaemon
+from zerg.searchd.store import _PUBLISH_AGGREGATES_SQL
 from zerg.searchd.store import object_set_hash
 from zerg.searchd.store import open_search_database
 
@@ -77,6 +78,20 @@ def test_searchd_rebuilds_an_incompatible_disposable_store(tmp_path):
         assert rebuilt.execute("SELECT COUNT(*) FROM session_index").fetchone()[0] == 0
     finally:
         rebuilt.close()
+
+
+def test_publish_aggregate_uses_session_generation_index(tmp_path):
+    connection = open_search_database(tmp_path / "search.db")
+    try:
+        plan = connection.execute(
+            f"EXPLAIN QUERY PLAN {_PUBLISH_AGGREGATES_SQL}",
+            ("session", "generation", 7, "session", "generation"),
+        ).fetchall()
+        details = [str(row[3]) for row in plan]
+        assert not any(detail == "SCAN e" for detail in details)
+        assert any("ix_search_events_session_generation_order" in detail for detail in details)
+    finally:
+        connection.close()
 
 
 @pytest.mark.asyncio
