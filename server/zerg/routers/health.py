@@ -18,6 +18,7 @@ from zerg.config import get_settings
 router = APIRouter(tags=["health"])
 
 EVENTS_FTS_EXISTS_SQL = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1"
+CATALOG_HEALTH_TIMEOUT_SECONDS = 0.25
 _ARCHIVE_DEGRADABLE_WRITER_LABELS = {
     "archive-primary-manifest",
     "heartbeat-bookkeeping",
@@ -219,7 +220,7 @@ def health_db(request: Request):
             from zerg.services.catalogd_supervisor import catalogd_paths
 
             _database_path, catalog_socket = catalogd_paths()
-            ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=0.05)
+            ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=CATALOG_HEALTH_TIMEOUT_SECONDS)
             if ping.get("ready") is not True:
                 raise RuntimeError("catalog not ready")
             return {"status": "ready", "catalog": ping} if trusted else {"status": "ready"}
@@ -305,7 +306,7 @@ def readyz_check():
             from zerg.services.catalogd_supervisor import catalogd_paths
 
             _database_path, catalog_socket = catalogd_paths()
-            ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=0.025)
+            ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=CATALOG_HEALTH_TIMEOUT_SECONDS)
             catalogd_ready = (
                 ping.get("ready") is True
                 and ping.get("schema_version") == CATALOG_SCHEMA_VERSION
@@ -497,7 +498,11 @@ def health_check(request: Request):
             from zerg.services.catalogd_supervisor import catalogd_paths
 
             _database_path, catalog_socket = catalogd_paths()
-            catalog_ping = call_catalogd_sync(catalog_socket, "ping.v2", timeout_seconds=0.05)
+            catalog_ping = call_catalogd_sync(
+                catalog_socket,
+                "ping.v2",
+                timeout_seconds=CATALOG_HEALTH_TIMEOUT_SECONDS,
+            )
             checks["catalogd"] = {
                 "status": "pass",
                 "ready": catalog_ping.get("ready") is True,
