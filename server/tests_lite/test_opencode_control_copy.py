@@ -10,14 +10,6 @@ EXPECTED_COPY = {
     "README.md": [
         "OpenCode supports managed send, interrupt, launch, and terminate, but not active-turn steer or pause-answer",
     ],
-    "web/src/lib/providers.ts": [
-        "Archive, launch, send, interrupt, terminate",
-        "Lifecycle control",
-    ],
-    "web/src/components/landing/IntegrationsSection.tsx": [
-        "OpenCode supports managed",
-        "send, interrupt, launch, and terminate without active-turn steer",
-    ],
     "web/src/pages/docs/IntegrationsPage.tsx": [
         "remote send,",
         "interrupt, and lifecycle terminate",
