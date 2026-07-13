@@ -50,6 +50,17 @@ def test_success_and_error_response_roundtrip() -> None:
     assert decode_frame(encode_frame(failure)) == failure
 
 
+def test_search_projection_sized_request_roundtrip() -> None:
+    request = CatalogRpcRequest(
+        id=REQUEST_ID,
+        method="search.index.object.v2",
+        deadline_mono_ns="9876543210",
+        params={"content_text": "x" * (2 * 1024 * 1024)},
+    )
+
+    assert decode_frame(encode_frame(request)) == request
+
+
 def test_rejects_malformed_magic() -> None:
     frame = encode_frame(CatalogRpcRequest(id=REQUEST_ID, method="ping.v2", deadline_mono_ns="1", params={}))
 
@@ -60,7 +71,7 @@ def test_rejects_malformed_magic() -> None:
 def test_rejects_oversize_before_reading_payload() -> None:
     frame = MAGIC + struct.pack(">I", MAX_PAYLOAD_BYTES + 1)
 
-    with pytest.raises(ProtocolError, match="1 MiB"):
+    with pytest.raises(ProtocolError, match="8 MiB"):
         decode_frame(frame)
 
 
