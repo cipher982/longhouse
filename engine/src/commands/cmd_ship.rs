@@ -149,6 +149,14 @@ async fn ship_path_storage_v2(
     }
 }
 
+fn capability_error_is_unreachable_transport(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_connect)
+    })
+}
+
 // ---------------------------------------------------------------------------
 // cmd_ship — scan all providers and ship new events
 // ---------------------------------------------------------------------------
@@ -654,9 +662,20 @@ pub async fn cmd_ship_file(
 
     if !dry_run {
         let client = ShipperClient::with_compression(&config, algo)?;
-        let storage_v2 = client
+        let storage_v2 = match client
             .storage_v2_capabilities(&config.machine_name, Some(Duration::from_secs(5)))
-            .await?;
+            .await
+        {
+            Ok(value) => value,
+            Err(error) if capability_error_is_unreachable_transport(&error) => {
+                tracing::warn!(
+                    %error,
+                    "Runtime Host is unreachable; preserving explicit file through durable spool"
+                );
+                None
+            }
+            Err(error) => return Err(error),
+        };
         if let Some(capabilities) = storage_v2.filter(|item| item.cutover) {
             let (events_shipped, reply_evidence_pending) = ship_path_storage_v2(
                 &mut conn,
@@ -1017,6 +1036,106 @@ mod tests {
             0,
             "dry-run should not advance queued_offset",
         );
+    }
+
+    #[test]
+    fn test_cmd_ship_file_unreachable_capability_host_spools_without_ack() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_claude_file(
+            &dir,
+            "aaaa1111-2222-3333-4444-555566667777.jsonl",
+            concat!(
+                r#"{"type":"user","uuid":"offline-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"offline-2","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+                "\n",
+            ),
+        );
+        let db_path = dir.path().join("engine.db");
+        let file_len = std::fs::metadata(&file).unwrap().len();
+
+        rt.block_on(cmd_ship_file(
+            &file,
+            Some("claude"),
+            Some("http://127.0.0.1:9"),
+            Some("test-token"),
+            Some(&db_path),
+            false,
+            true,
+            CompressionAlgo::Gzip,
+            None,
+            None,
+            false,
+            None,
+        ))
+        .unwrap();
+
+        let conn = open_db(Some(&db_path)).unwrap();
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let file_str = file.to_string_lossy().to_string();
+        assert_eq!(file_state.get_offset(&file_str).unwrap(), 0);
+        assert_eq!(file_state.get_queued_offset(&file_str).unwrap(), file_len);
+        let pending = spool.pending_entries_for_path_now(&file_str, 10).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(
+            (pending[0].start_offset, pending[0].end_offset),
+            (0, file_len)
+        );
+    }
+
+    #[test]
+    fn test_cmd_ship_file_capability_responses_never_fallback_to_legacy() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        for status_line in [
+            "401 Unauthorized",
+            "426 Upgrade Required",
+            "503 Service Unavailable",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let file = make_claude_file(
+                &dir,
+                "bbbb1111-2222-3333-4444-555566667777.jsonl",
+                concat!(
+                    r#"{"type":"user","uuid":"blocked-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                    "\n",
+                ),
+            );
+            let db_path = dir.path().join("engine.db");
+            let (url, handle) = spawn_http_response_server(status_line, "{}");
+            let result = rt.block_on(cmd_ship_file(
+                &file,
+                Some("claude"),
+                Some(&url),
+                Some("test-token"),
+                Some(&db_path),
+                false,
+                true,
+                CompressionAlgo::Gzip,
+                None,
+                None,
+                false,
+                None,
+            ));
+            handle.join().unwrap();
+            assert!(
+                result.is_err(),
+                "{status_line} must not enter legacy shipping"
+            );
+
+            let conn = open_db(Some(&db_path)).unwrap();
+            let file_str = file.to_string_lossy().to_string();
+            assert_eq!(FileState::new(&conn).get_offset(&file_str).unwrap(), 0);
+            assert_eq!(
+                FileState::new(&conn).get_queued_offset(&file_str).unwrap(),
+                0
+            );
+            assert!(Spool::new(&conn)
+                .pending_entries_for_path_now(&file_str, 10)
+                .unwrap()
+                .is_empty());
+        }
     }
 
     #[test]
