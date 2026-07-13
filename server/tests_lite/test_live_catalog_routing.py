@@ -72,9 +72,7 @@ def test_archive_route_process_keeps_catalog_auth_on_live_database(monkeypatch):
     monkeypatch.setattr(database_module, "_archive_route_process", True)
     monkeypatch.setattr(database_module._settings, "database_url", "sqlite:///file:/tmp/archive.db?mode=ro&uri=true")
     monkeypatch.setattr(database_module._settings, "live_database_url", "sqlite:////tmp/live.db")
-    monkeypatch.setattr(
-        database_module, "get_session_factory", lambda: pytest.fail("catalog auth must not use cold rows")
-    )
+    monkeypatch.setattr(database_module, "get_session_factory", lambda: pytest.fail("catalog auth must not use cold rows"))
     monkeypatch.setattr(database_module, "get_live_session_factory", lambda: live_sentinel)
     assert get_catalog_session_factory() is live_sentinel
 
@@ -187,8 +185,8 @@ def test_catalog_message_create_uses_catalog_rpc_without_sqlite(monkeypatch):
     sender_id = UUID("00000000-0000-0000-0000-000000000011")
     target_id = UUID("00000000-0000-0000-0000-000000000012")
     snapshots = {
-        sender_id: SimpleNamespace(id=sender_id, device_id="device-7", capabilities=SimpleNamespace(live_control_available=False)),
-        target_id: SimpleNamespace(id=target_id, device_id="device-7", capabilities=SimpleNamespace(live_control_available=False)),
+        sender_id: SimpleNamespace(id=sender_id, device_id="device-7"),
+        target_id: SimpleNamespace(id=target_id, device_id="device-7", catalog_facts={"latest_run": None, "connections": []}),
     }
     observed = {}
 
@@ -250,7 +248,16 @@ def test_catalog_message_delivery_preserves_owner_and_expected_status(monkeypatc
             sender_session=SimpleNamespace(id=sender_id, device_name="clifford", device_id="device-7"),
             target_session=SimpleNamespace(
                 id=target_id,
-                capabilities=SimpleNamespace(live_control_available=True),
+                catalog_facts={
+                    "latest_run": {"id": "run-1", "ended_at": None},
+                    "connections": [
+                        {
+                            "state": "attached",
+                            "released_at": None,
+                            "can_send_input": 1,
+                        }
+                    ],
+                },
             ),
             message={
                 "id": 13,

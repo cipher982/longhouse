@@ -1988,8 +1988,9 @@ async def _attempt_catalog_message_delivery(
     target_session,
     message: dict[str, Any],
 ) -> dict[str, Any]:
-    capabilities = getattr(target_session, "capabilities", None)
-    if capabilities is None or not capabilities.live_control_available:
+    from zerg.services.live_control_catalog import live_control_session_capability_available
+
+    if not live_control_session_capability_available(target_session, capability="send"):
         return message
 
     device_name = (
