@@ -6,7 +6,7 @@ import { IntegrationsSection } from "../IntegrationsSection";
 import { TrustSection } from "../TrustSection";
 
 describe("landing provider claims", () => {
-  it("shows differentiated provider cards instead of parity copy", () => {
+  it("shows plain provider capabilities and limitations", () => {
     render(
       <MemoryRouter>
         <IntegrationsSection />
@@ -15,20 +15,14 @@ describe("landing provider claims", () => {
 
     expect(screen.getByText("Claude Code")).toBeInTheDocument();
     expect(screen.getByText("OpenCode")).toBeInTheDocument();
-    expect(screen.getByText("Archive, search, and strongest control path")).toBeInTheDocument();
-    expect(screen.getByText("Archive, search, and Longhouse launch path")).toBeInTheDocument();
-    expect(screen.getByText("Archive, launch, and hook-backed phase signals")).toBeInTheDocument();
-    expect(screen.getByText("Archive, launch, send, interrupt, terminate")).toBeInTheDocument();
-    expect(screen.getByText("Strongest today")).toBeInTheDocument();
-    expect(screen.getByText("Control-ready")).toBeInTheDocument();
-    expect(screen.getByText("Lifecycle control")).toBeInTheDocument();
-    expect(screen.getAllByText("Observe-only today").length).toBeGreaterThanOrEqual(1);
-    expect(
-      screen.getByText(/Codex launch-through-Longhouse is supported/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/OpenCode supports managed send, interrupt, launch, and terminate without active-turn steer/i),
-    ).toBeInTheDocument();
+    expect(screen.getAllByText("Launch, send, steer, interrupt, and resume")).toHaveLength(2);
+    expect(screen.getByText("Launch, send, interrupt, and terminate")).toBeInTheDocument();
+    expect(screen.getByText("Local launch and send")).toBeInTheDocument();
+    expect(screen.getAllByText("Full control")).toHaveLength(2);
+    expect(screen.getByText("No mid-turn steering")).toBeInTheDocument();
+    expect(screen.getByText("No steering or resume")).toBeInTheDocument();
+    expect(screen.getByText("Limited control")).toBeInTheDocument();
+    expect(screen.queryByText(/strongest today/i)).not.toBeInTheDocument();
   });
 
   it("renders FAQ with honest provider capability question", async () => {

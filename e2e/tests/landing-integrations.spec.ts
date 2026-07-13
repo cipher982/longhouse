@@ -9,23 +9,28 @@ type ProviderExpectation = {
 const EXPECTED_PROVIDERS: ProviderExpectation[] = [
   {
     name: 'Claude Code',
-    description: 'Archive, search, and strongest control path',
-    status: 'Strongest today',
+    description: 'Launch, send, steer, interrupt, and resume',
+    status: 'Full control',
   },
   {
     name: 'Codex CLI',
-    description: 'Archive, search, and Longhouse launch path',
-    status: 'Control-ready',
+    description: 'Launch, send, steer, interrupt, and resume',
+    status: 'Full control',
   },
   {
     name: 'Cursor Agent',
-    description: 'Archive, launch, send, interrupt, and terminate',
-    status: 'Helm + Console',
+    description: 'Launch, send, interrupt, terminate, and resume',
+    status: 'No mid-turn steering',
+  },
+  {
+    name: 'OpenCode',
+    description: 'Launch, send, interrupt, and terminate',
+    status: 'No steering or resume',
   },
   {
     name: 'Antigravity CLI',
-    description: 'Archive, launch, and hook-backed phase signals',
-    status: 'Observe-only today',
+    description: 'Local launch and send',
+    status: 'Limited control',
   },
 ];
 
@@ -35,11 +40,11 @@ test.describe('Landing integrations claims', () => {
     await expect(page.locator('#providers')).toBeVisible({ timeout: 10_000 });
 
     for (const provider of EXPECTED_PROVIDERS) {
-      const card = page.locator('.landing-provider-card', { hasText: provider.name }).first();
-      await expect(card).toBeVisible();
-      await expect(card.locator('.landing-provider-name')).toHaveText(provider.name);
-      await expect(card.locator('.landing-provider-desc')).toHaveText(provider.description);
-      await expect(card.locator('.landing-provider-status')).toHaveText(provider.status);
+      const row = page.locator('.landing-provider-row', { hasText: provider.name }).first();
+      await expect(row).toBeVisible();
+      await expect(row.locator('.landing-provider-row-name')).toHaveText(provider.name);
+      await expect(row.locator('.landing-provider-row-desc')).toHaveText(provider.description);
+      await expect(row.locator('.landing-provider-row-status')).toHaveText(provider.status);
     }
   });
 });

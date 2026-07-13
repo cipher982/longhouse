@@ -1,7 +1,6 @@
 /**
- * Provider truth. Distinct shape: a left-aligned honest "what works on each
- * provider" table-ish strip, not a centered punchline + card grid. The honesty
- * IS the design here — say plainly where each control path stands today.
+ * Provider truth. A left-aligned capability summary that says plainly which
+ * controls work for each provider.
  */
 
 import { getLaunchProviderSupportList } from "../../lib/providers";
@@ -14,11 +13,11 @@ export function IntegrationsSection() {
     <section id="providers" className="landing-providers">
       <div className="landing-section-inner">
         <h2 className="landing-providers-title">
-          What works on each provider, honestly.
+          What works with Longhouse
         </h2>
         <p className="landing-providers-lead">
-          Every provider lands in the same timeline and search. Live control depends
-          on how mature each path is today — so here&rsquo;s the plain truth.
+          Every provider syncs into the same searchable timeline. Launch through
+          Longhouse to control supported sessions remotely.
         </p>
 
         <ul className="landing-providers-rows">
@@ -33,14 +32,6 @@ export function IntegrationsSection() {
             </li>
           ))}
         </ul>
-
-        <p className="landing-providers-foot">
-          Codex launch-through-Longhouse is supported; Cursor ships Helm (steerable
-          TUI with live transcript) plus headless Console launch; OpenCode supports managed
-          send, interrupt, launch, and terminate without active-turn steer;
-          Antigravity is managed observe-only today. Claude is still the strongest
-          continuation path. Older Google CLI JSON imports remain searchable under Antigravity.
-        </p>
       </div>
     </section>
   );
