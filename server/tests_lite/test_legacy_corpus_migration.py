@@ -363,6 +363,54 @@ async def test_oversized_legacy_tool_output_keeps_raw_truth_and_bounds_render(le
 
 
 @pytest.mark.asyncio
+async def test_many_events_on_one_source_line_overflow_to_bounded_normalized_evidence(legacy_db, tmp_path: Path):
+    session = _session(provider="claude")
+    raw = '{"type":"assistant","content":"one provider line"}'
+    with legacy_db() as db:
+        db.add(session)
+        db.flush()
+        db.add(
+            AgentSourceLine(
+                session_id=session.id,
+                source_path="expanded.jsonl",
+                source_offset=0,
+                branch_id=0,
+                raw_json=raw,
+                raw_json_codec=0,
+                line_hash=hashlib.sha256(raw.encode()).hexdigest(),
+            )
+        )
+        for index in range(77):
+            event = _event(session.id, raw_json=raw, source_path="expanded.jsonl", source_offset=0)
+            event.role = "tool"
+            event.tool_output_text = f"{index}:" + "x" * 80_654
+            event.event_hash = hashlib.sha256(f"event-{index}".encode()).hexdigest()
+            db.add(event)
+        db.commit()
+        watermark = freeze_high_watermark(db)
+
+    catalog = FakeCatalog()
+    converter = LegacyCorpusConverter(
+        session_factory=legacy_db,
+        catalog=catalog,
+        object_root=tmp_path / "objects-v2",
+        tenant_id="tenant-a",
+    )
+    with legacy_db() as db:
+        result = await converter.convert_session(db, session.id, watermark)
+
+    commits = [payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2"]
+    source = [payload for payload in commits if payload["provenance_kind"] == "legacy_source_lines"]
+    overflow = [payload for payload in commits if payload["provenance_kind"] == "legacy_normalized_event"]
+    assert sum(payload["render_manifest"]["event_count"] for payload in source) < 77
+    assert sum(payload["render_manifest"]["event_count"] for payload in overflow) > 0
+    assert sum(payload["render_manifest"]["event_count"] for payload in commits) == 77
+    assert all(payload["render_manifest"]["uncompressed_size"] <= 4 * 1024 * 1024 for payload in commits)
+    assert result.degradation_code is None
+    assert result.parity_matches is True
+
+
+@pytest.mark.asyncio
 async def test_oversized_unmatched_event_is_split_into_exact_bounded_raw_records(legacy_db, tmp_path: Path):
     session = _session()
     with legacy_db() as db:

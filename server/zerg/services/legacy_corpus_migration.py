@@ -57,15 +57,17 @@ from zerg.storage_v2.render_objects import seal_render_object
 
 PARSER_REVISION = "legacy-normalized-v1"
 ORDERING_REVISION = "semantic-order-v2"
-MIGRATION_LAYOUT_REVISION = "bounded-v3"
+MIGRATION_LAYOUT_REVISION = "bounded-v4"
 INVENTORY_BATCH = 500
 STREAMING_SOURCE_THRESHOLD = 10_000
 STREAMING_EVENT_PAGE = 50
 STREAMING_MATCH_PAGE = 250
 STREAMING_SQL_PAGE = 1_000
-STREAMING_EVENT_LAYOUT_REVISION = "bounded-events-v3"
-STREAMING_SOURCE_LAYOUT_REVISION = "mixed-stream-v4"
+STREAMING_EVENT_LAYOUT_REVISION = "bounded-events-v4"
+STREAMING_SOURCE_LAYOUT_REVISION = "mixed-stream-v5"
 LEGACY_RENDER_VALUE_BYTES = 768 * 1024
+LEGACY_RENDER_GROUP_BYTES = 1024 * 1024
+LEGACY_RENDER_GROUP_EVENTS = 1_000
 
 
 class CatalogCaller(Protocol):
@@ -383,14 +385,12 @@ class LegacyCorpusConverter:
             .all()
         )
         sources, source_covered, source_missing = self._load_sources(db, session_id, watermark, events)
-        event_groups = _events_by_source(events)
         source_keys = {(record.source_path, record.source_offset) for record in sources}
+        event_groups = {key: list(_bounded_source_events(group)) for key, group in _events_by_source(events).items() if key in source_keys}
+        attached_event_ids = {int(event.id) for group in event_groups.values() for event in group}
         synthetic_path = f"legacy-unmatched-events:{session_id}"
         for event in events:
-            event_key = None
-            if event.source_path is not None and event.source_offset is not None:
-                event_key = (event.source_path, int(event.source_offset))
-            if event_key is not None and event_key in source_keys:
+            if int(event.id) in attached_event_ids:
                 continue
             normalized = _normalized_event_source((event,))
             if normalized is None:
@@ -906,10 +906,11 @@ class LegacyCorpusConverter:
                     if events
                     else set()
                 )
-                event_groups: dict[tuple[str, int], list[AgentEvent]] = defaultdict(list)
+                candidate_groups: dict[tuple[str, int], list[AgentEvent]] = defaultdict(list)
                 for event in events:
                     if int(event.id) not in existing_ids:
-                        event_groups[(source_path, int(event.source_offset))].append(event)
+                        candidate_groups[(source_path, int(event.source_offset))].append(event)
+                event_groups = {key: list(_bounded_source_events(group)) for key, group in candidate_groups.items()}
                 for batch in _source_batches(record_page, event_groups):
                     adjusted = _SourceBatch(
                         source_path=source_path,
@@ -1522,6 +1523,25 @@ def _events_by_source(events: list[AgentEvent]) -> dict[tuple[str, int], list[Ag
         if event.source_path is not None and event.source_offset is not None:
             grouped[(event.source_path, int(event.source_offset))].append(event)
     return grouped
+
+
+def _bounded_source_events(events: list[AgentEvent]) -> tuple[AgentEvent, ...]:
+    """Keep one source envelope's render projection safely below the object cap.
+
+    A provider source line can expand into many normalized events. Overflow is
+    intentionally left unmatched so the existing normalized-evidence lane
+    preserves and renders it in independently bounded objects.
+    """
+
+    selected: list[AgentEvent] = []
+    encoded_bytes = 0
+    for event in events:
+        event_bytes = _estimated_render_bytes(event)
+        if selected and (len(selected) >= LEGACY_RENDER_GROUP_EVENTS or encoded_bytes + event_bytes > LEGACY_RENDER_GROUP_BYTES):
+            break
+        selected.append(event)
+        encoded_bytes += event_bytes
+    return tuple(selected)
 
 
 def _render_record(
