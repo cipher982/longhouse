@@ -10,6 +10,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import event as sqlalchemy_event
 
+import zerg.services.legacy_corpus_migration as migration_module
 from zerg.catalogd.client import CatalogClient
 from zerg.catalogd.server import CatalogDaemon
 from zerg.database import Base
@@ -33,6 +34,7 @@ from zerg.services.legacy_corpus_migration import create_inventory_run
 from zerg.services.legacy_corpus_migration import freeze_high_watermark
 from zerg.services.legacy_corpus_migration import inventory_rows
 from zerg.storage_v2.raw_objects import read_raw_object
+from zerg.storage_v2.render_objects import RenderObjectValidationError
 
 
 class FakeCatalog:
@@ -229,7 +231,8 @@ async def test_high_row_session_streams_inline_archive_and_events_in_bounded_bat
     source_commits = [payload for payload in commits if payload["provenance_kind"] == "legacy_source_lines"]
     event_commits = [payload for payload in commits if payload["provenance_kind"] == "legacy_normalized_event"]
     assert len(source_commits) > 10
-    assert len(event_commits) >= row_count // 500
+    assert event_commits == []
+    assert sum(payload["render_manifest"]["event_count"] for payload in source_commits) == row_count
     assert max(len(payload["record_hashes"]) for payload in commits) <= 1_000
     assert result.source_covered == row_count
     assert result.source_missing == 0
@@ -264,7 +267,58 @@ async def test_high_row_session_streams_inline_archive_and_events_in_bounded_bat
 
 
 @pytest.mark.asyncio
-async def test_oversized_legacy_tool_output_keeps_raw_truth_and_terminally_degrades_render(legacy_db, tmp_path: Path):
+async def test_streaming_uses_synthetic_raw_only_for_events_without_source_evidence(
+    legacy_db,
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.setattr(migration_module, "STREAMING_SOURCE_THRESHOLD", 1)
+    session = _session(provider="claude")
+    with legacy_db() as db:
+        db.add(session)
+        db.flush()
+        for offset in (10, 20):
+            raw = f'{{"offset":{offset}}}'
+            db.add(
+                AgentSourceLine(
+                    session_id=session.id,
+                    source_path="mixed.jsonl",
+                    source_offset=offset,
+                    branch_id=0,
+                    raw_json=raw,
+                    raw_json_codec=0,
+                    line_hash=hashlib.sha256(raw.encode()).hexdigest(),
+                )
+            )
+            db.add(_event(session.id, raw_json=None, source_path="mixed.jsonl", source_offset=offset))
+        unmatched = _event(session.id, raw_json=None, source_path="missing.jsonl", source_offset=30)
+        unmatched.event_hash = hashlib.sha256(b"unmatched-streaming").hexdigest()
+        db.add(unmatched)
+        db.commit()
+        watermark = freeze_high_watermark(db)
+
+    catalog = FakeCatalog()
+    converter = LegacyCorpusConverter(
+        session_factory=legacy_db,
+        catalog=catalog,
+        object_root=tmp_path / "objects-v2",
+        tenant_id="tenant-a",
+        archive_store=FilesystemArchiveStore(tmp_path / "archive"),
+    )
+    with legacy_db() as db:
+        result = await converter.convert_session(db, session.id, watermark, source_expected=2)
+
+    commits = [payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2"]
+    source_commits = [payload for payload in commits if payload["provenance_kind"] == "legacy_source_lines"]
+    synthetic_commits = [payload for payload in commits if payload["provenance_kind"] == "legacy_normalized_event"]
+    assert sum(payload["render_manifest"]["event_count"] for payload in source_commits) == 2
+    assert sum(payload["render_manifest"]["event_count"] for payload in synthetic_commits) == 1
+    assert sum(len(payload["record_hashes"]) for payload in synthetic_commits) == 1
+    assert result.parity_matches is True
+
+
+@pytest.mark.asyncio
+async def test_oversized_legacy_tool_output_keeps_raw_truth_and_bounds_render(legacy_db, tmp_path: Path):
     session = _session()
     raw = '{"type":"tool_result","content":"preserved in raw"}'
     with legacy_db() as db:
@@ -300,14 +354,11 @@ async def test_oversized_legacy_tool_output_keeps_raw_truth_and_terminally_degra
 
     commits = [payload for method, payload in catalog.calls if method == "storage.raw_object.commit.v2"]
     assert len(commits) == 1
-    assert commits[0]["render_state"] == "failed"
-    assert commits[0]["render_manifest"] is None
-    assert result.degradation_code == "render_projection_failed"
-    assert "tool_output_text" in (result.degradation_message or "")
-    assert result.parity_matches is False
-    await converter._complete(uuid4(), uuid4(), result)
-    completion = [payload for method, payload in catalog.calls if method == "migration.session.complete.v2"]
-    assert completion[0]["degradation_code"] == "render_projection_failed"
+    assert commits[0]["render_state"] == "pending"
+    assert commits[0]["render_manifest"] is not None
+    assert commits[0]["render_manifest"]["event_count"] == 1
+    assert result.degradation_code is None
+    assert result.parity_matches is True
 
 
 @pytest.mark.asyncio
@@ -349,8 +400,9 @@ async def test_oversized_unmatched_event_is_split_into_exact_bounded_raw_records
     )
     assert len(commits) == 2
     assert restored == expected
-    assert [payload["render_state"] for payload in commits] == ["failed", "pending"]
-    assert result.degradation_code == "render_projection_failed"
+    assert [payload["render_state"] for payload in commits] == ["pending", "pending"]
+    assert result.degradation_code is None
+    assert result.parity_matches is True
 
 
 @pytest.mark.asyncio
@@ -556,7 +608,7 @@ async def test_stream_retry_replaces_current_open_epoch_after_layout_revision(le
         "legacy_normalized_event",
         watermark,
         replace_existing_epochs=True,
-        layout_revision="bounded-events-v2",
+        layout_revision=migration_module.STREAMING_EVENT_LAYOUT_REVISION,
     )
 
     assert predecessor == current
@@ -893,6 +945,135 @@ async def test_converter_commits_through_real_catalog_contract(legacy_db, tmp_pa
         stored = await client.call("storage.session.read.v2", {"session_id": str(session.id)})
         assert stored["session"]["current_render_generation"] == str(result.render_generation_id)
         assert stored["session"]["render_state"] == "ready"
+    finally:
+        await client.close()
+        await daemon.close()
+        for path in catalog_root.iterdir():
+            path.unlink(missing_ok=True)
+        catalog_root.rmdir()
+
+
+@pytest.mark.asyncio
+async def test_render_failure_stays_hidden_and_repair_can_publish_later(legacy_db, tmp_path: Path, monkeypatch):
+    session = _session()
+    raw = '{"type":"user","message":"retry after render failure"}'
+    with legacy_db() as db:
+        db.add(session)
+        db.flush()
+        db.add(_event(session.id, raw_json=raw, source_path="repair.jsonl", source_offset=0))
+        db.commit()
+        watermark = freeze_high_watermark(db)
+
+    catalog_root = Path("/tmp") / f"lh-migrate-repair-{uuid4().hex[:10]}"
+    catalog_root.mkdir(mode=0o700)
+    daemon = CatalogDaemon(database_path=catalog_root / "live.db", socket_path=catalog_root / "catalogd.sock")
+    await daemon.start()
+    client = CatalogClient(catalog_root / "catalogd.sock")
+    try:
+        await client.call(
+            "auth.user.resolve_local.v2",
+            {
+                "email": "owner@example.com",
+                "provider": "password",
+                "provider_user_id": None,
+                "role": "USER",
+                "adopt_existing": True,
+                "require_email_match": False,
+                "max_users": None,
+                "promote_role": False,
+            },
+        )
+        run_id = uuid4()
+        first_claim = uuid4()
+        now = datetime.now(UTC)
+        await client.call(
+            "migration.run.create.v2",
+            {
+                "run_id": str(run_id),
+                "legacy_high_watermark": watermark.encode(),
+                "expected_session_count": 1,
+                "created_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "migration.session.register.batch.v2",
+            {
+                "run_id": str(run_id),
+                "sessions": [{"session_id": str(session.id), "source_expected": 1, "media_expected": 0}],
+                "registered_at": now.isoformat(),
+            },
+        )
+        await client.call(
+            "migration.session.claim.v2",
+            {
+                "run_id": str(run_id),
+                "worker_id": "first",
+                "claim_token": str(first_claim),
+                "now": now.isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        converter = LegacyCorpusConverter(
+            session_factory=legacy_db,
+            catalog=client,
+            object_root=tmp_path / "objects-v2",
+            tenant_id="tenant-a",
+        )
+        original_seal = migration_module.seal_render_object
+        calls = 0
+
+        def fail_first_render(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RenderObjectValidationError("injected first-attempt failure")
+            return original_seal(*args, **kwargs)
+
+        monkeypatch.setattr(migration_module, "seal_render_object", fail_first_render)
+        with legacy_db() as db:
+            failed = await converter.convert_session(db, session.id, watermark)
+        assert failed.degradation_code == "render_projection_failed"
+        await converter._complete(run_id, first_claim, failed)
+        hidden = await client.call("storage.session.read.v2", {"session_id": str(session.id)})
+        assert hidden["session"]["current_render_generation"] is None
+
+        await client.call(
+            "migration.render.repair.v2",
+            {
+                "run_id": str(run_id),
+                "session_ids": [str(session.id)],
+                "parser_revision": migration_module.PARSER_REVISION,
+                "ordering_revision": migration_module.ORDERING_REVISION,
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        second_claim = uuid4()
+        claimed = await client.call(
+            "migration.session.claim.v2",
+            {
+                "run_id": str(run_id),
+                "worker_id": "second",
+                "claim_token": str(second_claim),
+                "now": datetime.now(UTC).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        assert claimed["claimed"][0]["attempts"] == 2
+        with legacy_db() as db:
+            repaired = await converter.convert_session(
+                db,
+                session.id,
+                watermark,
+                replace_existing_epochs=True,
+            )
+        assert repaired.parity_matches is True
+        assert repaired.degradation_code is None
+        await converter._complete(run_id, second_claim, repaired)
+        published = await client.call("storage.session.read.v2", {"session_id": str(session.id)})
+        assert published["session"]["current_render_generation"] == str(repaired.render_generation_id)
+        assert published["session"]["render_state"] == "ready"
     finally:
         await client.close()
         await daemon.close()
