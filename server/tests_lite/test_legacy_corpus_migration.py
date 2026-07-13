@@ -4,6 +4,7 @@ import hashlib
 from dataclasses import replace
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -1061,6 +1062,42 @@ async def test_render_failure_stays_hidden_and_repair_can_publish_later(legacy_d
             },
         )
         assert claimed["claimed"][0]["attempts"] == 2
+        await client.call(
+            "migration.session.fail.v2",
+            {
+                "run_id": str(run_id),
+                "session_id": str(session.id),
+                "claim_token": str(second_claim),
+                "error_code": "OperationalError",
+                "error_message": "repair environment was temporarily unavailable",
+                "failed_at": datetime.now(UTC).isoformat(),
+                "retry_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
+            },
+        )
+        retry = await client.call(
+            "migration.render.repair.v2",
+            {
+                "run_id": str(run_id),
+                "session_ids": [str(session.id)],
+                "parser_revision": migration_module.PARSER_REVISION,
+                "ordering_revision": migration_module.ORDERING_REVISION,
+                "observed_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        assert retry["repaired"] == 1
+        third_claim = uuid4()
+        claimed = await client.call(
+            "migration.session.claim.v2",
+            {
+                "run_id": str(run_id),
+                "worker_id": "third",
+                "claim_token": str(third_claim),
+                "now": datetime.now(UTC).isoformat(),
+                "lease_seconds": 60,
+                "limit": 1,
+            },
+        )
+        assert claimed["claimed"][0]["attempts"] == 3
         with legacy_db() as db:
             repaired = await converter.convert_session(
                 db,
@@ -1070,7 +1107,7 @@ async def test_render_failure_stays_hidden_and_repair_can_publish_later(legacy_d
             )
         assert repaired.parity_matches is True
         assert repaired.degradation_code is None
-        await converter._complete(run_id, second_claim, repaired)
+        await converter._complete(run_id, third_claim, repaired)
         published = await client.call("storage.session.read.v2", {"session_id": str(session.id)})
         assert published["session"]["current_render_generation"] == str(repaired.render_generation_id)
         assert published["session"]["render_state"] == "ready"

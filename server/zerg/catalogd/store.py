@@ -5593,8 +5593,31 @@ class CatalogStore:
             selected = list(
                 connection.execute(select(rows).where(rows.c.run_id == run_key, rows.c.session_id.in_(session_keys))).mappings().all()
             )
+            session_states = {
+                str(row["session_id"]): row
+                for row in connection.execute(
+                    select(
+                        sessions.c.session_id,
+                        sessions.c.render_state,
+                        sessions.c.current_render_generation,
+                    ).where(sessions.c.session_id.in_(session_keys))
+                )
+                .mappings()
+                .all()
+            }
             eligible = {
-                str(row["session_id"]) for row in selected if row["state"] == "degraded" and row["error_code"] == "render_projection_failed"
+                str(row["session_id"])
+                for row in selected
+                if row["state"] == "degraded"
+                and (
+                    row["error_code"] == "render_projection_failed"
+                    or (
+                        int(row["attempts"]) >= 2
+                        and (session_state := session_states.get(str(row["session_id"]))) is not None
+                        and session_state["render_state"] == "pending"
+                        and session_state["current_render_generation"] is None
+                    )
+                )
             }
             conflicts = sorted(set(session_keys) - eligible)
             if conflicts:
