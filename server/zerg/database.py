@@ -417,8 +417,23 @@ def get_session_factory() -> sessionmaker:
     return default_session_factory
 
 
+def _default_database_enabled_for_process(settings) -> bool:
+    """Keep the retired database engine out of normal live-catalog processes."""
+
+    if not settings.database_url:
+        return False
+    if settings.testing or os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    if not settings.live_database_url:
+        return True
+    try:
+        return make_url(settings.database_url).query.get("mode") == "ro"
+    except Exception:
+        return True
+
+
 # Default engine and sessionmaker instances for app usage
-if _settings.database_url:
+if _default_database_enabled_for_process(_settings):
     default_engine = make_engine(_settings.database_url)
     default_session_factory = make_sessionmaker(default_engine)
 
@@ -462,6 +477,9 @@ def _ensure_default_engines_from_env() -> Engine | None:
 
     if default_engine is not None:
         return default_engine
+
+    if live_catalog_enabled():
+        return None
 
     from zerg.config import get_settings_unchecked
 

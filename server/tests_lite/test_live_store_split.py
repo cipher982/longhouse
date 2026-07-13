@@ -98,6 +98,23 @@ def test_live_write_serializer_is_distinct_from_archive_serializer():
     assert get_live_write_serializer() is not get_write_serializer()
 
 
+def test_live_catalog_process_does_not_construct_retired_database_engine(monkeypatch):
+    from types import SimpleNamespace
+
+    from zerg.database import _default_database_enabled_for_process
+
+    monkeypatch.delenv("TESTING", raising=False)
+    settings = SimpleNamespace(
+        database_url="sqlite:////data/longhouse.db",
+        live_database_url="sqlite:////data/longhouse-live.db",
+        testing=False,
+    )
+
+    assert _default_database_enabled_for_process(settings) is False
+    settings.database_url = "sqlite:///file:/data/longhouse.db?mode=ro&uri=true"
+    assert _default_database_enabled_for_process(settings) is True
+
+
 def test_initialize_live_database_creates_only_live_tables(tmp_path):
     from zerg.services.live_catalog_projection import live_catalog_table_names
 
