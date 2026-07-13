@@ -1808,6 +1808,7 @@ async def get_session_workspace(
     if storage_workspace is None and not get_settings().testing:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
     if storage_workspace is None:
+        assert legacy_session_factory is not None
 
         def build_legacy_workspace() -> SessionWorkspaceResponse:
             with legacy_session_factory() as db:

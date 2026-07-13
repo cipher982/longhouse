@@ -1013,6 +1013,7 @@ async def get_timeline_session_events(
     if storage_workspace is None and not get_settings().testing:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     if storage_workspace is None:
+        assert legacy_session_factory is not None
 
         def build_legacy_events():
             with legacy_session_factory() as db:
@@ -1082,6 +1083,7 @@ async def get_timeline_session_projection(
     if storage_workspace is None and not get_settings().testing:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     if storage_workspace is None:
+        assert legacy_session_factory is not None
 
         def build_legacy_projection():
             with legacy_session_factory() as db:
@@ -1139,6 +1141,7 @@ async def get_timeline_session_workspace(
     if storage_workspace is None and not get_settings().testing:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     if storage_workspace is None:
+        assert legacy_session_factory is not None
 
         def build_legacy_workspace() -> SessionWorkspaceResponse:
             with legacy_session_factory() as db:
@@ -1203,6 +1206,7 @@ async def get_timeline_session_mobile_tail(
     if storage_workspace is None and not get_settings().testing:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     if storage_workspace is None:
+        assert legacy_session_factory is not None
 
         def build_legacy_tail() -> SessionMobileTailResponse:
             legacy_snapshot_event_id: int | None = None

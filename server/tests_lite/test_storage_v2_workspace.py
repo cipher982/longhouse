@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 
+import zerg.services.session_workspace as session_workspace_module
 import zerg.services.storage_v2_workspace as workspace_module
 
 
@@ -14,6 +15,16 @@ class _Catalog:
             "commit_seq": "8",
             "session": {"owner_id": "42", "updated_at": "2026-07-12T12:00:00Z"},
         }
+
+
+def test_live_catalog_workspace_dependency_does_not_open_legacy_database(monkeypatch):
+    monkeypatch.setattr(session_workspace_module.database_module, "live_catalog_enabled", lambda: True)
+
+    def forbidden():
+        raise AssertionError("legacy database factory must not be constructed")
+
+    monkeypatch.setattr(session_workspace_module, "get_session_factory", forbidden)
+    assert session_workspace_module.get_legacy_workspace_session_factory() is None
 
 
 @pytest.mark.asyncio

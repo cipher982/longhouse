@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg import database as database_module
 from zerg.database import get_session_factory
 from zerg.models.user import User
 from zerg.services.agents import AgentsStore
@@ -62,6 +63,8 @@ def resolve_session_sharer(db: Session, user_id: int) -> SessionSharerResponse |
 def get_legacy_workspace_session_factory():
     """Inject the legacy DB factory without opening it on storage-v2 reads."""
 
+    if database_module.live_catalog_enabled():
+        return None
     return get_session_factory()
 
 
