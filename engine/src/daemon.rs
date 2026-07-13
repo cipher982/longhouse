@@ -2899,7 +2899,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         }
     };
 
-    if result.job.priority != WorkPriority::Live {
+    if result.job.priority != WorkPriority::Live && task_context.storage_v2.is_none() {
         let replay_prepare_at_ms = chrono::Utc::now().timestamp_millis();
         let replay_trace = shipper::ShipTraceContext {
             work_context: FAILED_SHIPMENT_RETRY_CONTEXT,
@@ -3011,6 +3011,15 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 result.events_shipped = outcome.events_shipped;
                 if outcome.has_more {
                     result.rerun_priority = Some(result.job.priority);
+                } else if let Err(error) =
+                    retire_legacy_spool_after_storage_v2(&conn, &result.job.path)
+                {
+                    tracing::warn!(
+                        path = %result.job.path.display(),
+                        error = %error,
+                        "Storage-v2 reached source head but legacy spool retirement failed"
+                    );
+                    result.local_retry_after = Some(local_retry_delay(result.job.priority));
                 }
                 tracing::info!(
                     path = %result.job.path.display(),
@@ -3021,7 +3030,16 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     "Shipped storage-v2 source envelope"
                 );
             }
-            Ok(None) => {}
+            Ok(None) => {
+                if let Err(error) = retire_legacy_spool_after_storage_v2(&conn, &result.job.path) {
+                    tracing::warn!(
+                        path = %result.job.path.display(),
+                        error = %error,
+                        "Storage-v2 source is current but legacy spool retirement failed"
+                    );
+                    result.local_retry_after = Some(local_retry_delay(result.job.priority));
+                }
+            }
             Err(error) => {
                 if task_context.tracker.record_error() {
                     tracing::warn!(
@@ -3223,6 +3241,25 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     finish_path_task(result, task_started)
 }
 
+fn retire_legacy_spool_after_storage_v2(
+    conn: &rusqlite::Connection,
+    path: &Path,
+) -> anyhow::Result<usize> {
+    let spool = Spool::new(conn);
+    let path = path.to_string_lossy();
+    let mut retired = 0usize;
+    loop {
+        let pending = spool.pending_entries_for_path_now(&path, 1_000)?;
+        if pending.is_empty() {
+            return Ok(retired);
+        }
+        for entry in pending {
+            spool.mark_shipped(entry.id)?;
+            retired += 1;
+        }
+    }
+}
+
 fn finish_path_task(mut result: PathTaskResult, started: Instant) -> PathTaskResult {
     result.processing_elapsed = started.elapsed();
     result
@@ -3257,6 +3294,38 @@ mod tests {
             wake_reason: None,
             file_len_hint: None,
         }
+    }
+
+    #[test]
+    fn test_storage_v2_source_head_retires_only_matching_legacy_spool_rows() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let spool = Spool::new(&conn);
+        spool
+            .enqueue("codex", "/tmp/target.jsonl", 0, 100, Some("target"))
+            .unwrap();
+        spool
+            .enqueue("codex", "/tmp/target.jsonl", 100, 200, Some("target"))
+            .unwrap();
+        spool
+            .enqueue("codex", "/tmp/other.jsonl", 0, 100, Some("other"))
+            .unwrap();
+
+        assert_eq!(
+            retire_legacy_spool_after_storage_v2(&conn, Path::new("/tmp/target.jsonl")).unwrap(),
+            2
+        );
+        assert!(spool
+            .pending_entries_for_path_now("/tmp/target.jsonl", 10)
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            spool
+                .pending_entries_for_path_now("/tmp/other.jsonl", 10)
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
