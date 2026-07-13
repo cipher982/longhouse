@@ -93,3 +93,11 @@ def test_searchd_paths_fall_back_to_short_private_runtime_dir(tmp_path, monkeypa
     assert database_path == catalog_path.parent / "search.db"
     assert len(os.fsencode(socket_path.with_name(f".{socket_path.name}.tmp.{os.getpid()}"))) < 104
     assert socket_path.parent.stat().st_mode & 0o077 == 0
+
+
+def test_search_projector_has_background_write_budget(supervisor_paths):
+    database_path, socket_path = supervisor_paths
+    supervisor = SearchdSupervisor(database_path=database_path, socket_path=socket_path)
+
+    assert supervisor.client.default_timeout_seconds == 1.0
+    assert supervisor.projector_client.default_timeout_seconds == 30.0

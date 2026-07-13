@@ -21,6 +21,7 @@ from zerg.searchd.store import SCHEMA_GENERATION
 from zerg.searchd.store import SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
+SEARCHD_PROJECTOR_RPC_TIMEOUT_SECONDS = 30.0
 
 
 def searchd_paths() -> tuple[Path, Path]:
@@ -46,7 +47,13 @@ class SearchdSupervisor:
         self.socket_path = socket_path
         self.status_path = socket_path.with_name("searchd-status.json")
         self.client = CatalogClient(socket_path)
-        self.projector_client = CatalogClient(socket_path)
+        # Background FTS writes can legitimately exceed the interactive RPC
+        # budget for large render objects. Reads retain the one-second bound on
+        # the separate client/read executor.
+        self.projector_client = CatalogClient(
+            socket_path,
+            default_timeout_seconds=SEARCHD_PROJECTOR_RPC_TIMEOUT_SECONDS,
+        )
         self._task: asyncio.Task | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._stopping = False
