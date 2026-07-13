@@ -136,6 +136,7 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "live_session_input_attachments",
         "live_session_live_previews",
         "live_sessions",
+        "session_messages",
         "runner_enroll_tokens",
         "runner_health_incidents",
         "runner_jobs",

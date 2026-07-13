@@ -71,6 +71,11 @@ _SAFE_RETRY_METHODS = {
     "session.preferences.update.v2",
     "session.active.list.v2",
     "session.timeline.list.v2",
+    "session.message.create.v2",
+    "session.message.list.v2",
+    "session.message.ack.v2",
+    "session.message.delivery.v2",
+    "session.message.pending_counts.v2",
     # Storage-v2 manifests are caller-identified by UUID/envelope hash. Exact
     # replay returns the durable manifest receipt; conflicting replay is rejected.
     "storage.source_epoch.open.v2",

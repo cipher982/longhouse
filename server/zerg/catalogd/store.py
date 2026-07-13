@@ -61,6 +61,7 @@ from zerg.models.live_store import LiveSessionInputAttachment
 from zerg.models.live_store import LiveSessionInputReceipt
 from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.models.live_store import LiveSessionLivePreview
+from zerg.models.live_store import LiveSessionMessage
 from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
@@ -325,6 +326,23 @@ def _input_attachment_dto(row: Any) -> dict[str, Any]:
         "original_byte_size": int(row.original_byte_size) if row.original_byte_size is not None else None,
         "created_at": _encode_datetime(row.created_at),
         "expires_at": _encode_datetime(row.expires_at),
+    }
+
+
+def _session_message_dto(row: Any) -> dict[str, Any]:
+    return {
+        "id": int(row.id),
+        "from_session_id": str(row.from_session_id),
+        "to_session_id": str(row.to_session_id),
+        "text": str(getattr(row, "body", row.text)),
+        "source_event_id": row.source_event_id,
+        "delivery_status": str(row.delivery_status),
+        "delivery_attempts": int(row.delivery_attempts or 0),
+        "last_error": row.last_error,
+        "delivered_via": row.delivered_via,
+        "created_at": _encode_datetime(row.created_at),
+        "delivered_at": _encode_datetime(row.delivered_at),
+        "acknowledged_at": _encode_datetime(row.acknowledged_at),
     }
 
 
@@ -3168,6 +3186,218 @@ class CatalogStore:
                 "observed_at": observed_at.isoformat(),
                 "facts": facts,
             }
+
+    @staticmethod
+    def _session_belongs_to_owner(connection: Any, *, session_id: str, owner_id: int) -> bool:
+        """Validate catalog session ownership, including single-tenant legacy cards."""
+
+        owner_exists = connection.execute(
+            select(LiveUser.id).where(LiveUser.id == owner_id, LiveUser.is_active.is_(True))
+        ).scalar_one_or_none()
+        if owner_exists is None:
+            return False
+
+        owner_text = str(owner_id)
+        live_owner = connection.execute(select(LiveSession.owner_id).where(LiveSession.session_id == session_id)).scalar_one_or_none()
+        if live_owner is not None:
+            return str(live_owner) == owner_text
+
+        storage_owner = connection.execute(
+            select(StorageSession.owner_id).where(StorageSession.session_id == session_id)
+        ).scalar_one_or_none()
+        if storage_owner is not None:
+            return str(storage_owner) == owner_text
+
+        # Legacy live cards predate per-session ownership. They are still
+        # unambiguously owned by the one active tenant in this catalog.
+        catalog_exists = connection.execute(
+            select(LiveSessionCatalog.session_id).where(LiveSessionCatalog.session_id == session_id)
+        ).scalar_one_or_none()
+        return catalog_exists is not None
+
+    def create_session_message(
+        self,
+        *,
+        message_key: str,
+        owner_id: int,
+        from_session_id: str,
+        to_session_id: str,
+        text: str,
+        source_event_id: int | None,
+        created_at: datetime,
+    ) -> dict[str, Any]:
+        table = LiveSessionMessage.__table__
+        with _write_transaction(self.engine) as connection:
+            existing = connection.execute(select(table).where(table.c.message_key == message_key)).mappings().first()
+            if existing is not None:
+                exact = (
+                    int(existing["owner_id"]) == owner_id
+                    and str(existing["from_session_id"]) == from_session_id
+                    and str(existing["to_session_id"]) == to_session_id
+                    and str(existing["text"]) == text
+                    and existing["source_event_id"] == source_event_id
+                    and _as_aware_utc(existing["created_at"]) == created_at
+                )
+                return {
+                    "created": False,
+                    "idempotency_conflict": not exact,
+                    "message": _session_message_dto(SimpleNamespace(**existing)) if exact else None,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            if from_session_id == to_session_id:
+                return {"invalid": "same_session", "commit_seq": str(_current_commit_seq(connection))}
+            if not self._session_belongs_to_owner(connection, session_id=from_session_id, owner_id=owner_id):
+                return {"not_found": "sender", "commit_seq": str(_current_commit_seq(connection))}
+            if not self._session_belongs_to_owner(connection, session_id=to_session_id, owner_id=owner_id):
+                return {"not_found": "target", "commit_seq": str(_current_commit_seq(connection))}
+            result = connection.execute(
+                insert(table)
+                .values(
+                    message_key=message_key,
+                    owner_id=owner_id,
+                    from_session_id=from_session_id,
+                    to_session_id=to_session_id,
+                    text=text,
+                    source_event_id=source_event_id,
+                    delivery_status="stored_only",
+                    delivery_attempts=0,
+                    created_at=created_at,
+                    updated_at=created_at,
+                )
+                .returning(table.c.id)
+            )
+            message_id = int(result.scalar_one())
+            commit_seq = _advance_commit_seq(connection, created_at)
+            row = connection.execute(select(table).where(table.c.id == message_id)).mappings().one()
+            return {
+                "created": True,
+                "idempotency_conflict": False,
+                "message": _session_message_dto(SimpleNamespace(**row)),
+                "commit_seq": str(commit_seq),
+            }
+
+    def list_session_messages(
+        self,
+        *,
+        owner_id: int,
+        session_id: str,
+        direction: str,
+        unacknowledged_only: bool,
+        limit: int,
+    ) -> dict[str, Any]:
+        table = LiveSessionMessage.__table__
+        with _read_snapshot(self.engine) as connection:
+            if not self._session_belongs_to_owner(connection, session_id=session_id, owner_id=owner_id):
+                return {"found": False, "messages": [], "commit_seq": str(_current_commit_seq(connection))}
+            query = select(table).where(table.c.owner_id == owner_id)
+            if direction == "inbound":
+                query = query.where(table.c.to_session_id == session_id)
+            elif direction == "outbound":
+                query = query.where(table.c.from_session_id == session_id)
+            else:
+                query = query.where(or_(table.c.to_session_id == session_id, table.c.from_session_id == session_id))
+            if unacknowledged_only:
+                query = query.where(table.c.acknowledged_at.is_(None))
+            rows = connection.execute(query.order_by(table.c.created_at.desc(), table.c.id.desc()).limit(limit)).mappings().all()
+            return {
+                "found": True,
+                "messages": [_session_message_dto(SimpleNamespace(**row)) for row in rows],
+                "commit_seq": str(_current_commit_seq(connection)),
+            }
+
+    def acknowledge_session_message(
+        self,
+        *,
+        owner_id: int,
+        message_id: int,
+        target_session_id: str,
+        acknowledged_at: datetime,
+    ) -> dict[str, Any]:
+        table = LiveSessionMessage.__table__
+        with _write_transaction(self.engine) as connection:
+            row = connection.execute(select(table).where(table.c.id == message_id, table.c.owner_id == owner_id)).mappings().first()
+            if row is None:
+                return {"not_found": True, "commit_seq": str(_current_commit_seq(connection))}
+            if str(row["to_session_id"]) != target_session_id:
+                return {"forbidden": True, "commit_seq": str(_current_commit_seq(connection))}
+            if row["delivery_status"] in {"queued", "delivering"}:
+                return {"conflict": "not_delivered", "commit_seq": str(_current_commit_seq(connection))}
+            if row["delivery_status"] == "failed":
+                return {"conflict": "failed", "commit_seq": str(_current_commit_seq(connection))}
+            changed = row["acknowledged_at"] is None
+            if changed:
+                connection.execute(
+                    update(table).where(table.c.id == message_id).values(acknowledged_at=acknowledged_at, updated_at=acknowledged_at)
+                )
+                commit_seq = _advance_commit_seq(connection, acknowledged_at)
+                row = connection.execute(select(table).where(table.c.id == message_id)).mappings().one()
+            else:
+                commit_seq = _current_commit_seq(connection)
+            return {
+                "changed": changed,
+                "message": _session_message_dto(SimpleNamespace(**row)),
+                "commit_seq": str(commit_seq),
+            }
+
+    def update_session_message_delivery(
+        self,
+        *,
+        owner_id: int,
+        message_id: int,
+        expected_status: str,
+        delivery_status: str,
+        delivery_attempts: int,
+        last_error: str | None,
+        delivered_via: str | None,
+        delivered_at: datetime | None,
+        updated_at: datetime,
+    ) -> dict[str, Any]:
+        table = LiveSessionMessage.__table__
+        with _write_transaction(self.engine) as connection:
+            row = connection.execute(select(table).where(table.c.id == message_id, table.c.owner_id == owner_id)).mappings().first()
+            if row is None:
+                return {"not_found": True, "commit_seq": str(_current_commit_seq(connection))}
+            desired = {
+                "delivery_status": delivery_status,
+                "delivery_attempts": delivery_attempts,
+                "last_error": last_error,
+                "delivered_via": delivered_via,
+                "delivered_at": delivered_at,
+            }
+            replay = all((_as_aware_utc(row[key]) if key == "delivered_at" else row[key]) == value for key, value in desired.items())
+            if replay:
+                return {
+                    "changed": False,
+                    "message": _session_message_dto(SimpleNamespace(**row)),
+                    "commit_seq": str(_current_commit_seq(connection)),
+                }
+            if row["delivery_status"] != expected_status:
+                return {"conflict": "status_changed", "commit_seq": str(_current_commit_seq(connection))}
+            connection.execute(update(table).where(table.c.id == message_id).values(**desired, updated_at=updated_at))
+            commit_seq = _advance_commit_seq(connection, updated_at)
+            row = connection.execute(select(table).where(table.c.id == message_id)).mappings().one()
+            return {
+                "changed": True,
+                "message": _session_message_dto(SimpleNamespace(**row)),
+                "commit_seq": str(commit_seq),
+            }
+
+    def pending_session_message_counts(self, *, owner_id: int, session_ids: list[str]) -> dict[str, Any]:
+        table = LiveSessionMessage.__table__
+        with _read_snapshot(self.engine) as connection:
+            rows = connection.execute(
+                select(table.c.to_session_id, func.count(table.c.id))
+                .where(
+                    table.c.owner_id == owner_id,
+                    table.c.to_session_id.in_(session_ids),
+                    table.c.acknowledged_at.is_(None),
+                    table.c.delivery_status != "failed",
+                )
+                .group_by(table.c.to_session_id)
+            ).all()
+            counts = {session_id: 0 for session_id in session_ids}
+            counts.update({str(session_id): int(count) for session_id, count in rows})
+            return {"counts": counts, "commit_seq": str(_current_commit_seq(connection))}
 
     def list_active_session_ids(self, *, limit: int, days_back: int, observed_at: datetime) -> dict[str, Any]:
         """Return bounded recently observed session identities from the live lane."""

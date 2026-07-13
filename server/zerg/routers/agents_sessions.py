@@ -10,6 +10,7 @@ from typing import Any
 from typing import List
 from typing import Optional
 from uuid import UUID
+from uuid import uuid4
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -59,6 +60,7 @@ from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
 from zerg.services.session_coordination import list_session_messages
 from zerg.services.session_coordination import load_session_tail
+from zerg.services.session_coordination import project_storage_v2_wall
 from zerg.services.session_coordination import query_wall_sessions
 from zerg.services.session_coordination import serialize_session_message
 from zerg.services.session_graph_projection import build_session_graph_projection
@@ -139,6 +141,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 _catalog_db_dependency = catalog_db_dependency()
+
+
+def _no_coordination_db():
+    yield None
+
+
+coordination_db_dependency = _no_coordination_db if database_module.live_catalog_enabled() else get_db
 
 
 def _no_session_preferences_db():
@@ -328,11 +337,11 @@ def _build_projection_seam_response(*, db: Session, item) -> SessionProjectionIt
 
 def _resolve_message_actor_session(
     *,
-    db: Session,
+    db: Session | None,
     request: Request,
     token: object | None,
     declared_session_id: UUID | None,
-) -> AgentSession:
+):
     header_session_id = _parse_message_session_header(request)
     token_session_raw = str(getattr(token, "session_id", "") or "").strip()
     token_session_id: UUID | None = None
@@ -372,7 +381,13 @@ def _resolve_message_actor_session(
             detail=f"Provide {_CURRENT_SESSION_HEADER} or session_id context for this request",
         )
 
-    session = db.query(AgentSession).filter(AgentSession.id == resolved_session_id).first()
+    if database_module.live_catalog_enabled() and db is None:
+        from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+        session = load_live_control_session_snapshot(resolved_session_id)
+    else:
+        assert db is not None
+        session = db.query(AgentSession).filter(AgentSession.id == resolved_session_id).first()
     if session is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -713,14 +728,14 @@ def list_session_summaries(
 
 
 @router.get("/sessions/wall", response_model=WallResponse)
-def wall_query(
+async def wall_query(
     repo: Optional[str] = Query(None, description="Filter by git_repo (substring match)"),
     project: Optional[str] = Query(None, description="Filter by project name"),
     days: int = Query(7, ge=1, le=90, description="Days to look back"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     include_automation: bool = Query(False, description="Include Hatch automation sessions in wall results"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    db: Session | None = Depends(coordination_db_dependency),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> WallResponse:
     """Wall query: raw signal metadata for sessions on a repo.
@@ -728,6 +743,52 @@ def wall_query(
     Schema-on-read: returns raw timestamps and facts. The consuming agent
     or UI decides what's relevant — no status bucketing, no pre-computed summaries.
     """
+    if database_module.live_catalog_enabled():
+        fetch_limit = min(200, limit * 4 if repo else limit)
+        snapshot = timeline_snapshot(
+            {
+                "project": project,
+                "provider": None,
+                "environment": None,
+                "include_test": False,
+                "hide_autonomous": not include_automation,
+                "include_automation": include_automation,
+                "device_id": None,
+                "days_back": days,
+                "limit": fetch_limit,
+                "offset": 0,
+            }
+        )
+        session_ids = list(
+            dict.fromkeys(
+                str(catalog["session_id"])
+                for row in snapshot.get("rows") or []
+                if isinstance(row, dict)
+                and isinstance((facts := row.get("facts")), dict)
+                and isinstance((catalog := facts.get("catalog")), dict)
+                and catalog.get("session_id")
+            )
+        )
+        counts: dict[str, int] = {}
+        if session_ids:
+            pending = await _catalog_message_call(
+                "session.message.pending_counts.v2",
+                {
+                    "owner_id": _catalog_message_owner_id(_auth),
+                    "session_ids": session_ids,
+                },
+            )
+            pending_counts = pending.get("counts")
+            if isinstance(pending_counts, dict):
+                counts = pending_counts
+        items = project_storage_v2_wall(
+            snapshot,
+            repo=repo,
+            limit=limit,
+            pending_counts=counts,
+        )
+        return WallResponse(sessions=items, total=len(items))
+    assert db is not None
     items = query_wall_sessions(
         db,
         repo=repo,
@@ -1892,11 +1953,111 @@ class SessionMessageAcknowledge(UTCBaseModel):
     session_id: UUID | None = None
 
 
+def _catalog_message_owner_id(auth: object) -> int:
+    owner_id = getattr(auth, "owner_id", None)
+    if owner_id is None:
+        from zerg.services.catalog_read_gateway import active_owner_id
+
+        owner_id = active_owner_id()
+    if owner_id is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Session owner is unavailable")
+    return int(owner_id)
+
+
+async def _catalog_message_call(method: str, params: dict[str, Any]) -> dict[str, Any]:
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Session messaging is unavailable")
+    try:
+        return await catalogd.call(method, params, timeout_seconds=1.0)
+    except CatalogRemoteError as exc:
+        status_code = {
+            "not_found": status.HTTP_404_NOT_FOUND,
+            "forbidden": status.HTTP_403_FORBIDDEN,
+            "conflict": status.HTTP_409_CONFLICT,
+        }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    except CatalogUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Session messaging is unavailable") from exc
+
+
+async def _attempt_catalog_message_delivery(
+    *,
+    owner_id: int,
+    sender_session,
+    target_session,
+    message: dict[str, Any],
+) -> dict[str, Any]:
+    capabilities = getattr(target_session, "capabilities", None)
+    if capabilities is None or not capabilities.live_control_available:
+        return message
+
+    device_name = (
+        str(getattr(sender_session, "device_name", "") or "").strip()
+        or str(getattr(sender_session, "device_id", "") or "").strip()
+        or "unknown-device"
+    )
+    injected_text = "\n".join(
+        [
+            f"[Message #{message['id']} from session {sender_session.id} on {device_name}]",
+            str(message["text"]),
+            f"[End message — use session_tail({sender_session.id}) for full context]",
+        ]
+    )
+    delivery_status = "stored_only"
+    delivered_via = None
+    delivered_at = None
+    last_error = None
+    try:
+        from zerg.routers.session_chat import INPUT_INTENT_AUTO
+        from zerg.routers.session_chat import SessionInputRequest
+        from zerg.routers.session_chat import _create_catalog_session_input_response
+
+        response = await _create_catalog_session_input_response(
+            source_session=target_session,
+            owner_id=owner_id,
+            body=SessionInputRequest(
+                text=injected_text,
+                intent=INPUT_INTENT_AUTO,
+                client_request_id=f"session-message-{message['id']}",
+            ),
+            db=None,
+        )
+        if response.outcome == "sent":
+            delivery_status = "delivered"
+            delivered_via = "live_input"
+            delivered_at = datetime.now(timezone.utc).isoformat()
+        else:
+            delivered_via = "live_input_queue"
+    except HTTPException as exc:
+        last_error = str(exc.detail)[:500]
+    except Exception as exc:
+        logger.warning("Session message %s live delivery failed", message.get("id"), exc_info=True)
+        last_error = str(exc)[:500] or type(exc).__name__
+
+    result = await _catalog_message_call(
+        "session.message.delivery.v2",
+        {
+            "owner_id": owner_id,
+            "message_id": int(message["id"]),
+            "expected_status": str(message["delivery_status"]),
+            "delivery_status": delivery_status,
+            "delivery_attempts": int(message.get("delivery_attempts") or 0) + 1,
+            "last_error": last_error,
+            "delivered_via": delivered_via,
+            "delivered_at": delivered_at,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    updated = result.get("message")
+    return updated if isinstance(updated, dict) else message
+
+
 @router.post("/messages", status_code=status.HTTP_201_CREATED)
 async def create_message(
     request: Request,
     payload: SessionMessageCreate,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(coordination_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict:
@@ -1907,6 +2068,35 @@ async def create_message(
         token=_auth,
         declared_session_id=payload.from_session_id,
     )
+    if database_module.live_catalog_enabled():
+        owner_id = _catalog_message_owner_id(_auth)
+        from zerg.services.live_control_catalog import load_live_control_session_snapshot
+
+        target_session = load_live_control_session_snapshot(payload.to_session_id)
+        if target_session is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target session not found")
+        created = await _catalog_message_call(
+            "session.message.create.v2",
+            {
+                "message_key": str(uuid4()),
+                "owner_id": owner_id,
+                "from_session_id": str(sender_session.id),
+                "to_session_id": str(payload.to_session_id),
+                "text": payload.text[:4000],
+                "source_event_id": payload.source_event_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        message = created.get("message")
+        if not isinstance(message, dict):
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invalid catalog message response")
+        return await _attempt_catalog_message_delivery(
+            owner_id=owner_id,
+            sender_session=sender_session,
+            target_session=target_session,
+            message=message,
+        )
+    assert db is not None
     try:
         outcome = await create_session_message(
             db=db,
@@ -1931,7 +2121,7 @@ async def list_messages(
     direction: str = Query("inbound", description="Message direction: inbound|outbound|all"),
     unacknowledged_only: bool = Query(False, description="Only include messages without acknowledged_at"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(coordination_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict:
@@ -1950,6 +2140,23 @@ async def list_messages(
     )
     resolved_session_id = actor_session.id
 
+    if database_module.live_catalog_enabled():
+        result = await _catalog_message_call(
+            "session.message.list.v2",
+            {
+                "owner_id": _catalog_message_owner_id(_auth),
+                "session_id": str(resolved_session_id),
+                "direction": direction,
+                "unacknowledged_only": unacknowledged_only,
+                "limit": limit,
+            },
+        )
+        messages = result.get("messages")
+        if not isinstance(messages, list):
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invalid catalog message response")
+        return {"messages": messages, "total": len(messages)}
+
+    assert db is not None
     messages = list_session_messages(
         db,
         session_id=resolved_session_id,
@@ -1968,7 +2175,7 @@ async def acknowledge_message(
     message_id: int,
     request: Request,
     payload: SessionMessageAcknowledge | None = None,
-    db: Session = Depends(get_db),
+    db: Session | None = Depends(coordination_db_dependency),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict:
@@ -1979,6 +2186,21 @@ async def acknowledge_message(
         token=_auth,
         declared_session_id=payload.session_id if payload is not None else None,
     )
+    if database_module.live_catalog_enabled():
+        result = await _catalog_message_call(
+            "session.message.ack.v2",
+            {
+                "owner_id": _catalog_message_owner_id(_auth),
+                "message_id": message_id,
+                "target_session_id": str(actor_session.id),
+                "acknowledged_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        message = result.get("message")
+        if not isinstance(message, dict):
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Invalid catalog message response")
+        return message
+    assert db is not None
     try:
         message = acknowledge_session_message_for_session(
             db,

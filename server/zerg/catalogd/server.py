@@ -257,6 +257,16 @@ class CatalogDaemon:
             return await self._upsert_apns_live_activity(request)
         if request.method == "notification.apns.live_activity.end.v2":
             return await self._end_apns_live_activity(request)
+        if request.method == "session.message.create.v2":
+            return await self._create_session_message(request)
+        if request.method == "session.message.list.v2":
+            return await self._list_session_messages(request)
+        if request.method == "session.message.ack.v2":
+            return await self._ack_session_message(request)
+        if request.method == "session.message.delivery.v2":
+            return await self._update_session_message_delivery(request)
+        if request.method == "session.message.pending_counts.v2":
+            return await self._read_pending_session_message_counts(request)
         if request.method == "session.runtime.apply.v2":
             return await self._apply_session_runtime(request)
         if request.method == "control.command_result.apply.v2":
@@ -997,6 +1007,154 @@ class CatalogDaemon:
             owner_id=owner_id,
             activity_id=activity_id,
             ended_at=ended_at,
+        )
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _create_session_message(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "message_key",
+            "owner_id",
+            "from_session_id",
+            "to_session_id",
+            "text",
+            "source_event_id",
+            "created_at",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "session.message.create.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        source_event_id = params["source_event_id"]
+        if source_event_id is not None and (type(source_event_id) is not int or source_event_id <= 0):
+            return self._error(request, "invalid_request", "source_event_id must be a positive integer or null")
+        try:
+            params["message_key"] = str(_canonical_uuid(params["message_key"], "message_key"))
+            params["from_session_id"] = str(_canonical_uuid(params["from_session_id"], "from_session_id"))
+            params["to_session_id"] = str(_canonical_uuid(params["to_session_id"], "to_session_id"))
+            params["text"] = _bounded_text(params["text"], "text", 4_000)
+            params["created_at"] = _parse_datetime(params["created_at"], "created_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.create_session_message, **params)
+        if result.get("idempotency_conflict"):
+            return self._error(request, "conflict", "message_key was reused with different content")
+        if reason := result.get("invalid"):
+            return self._error(request, "invalid_request", "cannot send a session message to the same session", details={"reason": reason})
+        if missing := result.get("not_found"):
+            return self._error(request, "not_found", f"{missing} session not found for owner")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_session_messages(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"owner_id", "session_id", "direction", "unacknowledged_only", "limit"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "session.message.list.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if params["direction"] not in {"inbound", "outbound", "all"}:
+            return self._error(request, "invalid_request", "direction must be inbound, outbound, or all")
+        if type(params["unacknowledged_only"]) is not bool:
+            return self._error(request, "invalid_request", "unacknowledged_only must be a boolean")
+        if type(params["limit"]) is not int or not 1 <= params["limit"] <= 200:
+            return self._error(request, "invalid_request", "limit must be between 1 and 200")
+        try:
+            params["session_id"] = str(_canonical_uuid(params["session_id"], "session_id"))
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_read_store(self._store.list_session_messages, **params)
+        if not result.get("found"):
+            return self._error(request, "not_found", "session not found for owner")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _ack_session_message(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {"owner_id", "message_id", "target_session_id", "acknowledged_at"}
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "session.message.ack.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if type(params["message_id"]) is not int or params["message_id"] <= 0:
+            return self._error(request, "invalid_request", "message_id must be a positive integer")
+        try:
+            params["target_session_id"] = str(_canonical_uuid(params["target_session_id"], "target_session_id"))
+            params["acknowledged_at"] = _parse_datetime(params["acknowledged_at"], "acknowledged_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.acknowledge_session_message, **params)
+        if result.get("not_found"):
+            return self._error(request, "not_found", "session message not found")
+        if result.get("forbidden"):
+            return self._error(request, "forbidden", "only the target session can acknowledge this message")
+        if conflict := result.get("conflict"):
+            return self._error(request, "conflict", "session message cannot be acknowledged", details={"reason": conflict})
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _update_session_message_delivery(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        expected = {
+            "owner_id",
+            "message_id",
+            "expected_status",
+            "delivery_status",
+            "delivery_attempts",
+            "last_error",
+            "delivered_via",
+            "delivered_at",
+            "updated_at",
+        }
+        if set(request.params) != expected:
+            return self._error(request, "invalid_request", "session.message.delivery.v2 has invalid parameters")
+        params = dict(request.params)
+        if type(params["owner_id"]) is not int or params["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if type(params["message_id"]) is not int or params["message_id"] <= 0:
+            return self._error(request, "invalid_request", "message_id must be a positive integer")
+        statuses = {"queued", "delivering", "delivered", "stored_only", "failed"}
+        if params["expected_status"] not in statuses or params["delivery_status"] not in statuses:
+            return self._error(request, "invalid_request", "delivery status is invalid")
+        if type(params["delivery_attempts"]) is not int or not 0 <= params["delivery_attempts"] <= 1_000:
+            return self._error(request, "invalid_request", "delivery_attempts is invalid")
+        try:
+            if params["last_error"] is not None:
+                params["last_error"] = _bounded_text(params["last_error"], "last_error", 4_000)
+            if params["delivered_via"] is not None:
+                params["delivered_via"] = _bounded_text(params["delivered_via"], "delivered_via", 32)
+            if params["delivered_at"] is not None:
+                params["delivered_at"] = _parse_datetime(params["delivered_at"], "delivered_at")
+            params["updated_at"] = _parse_datetime(params["updated_at"], "updated_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.update_session_message_delivery, **params)
+        if result.get("not_found"):
+            return self._error(request, "not_found", "session message not found")
+        if conflict := result.get("conflict"):
+            return self._error(request, "conflict", "session message delivery state changed", details={"reason": conflict})
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _read_pending_session_message_counts(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "session_ids"}:
+            return self._error(request, "invalid_request", "session.message.pending_counts.v2 has invalid parameters")
+        owner_id = request.params["owner_id"]
+        raw_session_ids = request.params["session_ids"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if not isinstance(raw_session_ids, list) or not 1 <= len(raw_session_ids) <= 200:
+            return self._error(request, "invalid_request", "session_ids must contain 1 through 200 rows")
+        try:
+            session_ids = [str(_canonical_uuid(value, "session_id")) for value in raw_session_ids]
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if len(set(session_ids)) != len(session_ids):
+            return self._error(request, "invalid_request", "session_ids must be unique")
+        assert self._store is not None
+        result = await self._run_read_store(
+            self._store.pending_session_message_counts,
+            owner_id=owner_id,
+            session_ids=session_ids,
         )
         return CatalogRpcResponse(id=request.id, result=result)
 

@@ -38,6 +38,8 @@ ERROR_CODES = frozenset(
         "invalid_cursor",
         "projection_lag",
         "conflict",
+        "not_found",
+        "forbidden",
         "resource_exhausted",
     }
 )

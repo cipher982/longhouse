@@ -6,6 +6,7 @@ the same wall/tail/message semantics without forcing a broad router rewrite.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from collections.abc import Sequence
 from datetime import datetime
 from datetime import timedelta
@@ -19,12 +20,22 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
+from zerg.models.live_store import LiveRuntimeState
+from zerg.models.live_store import LiveSessionCatalog
+from zerg.models.live_store import LiveSessionConnection
+from zerg.models.live_store import LiveSessionRun
+from zerg.models.live_store import LiveSessionThread
+from zerg.models.live_store import LiveTimelineCard
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
+from zerg.services.agents.kernel_capabilities import project_capabilities_from_rows
+from zerg.services.catalog_facts import decode_catalog_datetime
+from zerg.services.catalog_facts import hydrate_catalog_row
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_messages import MESSAGE_STATUS_DELIVERING
 from zerg.services.session_messages import MESSAGE_STATUS_FAILED
 from zerg.services.session_messages import MESSAGE_STATUS_QUEUED
+from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_views import WallSessionResponse
@@ -149,6 +160,94 @@ def query_wall_sessions(
                 tool_calls=session.tool_calls or 0,
             )
         )
+
+    return items
+
+
+def project_storage_v2_wall(
+    snapshot: dict[str, Any],
+    *,
+    repo: str | None = None,
+    limit: int = 50,
+    pending_counts: Mapping[str | UUID, int] | None = None,
+) -> list[WallSessionResponse]:
+    """Project catalogd timeline facts into the wall contract without a DB.
+
+    The timeline snapshot already owns filtering, ordering, and pagination.
+    Event-role timestamps are intentionally left unset because the bounded
+    catalog does not persist them; ``last_event_at`` remains the canonical
+    activity signal available from storage-v2.
+    """
+
+    observed_at = decode_catalog_datetime(snapshot.get("observed_at"))
+    if not isinstance(observed_at, datetime):
+        raise ValueError("catalog timeline snapshot is missing observed_at")
+    if limit <= 0:
+        return []
+    pending_by_session = {str(session_id): int(count) for session_id, count in (pending_counts or {}).items()}
+    repo_lower = repo.lower() if repo else None
+
+    items: list[WallSessionResponse] = []
+    for row in snapshot.get("rows") or []:
+        facts = row.get("facts") if isinstance(row, dict) else None
+        if not isinstance(facts, dict):
+            raise ValueError("catalog timeline row is missing facts")
+        session = hydrate_catalog_row(LiveSessionCatalog, facts.get("catalog"))
+        if session is None:
+            raise ValueError("catalog wall facts are missing catalog")
+        if repo_lower and not (
+            (session.git_repo and repo_lower in session.git_repo.lower()) or (session.cwd and repo_lower in session.cwd.lower())
+        ):
+            continue
+        card = hydrate_catalog_row(LiveTimelineCard, facts.get("card"))
+        runtime = hydrate_catalog_row(LiveRuntimeState, facts.get("runtime"))
+        thread = hydrate_catalog_row(LiveSessionThread, facts.get("primary_thread"))
+        run = hydrate_catalog_row(LiveSessionRun, facts.get("latest_run"))
+        connections = [
+            connection
+            for payload in facts.get("connections") or []
+            if (connection := hydrate_catalog_row(LiveSessionConnection, payload)) is not None
+        ]
+        capabilities = project_capabilities_from_rows(
+            session_id=str(session.session_id),
+            thread=thread,
+            latest_run=run,
+            connections=connections,
+            now=observed_at,
+        )
+        runtime_view = build_runtime_view(state=runtime, session=session, now=observed_at) if runtime is not None else None
+        last_activity_at = (card.last_activity_at if card is not None else None) or session.last_activity_at
+        session_id = str(session.session_id)
+
+        items.append(
+            WallSessionResponse(
+                session_id=session_id,
+                device_name=session.device_name or (session.device_id.replace("shipper-", "") if session.device_id else None),
+                device_id=session.device_id,
+                cwd=session.cwd,
+                git_repo=session.git_repo,
+                git_branch=session.git_branch,
+                project=session.project,
+                provider=session.provider,
+                summary_title=(card.summary_title if card is not None else None) or session.summary_title,
+                started_at=session.started_at,
+                last_event_at=last_activity_at,
+                has_live_presence=runtime_view is not None and runtime_view.presence_state is not None,
+                presence_state=runtime_view.presence_state if runtime_view is not None else None,
+                kernel_control_label=capabilities.control_label,
+                kernel_live_control_available=capabilities.live_control_available,
+                kernel_host_reattach_available=capabilities.host_reattach_available,
+                kernel_observe_only=capabilities.observe_only,
+                kernel_search_only=capabilities.search_only,
+                kernel_staleness_reason=capabilities.staleness_reason,
+                pending_inbound_messages=pending_by_session.get(session_id, 0),
+                user_messages=int((card.user_messages if card is not None else session.user_messages) or 0),
+                assistant_messages=int((card.assistant_messages if card is not None else session.assistant_messages) or 0),
+                tool_calls=int((card.tool_calls if card is not None else session.tool_calls) or 0),
+            )
+        )
+        if len(items) >= limit:
+            break
 
     return items
 
