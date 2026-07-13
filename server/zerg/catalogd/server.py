@@ -1298,10 +1298,10 @@ class CatalogDaemon:
         for field in ("include_test", "hide_autonomous", "include_automation"):
             if type(params[field]) is not bool:
                 return self._error(request, "invalid_request", f"{field} must be a boolean")
-        if type(params["days_back"]) is not int or not 1 <= params["days_back"] <= 90:
-            return self._error(request, "invalid_request", "days_back must be an integer from 1 through 90")
-        if type(params["limit"]) is not int or not 1 <= params["limit"] <= 100:
-            return self._error(request, "invalid_request", "limit must be an integer from 1 through 100")
+        if type(params["days_back"]) is not int or not 1 <= params["days_back"] <= 3_650:
+            return self._error(request, "invalid_request", "days_back must be an integer from 1 through 3650")
+        if type(params["limit"]) is not int or not 1 <= params["limit"] <= 200:
+            return self._error(request, "invalid_request", "limit must be an integer from 1 through 200")
         if type(params["offset"]) is not int or not 0 <= params["offset"] <= 1_000_000:
             return self._error(request, "invalid_request", "offset must be an integer from 0 through 1000000")
         assert self._store is not None

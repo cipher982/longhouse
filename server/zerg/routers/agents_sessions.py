@@ -40,17 +40,21 @@ from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.catalog_read_gateway import CatalogReadError
+from zerg.services.catalog_read_gateway import timeline_snapshot
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
+from zerg.services.raw_object_workers import RawObjectWorkerError
 from zerg.services.searchd_supervisor import get_searchd_client
 from zerg.services.session_archive import SessionArchiveBundleResponse
 from zerg.services.session_archive import SessionArchiveManifestResponse
 from zerg.services.session_archive import build_session_archive_bundle
 from zerg.services.session_archive import build_session_archive_manifest_item
+from zerg.services.session_archive import build_storage_v2_archive_bundle
+from zerg.services.session_archive import build_storage_v2_archive_manifest
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
 from zerg.services.session_coordination import list_session_messages
@@ -127,6 +131,7 @@ from zerg.services.worklog_day_export import WorklogDayExportResponse
 from zerg.services.worklog_day_export import WorklogV2Error
 from zerg.services.worklog_day_export import build_worklog_day_export
 from zerg.services.worklog_day_export import build_worklog_day_export_v2
+from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
 
@@ -510,8 +515,8 @@ def list_archive_manifest(
     days_back: int = Query(90, ge=1, le=3650, description="Days to look back"),
     limit: int = Query(100, ge=1, le=200, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    db: Session | None = Depends(session_detail_db_dependency),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionArchiveManifestResponse:
     """List sessions for archive sync/backfill without product-surface pagination limits.
@@ -521,6 +526,23 @@ def list_archive_manifest(
     `hide_autonomous=false` explicitly.
     """
     try:
+        if database_module.live_catalog_enabled():
+            snapshot = timeline_snapshot(
+                {
+                    "project": None,
+                    "provider": None,
+                    "environment": None,
+                    "include_test": include_test,
+                    "hide_autonomous": hide_autonomous,
+                    "include_automation": include_automation,
+                    "device_id": None,
+                    "days_back": days_back,
+                    "limit": limit,
+                    "offset": offset,
+                }
+            )
+            return build_storage_v2_archive_manifest(snapshot)
+        assert db is not None
         since = datetime.now(timezone.utc) - timedelta(days=days_back)
         store = AgentsStore(db)
         sessions, total = store.list_sessions(
@@ -538,6 +560,11 @@ def list_archive_manifest(
         )
     except HTTPException:
         raise
+    except CatalogReadError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
     except Exception:
         logger.exception("Failed to list archive manifest")
         raise HTTPException(
@@ -1804,11 +1831,11 @@ async def export_session(
 
 
 @router.get("/sessions/{session_id}/archive-bundle", response_model=SessionArchiveBundleResponse)
-def export_session_archive_bundle(
+async def export_session_archive_bundle(
     session_id: UUID,
     branch_mode: str = Query("head", description="Archive bundle branch projection mode. v1 supports head only."),
-    db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    db: Session | None = Depends(session_detail_db_dependency),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionArchiveBundleResponse:
     """Export a versioned archive bundle for the current session head."""
@@ -1819,12 +1846,28 @@ def export_session_archive_bundle(
         )
 
     try:
-        result = build_session_archive_bundle(db, session_id, branch_mode=branch_mode)
-    except ArchiveTranscriptUnavailable as exc:
+        if database_module.live_catalog_enabled():
+            owner_id = getattr(_auth, "owner_id", None)
+            if owner_id is None:
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Archive bundle requires an owner-bound token")
+            result = await build_storage_v2_archive_bundle(
+                session_id=session_id,
+                owner_id=int(owner_id),
+                branch_mode=branch_mode,
+            )
+        else:
+            assert db is not None
+            result = build_session_archive_bundle(db, session_id, branch_mode=branch_mode)
+    except (ArchiveTranscriptUnavailable, RawObjectWorkerError, RawObjectCorruptError) as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Transcript raw bytes unavailable for session {session_id}: {exc}",
         )
+    except (CatalogRemoteError, CatalogUnavailable, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Archive catalog unavailable for session {session_id}: {exc}",
+        ) from exc
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

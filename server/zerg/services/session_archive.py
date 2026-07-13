@@ -14,9 +14,16 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
+from zerg.catalogd.client import CatalogUnavailable
 from zerg.services.agents import AgentsStore
+from zerg.services.catalog_facts import decode_catalog_datetime
+from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.live_catalog_timeline import project_catalog_session_facts
+from zerg.services.raw_object_workers import RawObjectWorkerError
+from zerg.services.raw_object_workers import get_raw_object_worker_pool
 from zerg.services.session_kernel_projection import project_session_kernel_fields
 from zerg.services.session_kernel_projection import project_session_lineage_fields
+from zerg.storage_v2.raw_objects import RawObjectCorruptError
 from zerg.utils.time import UTCBaseModel
 
 BUNDLE_VERSION = 1
@@ -161,6 +168,156 @@ def build_session_archive_manifest_item(db: Session, session) -> SessionArchiveM
     )
 
 
+async def build_storage_v2_archive_bundle(
+    *,
+    session_id: UUID,
+    owner_id: int,
+    branch_mode: str = "head",
+) -> SessionArchiveBundleResponse | None:
+    """Build the Life Hub bundle from catalogd and immutable raw objects."""
+
+    if branch_mode != "head":
+        raise ValueError("branch_mode must be 'head' for archive bundle export")
+    catalog = get_catalogd_client()
+    if catalog is None:
+        raise CatalogUnavailable("catalogd is unavailable")
+    storage_result = await catalog.call("storage.session.read.v2", {"session_id": str(session_id)})
+    storage_session = storage_result.get("session")
+    if not isinstance(storage_session, dict) or str(storage_session.get("owner_id")) != str(owner_id):
+        return None
+    live_result = await catalog.call("session.read.v2", {"session_id": str(session_id)})
+    facts = live_result.get("facts")
+    observed_at = decode_catalog_datetime(live_result.get("observed_at"))
+    if not isinstance(facts, dict) or observed_at is None:
+        raise RuntimeError("catalog omitted session facts")
+    projected = project_catalog_session_facts(facts, observed_at=observed_at)
+
+    payload = bytearray()
+    after_source_key: str | None = None
+    workers = get_raw_object_worker_pool()
+    while True:
+        manifest = await catalog.call(
+            "storage.session.raw_manifest.v2",
+            {
+                "session_id": str(session_id),
+                "owner_id": str(owner_id),
+                "after_source_key": after_source_key,
+                "limit": 8,
+            },
+        )
+        objects = manifest.get("objects")
+        if not isinstance(objects, list):
+            raise RuntimeError("catalog returned an invalid raw manifest")
+        if not objects:
+            break
+        for item in objects:
+            if not isinstance(item, dict):
+                raise RuntimeError("catalog returned an invalid raw object")
+            try:
+                decoded = await workers.read(str(item["object_path"]), str(item["object_hash"]))
+            except (KeyError, RawObjectCorruptError, RawObjectWorkerError) as exc:
+                raise RawObjectWorkerError("immutable raw object could not be verified") from exc
+            if decoded.envelope_id != item.get("envelope_id") or decoded.spec.session_id != session_id:
+                raise RawObjectCorruptError("raw object does not match its catalog manifest")
+            for record in decoded.spec.records:
+                payload.extend(record.data)
+                if not record.data.endswith(b"\n"):
+                    payload.extend(b"\n")
+        after_source_key = _storage_source_key(objects[-1])
+        if manifest.get("objects_truncated") is not True:
+            break
+
+    payload_sha, encoded_payload = _encode_jsonl_payload(bytes(payload))
+    catalog_facts = facts.get("catalog") if isinstance(facts.get("catalog"), dict) else {}
+    connections = facts.get("connections") if isinstance(facts.get("connections"), list) else []
+    managed_transport = next(
+        (str(item["control_plane"]) for item in connections if isinstance(item, dict) and item.get("control_plane")),
+        None,
+    )
+    provider_alias = facts.get("provider_alias")
+    return SessionArchiveBundleResponse(
+        bundle_version=BUNDLE_VERSION,
+        exported_at=datetime.now(timezone.utc),
+        session=SessionArchiveSessionResponse(
+            id=str(session_id),
+            provider=str(storage_session["provider"]),
+            provider_session_id=str(provider_alias) if provider_alias else None,
+            project=storage_session.get("project"),
+            device_id=storage_session.get("machine_id"),
+            device_name=catalog_facts.get("device_name"),
+            cwd=storage_session.get("cwd"),
+            git_repo=storage_session.get("git_repo"),
+            git_branch=storage_session.get("git_branch"),
+            started_at=storage_session["started_at"],
+            ended_at=storage_session.get("ended_at"),
+            last_activity_at=storage_session.get("last_activity_at"),
+            thread_root_session_id=projected.thread_root_session_id,
+            continued_from_session_id=projected.continued_from_session_id,
+            continuation_kind=projected.continuation_kind,
+            origin_label=projected.origin_label,
+            execution_home=projected.session_state.mode.value,
+            managed_transport=managed_transport,
+            summary_title=storage_session.get("summary_title"),
+            summary=catalog_facts.get("summary"),
+            transcript_revision=int(storage_session.get("transcript_revision") or 0),
+            summary_revision=int(catalog_facts.get("summary_revision") or 0),
+            embedding_revision=0,
+            is_sidechain=projected.is_sidechain,
+        ),
+        archive=SessionArchivePayloadResponse(
+            format="jsonl",
+            branch_mode=branch_mode,
+            sha256=payload_sha,
+            bytes=len(payload),
+            jsonl_b64_gzip=encoded_payload,
+        ),
+    )
+
+
+def _storage_source_key(item: dict[str, object]) -> str:
+    import json
+
+    return json.dumps(
+        [
+            item["machine_id"],
+            item["provider"],
+            item["opaque_source_id"],
+            item["source_epoch"],
+            f"{int(item['range_start']):020d}",
+            item["envelope_id"],
+        ],
+        separators=(",", ":"),
+    )
+
+
+def build_storage_v2_archive_manifest(snapshot: dict[str, object]) -> SessionArchiveManifestResponse:
+    """Project one catalogd timeline snapshot into the archive manifest contract."""
+
+    observed_at = decode_catalog_datetime(snapshot.get("observed_at"))
+    rows = snapshot.get("rows")
+    if observed_at is None or not isinstance(rows, list):
+        raise RuntimeError("catalog returned an invalid archive manifest snapshot")
+    sessions: list[SessionArchiveManifestItemResponse] = []
+    for row in rows:
+        facts = row.get("facts") if isinstance(row, dict) else None
+        catalog_facts = facts.get("catalog") if isinstance(facts, dict) else None
+        if not isinstance(facts, dict) or not isinstance(catalog_facts, dict):
+            raise RuntimeError("catalog archive manifest row is incomplete")
+        projected = project_catalog_session_facts(facts, observed_at=observed_at)
+        sessions.append(
+            SessionArchiveManifestItemResponse(
+                id=projected.id,
+                started_at=projected.started_at,
+                last_activity_at=projected.last_activity_at,
+                transcript_revision=int(catalog_facts.get("transcript_revision") or 0),
+                provider=projected.provider,
+                project=projected.project,
+                is_sidechain=projected.is_sidechain,
+            )
+        )
+    return SessionArchiveManifestResponse(sessions=sessions, total=int(snapshot.get("total") or 0))
+
+
 __all__ = [
     "BUNDLE_VERSION",
     "SessionArchiveBundleResponse",
@@ -168,4 +325,6 @@ __all__ = [
     "SessionArchiveManifestResponse",
     "build_session_archive_manifest_item",
     "build_session_archive_bundle",
+    "build_storage_v2_archive_bundle",
+    "build_storage_v2_archive_manifest",
 ]
