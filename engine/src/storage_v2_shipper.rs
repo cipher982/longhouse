@@ -22,13 +22,14 @@ use crate::shipping::storage_v2::{
     StorageV2Capabilities, StorageV2Envelope, StorageV2MediaRef, StorageV2Record,
 };
 use crate::shipping::storage_v2::{StorageV2Render, StorageV2RenderRecord, StorageV2SessionFacts};
+use crate::state::file_identity::{cursor_fingerprint, identity_from_metadata};
 use crate::state::file_state::FileState;
 use crate::state::source_epoch::{self, SourceChangeHint, SourceEpochResolution, SourceLane};
 use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 
 pub(crate) const PARSER_REVISION: &str = "engine-parser-v2";
 pub(crate) const ORDERING_REVISION: &str = "semantic-order-v2";
-const OPENCODE_LIVE_SESSION_LIMIT: usize = 64;
+const OPENCODE_SESSION_PAGE_SIZE: usize = 64;
 
 pub(crate) struct PreparedStorageV2Envelope {
     pub envelope: StorageV2Envelope,
@@ -58,7 +59,7 @@ pub(crate) fn prepare_next_envelope(
     let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let path_text = canonical_path.to_string_lossy();
     let opaque_source_id = opaque_source_id(&path_text);
-    let legacy_offset = FileState::new(conn).get_offset(&path_text)?;
+    let legacy_offset = validated_legacy_offset(conn, &path_text, &canonical_path)?;
     let source_revision = if provider.eq_ignore_ascii_case("antigravity") {
         Some(hash_file(path)?)
     } else {
@@ -249,124 +250,167 @@ pub(crate) fn prepare_next_opencode_envelope(
 ) -> Result<Option<PreparedStorageV2Envelope>> {
     let canonical_path = std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf());
     let path_text = canonical_path.to_string_lossy();
-    let candidates =
-        opencode_db::list_recent_opencode_sessions(db_path, OPENCODE_LIVE_SESSION_LIMIT)?;
-
-    for (candidate_index, candidate) in candidates.iter().enumerate() {
-        let snapshot = opencode_db::opencode_raw_snapshot(db_path, &candidate.provider_session_id)?;
-        let logical_len = u64::try_from(snapshot.records.len())
-            .context("OpenCode snapshot has too many records")?;
-        let opaque_source_id = opaque_source_id(&format!(
-            "{path_text}\0opencode-session\0{}",
-            candidate.provider_session_id
-        ));
-        let resolution = source_epoch::observe_source(
-            conn,
-            "opencode",
-            &opaque_source_id,
-            "opencode-sqlite-session-v1",
-            logical_len,
-            SourceLane::Durable,
-            0,
-            Some(&snapshot.source_revision),
-            SourceChangeHint::None,
+    let mut page_offset = 0usize;
+    loop {
+        let candidates = opencode_db::list_opencode_sessions_page(
+            db_path,
+            OPENCODE_SESSION_PAGE_SIZE,
+            page_offset,
         )?;
-        let range_start =
-            source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
-        if range_start >= logical_len {
-            continue;
+        if candidates.is_empty() {
+            return Ok(None);
         }
-        let (range_end, raw_bytes) = bounded_record_ordinal_end(
-            &snapshot.records,
-            range_start,
-            capabilities.max_records,
-            capabilities.max_raw_record_bytes,
-        )?;
-        let parse_result =
-            opencode_db::parse_opencode_session(db_path, &candidate.provider_session_id)?;
-        let session_id =
-            opencode_db::managed_longhouse_session_id_for_opencode(&candidate.provider_session_id)
-                .unwrap_or_else(|| parse_result.metadata.session_id.clone());
-        let session_uuid =
-            Uuid::parse_str(&session_id).context("storage-v2 OpenCode session id is not a UUID")?;
-        let start = usize::try_from(range_start).context("OpenCode range start exceeds usize")?;
-        let end = usize::try_from(range_end).context("OpenCode range end exceeds usize")?;
-        let selected = &snapshot.records[start..end];
-        let identity = EnvelopeIdentity {
-            tenant_id: capabilities.tenant_id.clone(),
-            machine_id: capabilities.machine_id.clone(),
-            provider: "opencode".to_string(),
-            opaque_source_id: opaque_source_id.clone(),
-            source_epoch: resolution.source_epoch,
-            range_kind: RangeKind::RecordOrdinal,
-            range_start,
-            range_end,
-            record_hashes: storage_v2_contract::hash_records(selected),
-        };
-        let expected_envelope_id = hex_hash(storage_v2_contract::envelope_id(&identity)?);
-        let render_records = opencode_render_records_for_range(
-            &parse_result,
-            snapshot.part_record_start,
-            range_start,
-            range_end,
-        )?;
-        let event_count = render_records.len();
-        let render_generation = render_generation_id(session_uuid);
-        let session = session_facts(&parse_result.metadata, &render_records, &resolution)?;
-        let media_objects = opencode_media_objects_for_range(
-            &parse_result,
-            snapshot.part_record_start,
-            range_start,
-            range_end,
-        )?;
-        return Ok(Some(PreparedStorageV2Envelope {
-            envelope: StorageV2Envelope {
-                protocol_version: 2,
+        for (candidate_index, candidate) in candidates.iter().enumerate() {
+            let snapshot =
+                opencode_db::opencode_raw_snapshot(db_path, &candidate.provider_session_id)?;
+            let logical_len = u64::try_from(snapshot.records.len())
+                .context("OpenCode snapshot has too many records")?;
+            let opaque_source_id = opaque_source_id(&format!(
+                "{path_text}\0opencode-session\0{}",
+                candidate.provider_session_id
+            ));
+            let resolution = source_epoch::observe_source(
+                conn,
+                "opencode",
+                &opaque_source_id,
+                "opencode-sqlite-session-v1",
+                logical_len,
+                SourceLane::Durable,
+                0,
+                Some(&snapshot.source_revision),
+                SourceChangeHint::None,
+            )?;
+            let range_start =
+                source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
+            if range_start >= logical_len {
+                continue;
+            }
+            let (range_end, raw_bytes) = bounded_record_ordinal_end(
+                &snapshot.records,
+                range_start,
+                capabilities.max_records,
+                capabilities.max_raw_record_bytes,
+            )?;
+            let parse_result =
+                opencode_db::parse_opencode_session(db_path, &candidate.provider_session_id)?;
+            let session_id = opencode_db::managed_longhouse_session_id_for_opencode(
+                &candidate.provider_session_id,
+            )
+            .unwrap_or_else(|| parse_result.metadata.session_id.clone());
+            let session_uuid = Uuid::parse_str(&session_id)
+                .context("storage-v2 OpenCode session id is not a UUID")?;
+            let start =
+                usize::try_from(range_start).context("OpenCode range start exceeds usize")?;
+            let end = usize::try_from(range_end).context("OpenCode range end exceeds usize")?;
+            let selected = &snapshot.records[start..end];
+            let identity = EnvelopeIdentity {
                 tenant_id: capabilities.tenant_id.clone(),
                 machine_id: capabilities.machine_id.clone(),
-                session_id,
                 provider: "opencode".to_string(),
-                opaque_source_id,
-                source_epoch: resolution.source_epoch.to_string(),
-                predecessor_source_epoch: resolution
-                    .predecessor_epoch
-                    .map(|value| value.to_string()),
-                epoch_opened_at: resolution.opened_at,
-                range_kind: "record_ordinal".to_string(),
+                opaque_source_id: opaque_source_id.clone(),
+                source_epoch: resolution.source_epoch,
+                range_kind: RangeKind::RecordOrdinal,
                 range_start,
                 range_end,
-                render: Some(StorageV2Render {
-                    generation_id: render_generation.to_string(),
-                    parser_revision: PARSER_REVISION.to_string(),
-                    ordering_revision: ORDERING_REVISION.to_string(),
-                    records: render_records,
-                }),
-                media: storage_v2_media_refs(&media_objects),
-                session,
-                records: selected
+                record_hashes: storage_v2_contract::hash_records(selected),
+            };
+            let expected_envelope_id = hex_hash(storage_v2_contract::envelope_id(&identity)?);
+            let render_records = opencode_render_records_for_range(
+                &parse_result,
+                snapshot.part_record_start,
+                range_start,
+                range_end,
+            )?;
+            let event_count = render_records.len();
+            let render_generation = render_generation_id(session_uuid);
+            let session = session_facts(&parse_result.metadata, &render_records, &resolution)?;
+            let media_objects = opencode_media_objects_for_range(
+                &parse_result,
+                snapshot.part_record_start,
+                range_start,
+                range_end,
+            )?;
+            return Ok(Some(PreparedStorageV2Envelope {
+                envelope: StorageV2Envelope {
+                    protocol_version: 2,
+                    tenant_id: capabilities.tenant_id.clone(),
+                    machine_id: capabilities.machine_id.clone(),
+                    session_id,
+                    provider: "opencode".to_string(),
+                    opaque_source_id,
+                    source_epoch: resolution.source_epoch.to_string(),
+                    predecessor_source_epoch: resolution
+                        .predecessor_epoch
+                        .map(|value| value.to_string()),
+                    epoch_opened_at: resolution.opened_at,
+                    range_kind: "record_ordinal".to_string(),
+                    range_start,
+                    range_end,
+                    render: Some(StorageV2Render {
+                        generation_id: render_generation.to_string(),
+                        parser_revision: PARSER_REVISION.to_string(),
+                        ordering_revision: ORDERING_REVISION.to_string(),
+                        records: render_records,
+                    }),
+                    media: storage_v2_media_refs(&media_objects),
+                    session,
+                    records: selected
+                        .iter()
+                        .enumerate()
+                        .map(|(offset, bytes)| StorageV2Record {
+                            source_position: range_start + offset as u64,
+                            data_b64: BASE64_STANDARD.encode(bytes),
+                        })
+                        .collect(),
+                    expected_envelope_id,
+                },
+                source_epoch: resolution.source_epoch,
+                range_start,
+                range_end,
+                event_count,
+                has_reply_evidence: parse_result
+                    .events
                     .iter()
-                    .enumerate()
-                    .map(|(offset, bytes)| StorageV2Record {
-                        source_position: range_start + offset as u64,
-                        data_b64: BASE64_STANDARD.encode(bytes),
-                    })
-                    .collect(),
-                expected_envelope_id,
-            },
-            source_epoch: resolution.source_epoch,
-            range_start,
-            range_end,
-            event_count,
-            has_reply_evidence: parse_result
-                .events
-                .iter()
-                .any(|event| matches!(event.role, Role::Assistant | Role::Tool)),
-            raw_bytes,
-            has_more: range_end < logical_len || candidate_index + 1 < candidates.len(),
-            media_objects,
-        }));
+                    .any(|event| matches!(event.role, Role::Assistant | Role::Tool)),
+                raw_bytes,
+                has_more: range_end < logical_len
+                    || candidate_index + 1 < candidates.len()
+                    || candidates.len() == OPENCODE_SESSION_PAGE_SIZE,
+                media_objects,
+            }));
+        }
+        page_offset = page_offset.saturating_add(candidates.len());
     }
-    Ok(None)
+}
+
+fn validated_legacy_offset(conn: &Connection, path_text: &str, path: &Path) -> Result<u64> {
+    let file_state = FileState::new(conn);
+    let offset = file_state.get_offset(path_text)?;
+    if offset == 0 {
+        return Ok(0);
+    }
+    let metadata = path
+        .metadata()
+        .with_context(|| format!("reading source metadata: {}", path.display()))?;
+    let stored_identity = file_state.get_file_identity(path_text)?;
+    let current_identity = identity_from_metadata(&metadata);
+    let stored_fingerprint = file_state.get_acked_cursor_fingerprint(path_text)?;
+    let current_fingerprint = cursor_fingerprint(path, offset);
+    if stored_identity == current_identity
+        && stored_identity.is_some()
+        && stored_fingerprint == current_fingerprint
+        && stored_fingerprint.is_some()
+    {
+        return Ok(offset);
+    }
+    tracing::warn!(
+        path = %path.display(),
+        offset,
+        stored_identity = ?stored_identity,
+        current_identity = ?current_identity,
+        "Legacy cursor lacks matching file identity and boundary proof; replaying storage-v2 source from zero"
+    );
+    Ok(0)
 }
 
 pub(crate) async fn ship_next_opencode_envelope(
@@ -712,6 +756,7 @@ mod tests {
     use crate::pipeline::compressor::CompressionAlgo;
     use crate::shipping::client::ShipperClient;
     use crate::state::db::open_db;
+    use crate::state::file_state::FileState;
 
     fn capabilities() -> StorageV2Capabilities {
         StorageV2Capabilities {
@@ -756,6 +801,72 @@ mod tests {
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn initial_v2_epoch_adopts_only_a_proven_legacy_cursor() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let first = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+        let second = b"{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":\"2026-07-12T12:01:00Z\",\"message\":{\"content\":\"world\"}}\n";
+        fs::write(&path, [first.as_slice(), second.as_slice()].concat()).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let canonical = fs::canonicalize(&path).unwrap();
+        let path_text = canonical.to_string_lossy();
+        FileState::new(&conn)
+            .set_offset(
+                &path_text,
+                first.len() as u64,
+                "018f0c3a-7b2d-7f10-8a11-123456789abc",
+                "provider-session",
+                "claude",
+            )
+            .unwrap();
+
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.range_start, first.len() as u64);
+    }
+
+    #[test]
+    fn initial_v2_epoch_replays_after_same_inode_truncate_and_regrow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let first = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+        let replacement = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"jello\"}}\n";
+        let second = b"{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":\"2026-07-12T12:01:00Z\",\"message\":{\"content\":\"world\"}}\n";
+        fs::write(&path, [first.as_slice(), second.as_slice()].concat()).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let canonical = fs::canonicalize(&path).unwrap();
+        let path_text = canonical.to_string_lossy();
+        let file_state = FileState::new(&conn);
+        file_state
+            .set_offset(
+                &path_text,
+                first.len() as u64,
+                "018f0c3a-7b2d-7f10-8a11-123456789abc",
+                "provider-session",
+                "claude",
+            )
+            .unwrap();
+        let stored_identity = file_state.get_file_identity(&path_text).unwrap();
+
+        fs::write(&path, [replacement.as_slice(), second.as_slice()].concat()).unwrap();
+        assert_eq!(
+            stored_identity,
+            identity_from_metadata(&path.metadata().unwrap()),
+            "the regression must exercise truncate/regrow of the same file identity"
+        );
+
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.range_start, 0);
     }
 
     #[test]
@@ -1014,5 +1125,54 @@ mod tests {
             second.envelope.render.as_ref().unwrap().generation_id,
             first_render.generation_id
         );
+    }
+
+    #[test]
+    fn opencode_storage_v2_exhausts_sessions_older_than_the_newest_64() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        create_opencode_db(&db_path);
+        let provider = Connection::open(&db_path).unwrap();
+        for index in 2..=65 {
+            let session_id = format!("session-{index}");
+            let message_id = format!("message-{index}");
+            let part_id = format!("part-{index}");
+            let timestamp = 1_779_000_000_000_i64 + index;
+            provider
+                .execute(
+                    "INSERT INTO session VALUES (?1, 'project-1', NULL, '/tmp/longhouse', '/tmp/longhouse', 'OpenCode test', '1', ?2, ?2)",
+                    params![session_id, timestamp],
+                )
+                .unwrap();
+            provider
+                .execute(
+                    "INSERT INTO message VALUES (?1, ?2, ?3, ?3, '{\"role\":\"user\"}')",
+                    params![message_id, session_id, timestamp + 1],
+                )
+                .unwrap();
+            provider
+                .execute(
+                    "INSERT INTO part VALUES (?1, ?2, ?3, ?4, ?4, '{\"type\":\"text\",\"text\":\"hello\"}')",
+                    params![part_id, message_id, session_id, timestamp + 2],
+                )
+                .unwrap();
+        }
+        drop(provider);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let mut shipped_sources = std::collections::HashSet::new();
+        while let Some(prepared) =
+            prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path).unwrap()
+        {
+            shipped_sources.insert(prepared.envelope.opaque_source_id.clone());
+            source_epoch::acknowledge_position(
+                &mut conn,
+                prepared.source_epoch,
+                SourceLane::Durable,
+                prepared.range_start,
+                prepared.range_end,
+            )
+            .unwrap();
+        }
+        assert_eq!(shipped_sources.len(), 65);
     }
 }

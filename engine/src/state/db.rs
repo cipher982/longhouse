@@ -65,6 +65,7 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             queued_offset INTEGER NOT NULL DEFAULT 0,
             acked_offset INTEGER NOT NULL DEFAULT 0,
             file_identity TEXT,
+            acked_cursor_fingerprint TEXT,
             session_id TEXT,
             provider_session_id TEXT,
             last_updated TEXT NOT NULL
@@ -169,6 +170,9 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         .collect::<std::result::Result<_, _>>()?;
     if !file_state_columns.contains("file_identity") {
         conn.execute_batch("ALTER TABLE file_state ADD COLUMN file_identity TEXT;")?;
+    }
+    if !file_state_columns.contains("acked_cursor_fingerprint") {
+        conn.execute_batch("ALTER TABLE file_state ADD COLUMN acked_cursor_fingerprint TEXT;")?;
     }
 
     let live_file_state_columns: std::collections::HashSet<String> = conn

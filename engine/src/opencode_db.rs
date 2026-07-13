@@ -126,19 +126,20 @@ pub fn list_opencode_sessions(db_path: &Path) -> Result<Vec<OpenCodeSessionCandi
     list_opencode_sessions_inner(db_path, None)
 }
 
-pub fn list_recent_opencode_sessions(
+pub fn list_opencode_sessions_page(
     db_path: &Path,
     limit: usize,
+    offset: usize,
 ) -> Result<Vec<OpenCodeSessionCandidate>> {
     if limit == 0 {
         return Ok(Vec::new());
     }
-    list_opencode_sessions_inner(db_path, Some(limit))
+    list_opencode_sessions_inner(db_path, Some((limit, offset)))
 }
 
 fn list_opencode_sessions_inner(
     db_path: &Path,
-    limit: Option<usize>,
+    page: Option<(usize, usize)>,
 ) -> Result<Vec<OpenCodeSessionCandidate>> {
     let conn = open_readonly(db_path)?;
     let has_agent_column = sqlite_column_exists(&conn, "session", "agent")?;
@@ -151,22 +152,14 @@ fn list_opencode_sessions_inner(
                    COALESCE((SELECT MAX(p.time_updated) FROM part p WHERE p.session_id = s.id), 0)
         ) AS version_ms
         FROM session s
-        {}
         ORDER BY version_ms DESC, s.id ASC
         {}
         "#,
-        if limit.is_some() {
-            r#"WHERE s.id IN (
-                SELECT id FROM (SELECT id FROM session ORDER BY time_updated DESC, id ASC LIMIT ?1)
-                UNION
-                SELECT session_id FROM (SELECT session_id FROM message ORDER BY time_updated DESC, id ASC LIMIT ?1)
-                UNION
-                SELECT session_id FROM (SELECT session_id FROM part ORDER BY time_updated DESC, id ASC LIMIT ?1)
-            )"#
+        if page.is_some() {
+            "LIMIT ?1 OFFSET ?2"
         } else {
             ""
-        },
-        if limit.is_some() { "LIMIT ?1" } else { "" }
+        }
     );
     let mut stmt = conn.prepare(&sql)?;
     let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<OpenCodeSessionCandidate> {
@@ -179,8 +172,11 @@ fn list_opencode_sessions_inner(
             fingerprint: String::new(),
         })
     };
-    let mut rows = match limit {
-        Some(limit) => stmt.query(params![i64::try_from(limit).unwrap_or(i64::MAX)])?,
+    let mut rows = match page {
+        Some((limit, offset)) => stmt.query(params![
+            i64::try_from(limit).unwrap_or(i64::MAX),
+            i64::try_from(offset).unwrap_or(i64::MAX)
+        ])?,
         None => stmt.query([])?,
     };
 
@@ -452,7 +448,10 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
     })
 }
 
-pub fn opencode_raw_snapshot(db_path: &Path, provider_session_id: &str) -> Result<OpenCodeRawSnapshot> {
+pub fn opencode_raw_snapshot(
+    db_path: &Path,
+    provider_session_id: &str,
+) -> Result<OpenCodeRawSnapshot> {
     let conn = open_readonly(db_path)?;
     let mut session = load_session(&conn, provider_session_id)?;
     session.agent = load_session_agent(&conn, provider_session_id)?;
@@ -486,7 +485,8 @@ pub fn opencode_raw_snapshot(db_path: &Path, provider_session_id: &str) -> Resul
             "message_data": message.data,
         }))?);
     }
-    let part_record_start = u64::try_from(records.len()).context("OpenCode raw record count exceeds u64")?;
+    let part_record_start =
+        u64::try_from(records.len()).context("OpenCode raw record count exceeds u64")?;
     for part in parts {
         records.push(serde_json::to_vec(&json!({
             "kind": "part",
@@ -1473,7 +1473,8 @@ mod tests {
             .unwrap()
             .contains("\"kind\":\"session\""));
         assert!(first.records.iter().skip(1).any(|record| {
-            String::from_utf8_lossy(record).contains("{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"hello OpenCode\\\"}")
+            String::from_utf8_lossy(record)
+                .contains("{\\\"type\\\":\\\"text\\\",\\\"text\\\":\\\"hello OpenCode\\\"}")
         }));
     }
 

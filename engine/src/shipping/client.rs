@@ -220,9 +220,13 @@ impl ShipperClient {
                             let body = response.text().await.unwrap_or_default();
                             return ShipResult::RetryableClientError(status, body);
                         }
-                        400 | 422 | 426 => {
+                        400 | 422 => {
                             let body = response.text().await.unwrap_or_default();
                             return ShipResult::PayloadRejected(status, body);
+                        }
+                        426 => {
+                            let body = response.text().await.unwrap_or_default();
+                            return ShipResult::RetryableClientError(status, body);
                         }
                         413 => {
                             let body = response.text().await.unwrap_or_default();
@@ -651,7 +655,8 @@ mod tests {
 
     fn classify_status(status: u16, body: &str) -> ShipResult {
         match status {
-            400 | 422 | 426 => ShipResult::PayloadRejected(status, body.to_string()),
+            400 | 422 => ShipResult::PayloadRejected(status, body.to_string()),
+            426 => ShipResult::RetryableClientError(status, body.to_string()),
             413 => ShipResult::PayloadTooLarge(body.to_string()),
             401 | 403 | 400..=499 => ShipResult::RetryableClientError(status, body.to_string()),
             500..=599 => ShipResult::ServerError(status, body.to_string()),
@@ -697,6 +702,10 @@ mod tests {
         assert!(matches!(
             classify_status(422, "invalid payload"),
             ShipResult::PayloadRejected(422, _)
+        ));
+        assert!(matches!(
+            classify_status(426, "storage v2 required"),
+            ShipResult::RetryableClientError(426, _)
         ));
         assert!(matches!(
             classify_status(413, "too large"),

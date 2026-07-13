@@ -10,7 +10,7 @@ use anyhow::Result;
 use chrono::Utc;
 use rusqlite::Connection;
 
-use super::file_identity::current_file_identity;
+use super::file_identity::{current_file_identity, cursor_fingerprint};
 
 /// A tracked session file.
 #[derive(Debug, Clone)]
@@ -74,6 +74,19 @@ impl<'a> FileState<'a> {
         }
     }
 
+    pub fn get_acked_cursor_fingerprint(&self, file_path: &str) -> Result<Option<String>> {
+        let result = self.conn.query_row(
+            "SELECT acked_cursor_fingerprint FROM file_state WHERE path = ?",
+            [file_path],
+            |row| row.get::<_, Option<String>>(0),
+        );
+        match result {
+            Ok(value) => Ok(value),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Backfill identity for old rows without changing offsets.
     pub fn record_file_identity_if_missing(
         &self,
@@ -104,21 +117,27 @@ impl<'a> FileState<'a> {
     ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         let file_identity = current_file_identity(file_path);
+        let acked_cursor_fingerprint = cursor_fingerprint(std::path::Path::new(file_path), offset);
         self.conn.execute(
-            "INSERT INTO file_state (path, provider, queued_offset, acked_offset, file_identity, session_id, provider_session_id, last_updated)
-             VALUES (?1, ?2, MAX(?3, 0), MAX(?3, 0), ?4, ?5, ?6, ?7)
+            "INSERT INTO file_state (path, provider, queued_offset, acked_offset, file_identity, acked_cursor_fingerprint, session_id, provider_session_id, last_updated)
+             VALUES (?1, ?2, MAX(?3, 0), MAX(?3, 0), ?4, ?5, ?6, ?7, ?8)
              ON CONFLICT(path) DO UPDATE SET
                  queued_offset = MAX(queued_offset, ?3),
                  acked_offset = MAX(acked_offset, ?3),
                  file_identity = COALESCE(?4, file_identity),
-                 session_id = ?5,
-                 provider_session_id = ?6,
-                 last_updated = ?7",
+                 acked_cursor_fingerprint = CASE
+                     WHEN ?3 >= acked_offset THEN ?5
+                     ELSE acked_cursor_fingerprint
+                 END,
+                 session_id = ?6,
+                 provider_session_id = ?7,
+                 last_updated = ?8",
             rusqlite::params![
                 file_path,
                 provider,
                 offset as i64,
                 file_identity,
+                acked_cursor_fingerprint,
                 session_id,
                 provider_session_id,
                 now
@@ -163,10 +182,17 @@ impl<'a> FileState<'a> {
     /// Advance acked offset only (server confirmed receipt). Monotonic.
     pub fn set_acked_offset(&self, file_path: &str, offset: u64) -> Result<()> {
         let now = Utc::now().to_rfc3339();
+        let acked_cursor_fingerprint = cursor_fingerprint(std::path::Path::new(file_path), offset);
         self.conn.execute(
-            "UPDATE file_state SET acked_offset = MAX(acked_offset, ?1), last_updated = ?2
-             WHERE path = ?3",
-            rusqlite::params![offset as i64, now, file_path],
+            "UPDATE file_state
+             SET acked_cursor_fingerprint = CASE
+                     WHEN ?1 >= acked_offset THEN ?2
+                     ELSE acked_cursor_fingerprint
+                 END,
+                 acked_offset = MAX(acked_offset, ?1),
+                 last_updated = ?3
+             WHERE path = ?4",
+            rusqlite::params![offset as i64, acked_cursor_fingerprint, now, file_path],
         )?;
         Ok(())
     }
@@ -180,6 +206,7 @@ impl<'a> FileState<'a> {
              SET queued_offset = 0,
                  acked_offset = 0,
                  file_identity = COALESCE(?1, file_identity),
+                 acked_cursor_fingerprint = NULL,
                  last_updated = ?2
              WHERE path = ?3",
             rusqlite::params![file_identity, now, file_path],

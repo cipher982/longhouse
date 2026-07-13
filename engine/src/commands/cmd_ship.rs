@@ -189,16 +189,9 @@ pub async fn cmd_ship(
 
     if !dry_run {
         let client = ShipperClient::with_compression(&config, algo)?;
-        let storage_v2 = match client
+        let storage_v2 = client
             .storage_v2_capabilities(&config.machine_name, Some(Duration::from_secs(5)))
-            .await
-        {
-            Ok(value) => value,
-            Err(error) => {
-                tracing::warn!(%error, "Storage-v2 capability check failed; preserving work through legacy spool");
-                None
-            }
-        };
+            .await?;
         if let Some(capabilities) = storage_v2.filter(|item| item.cutover) {
             let providers = discovery::get_providers();
             let mut all_files = discovery::discover_all_files(&providers);
@@ -661,16 +654,9 @@ pub async fn cmd_ship_file(
 
     if !dry_run {
         let client = ShipperClient::with_compression(&config, algo)?;
-        let storage_v2 = match client
+        let storage_v2 = client
             .storage_v2_capabilities(&config.machine_name, Some(Duration::from_secs(5)))
-            .await
-        {
-            Ok(value) => value,
-            Err(error) => {
-                tracing::warn!(%error, "Storage-v2 capability check failed; preserving work through legacy spool");
-                None
-            }
-        };
+            .await?;
         if let Some(capabilities) = storage_v2.filter(|item| item.cutover) {
             let (events_shipped, reply_evidence_pending) = ship_path_storage_v2(
                 &mut conn,
