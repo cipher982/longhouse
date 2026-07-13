@@ -25,6 +25,7 @@ WORKLOG_DAY_SOURCE = "longhouse-worklog-api-v1"
 WORKLOG_DAY_V2_SOURCE = "longhouse-worklog-search-v2"
 _WORKLOG_RPC_PAGE_SIZE = 500
 _WORKLOG_MAX_PAGES = 200
+_WORKLOG_RPC_TIMEOUT_SECONDS = 5.0
 
 WORKLOG_DAY_SESSIONS_SQL = """
 WITH active_sessions AS (
@@ -363,6 +364,7 @@ async def _collect_worklog_pages(
                 "offset": offset,
                 "limit": _WORKLOG_RPC_PAGE_SIZE,
             },
+            timeout_seconds=_WORKLOG_RPC_TIMEOUT_SECONDS,
         )
         result_snapshot_id = result.get("snapshot_id")
         if not isinstance(result_snapshot_id, str) or (snapshot_id is not None and result_snapshot_id != snapshot_id):

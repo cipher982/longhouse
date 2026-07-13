@@ -232,11 +232,12 @@ def test_worklog_day_live_catalog_uses_search_projection_without_cold_fallback(t
             self.calls = []
             self.snapshot_id = "55555555-5555-4555-8555-555555555555"
 
-        async def call(self, method, params):
+        async def call(self, method, params, **kwargs):
             if method == "worklog.snapshot.release.v2":
                 assert params == {"snapshot_id": self.snapshot_id, "owner_id": "1"}
                 return {"released": True}
             assert method == "worklog.day.v2"
+            assert kwargs == {"timeout_seconds": 5.0}
             self.calls.append(params)
             assert params["offset"] == 0
             if params["section"] == "sessions":
