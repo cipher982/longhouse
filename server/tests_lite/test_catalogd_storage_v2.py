@@ -57,11 +57,12 @@ def _raw_params(
     sealed_at: datetime,
     predecessor: UUID | None = None,
     opaque_source_id: str = "history.jsonl",
+    machine_id: str = "cinder",
 ) -> dict:
     record_hashes = tuple(hashlib.sha256(record).digest() for record in records)
     identity = EnvelopeIdentity(
         tenant_id="tenant-a",
-        machine_id="cinder",
+        machine_id=machine_id,
         provider="codex",
         opaque_source_id=opaque_source_id,
         source_epoch=epoch,
@@ -78,7 +79,7 @@ def _raw_params(
         "tenant_id": "tenant-a",
         "owner_id": "42",
         "session_id": str(session_id),
-        "machine_id": "cinder",
+        "machine_id": machine_id,
         "provider": "codex",
         "opaque_source_id": opaque_source_id,
         "source_epoch": str(epoch),
@@ -554,6 +555,111 @@ async def test_raw_receipt_derives_explicit_missing_media_and_records_envelope_r
         with pytest.raises(CatalogRemoteError) as conflict:
             await client.call("storage.raw_object.commit.v2", drift)
         assert conflict.value.code == "source_epoch_conflict"
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_source_epoch_rebind_moves_visibility_to_managed_session(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    parsed_session_id = uuid4()
+    managed_session_id = uuid4()
+    parsed_epoch = uuid4()
+    managed_epoch = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        parsed = _raw_params(
+            epoch=parsed_epoch,
+            session_id=parsed_session_id,
+            start=0,
+            end=4,
+            records=(b"old\n",),
+            sealed_at=now,
+        )
+        await client.call("storage.raw_object.commit.v2", parsed)
+
+        managed = _raw_params(
+            epoch=managed_epoch,
+            predecessor=parsed_epoch,
+            session_id=managed_session_id,
+            start=0,
+            end=4,
+            records=(b"old\n",),
+            sealed_at=now + timedelta(seconds=1),
+        )
+        await client.call("storage.raw_object.commit.v2", managed)
+
+        timeline = await client.call(
+            "storage.session.timeline.list.v2",
+            {
+                "owner_id": "42",
+                "before_last_activity_at": None,
+                "before_session_id": None,
+                "project": None,
+                "provider": None,
+                "include_test": False,
+                "limit": 100,
+            },
+        )
+        assert [row["session_id"] for row in timeline["sessions"]] == [str(managed_session_id)]
+
+        parsed_manifest = await client.call(
+            "storage.session.raw_manifest.v2",
+            {"session_id": str(parsed_session_id), "owner_id": "42", "after_source_key": None, "limit": 100},
+        )
+        managed_manifest = await client.call(
+            "storage.session.raw_manifest.v2",
+            {"session_id": str(managed_session_id), "owner_id": "42", "after_source_key": None, "limit": 100},
+        )
+        assert parsed_manifest["objects"] == []
+        assert [row["envelope_id"] for row in managed_manifest["objects"]] == [managed["envelope_id"]]
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_session_accepts_native_source_after_machine_rename(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    session_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        before_rename = _raw_params(
+            epoch=uuid4(),
+            session_id=session_id,
+            start=0,
+            end=4,
+            records=(b"old\n",),
+            sealed_at=now,
+            opaque_source_id="old-machine.jsonl",
+            machine_id="shipper-laptop",
+        )
+        after_rename = _raw_params(
+            epoch=uuid4(),
+            session_id=session_id,
+            start=0,
+            end=4,
+            records=(b"new\n",),
+            sealed_at=now + timedelta(seconds=1),
+            opaque_source_id="current-machine.jsonl",
+            machine_id="cinder",
+        )
+
+        await client.call("storage.raw_object.commit.v2", before_rename)
+        await client.call("storage.raw_object.commit.v2", after_rename)
+
+        manifest = await client.call(
+            "storage.session.raw_manifest.v2",
+            {"session_id": str(session_id), "owner_id": "42", "after_source_key": None, "limit": 100},
+        )
+        assert {row["machine_id"] for row in manifest["objects"]} == {"shipper-laptop", "cinder"}
     finally:
         await client.close()
         await daemon.close()

@@ -16,7 +16,9 @@ use crate::opencode_db;
 use crate::pipeline::parser::{
     self, ParseResult, ParsedEvent, ParsedMediaObject, Role, SessionMetadata,
 };
-use crate::raw_records::{read_next_raw_batch, RawRecordBatch, RawSourceFraming};
+use crate::raw_records::{
+    read_next_raw_batch_with_limits, RawRecordBatch, RawSourceFraming, MAX_RAW_BATCH_BYTES,
+};
 use crate::shipping::client::ShipperClient;
 use crate::shipping::storage_v2::{
     StorageV2Capabilities, StorageV2Envelope, StorageV2MediaRef, StorageV2Record,
@@ -73,6 +75,7 @@ pub(crate) fn prepare_next_envelope(
         SourceLane::Durable,
         legacy_offset,
         source_revision.as_deref(),
+        session_id_override,
         SourceChangeHint::None,
     )?;
     let position = source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
@@ -85,7 +88,16 @@ pub(crate) fn prepare_next_envelope(
     } else {
         RawSourceFraming::LfDelimited
     };
-    let Some(mut raw_batch) = read_next_raw_batch(path, framing, position)? else {
+    let maximum_record_bytes = usize::try_from(capabilities.max_raw_record_bytes)
+        .context("storage-v2 raw record limit exceeds usize")?;
+    let Some(mut raw_batch) = read_next_raw_batch_with_limits(
+        path,
+        framing,
+        position,
+        MAX_RAW_BATCH_BYTES,
+        maximum_record_bytes,
+    )?
+    else {
         return Ok(None);
     };
     let parse_result = parser::parse_session_file(path, position)?;
@@ -100,7 +112,14 @@ pub(crate) fn prepare_next_envelope(
         };
         raw_batch.range_end = last.range_end;
     }
-    let session_id = resolve_session_id(provider, &parse_result, session_id_override);
+    let session_id = resolve_session_id(
+        provider,
+        &parse_result,
+        resolution
+            .bound_session_id
+            .as_deref()
+            .or(session_id_override),
+    );
     let session_uuid =
         Uuid::parse_str(&session_id).context("storage-v2 session id is not a UUID")?;
     let raw_bytes: Vec<Vec<u8>> = raw_batch
@@ -278,6 +297,7 @@ pub(crate) fn prepare_next_opencode_envelope(
                 SourceLane::Durable,
                 0,
                 Some(&snapshot.source_revision),
+                None,
                 SourceChangeHint::None,
             )?;
             let range_start =

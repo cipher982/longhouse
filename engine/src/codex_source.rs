@@ -37,10 +37,11 @@ pub fn parse_codex_subagent_source_str(source: &str) -> Option<CodexSubagentSour
 }
 
 pub fn codex_thread_value_is_subagent(thread: &Value) -> bool {
-    thread
-        .get("source")
-        .and_then(parse_codex_subagent_source)
-        .is_some()
+    codex_thread_value_subagent_source(thread).is_some()
+}
+
+pub fn codex_thread_value_subagent_source(thread: &Value) -> Option<CodexSubagentSource> {
+    thread.get("source").and_then(parse_codex_subagent_source)
 }
 
 pub fn codex_rollout_file_is_subagent(path: &Path) -> bool {

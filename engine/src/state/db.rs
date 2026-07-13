@@ -148,6 +148,7 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             start_reason TEXT NOT NULL,
             max_observed_len INTEGER NOT NULL,
             source_revision TEXT,
+            bound_session_id TEXT,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             ended_at TEXT,
@@ -200,6 +201,9 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         .collect::<std::result::Result<_, _>>()?;
     if !source_epoch_columns.contains("source_revision") {
         conn.execute_batch("ALTER TABLE source_epoch_registry ADD COLUMN source_revision TEXT;")?;
+    }
+    if !source_epoch_columns.contains("bound_session_id") {
+        conn.execute_batch("ALTER TABLE source_epoch_registry ADD COLUMN bound_session_id TEXT;")?;
     }
 
     // Old builds could create duplicate pending pointers for the same file/range.
@@ -367,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn test_open_db_adds_source_revision_to_existing_epoch_registry() {
+    fn test_open_db_adds_source_metadata_to_existing_epoch_registry() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = Connection::open(tmp.path()).unwrap();
         conn.execute_batch(
@@ -397,5 +401,6 @@ mod tests {
             .collect::<std::result::Result<_, _>>()
             .unwrap();
         assert!(columns.contains("source_revision"));
+        assert!(columns.contains("bound_session_id"));
     }
 }

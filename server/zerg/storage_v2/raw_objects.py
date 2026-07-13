@@ -19,11 +19,11 @@ from zerg.storage_v2.contracts import hash_records
 
 MAGIC = b"LHRAW2\x00\x00"
 FORMAT_VERSION = 2
-MAX_RECORD_BYTES = 4 * 1024 * 1024
+MAX_RECORD_BYTES = 32 * 1024 * 1024
 MAX_RECORDS = 10_000
 MAX_HEADER_BYTES = 16 * 1024
 MAX_ENCODED_BYTES = MAX_RECORD_BYTES + MAX_HEADER_BYTES + (MAX_RECORDS * 12)
-MAX_COMPRESSED_BYTES = 8 * 1024 * 1024
+MAX_COMPRESSED_BYTES = 40 * 1024 * 1024
 
 
 class RawObjectError(RuntimeError):
@@ -85,7 +85,7 @@ def seal_raw_object(root: Path, spec: RawObjectSpec) -> SealedRawObject:
     payload_hash = hashlib.sha256(payload).hexdigest()
     compressed = zstandard.ZstdCompressor(level=3, write_checksum=True, write_content_size=True).compress(payload)
     if len(compressed) > MAX_COMPRESSED_BYTES:
-        raise RawObjectValidationError("compressed raw object exceeds 8 MiB")
+        raise RawObjectValidationError("compressed raw object exceeds 40 MiB")
     compressed_hash = hashlib.sha256(compressed).hexdigest()
     relative_path = Path("raw") / "v2" / compressed_hash[:2] / f"{compressed_hash}.zst"
     final_path = _safe_path(root, relative_path)
@@ -316,7 +316,7 @@ def _validate_spec(spec: RawObjectSpec) -> None:
         raise RawObjectValidationError("raw object exceeds 10000 records")
     total_bytes = sum(len(record.data) for record in spec.records)
     if total_bytes > MAX_RECORD_BYTES:
-        raise RawObjectValidationError("raw record bytes exceed 4 MiB")
+        raise RawObjectValidationError("raw record bytes exceed 32 MiB")
     if not 0 <= spec.range_start <= spec.range_end < 1 << 64:
         raise RawObjectValidationError("raw source range exceeds u64")
     if any(not 0 <= record.source_position < 1 << 64 for record in spec.records):

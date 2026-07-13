@@ -37,6 +37,7 @@ pub enum EpochStartReason {
     RevisionChange,
     Rewrite,
     Rewind,
+    SessionRebind,
 }
 
 impl EpochStartReason {
@@ -48,6 +49,7 @@ impl EpochStartReason {
             Self::RevisionChange => "revision_change",
             Self::Rewrite => "rewrite",
             Self::Rewind => "rewind",
+            Self::SessionRebind => "session_rebind",
         }
     }
 }
@@ -66,6 +68,7 @@ pub struct SourceEpochResolution {
     pub created: bool,
     pub start_reason: EpochStartReason,
     pub opened_at: String,
+    pub bound_session_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +79,7 @@ struct ActiveEpoch {
     start_reason: EpochStartReason,
     max_observed_len: u64,
     source_revision: Option<String>,
+    bound_session_id: Option<String>,
     opened_at: String,
 }
 
@@ -88,6 +92,7 @@ pub fn observe_file(
     lane: SourceLane,
     position: u64,
     source_revision: Option<&str>,
+    bound_session_id: Option<&str>,
     change_hint: SourceChangeHint,
 ) -> Result<SourceEpochResolution> {
     let metadata = path
@@ -105,6 +110,7 @@ pub fn observe_file(
         lane,
         position,
         source_revision,
+        bound_session_id,
         change_hint,
     )
 }
@@ -119,6 +125,7 @@ pub fn observe_source(
     lane: SourceLane,
     position: u64,
     source_revision: Option<&str>,
+    bound_session_id: Option<&str>,
     change_hint: SourceChangeHint,
 ) -> Result<SourceEpochResolution> {
     if provider.is_empty() || opaque_source_id.is_empty() || file_incarnation.is_empty() {
@@ -127,6 +134,9 @@ pub fn observe_source(
     let observed_source_len = source_len;
     let observed_position = position;
     let source_revision = source_revision
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let bound_session_id = bound_session_id
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let source_len = i64::try_from(source_len).context("source length exceeds SQLite INTEGER")?;
@@ -150,6 +160,11 @@ pub fn observe_source(
             && active.source_revision.as_deref() != source_revision
         {
             Some(EpochStartReason::RevisionChange)
+        } else if bound_session_id.is_some()
+            && active.bound_session_id.as_deref() != bound_session_id
+            && (active.bound_session_id.is_some() || observed_position > 0)
+        {
+            Some(EpochStartReason::SessionRebind)
         } else {
             match change_hint {
                 SourceChangeHint::None => None,
@@ -167,11 +182,13 @@ pub fn observe_source(
                 "UPDATE source_epoch_registry
                  SET max_observed_len = MAX(max_observed_len, ?1),
                      source_revision = COALESCE(?2, source_revision),
-                     updated_at = ?3
-                 WHERE source_epoch = ?4",
+                     bound_session_id = COALESCE(?3, bound_session_id),
+                     updated_at = ?4
+                 WHERE source_epoch = ?5",
                 params![
                     source_len,
                     source_revision,
+                    bound_session_id,
                     now,
                     active.source_epoch.to_string()
                 ],
@@ -182,6 +199,9 @@ pub fn observe_source(
                 created: false,
                 start_reason: active.start_reason,
                 opened_at: active.opened_at,
+                bound_session_id: active
+                    .bound_session_id
+                    .or_else(|| bound_session_id.map(str::to_string)),
             };
             resolution
         }
@@ -203,6 +223,7 @@ pub fn observe_source(
                 reason,
                 source_len,
                 source_revision,
+                bound_session_id,
                 &now,
             )?;
             SourceEpochResolution {
@@ -211,6 +232,7 @@ pub fn observe_source(
                 created: true,
                 start_reason: reason,
                 opened_at: now.clone(),
+                bound_session_id: bound_session_id.map(str::to_string),
             }
         }
         (None, _) => {
@@ -225,6 +247,7 @@ pub fn observe_source(
                 EpochStartReason::Initial,
                 source_len,
                 source_revision,
+                bound_session_id,
                 &now,
             )?;
             SourceEpochResolution {
@@ -233,11 +256,13 @@ pub fn observe_source(
                 created: true,
                 start_reason: EpochStartReason::Initial,
                 opened_at: now.clone(),
+                bound_session_id: bound_session_id.map(str::to_string),
             }
         }
     };
 
-    let initial_position = if resolved.created && resolved.start_reason != EpochStartReason::Initial {
+    let initial_position = if resolved.created && resolved.start_reason != EpochStartReason::Initial
+    {
         0
     } else {
         position.min(source_len)
@@ -279,7 +304,8 @@ pub fn acknowledge_position(
     if acknowledged_through < expected_start {
         bail!("source epoch acknowledgement cannot move backward");
     }
-    let expected_start = i64::try_from(expected_start).context("source position exceeds SQLite INTEGER")?;
+    let expected_start =
+        i64::try_from(expected_start).context("source position exceeds SQLite INTEGER")?;
     let acknowledged_through =
         i64::try_from(acknowledged_through).context("source position exceeds SQLite INTEGER")?;
     let changed = conn.execute(
@@ -307,7 +333,7 @@ fn load_active_epoch(
 ) -> Result<Option<ActiveEpoch>> {
     conn.query_row(
         "SELECT source_epoch, file_incarnation, predecessor_epoch, start_reason,
-                max_observed_len, source_revision, created_at
+                max_observed_len, source_revision, bound_session_id, created_at
          FROM source_epoch_registry
          WHERE provider = ?1 AND opaque_source_id = ?2 AND ended_at IS NULL",
         params![provider, opaque_source_id],
@@ -322,13 +348,23 @@ fn load_active_epoch(
                 reason,
                 row.get::<_, i64>(4)?,
                 row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, String>(7)?,
             ))
         },
     )
     .optional()?
     .map(
-        |(epoch, incarnation, predecessor, reason, max_len, source_revision, opened_at)| {
+        |(
+            epoch,
+            incarnation,
+            predecessor,
+            reason,
+            max_len,
+            source_revision,
+            bound_session_id,
+            opened_at,
+        )| {
             Ok(ActiveEpoch {
                 source_epoch: Uuid::parse_str(&epoch)?,
                 file_incarnation: incarnation,
@@ -338,6 +374,7 @@ fn load_active_epoch(
                 start_reason: parse_reason(&reason)?,
                 max_observed_len: u64::try_from(max_len).context("negative source length")?,
                 source_revision,
+                bound_session_id,
                 opened_at,
             })
         },
@@ -356,14 +393,15 @@ fn insert_epoch(
     reason: EpochStartReason,
     source_len: i64,
     source_revision: Option<&str>,
+    bound_session_id: Option<&str>,
     now: &str,
 ) -> Result<()> {
     conn.execute(
         "INSERT INTO source_epoch_registry (
              source_epoch, provider, opaque_source_id, file_incarnation,
              predecessor_epoch, start_reason, max_observed_len, source_revision,
-             created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+             bound_session_id, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
         params![
             epoch.to_string(),
             provider,
@@ -373,6 +411,7 @@ fn insert_epoch(
             reason.as_str(),
             source_len,
             source_revision,
+            bound_session_id,
             now
         ],
     )?;
@@ -387,6 +426,7 @@ fn parse_reason(value: &str) -> Result<EpochStartReason> {
         "revision_change" => Ok(EpochStartReason::RevisionChange),
         "rewrite" => Ok(EpochStartReason::Rewrite),
         "rewind" => Ok(EpochStartReason::Rewind),
+        "session_rebind" => Ok(EpochStartReason::SessionRebind),
         other => bail!("invalid source epoch reason {other:?}"),
     }
 }
@@ -414,6 +454,7 @@ mod tests {
             SourceLane::Durable,
             4,
             Some("provider-revision-1"),
+            None,
             SourceChangeHint::None,
         )
         .unwrap();
@@ -425,11 +466,15 @@ mod tests {
             SourceLane::Durable,
             8,
             Some("provider-revision-1"),
+            None,
             SourceChangeHint::None,
         )
         .unwrap();
         assert_eq!(archive.source_epoch, live.source_epoch);
-        assert_eq!(lane_position(&conn, archive.source_epoch, SourceLane::Durable).unwrap(), 4);
+        assert_eq!(
+            lane_position(&conn, archive.source_epoch, SourceLane::Durable).unwrap(),
+            4
+        );
         assert!(!archive.opened_at.is_empty());
         drop(conn);
 
@@ -442,13 +487,17 @@ mod tests {
             SourceLane::Durable,
             2,
             Some("provider-revision-1"),
+            None,
             SourceChangeHint::None,
         )
         .unwrap();
         assert_eq!(archive.source_epoch, after_restart.source_epoch);
         assert!(!after_restart.created);
         assert_eq!(after_restart.opened_at, archive.opened_at);
-        assert_eq!(lane_position(&reopened, archive.source_epoch, SourceLane::Durable).unwrap(), 4);
+        assert_eq!(
+            lane_position(&reopened, archive.source_epoch, SourceLane::Durable).unwrap(),
+            4
+        );
         acknowledge_position(
             &mut reopened,
             archive.source_epoch,
@@ -457,7 +506,10 @@ mod tests {
             8,
         )
         .unwrap();
-        assert_eq!(lane_position(&reopened, archive.source_epoch, SourceLane::Durable).unwrap(), 8);
+        assert_eq!(
+            lane_position(&reopened, archive.source_epoch, SourceLane::Durable).unwrap(),
+            8
+        );
     }
 
     #[test]
@@ -476,6 +528,7 @@ mod tests {
             SourceLane::Durable,
             8,
             Some("revision-1"),
+            None,
             SourceChangeHint::None,
         )
         .unwrap();
@@ -490,6 +543,7 @@ mod tests {
             SourceLane::Durable,
             0,
             Some("revision-2"),
+            None,
             SourceChangeHint::None,
         )
         .unwrap();
@@ -510,6 +564,7 @@ mod tests {
             SourceLane::Durable,
             8,
             Some("revision-2"),
+            None,
             SourceChangeHint::None,
         )
         .unwrap();
@@ -526,6 +581,7 @@ mod tests {
             SourceLane::Durable,
             8,
             Some("revision-2"),
+            None,
             SourceChangeHint::None,
         )
         .unwrap();
@@ -537,6 +593,7 @@ mod tests {
             SourceLane::Durable,
             2,
             Some("revision-2"),
+            None,
             SourceChangeHint::None,
         )
         .unwrap();
@@ -551,6 +608,7 @@ mod tests {
             SourceLane::Durable,
             2,
             Some("revision-2"),
+            None,
             SourceChangeHint::Rewind,
         )
         .unwrap();
@@ -566,6 +624,7 @@ mod tests {
             SourceLane::Durable,
             0,
             Some("revision-3"),
+            None,
             SourceChangeHint::None,
         )
         .unwrap();
@@ -583,6 +642,7 @@ mod tests {
             SourceLane::Durable,
             0,
             Some("revision-3"),
+            None,
             SourceChangeHint::Rewrite,
         )
         .unwrap();
@@ -598,5 +658,62 @@ mod tests {
             })
             .unwrap();
         assert_eq!(retained, 6);
+    }
+
+    #[test]
+    fn late_managed_binding_rotates_once_and_survives_hintless_repair() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("history.jsonl");
+        fs::write(&source, b"one\ntwo\n").unwrap();
+        let mut conn = crate::state::db::open_db(None).unwrap();
+
+        let parsed = observe_file(
+            &mut conn,
+            "codex",
+            "history.jsonl",
+            &source,
+            SourceLane::Durable,
+            4,
+            None,
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+        let managed = observe_file(
+            &mut conn,
+            "codex",
+            "history.jsonl",
+            &source,
+            SourceLane::Durable,
+            4,
+            None,
+            Some("managed-session"),
+            SourceChangeHint::None,
+        )
+        .unwrap();
+
+        assert_eq!(managed.start_reason, EpochStartReason::SessionRebind);
+        assert_eq!(managed.predecessor_epoch, Some(parsed.source_epoch));
+        assert_eq!(managed.bound_session_id.as_deref(), Some("managed-session"));
+        assert_eq!(
+            lane_position(&conn, managed.source_epoch, SourceLane::Durable).unwrap(),
+            0
+        );
+
+        let repair = observe_file(
+            &mut conn,
+            "codex",
+            "history.jsonl",
+            &source,
+            SourceLane::Durable,
+            0,
+            None,
+            None,
+            SourceChangeHint::None,
+        )
+        .unwrap();
+        assert_eq!(repair.source_epoch, managed.source_epoch);
+        assert_eq!(repair.bound_session_id.as_deref(), Some("managed-session"));
+        assert!(!repair.created);
     }
 }

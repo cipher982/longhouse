@@ -41,7 +41,7 @@ impl StorageV2Capabilities {
             || self.lane_header != STORAGE_V2_LANE_HEADER
             || self.max_wire_body_bytes < self.max_raw_record_bytes
             || self.max_raw_record_bytes == 0
-            || self.max_raw_record_bytes > 4 * 1024 * 1024
+            || self.max_raw_record_bytes > 32 * 1024 * 1024
             || self.max_records == 0
             || self.max_records > 10_000
             || self.media_claim_path != "/api/agents/storage/v2/media/claims"
@@ -199,8 +199,8 @@ mod tests {
             tenant_id: "david010".to_string(),
             machine_id: "cinder".to_string(),
             ingest_path: STORAGE_V2_ENVELOPES_PATH.to_string(),
-            max_wire_body_bytes: 6 * 1024 * 1024,
-            max_raw_record_bytes: 4 * 1024 * 1024,
+            max_wire_body_bytes: 48 * 1024 * 1024,
+            max_raw_record_bytes: 32 * 1024 * 1024,
             max_records: 10_000,
             media_claim_path: "/api/agents/storage/v2/media/claims".to_string(),
             media_upload_path_template: "/api/agents/storage/v2/media/{sha256}".to_string(),
@@ -212,7 +212,7 @@ mod tests {
         };
         valid.validate("cinder").unwrap();
         let mut drift = valid;
-        drift.ingest_path = "/api/agents/ingest".to_string();
+        drift.max_raw_record_bytes += 1;
         assert!(drift.validate("cinder").is_err());
     }
 

@@ -10,6 +10,7 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub(crate) const MAX_RAW_BATCH_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MAX_RAW_RECORD_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAX_RAW_BATCH_RECORDS: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,7 +71,13 @@ pub(crate) fn read_next_raw_batch(
     framing: RawSourceFraming,
     start_offset: u64,
 ) -> Result<Option<RawRecordBatch>, RawRecordError> {
-    read_next_raw_batch_bounded(path, framing, start_offset, MAX_RAW_BATCH_BYTES)
+    read_next_raw_batch_with_limits(
+        path,
+        framing,
+        start_offset,
+        MAX_RAW_BATCH_BYTES,
+        MAX_RAW_RECORD_BYTES,
+    )
 }
 
 pub(crate) fn read_next_raw_batch_bounded(
@@ -79,7 +86,19 @@ pub(crate) fn read_next_raw_batch_bounded(
     start_offset: u64,
     maximum_bytes: usize,
 ) -> Result<Option<RawRecordBatch>, RawRecordError> {
-    let maximum_bytes = maximum_bytes.clamp(1, MAX_RAW_BATCH_BYTES);
+    read_next_raw_batch_with_limits(path, framing, start_offset, maximum_bytes, maximum_bytes)
+}
+
+pub(crate) fn read_next_raw_batch_with_limits(
+    path: &Path,
+    framing: RawSourceFraming,
+    start_offset: u64,
+    maximum_batch_bytes: usize,
+    maximum_record_bytes: usize,
+) -> Result<Option<RawRecordBatch>, RawRecordError> {
+    let maximum_batch_bytes = maximum_batch_bytes.clamp(1, MAX_RAW_BATCH_BYTES);
+    let maximum_record_bytes =
+        maximum_record_bytes.clamp(maximum_batch_bytes, MAX_RAW_RECORD_BYTES);
     let file = File::open(path).map_err(|source| RawRecordError::Open {
         path: path.to_path_buf(),
         source,
@@ -98,8 +117,17 @@ pub(crate) fn read_next_raw_batch_bounded(
         });
     }
     match framing {
-        RawSourceFraming::LfDelimited => read_next_lf_batch(path, file, start_offset, length, maximum_bytes),
-        RawSourceFraming::WholeDocument => read_whole_document(path, file, start_offset, length),
+        RawSourceFraming::LfDelimited => read_next_lf_batch(
+            path,
+            file,
+            start_offset,
+            length,
+            maximum_batch_bytes,
+            maximum_record_bytes,
+        ),
+        RawSourceFraming::WholeDocument => {
+            read_whole_document(path, file, start_offset, length, maximum_record_bytes)
+        }
     }
 }
 
@@ -108,7 +136,8 @@ fn read_next_lf_batch(
     mut file: File,
     start_offset: u64,
     source_len: u64,
-    maximum_bytes: usize,
+    maximum_batch_bytes: usize,
+    maximum_record_bytes: usize,
 ) -> Result<Option<RawRecordBatch>, RawRecordError> {
     ensure_lf_boundary(path, &mut file, start_offset)?;
     file.seek(SeekFrom::Start(start_offset))
@@ -119,7 +148,14 @@ fn read_next_lf_batch(
     let mut position = start_offset;
 
     while records.len() < MAX_RAW_BATCH_RECORDS {
-        let remaining = maximum_bytes - batch_bytes;
+        if !records.is_empty() && batch_bytes >= maximum_batch_bytes {
+            break;
+        }
+        let remaining = if records.is_empty() {
+            maximum_record_bytes
+        } else {
+            maximum_batch_bytes - batch_bytes
+        };
         let mut bytes = Vec::new();
         let mut bounded = (&mut reader).take(remaining as u64);
         let read = bounded
@@ -134,7 +170,7 @@ fn read_next_lf_batch(
             if records.is_empty() {
                 return Err(RawRecordError::RecordTooLarge {
                     start: position,
-                    maximum: maximum_bytes,
+                    maximum: maximum_record_bytes,
                 });
             }
             break;
@@ -148,7 +184,7 @@ fn read_next_lf_batch(
             bytes,
         });
         batch_bytes += read;
-        if batch_bytes == maximum_bytes {
+        if batch_bytes >= maximum_batch_bytes {
             break;
         }
     }
@@ -185,6 +221,7 @@ fn read_whole_document(
     mut file: File,
     start_offset: u64,
     length: u64,
+    maximum_record_bytes: usize,
 ) -> Result<Option<RawRecordBatch>, RawRecordError> {
     if start_offset != 0 {
         return Err(RawRecordError::WholeDocumentNonZeroStart);
@@ -192,10 +229,10 @@ fn read_whole_document(
     if length == 0 {
         return Ok(None);
     }
-    if length > MAX_RAW_BATCH_BYTES as u64 {
+    if length > maximum_record_bytes as u64 {
         return Err(RawRecordError::RecordTooLarge {
             start: 0,
-            maximum: MAX_RAW_BATCH_BYTES,
+            maximum: maximum_record_bytes,
         });
     }
     let mut bytes = Vec::with_capacity(length as usize);
@@ -323,9 +360,38 @@ mod tests {
     #[test]
     fn oversized_record_is_rejected_instead_of_split() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        fs::write(tmp.path(), vec![b'x'; MAX_RAW_BATCH_BYTES + 1]).unwrap();
-        let error = read_next_raw_batch(tmp.path(), RawSourceFraming::LfDelimited, 0).unwrap_err();
+        fs::write(tmp.path(), vec![b'x'; 17]).unwrap();
+        let error =
+            read_next_raw_batch_with_limits(tmp.path(), RawSourceFraming::LfDelimited, 0, 8, 16)
+                .unwrap_err();
         assert!(matches!(error, RawRecordError::RecordTooLarge { .. }));
+    }
+
+    #[test]
+    fn one_oversized_record_uses_the_bounded_single_record_escape_hatch() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let mut bytes = vec![b'x'; 12];
+        bytes.push(b'\n');
+        bytes.extend_from_slice(b"next\n");
+        fs::write(tmp.path(), &bytes).unwrap();
+
+        let first =
+            read_next_raw_batch_with_limits(tmp.path(), RawSourceFraming::LfDelimited, 0, 8, 16)
+                .unwrap()
+                .unwrap();
+        assert_eq!(first.records.len(), 1);
+        assert_eq!(first.byte_len(), 13);
+
+        let second = read_next_raw_batch_with_limits(
+            tmp.path(),
+            RawSourceFraming::LfDelimited,
+            first.range_end,
+            8,
+            16,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(second.records[0].bytes, b"next\n");
     }
 
     #[test]

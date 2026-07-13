@@ -67,7 +67,7 @@ from zerg.storage_v2.render_objects import validate_render_object_spec
 router = APIRouter(prefix="/agents/storage/v2", tags=["agents"])
 logger = logging.getLogger(__name__)
 
-MAX_WIRE_BODY_BYTES = 12 * 1024 * 1024
+MAX_WIRE_BODY_BYTES = 48 * 1024 * 1024
 _EXPECTED_ENVELOPE_FIELDS = {
     "protocol_version",
     "tenant_id",

@@ -68,6 +68,7 @@ STREAMING_SOURCE_LAYOUT_REVISION = "mixed-stream-v5"
 LEGACY_RENDER_VALUE_BYTES = 768 * 1024
 LEGACY_RENDER_GROUP_BYTES = 1024 * 1024
 LEGACY_RENDER_GROUP_EVENTS = 1_000
+MIGRATION_RECORD_BYTES = min(MAX_RECORD_BYTES, 4 * 1024 * 1024)
 
 
 class CatalogCaller(Protocol):
@@ -396,7 +397,7 @@ class LegacyCorpusConverter:
             if normalized is None:
                 raise ValueError(f"legacy event {event.id} cannot be preserved as bounded derived evidence")
             normalized_bytes = normalized.encode("utf-8")
-            if len(normalized_bytes) <= MAX_RECORD_BYTES:
+            if len(normalized_bytes) <= MIGRATION_RECORD_BYTES:
                 synthetic_key = (synthetic_path, int(event.id))
                 sources.append(
                     _SourceRecord(
@@ -411,10 +412,10 @@ class LegacyCorpusConverter:
                 event_groups[synthetic_key] = [event]
                 continue
             chunk_path = f"{synthetic_path}:{event.id}"
-            for chunk_index, start in enumerate(range(0, len(normalized_bytes), MAX_RECORD_BYTES)):
+            for chunk_index, start in enumerate(range(0, len(normalized_bytes), MIGRATION_RECORD_BYTES)):
                 sources.append(
                     _SourceRecord(
-                        data=normalized_bytes[start : start + MAX_RECORD_BYTES],
+                        data=normalized_bytes[start : start + MIGRATION_RECORD_BYTES],
                         source_path=chunk_path,
                         source_offset=chunk_index,
                         branch_id=int(event.branch_id or 0),
@@ -708,7 +709,7 @@ class LegacyCorpusConverter:
                         if value is None:
                             continue
                         raw_bytes = value.encode("utf-8")
-                        if len(raw_bytes) <= MAX_RECORD_BYTES and hashlib.sha256(raw_bytes).hexdigest() == line_hash:
+                        if len(raw_bytes) <= MIGRATION_RECORD_BYTES and hashlib.sha256(raw_bytes).hexdigest() == line_hash:
                             inline_rows.append((path, offset, line_hash, int(branch_id), raw_bytes))
                     if inline_rows:
                         work_db.executemany(
@@ -1011,11 +1012,11 @@ class LegacyCorpusConverter:
                         continue
                     encoded = normalized.encode("utf-8")
                     event_path = source_path
-                    for chunk_index, start in enumerate(range(0, len(encoded), MAX_RECORD_BYTES)):
-                        chunk_path = event_path if len(encoded) <= MAX_RECORD_BYTES else f"{event_path}:event={event.id}"
+                    for chunk_index, start in enumerate(range(0, len(encoded), MIGRATION_RECORD_BYTES)):
+                        chunk_path = event_path if len(encoded) <= MIGRATION_RECORD_BYTES else f"{event_path}:event={event.id}"
                         source_records.append(
                             _SourceRecord(
-                                data=encoded[start : start + MAX_RECORD_BYTES],
+                                data=encoded[start : start + MIGRATION_RECORD_BYTES],
                                 source_path=chunk_path,
                                 source_offset=int(event.id) if chunk_index == 0 else chunk_index,
                                 branch_id=int(event.branch_id or 0),
@@ -1244,7 +1245,7 @@ class LegacyCorpusConverter:
                 if value is not None:
                     data = value.encode("utf-8")
                     validated_raw_hash = hashlib.sha256(data).hexdigest()
-                    if len(data) > MAX_RECORD_BYTES or validated_raw_hash != row.line_hash:
+                    if len(data) > MIGRATION_RECORD_BYTES or validated_raw_hash != row.line_hash:
                         value = None
                         validated_raw_hash = None
                 matching_events = events_by_key.get((row.source_path, int(row.source_offset)), ())
@@ -1254,7 +1255,7 @@ class LegacyCorpusConverter:
                             raw
                             for event in matching_events
                             if (raw := decode_raw_json(event)) is not None
-                            and len(raw.encode("utf-8")) <= MAX_RECORD_BYTES
+                            and len(raw.encode("utf-8")) <= MIGRATION_RECORD_BYTES
                             and hashlib.sha256(raw.encode("utf-8")).hexdigest() == row.line_hash
                         ),
                         None,
@@ -1267,13 +1268,13 @@ class LegacyCorpusConverter:
                 if value is None:
                     continue
                 data = value.encode("utf-8")
-                if len(data) > MAX_RECORD_BYTES:
+                if len(data) > MIGRATION_RECORD_BYTES:
                     continue
                 raw_hash = validated_raw_hash or hashlib.sha256(data).hexdigest()
                 if provenance_kind != "legacy_normalized_event":
                     if raw_hash != row.line_hash:
                         derived = _normalized_event_source(matching_events)
-                        if derived is None or len(derived.encode("utf-8")) > MAX_RECORD_BYTES:
+                        if derived is None or len(derived.encode("utf-8")) > MIGRATION_RECORD_BYTES:
                             missing += 1
                             continue
                         data = derived.encode("utf-8")
@@ -1303,11 +1304,11 @@ class LegacyCorpusConverter:
         for event in events:
             value = decode_raw_json(event)
             provenance_kind = "legacy_fallback"
-            if value is None or len(value.encode("utf-8")) > MAX_RECORD_BYTES:
+            if value is None or len(value.encode("utf-8")) > MIGRATION_RECORD_BYTES:
                 missing += 1
                 value = _normalized_event_source((event,))
                 provenance_kind = "legacy_normalized_event"
-            if value is None or len(value.encode("utf-8")) > MAX_RECORD_BYTES:
+            if value is None or len(value.encode("utf-8")) > MIGRATION_RECORD_BYTES:
                 continue
             data = value.encode("utf-8")
             source_path = event.source_path or f"legacy-event:{event.id}"

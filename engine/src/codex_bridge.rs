@@ -20,7 +20,10 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-use crate::codex_source::{codex_rollout_file_is_subagent, codex_thread_value_is_subagent};
+use crate::codex_source::{
+    codex_rollout_file_is_subagent, codex_thread_value_is_subagent,
+    codex_thread_value_subagent_source,
+};
 use crate::text::truncate_tail_chars;
 
 const BRIDGE_RUNTIME_SOURCE: &str =
@@ -944,7 +947,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     let mut startup_subscribed_thread_id: Option<String> = None;
     let mut startup_resume_response: Option<Value> = None;
     if let Some(thread_id) = resume_thread_id.clone() {
-        match resume_startup_thread_with_retry(
+        match resume_startup_primary_thread_with_redirect(
             &mut client,
             &config,
             &mut starting_state,
@@ -953,23 +956,12 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         )
         .await
         {
-            Ok(response) => {
+            Ok((response, resumed_thread_id, resumed_thread_path)) => {
                 let resume_thread = response.get("thread").cloned().unwrap_or(Value::Null);
-                if codex_thread_value_is_subagent(&resume_thread) {
-                    let resume_thread_id = extract_string(&resume_thread, &["id"])
-                        .unwrap_or_else(|| thread_id.clone());
-                    let error_text = format!(
-                        "thread/resume returned Codex subagent thread {resume_thread_id}; refusing to adopt as managed primary"
-                    );
-                    starting_state.status = "error".to_string();
-                    starting_state.last_error = Some(error_text.clone());
-                    let _ = write_state_file(&config.state_file, &starting_state);
-                    bail!("{error_text}");
-                }
                 starting_state.thread_id =
-                    extract_string(&resume_thread, &["id"]).or_else(|| Some(thread_id.clone()));
-                starting_state.thread_path = extract_string(&resume_thread, &["path"])
-                    .or_else(|| config.resume_thread_path.clone());
+                    extract_string(&resume_thread, &["id"]).or(Some(resumed_thread_id));
+                starting_state.thread_path =
+                    extract_string(&resume_thread, &["path"]).or(resumed_thread_path);
                 starting_state.thread_subscription_status =
                     Some(ThreadSubscriptionStatus::Subscribed.as_str().to_string());
                 startup_subscribed_thread_id = starting_state.thread_id.clone();
@@ -5004,7 +4996,10 @@ async fn handle_bridge_followup(
             thread_id,
             thread_path,
         } => {
-            let params = thread_resume_params(&thread_id, thread_path.as_deref());
+            let mut requested_thread_id = thread_id;
+            let mut requested_thread_path = thread_path;
+            let mut params =
+                thread_resume_params(&requested_thread_id, requested_thread_path.as_deref());
             let mut last_error = None;
             for attempt in 0..=THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
                 context.state.thread_subscription_attempts =
@@ -5025,11 +5020,26 @@ async fn handle_bridge_followup(
                 {
                     Ok(response) => {
                         let resume_thread = response.get("thread").cloned().unwrap_or(Value::Null);
-                        if codex_thread_value_is_subagent(&resume_thread) {
+                        if let Some(subagent) = codex_thread_value_subagent_source(&resume_thread) {
                             let resume_thread_id = extract_string(&resume_thread, &["id"])
-                                .unwrap_or_else(|| thread_id.clone());
+                                .unwrap_or_else(|| requested_thread_id.clone());
+                            if let Some(parent_thread_id) = subagent
+                                .parent_thread_id
+                                .filter(|parent| parent != &resume_thread_id)
+                            {
+                                context.rejected_thread_ids.insert(resume_thread_id.clone());
+                                if attempt < THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
+                                    eprintln!(
+                                        "[codex-bridge] redirected resumed Codex subagent {resume_thread_id} to primary parent {parent_thread_id}"
+                                    );
+                                    requested_thread_id = parent_thread_id;
+                                    requested_thread_path = None;
+                                    params = thread_resume_params(&requested_thread_id, None);
+                                    continue;
+                                }
+                            }
                             let error_text = format!(
-                                "thread/resume returned Codex subagent thread {resume_thread_id}; refusing to adopt as managed primary"
+                                "thread/resume returned Codex subagent thread {resume_thread_id} without a usable parent; refusing to adopt as managed primary"
                             );
                             context.rejected_thread_ids.insert(resume_thread_id);
                             update_thread_subscription_tracking(
@@ -5040,11 +5050,9 @@ async fn handle_bridge_followup(
                             bail!("{error_text}");
                         }
                         let resume_thread_id = extract_string(&resume_thread, &["id"])
-                            .or_else(|| context.state.thread_id.clone())
-                            .or_else(|| Some(thread_id.clone()));
+                            .or_else(|| Some(requested_thread_id.clone()));
                         let resume_thread_path = extract_string(&resume_thread, &["path"])
-                            .or_else(|| context.state.thread_path.clone())
-                            .or_else(|| thread_path.clone());
+                            .or_else(|| requested_thread_path.clone());
                         let _ = adopt_thread_identity(
                             config,
                             context,
@@ -5158,6 +5166,47 @@ async fn resume_startup_thread_with_retry(
         }
     }
     Err(last_error.unwrap_or_else(|| anyhow!("thread/resume retry loop exited without an error")))
+}
+
+async fn resume_startup_primary_thread_with_redirect(
+    client: &mut RpcClient,
+    config: &BridgeRunConfig,
+    state: &mut BridgeStateFile,
+    thread_id: &str,
+    thread_path: Option<&str>,
+) -> Result<(Value, String, Option<String>)> {
+    let mut requested_thread_id = thread_id.to_string();
+    let mut requested_thread_path = thread_path.map(str::to_string);
+    for _ in 0..=1 {
+        let response = resume_startup_thread_with_retry(
+            client,
+            config,
+            state,
+            &requested_thread_id,
+            requested_thread_path.as_deref(),
+        )
+        .await?;
+        let resume_thread = response.get("thread").cloned().unwrap_or(Value::Null);
+        let Some(subagent) = codex_thread_value_subagent_source(&resume_thread) else {
+            return Ok((response, requested_thread_id, requested_thread_path));
+        };
+        let resumed_thread_id =
+            extract_string(&resume_thread, &["id"]).unwrap_or_else(|| requested_thread_id.clone());
+        let Some(parent_thread_id) = subagent
+            .parent_thread_id
+            .filter(|parent| parent != &resumed_thread_id)
+        else {
+            bail!(
+                "thread/resume returned Codex subagent thread {resumed_thread_id} without a usable parent; refusing to adopt as managed primary"
+            );
+        };
+        eprintln!(
+            "[codex-bridge] redirected resumed Codex subagent {resumed_thread_id} to primary parent {parent_thread_id}"
+        );
+        requested_thread_id = parent_thread_id;
+        requested_thread_path = None;
+    }
+    bail!("Codex subagent parent redirect did not resolve to a primary thread")
 }
 
 async fn apply_thread_resume_snapshot(
@@ -7964,7 +8013,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_bridge_followup_rejects_subagent_resume_without_replacing_parent() {
+    async fn handle_bridge_followup_redirects_subagent_resume_to_parent() {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
         let mut context = make_test_context(&temp);
@@ -7974,9 +8023,9 @@ mod tests {
         fs::write(&child_path, "{\"ok\":true}\n").unwrap();
         let parent_path_string = parent_path.display().to_string();
         let child_path_string = child_path.display().to_string();
-        context.state.thread_id = Some("thr-parent".to_string());
-        context.state.thread_path = Some(parent_path_string.clone());
-        context.runtime.thread_id = Some("thr-parent".to_string());
+        context.state.thread_id = Some("thr-child".to_string());
+        context.state.thread_path = Some(child_path_string.clone());
+        context.runtime.thread_id = Some("thr-child".to_string());
 
         let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
@@ -7999,6 +8048,17 @@ mod tests {
                 }
             })))
             .unwrap();
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": 2,
+                "result": {
+                    "thread": {
+                        "id": "thr-parent",
+                        "path": parent_path_string
+                    }
+                }
+            })))
+            .unwrap();
         let mut client = RpcClient {
             child: None,
             child_pid: None,
@@ -8011,51 +8071,54 @@ mod tests {
             ws_url: "ws://example.test".to_string(),
         };
 
-        let err = handle_bridge_followup(
+        handle_bridge_followup(
             &config,
             &mut client,
             &mut context,
             BridgeFollowup::SubscribeThread {
-                thread_id: "thr-parent".to_string(),
-                thread_path: Some(parent_path_string.clone()),
+                thread_id: "thr-child".to_string(),
+                thread_path: Some(child_path_string.clone()),
             },
         )
         .await
-        .unwrap_err();
+        .unwrap();
 
-        assert!(err
-            .to_string()
-            .contains("thread/resume returned Codex subagent thread thr-child"));
         assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
         assert_eq!(
             context.state.thread_path.as_deref(),
             Some(parent_path_string.as_str())
         );
         assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-parent"));
-        assert_eq!(context.subscribed_thread_id, None);
+        assert_eq!(context.subscribed_thread_id.as_deref(), Some("thr-parent"));
         assert_eq!(
             context.state.thread_subscription_status.as_deref(),
-            Some(ThreadSubscriptionStatus::Failed.as_str())
+            Some(ThreadSubscriptionStatus::Subscribed.as_str())
         );
-        assert_eq!(context.state.thread_subscription_attempts, 1);
-        assert!(context
-            .state
-            .thread_subscription_last_error
-            .as_deref()
-            .is_some_and(|message| message
-                .contains("thread/resume returned Codex subagent thread thr-child")));
+        assert_eq!(context.state.thread_subscription_attempts, 2);
+        assert_eq!(context.state.thread_subscription_last_error, None);
         assert!(context.rejected_thread_ids.contains("thr-child"));
 
-        let outbound = outbound_rx.recv().await.unwrap();
-        let payload: Value = serde_json::from_str(&outbound).unwrap();
+        let first_outbound = outbound_rx.recv().await.unwrap();
+        let first_payload: Value = serde_json::from_str(&first_outbound).unwrap();
         assert_eq!(
-            payload.get("method").and_then(Value::as_str),
+            first_payload.get("method").and_then(Value::as_str),
             Some("thread/resume")
         );
         assert_eq!(
-            payload.pointer("/params/threadId").and_then(Value::as_str),
+            first_payload
+                .pointer("/params/threadId")
+                .and_then(Value::as_str),
+            Some("thr-child")
+        );
+        let second_outbound = outbound_rx.recv().await.unwrap();
+        let second_payload: Value = serde_json::from_str(&second_outbound).unwrap();
+        assert_eq!(
+            second_payload
+                .pointer("/params/threadId")
+                .and_then(Value::as_str),
             Some("thr-parent")
         );
+        assert!(second_payload.pointer("/params/path").is_none());
     }
 
     #[tokio::test]

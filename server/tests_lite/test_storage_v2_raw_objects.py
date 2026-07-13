@@ -87,7 +87,7 @@ def test_validation_rejects_gaps_oversize_and_path_escape(tmp_path):
         )
 
     oversized = RawRecord(source_position=0, data=b"x" * (MAX_RECORD_BYTES + 1))
-    with pytest.raises(RawObjectValidationError, match="4 MiB"):
+    with pytest.raises(RawObjectValidationError, match="32 MiB"):
         seal_raw_object(tmp_path, _spec(records=(oversized,)))
 
     sealed = seal_raw_object(tmp_path, _spec())

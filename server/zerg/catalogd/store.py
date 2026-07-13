@@ -3931,7 +3931,6 @@ class CatalogStore:
                 (
                     existing_session["tenant_id"] != tenant_id,
                     existing_session["provider"] != provider,
-                    existing_session["machine_id"] != machine_id,
                 )
             ):
                 return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
@@ -4002,8 +4001,6 @@ class CatalogStore:
                         .mappings()
                         .all()
                     )
-                    if any(str(row["session_id"]) != session_key for row in predecessor_raw_rows):
-                        return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 elif open_rows:
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
                 accepted_through = _u64_key(0)
@@ -4070,6 +4067,7 @@ class CatalogStore:
                         )
                     )
                     retired_envelope_ids = [str(row["envelope_id"]) for row in predecessor_raw_rows]
+                    replaced_session_ids = {str(row["session_id"]) for row in predecessor_raw_rows if str(row["session_id"]) != session_key}
                     if retired_envelope_ids:
                         connection.execute(
                             update(raw)
@@ -4097,6 +4095,40 @@ class CatalogStore:
                                 commit_seq=commit_seq,
                             )
                         )
+                    for replaced_session_id in replaced_session_ids:
+                        has_active_raw = connection.execute(
+                            select(raw.c.envelope_id)
+                            .where(
+                                raw.c.session_id == replaced_session_id,
+                                raw.c.retired_at.is_(None),
+                            )
+                            .limit(1)
+                        ).first()
+                        if has_active_raw is None:
+                            connection.execute(
+                                update(storage_session)
+                                .where(storage_session.c.session_id == replaced_session_id)
+                                .values(
+                                    hidden_from_default_timeline=1,
+                                    raw_state="retired",
+                                    render_state="retired",
+                                    commit_seq=commit_seq,
+                                    updated_at=commit_time,
+                                )
+                            )
+                            connection.execute(
+                                update(render_generation)
+                                .where(
+                                    render_generation.c.session_id == replaced_session_id,
+                                    render_generation.c.state == "current",
+                                )
+                                .values(
+                                    state="superseded",
+                                    superseded_at=commit_time,
+                                    commit_seq=commit_seq,
+                                    updated_at=commit_time,
+                                )
+                            )
                 connection.execute(
                     insert(epoch).values(
                         source_epoch=epoch_key,

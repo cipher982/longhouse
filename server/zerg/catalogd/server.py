@@ -2689,9 +2689,9 @@ def _validate_raw_object_commit(params: dict) -> None:
         raise ValueError("object_path must be a safe relative path")
     if params["object_hash"] not in path:
         raise ValueError("object_path must be content-addressed by object_hash")
-    # Raw record bytes are capped at 4 MiB. The self-describing object adds a
+    # Raw record bytes are capped at 32 MiB. The self-describing object adds a
     # bounded header plus one 12-byte position/length tuple per record.
-    for field, maximum in (("uncompressed_size", 5 * 1024 * 1024), ("compressed_size", 8 * 1024 * 1024)):
+    for field, maximum in (("uncompressed_size", 33 * 1024 * 1024), ("compressed_size", 40 * 1024 * 1024)):
         value = params[field]
         if type(value) is not int or not 0 <= value <= maximum:
             raise ValueError(f"{field} exceeds its storage-v2 bound")

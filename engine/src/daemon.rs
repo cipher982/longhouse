@@ -2983,6 +2983,22 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         } else {
             Duration::from_secs(75)
         };
+        let session_id_override = match resolve_storage_v2_session_override(
+            &conn,
+            &result.job.path,
+            result.job.observation.session_id.as_deref(),
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(
+                    path = %result.job.path.display(),
+                    error = %error,
+                    "Storage-v2 session binding lookup failed"
+                );
+                result.local_retry_after = Some(local_retry_delay(result.job.priority));
+                return finish_path_task(result, task_started);
+            }
+        };
         let ship_result = if is_opencode_database_job(&result.job) {
             crate::storage_v2_shipper::ship_next_opencode_envelope(
                 &mut conn,
@@ -3000,7 +3016,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 capabilities,
                 &result.job.path,
                 result.job.provider,
-                result.job.observation.session_id.as_deref(),
+                session_id_override.as_deref(),
                 lane,
                 timeout,
             )
@@ -3239,6 +3255,25 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     }
 
     finish_path_task(result, task_started)
+}
+
+fn resolve_storage_v2_session_override(
+    conn: &rusqlite::Connection,
+    path: &Path,
+    wake_hint: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    if let Some(session_id) = wake_hint.map(str::trim).filter(|value| !value.is_empty()) {
+        return Ok(Some(session_id.to_string()));
+    }
+    let binding = crate::state::session_binding::SessionBinding::new(conn);
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Some(session_id) = binding.get(&canonical.to_string_lossy())? {
+        return Ok(Some(session_id));
+    }
+    if canonical != path {
+        return binding.get(&path.to_string_lossy());
+    }
+    Ok(None)
 }
 
 fn retire_legacy_spool_after_storage_v2(
