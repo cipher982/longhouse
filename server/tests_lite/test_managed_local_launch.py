@@ -488,66 +488,136 @@ def test_this_device_launch_returns_hot_readiness_when_archive_writer_is_stale(m
         assert response.session_id in outbox.idempotency_key
 
 
-def test_this_device_launch_materializes_live_catalog_without_archive_db(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("provider", "expected_transport", "expect_empty_attach"),
+    [
+        ("cursor", "cursor_helm", True),
+        ("codex", "codex_app_server", False),
+    ],
+)
+def test_this_device_launch_materializes_live_catalog_without_archive_db(
+    monkeypatch,
+    provider,
+    expected_transport,
+    expect_empty_attach,
+):
     import zerg.database as database_module
-    from zerg.catalogd.schema import initialize_catalog_schema
-    from zerg.catalogd.store import CatalogStore
+    from pathlib import Path
+    from uuid import uuid4
+
+    from zerg.catalogd.client import CatalogClient
+    from zerg.catalogd.server import CatalogDaemon
     from zerg.routers import session_chat
 
-    live_url = f"sqlite:///{tmp_path / 'managed-launch-catalog.db'}"
-    live_engine = make_live_engine(live_url)
-    initialize_live_database(live_engine)
-    initialize_catalog_schema(live_engine)
+    root = Path("/tmp") / f"lh-ml-{provider}-{uuid4().hex[:8]}"
+    root.mkdir(mode=0o700)
+    database_path = root / "live.db"
+    socket_path = root / "catalogd.sock"
+    live_engine = make_live_engine(f"sqlite:///{database_path}")
     LiveSession = make_sessionmaker(live_engine)
-    catalog_store = CatalogStore(live_engine)
 
-    class CatalogClient:
+    async def _run_launch():
+        daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+        await daemon.start()
+        client = CatalogClient(socket_path)
+        monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+        monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+        monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: client)
+        monkeypatch.setattr(
+            session_chat,
+            "get_live_write_serializer",
+            lambda: (_ for _ in ()).throw(AssertionError("catalog launch must not use the API live serializer")),
+        )
+        try:
+            return await session_chat._launch_managed_local_session_serialized(
+                SimpleNamespace(),
+                ManagedLocalLaunchParams(
+                    owner_id=42,
+                    runner_target="cinder",
+                    cwd="/tmp/demo",
+                    provider=provider,
+                    project="demo",
+                    machine_name="cinder",
+                ),
+            )
+        finally:
+            await client.close()
+            await daemon.close()
+
+    try:
+        _result, response = asyncio.run(_run_launch())
+        assert response.provider == provider
+        assert response.managed_transport.value == expected_transport
+        if expect_empty_attach:
+            assert response.attach_command == ""
+        else:
+            assert "codex-bridge attach --session-id" in response.attach_command
+            assert response.session_id in response.attach_command
+        assert response.provider_session_id is None
+        with LiveSession() as live_db:
+            catalog = live_db.get(LiveSessionCatalog, response.session_id)
+            assert catalog is not None
+            assert catalog.project == "demo"
+            assert catalog.primary_thread_id is not None
+            assert live_db.get(LiveSessionThread, catalog.primary_thread_id) is not None
+            attempt = live_db.query(LiveSessionLaunchAttempt).one()
+            assert attempt.command_id == f"managed-local-{response.session_id}"
+            assert attempt.state == "pending"
+            run = live_db.query(LiveSessionRun).one()
+            connection = live_db.query(LiveSessionConnection).one()
+            assert connection.run_id == run.id
+            assert connection.state == "detached"
+            assert connection.device_id == "cinder"
+            assert live_db.query(LiveSessionThreadAlias).count() == 0
+    finally:
+        live_engine.dispose()
+        for path in root.iterdir():
+            path.unlink(missing_ok=True)
+        root.rmdir()
+
+
+def test_this_device_launch_surfaces_catalog_rejection_without_retry_theater(monkeypatch):
+    import zerg.database as database_module
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.protocol import CatalogRpcError
+    from zerg.routers import session_chat
+    from zerg.services.managed_local_launcher import ManagedLocalLaunchError
+
+    class RejectingCatalog:
         async def call(self, method, params, **_kwargs):
             assert method == "session.launch.local.create.v2"
-            launch = dict(params["launch"])
-            launch["started_at"] = datetime.fromisoformat(launch["started_at"])
-            launch["expires_at"] = datetime.fromisoformat(launch["expires_at"])
-            return catalog_store.create_local_launch(launch=launch)
+            raise CatalogRemoteError(
+                CatalogRpcError(
+                    code="invalid_request",
+                    message="local launch.plan.attach_command must be a string of at most 4096 characters",
+                    retryable=False,
+                    retry_after_ms=None,
+                    details={},
+                )
+            )
 
     monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
     monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
-    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: CatalogClient())
-    monkeypatch.setattr(
-        session_chat,
-        "get_live_write_serializer",
-        lambda: (_ for _ in ()).throw(AssertionError("catalog launch must not use the API live serializer")),
-    )
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: RejectingCatalog())
 
-    _result, response = asyncio.run(
-        session_chat._launch_managed_local_session_serialized(
-            SimpleNamespace(),
-            ManagedLocalLaunchParams(
-                owner_id=42,
-                runner_target="cinder",
-                cwd="/tmp/demo",
-                provider="codex",
-                project="demo",
-                machine_name="cinder",
-            ),
+    with pytest.raises(ManagedLocalLaunchError) as exc_info:
+        asyncio.run(
+            session_chat._launch_managed_local_session_serialized(
+                SimpleNamespace(),
+                ManagedLocalLaunchParams(
+                    owner_id=42,
+                    runner_target="cinder",
+                    cwd="/tmp/demo",
+                    provider="cursor",
+                    project="demo",
+                    machine_name="cinder",
+                ),
+            )
         )
-    )
 
-    with LiveSession() as live_db:
-        catalog = live_db.get(LiveSessionCatalog, response.session_id)
-        assert catalog is not None
-        assert catalog.project == "demo"
-        assert catalog.primary_thread_id is not None
-        assert live_db.get(LiveSessionThread, catalog.primary_thread_id) is not None
-        attempt = live_db.query(LiveSessionLaunchAttempt).one()
-        assert attempt.command_id == f"managed-local-{response.session_id}"
-        assert attempt.state == "pending"
-        run = live_db.query(LiveSessionRun).one()
-        connection = live_db.query(LiveSessionConnection).one()
-        assert connection.run_id == run.id
-        assert connection.state == "detached"
-        assert connection.device_id == "cinder"
-        assert live_db.query(LiveSessionThreadAlias).count() == 0
-        assert response.provider_session_id is None
+    assert exc_info.value.status_code == 500
+    assert "attach_command" in exc_info.value.detail
+    assert "retry shortly" not in exc_info.value.detail.lower()
 
 
 def test_this_device_launch_skips_runtime_pubsub_for_hot_readiness(monkeypatch, tmp_path):
