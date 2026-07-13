@@ -3272,10 +3272,14 @@ def _validate_local_launch_rpc(value: object) -> dict:
         ("loop_mode", 32),
         ("permission_mode", 32),
         ("managed_transport", 64),
-        ("attach_command", 4096),
     ):
         if not _is_string(plan[field], maximum=maximum):
             raise ValueError(f"local launch.plan.{field} must contain 1 to {maximum} characters")
+    # attach_command is a required string. Empty means "no host reattach command"
+    # (valid for Cursor Helm / Antigravity). Non-empty values are bounded.
+    attach_command = plan["attach_command"]
+    if not isinstance(attach_command, str) or len(attach_command) > 4096:
+        raise ValueError("local launch.plan.attach_command must be a string of at most 4096 characters")
     for field, maximum in (("provider_session_id", 512), ("launch_actor", 32), ("launch_surface", 32)):
         raw = plan[field]
         if raw is not None and (not isinstance(raw, str) or not raw or len(raw) > maximum):

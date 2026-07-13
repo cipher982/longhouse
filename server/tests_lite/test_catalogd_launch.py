@@ -264,3 +264,130 @@ async def test_catalogd_owns_managed_local_launch_transaction(daemon_paths):
             REMOTE_LAUNCH_OUTCOME_KIND,
         ]
     engine.dispose()
+
+
+def _local_launch_payload(
+    *,
+    session_id,
+    provider: str,
+    managed_transport: str,
+    attach_command: object,
+    provider_session_id: str | None = None,
+):
+    now = datetime.now(UTC)
+    return {
+        "owner_id": 7,
+        "git_repo": "cipher982/longhouse",
+        "git_branch": "main",
+        "started_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=5)).isoformat(),
+        "plan": {
+            "session_id": str(session_id),
+            "provider": provider,
+            "provider_session_id": provider_session_id,
+            "source_name": "cinder",
+            "source_runner_id": None,
+            "cwd": "/workspace/longhouse",
+            "project": "longhouse",
+            "display_name": "Managed local",
+            "managed_session_name": f"{provider}-managed-1",
+            "loop_mode": "assist",
+            "permission_mode": "bypass",
+            "launch_actor": "human_ui",
+            "launch_surface": "cli",
+            "managed_transport": managed_transport,
+            "attach_command": attach_command,
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "managed_transport"),
+    [
+        ("cursor", "cursor_helm"),
+        ("antigravity", "antigravity_hook_inbox"),
+    ],
+)
+async def test_catalogd_local_launch_accepts_empty_attach_command(daemon_paths, provider, managed_transport):
+    database_path, socket_path = daemon_paths
+    session_id = uuid4()
+    launch = _local_launch_payload(
+        session_id=session_id,
+        provider=provider,
+        managed_transport=managed_transport,
+        attach_command="",
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        created = await client.call("session.launch.local.create.v2", {"launch": launch})
+        assert created["created"] is True
+        replay = await client.call("session.launch.local.create.v2", {"launch": launch})
+        assert replay["exact_replay"] is True
+    finally:
+        await client.close()
+        await daemon.close()
+
+    engine = create_catalog_engine(database_path)
+    initialize_catalog_schema(engine)
+    with Session(engine) as db:
+        catalog = db.get(LiveSessionCatalog, str(session_id))
+        assert catalog is not None
+        assert catalog.provider == provider
+        attempt = db.query(LiveSessionLaunchAttempt).one()
+        assert attempt.command_id == f"managed-local-{session_id}"
+        assert db.query(LiveArchiveOutbox).filter_by(kind=MANAGED_LOCAL_LAUNCH_KIND).count() == 1
+    engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "attach_command",
+    [None, 12, "x" * 4097],
+)
+async def test_catalogd_local_launch_rejects_invalid_attach_command(daemon_paths, attach_command):
+    database_path, socket_path = daemon_paths
+    launch = _local_launch_payload(
+        session_id=uuid4(),
+        provider="cursor",
+        managed_transport="cursor_helm",
+        attach_command=attach_command if attach_command is not None else "",
+    )
+    if attach_command is None:
+        launch["plan"]["attach_command"] = None
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("session.launch.local.create.v2", {"launch": launch})
+        assert exc_info.value.code == "invalid_request"
+        assert "attach_command" in str(exc_info.value)
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_catalogd_local_launch_rejects_missing_attach_command(daemon_paths):
+    database_path, socket_path = daemon_paths
+    launch = _local_launch_payload(
+        session_id=uuid4(),
+        provider="cursor",
+        managed_transport="cursor_helm",
+        attach_command="",
+    )
+    del launch["plan"]["attach_command"]
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        with pytest.raises(CatalogRemoteError) as exc_info:
+            await client.call("session.launch.local.create.v2", {"launch": launch})
+        assert exc_info.value.code == "invalid_request"
+        assert "plan" in str(exc_info.value)
+    finally:
+        await client.close()
+        await daemon.close()
