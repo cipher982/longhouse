@@ -21,7 +21,7 @@ def _call(operation: str, **params: Any) -> dict[str, Any]:
     return call_catalogd_sync(
         socket_path,
         "runner.operation.v2",
-        {"operation": operation, "params": params},
+        params={"operation": operation, "params": params},
         timeout_seconds=2.0,
     )
 

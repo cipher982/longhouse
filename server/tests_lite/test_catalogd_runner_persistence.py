@@ -12,6 +12,7 @@ from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
 from zerg.models.user import User
+from zerg.services import runner_catalog
 from zerg.tools.builtin import runner_tools
 
 
@@ -23,6 +24,26 @@ def daemon_paths():
     for path in root.iterdir():
         path.unlink(missing_ok=True)
     root.rmdir()
+
+
+def test_runner_catalog_facade_uses_keyword_rpc_params(monkeypatch, tmp_path):
+    socket_path = tmp_path / "catalogd.sock"
+    captured = {}
+
+    def fake_call(path, method, *, params, timeout_seconds):
+        captured.update(path=path, method=method, params=params, timeout_seconds=timeout_seconds)
+        return {"ok": True}
+
+    monkeypatch.setattr(runner_catalog, "catalogd_paths", lambda: (tmp_path / "live.db", socket_path))
+    monkeypatch.setattr(runner_catalog, "call_catalogd_sync", fake_call)
+
+    assert runner_catalog.operation("runner_get", runner_id="runner-1") == {"ok": True}
+    assert captured == {
+        "path": socket_path,
+        "method": "runner.operation.v2",
+        "params": {"operation": "runner_get", "params": {"runner_id": "runner-1"}},
+        "timeout_seconds": 2.0,
+    }
 
 
 @pytest.mark.asyncio
