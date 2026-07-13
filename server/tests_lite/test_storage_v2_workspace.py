@@ -20,7 +20,7 @@ class _Catalog:
 async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch):
     session_id = uuid4()
     session = SimpleNamespace(
-        lifecycle="open",
+        runtime_display=SimpleNamespace(lifecycle="open"),
         capabilities=SimpleNamespace(live_control_available=True),
         model_dump=lambda **_kwargs: {"id": str(session_id), "lifecycle": "open", "capabilities": {}},
     )

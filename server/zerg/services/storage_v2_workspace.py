@@ -112,7 +112,7 @@ async def build_storage_v2_workspace(
     events = page.get("events")
     if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The render projection is invalid.")
-    closed = session.lifecycle == "closed"
+    closed = session.runtime_display.lifecycle == "closed"
     completed_tool_call_ids = {str(event["tool_call_id"]) for event in events if event.get("role") == "tool" and event.get("tool_call_id")}
     items = [
         _event_projection(
