@@ -436,7 +436,7 @@ enum APIToolCallState: String, Codable, Hashable, Sendable, CaseIterable {
 }
 
 struct APIEventResponse: Codable, Hashable, Sendable {
-    let id: Int
+    let id: JSONValue
     let role: String
     let contentText: String?
     let rawContentText: String?
@@ -493,6 +493,9 @@ struct APISessionProjectionResponse: Codable, Hashable, Sendable {
     let pageOffset: Int?
     let branchMode: String?
     let abandonedEvents: Int?
+    let generationId: String?
+    let nextCursor: String?
+    let hasMore: Bool?
 }
 
 struct APISessionWorkspaceRevisionResponse: Codable, Hashable, Sendable {

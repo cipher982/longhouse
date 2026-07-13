@@ -5024,9 +5024,9 @@ export interface components {
         EventResponse: {
             /**
              * Id
-             * @description Event ID
+             * @description Stable legacy or storage-v2 event ID
              */
-            id: number;
+            id: number | string;
             /**
              * Role
              * @description Message role
@@ -5156,6 +5156,22 @@ export interface components {
              * @default 0
              */
             abandoned_events: number;
+            /**
+             * Generation Id
+             * @description Storage-v2 render generation for cursor validation
+             */
+            generation_id?: string | null;
+            /**
+             * Next Cursor
+             * @description Exclusive cursor for the next storage-v2 page
+             */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @description Whether another storage-v2 page is available
+             * @default false
+             */
+            has_more: boolean;
         };
         /**
          * FiltersResponse
@@ -8673,6 +8689,22 @@ export interface components {
              * @default 0
              */
             abandoned_events: number;
+            /**
+             * Generation Id
+             * @description Storage-v2 render generation for cursor validation
+             */
+            generation_id?: string | null;
+            /**
+             * Next Cursor
+             * @description Exclusive cursor for the next storage-v2 page
+             */
+            next_cursor?: string | null;
+            /**
+             * Has More
+             * @description Whether another storage-v2 page is available
+             * @default false
+             */
+            has_more: boolean;
         };
         /**
          * SessionResponse
@@ -13847,7 +13879,7 @@ export interface operations {
             header?: never;
             path: {
                 session_id: string;
-                input_id: number;
+                input_id: string;
                 attachment_id: string;
             };
             cookie?: never;
@@ -16459,6 +16491,8 @@ export interface operations {
                 limit?: number;
                 /** @description Offset for pagination */
                 offset?: number;
+                /** @description Exclusive storage-v2 cursor for the next page */
+                cursor?: string | null;
             };
             header?: never;
             path: {
@@ -16501,6 +16535,8 @@ export interface operations {
                 limit?: number;
                 /** @description Offset within the stitched projection */
                 offset?: number;
+                /** @description Exclusive storage-v2 cursor for the next page */
+                cursor?: string | null;
             };
             header?: never;
             path: {

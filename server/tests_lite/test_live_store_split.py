@@ -119,6 +119,10 @@ def test_initialize_live_database_creates_only_live_tables(tmp_path):
         "live_session_input_attachments",
         "live_session_live_previews",
         "live_sessions",
+        "runner_enroll_tokens",
+        "runner_health_incidents",
+        "runner_jobs",
+        "runners",
     } | set(live_catalog_table_names())
     assert "sessions" not in tables
     assert "agent_heartbeats" not in tables

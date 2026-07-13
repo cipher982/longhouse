@@ -29,8 +29,7 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
 from zerg.database import catalog_db_dependency
-from zerg.database import get_db
-from zerg.database import get_session_factory
+from zerg.database import get_catalog_session_factory
 from zerg.database import live_catalog_enabled
 from zerg.database import reset_test_worker_id
 from zerg.database import set_test_worker_id
@@ -59,12 +58,21 @@ from zerg.services.runner_health import build_runner_response
 from zerg.services.runner_health import normalize_runner_binary_tag
 from zerg.services.runner_heartbeat_cache import mark_runner_heartbeat
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
+from zerg.services.write_serializer import get_live_write_serializer
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
 _catalog_db_dependency = catalog_db_dependency()
+
+
+def _runner_write_serializer():
+    live_serializer = get_live_write_serializer()
+    if live_catalog_enabled() and live_serializer.is_configured:
+        return live_serializer
+    return get_write_serializer()
+
 
 router = APIRouter(
     prefix="/runners",
@@ -137,7 +145,7 @@ async def _handle_exec_chunk(
         }
 
     try:
-        ws = get_write_serializer()
+        ws = _runner_write_serializer()
         if ws.is_configured:
             updated_job = await ws.execute(_write_chunk, label="runner-output", auto_commit=False)
         else:
@@ -182,7 +190,7 @@ async def _handle_exec_done(
         }
 
     try:
-        ws = get_write_serializer()
+        ws = _runner_write_serializer()
         if ws.is_configured:
             persisted = await ws.execute(_persist_completion, label="runner-job-complete", auto_commit=False)
         else:
@@ -244,7 +252,7 @@ async def _handle_exec_error(
         return updated_job is not None
 
     try:
-        ws = get_write_serializer()
+        ws = _runner_write_serializer()
         if ws.is_configured:
             persisted = await ws.execute(_persist_error, label="runner-job-error", auto_commit=False)
         else:
@@ -441,7 +449,7 @@ def get_uninstall_script() -> Response:
 def create_enroll_token(
     request: Request,
     response: Response,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> EnrollTokenResponse:
     """Create a new enrollment token for registering a runner.
@@ -505,7 +513,7 @@ def create_enroll_token(
 @router.post("/register", response_model=RunnerRegisterResponse)
 async def register_runner(
     request: RunnerRegisterRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
 ) -> RunnerRegisterResponse:
     """Register a new runner using an enrollment token.
 
@@ -623,9 +631,6 @@ def get_runner_status(
     """
     timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "private, max-age=15"
-    if live_catalog_enabled():
-        return RunnerStatusResponse(total=0, online=0, offline=0, runners=[])
-
     with timing.span("load_runners"):
         runners = runner_crud.get_runners(db=db, owner_id=current_user.id)
     connection_manager = get_runner_connection_manager()
@@ -662,7 +667,7 @@ def get_runner_status(
 
 @router.get("/", response_model=RunnerListResponse)
 def list_runners(
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerListResponse:
     """List all runners for the authenticated user."""
@@ -686,7 +691,7 @@ def list_runners(
 )
 def delete_runner(
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> Response:
     """Delete a stale runner permanently.
@@ -722,7 +727,7 @@ def delete_runner(
 @router.get("/{runner_id}", response_model=RunnerResponse)
 def get_runner(
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerResponse:
     """Get details of a specific runner."""
@@ -744,7 +749,7 @@ def get_runner(
 @router.post("/preflight", response_model=RunnerPreflightResponse)
 def runner_preflight(
     request: RunnerPreflightRequest,
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
 ) -> RunnerPreflightResponse:
     """Authenticate runner credentials for local doctor flows."""
     auth = authenticate_runner_identity(
@@ -792,7 +797,7 @@ def list_runner_jobs(
     runner_id: int = Path(..., gt=0),
     limit: int = Query(20, ge=1, le=100),
     offset: int = Query(0, ge=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerJobListResponse:
     """List recent jobs for a specific runner."""
@@ -810,7 +815,7 @@ def list_runner_jobs(
 @router.get("/{runner_id}/doctor", response_model=RunnerDoctorResponse)
 def get_runner_doctor(
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerDoctorResponse:
     """Run server-side doctor diagnostics for a specific runner."""
@@ -833,7 +838,7 @@ def get_runner_doctor(
 def update_runner(
     update: RunnerUpdate,
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerResponse:
     """Update a runner's configuration (name, labels, capabilities)."""
@@ -892,7 +897,7 @@ def update_runner(
 @router.post("/{runner_id}/revoke", response_model=RunnerSuccessResponse)
 def revoke_runner(
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerSuccessResponse:
     """Revoke a runner (mark as revoked, prevent reconnection).
@@ -926,7 +931,7 @@ def revoke_runner(
 async def rotate_runner_secret(
     response: Response,
     runner_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
+    db: Session = Depends(_catalog_db_dependency),
     current_user: User = Depends(get_current_user),
 ) -> RunnerRotateSecretResponse:
     """Rotate a runner's authentication secret.
@@ -1086,7 +1091,7 @@ async def _runner_websocket_with_db(
                     r.runner_metadata = _meta
 
         try:
-            ws = get_write_serializer()
+            ws = _runner_write_serializer()
             await ws.execute_or_direct(_mark_online, db, label="runner-online")
         except Exception as e:
             db.rollback()
@@ -1148,7 +1153,7 @@ async def _runner_websocket_with_db(
                 try:
                     # Roll back any dirty state from websocket message processing.
                     _rollback_after_write_failure(db, operation="runner websocket cleanup")
-                    ws = get_write_serializer()
+                    ws = _runner_write_serializer()
                     await ws.execute_or_direct(_mark_offline, db, label="runner-offline")
                     logger.info(f"Runner {runner_id} marked offline")
                 except Exception as e:
@@ -1161,12 +1166,9 @@ async def _runner_websocket_with_db(
 async def runner_websocket(
     websocket: WebSocket,
 ) -> None:
-    if live_catalog_enabled():
-        await websocket.close(code=1013, reason="Runner control is unavailable while archive storage is isolated")
-        return
     worker_id = websocket.query_params.get("worker")
     worker_token = set_test_worker_id(worker_id) if worker_id else None
-    db = get_session_factory()()
+    db = get_catalog_session_factory()()
 
     try:
         await _runner_websocket_with_db(websocket, db)

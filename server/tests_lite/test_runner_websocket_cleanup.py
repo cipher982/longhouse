@@ -18,6 +18,8 @@ def _make_db(tmp_path):
 
 
 class _DisconnectBeforeHelloWebSocket:
+    query_params = {}
+
     def __init__(self):
         self.accepted = False
         self.close_calls = 0
@@ -47,16 +49,6 @@ class _InvalidHelloWebSocket:
     async def close(self, code=1000, reason=None):
         self.close_calls += 1
         raise RuntimeError("Unexpected ASGI message 'websocket.close', after sending 'websocket.close' or response already completed.")
-
-
-class _CatalogModeWebSocket:
-    query_params = {}
-
-    def __init__(self):
-        self.closed = None
-
-    async def close(self, code=1000, reason=None):
-        self.closed = (code, reason)
 
 
 @pytest.mark.asyncio
@@ -91,12 +83,12 @@ async def test_runner_invalid_hello_close_race_is_swallowed(tmp_path, caplog):
 
 
 @pytest.mark.asyncio
-async def test_runner_websocket_does_not_open_archive_in_catalog_mode(monkeypatch):
-    websocket = _CatalogModeWebSocket()
+async def test_runner_websocket_uses_catalog_database_in_catalog_mode(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    websocket = _DisconnectBeforeHelloWebSocket()
     monkeypatch.setattr("zerg.routers.runners.live_catalog_enabled", lambda: True)
-    monkeypatch.setattr("zerg.routers.runners.get_session_factory", lambda: pytest.fail("cold DB opened"))
+    monkeypatch.setattr("zerg.routers.runners.get_catalog_session_factory", lambda: SessionLocal)
 
     await runner_websocket(websocket)
 
-    assert websocket.closed is not None
-    assert websocket.closed[0] == 1013
+    assert websocket.accepted is True

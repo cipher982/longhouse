@@ -64,7 +64,7 @@ def test_runner_exec_uses_credential_resolver():
         ),
         patch("zerg.tools.builtin.runner_tools._resolve_target", return_value=(7, "cinder")),
         patch("zerg.tools.builtin.runner_tools.get_settings", return_value=SimpleNamespace(environment="dev")),
-        patch("zerg.tools.builtin.runner_tools.get_db", return_value=iter([fake_db])),
+        patch("zerg.tools.builtin.runner_tools.get_catalog_session_factory", return_value=lambda: fake_db),
         patch("zerg.tools.builtin.runner_tools.runner_crud.get_runner", return_value=runner),
         patch(
             "zerg.tools.builtin.runner_tools.get_runner_connection_manager",

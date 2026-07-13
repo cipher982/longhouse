@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 
@@ -104,6 +104,51 @@ pub fn reported_ship_events(
     replay_events_shipped + shipped_events
 }
 
+async fn ship_path_storage_v2(
+    conn: &mut rusqlite::Connection,
+    client: &ShipperClient,
+    capabilities: &crate::shipping::storage_v2::StorageV2Capabilities,
+    path: &std::path::Path,
+    provider: &str,
+    session_id_override: Option<&str>,
+    require_reply_evidence: bool,
+    request_timeout: Duration,
+) -> anyhow::Result<(usize, bool)> {
+    let mut events_shipped = 0usize;
+    loop {
+        let prepared = if provider == "opencode" && opencode_db::is_opencode_database_path(path) {
+            crate::storage_v2_shipper::prepare_next_opencode_envelope(conn, capabilities, path)?
+        } else {
+            crate::storage_v2_shipper::prepare_next_envelope(
+                conn,
+                capabilities,
+                path,
+                provider,
+                session_id_override,
+            )?
+        };
+        let Some(prepared) = prepared else {
+            return Ok((events_shipped, false));
+        };
+        if require_reply_evidence && !prepared.has_reply_evidence {
+            return Ok((events_shipped, true));
+        }
+        let outcome = crate::storage_v2_shipper::ship_prepared_envelope(
+            conn,
+            client,
+            capabilities,
+            prepared,
+            "repair",
+            request_timeout,
+        )
+        .await?;
+        events_shipped += outcome.events_shipped;
+        if !outcome.has_more {
+            return Ok((events_shipped, false));
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // cmd_ship — scan all providers and ship new events
 // ---------------------------------------------------------------------------
@@ -117,6 +162,7 @@ pub async fn cmd_ship(
     json_output: bool,
     algo: CompressionAlgo,
     max_batch_bytes: Option<u64>,
+    machine_name: Option<&str>,
 ) -> anyhow::Result<()> {
     let start = Instant::now();
 
@@ -126,7 +172,7 @@ pub async fn cmd_ship(
         token,
         db_path,
         if workers > 0 { Some(workers) } else { None },
-        None,
+        machine_name,
         max_batch_bytes,
     );
     crate::pipeline::compressor::set_machine_name(&config.machine_name);
@@ -139,7 +185,79 @@ pub async fn cmd_ship(
     }
 
     // Open state DB
-    let conn = open_db(config.db_path.as_deref())?;
+    let mut conn = open_db(config.db_path.as_deref())?;
+
+    if !dry_run {
+        let client = ShipperClient::with_compression(&config, algo)?;
+        let storage_v2 = match client
+            .storage_v2_capabilities(&config.machine_name, Some(Duration::from_secs(5)))
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(%error, "Storage-v2 capability check failed; preserving work through legacy spool");
+                None
+            }
+        };
+        if let Some(capabilities) = storage_v2.filter(|item| item.cutover) {
+            let providers = discovery::get_providers();
+            let mut all_files = discovery::discover_all_files(&providers);
+            for pending in Spool::new(&conn).pending_paths_now(10_000)? {
+                let path = PathBuf::from(&pending.file_path);
+                if path.exists() && !all_files.iter().any(|(known, _)| known == &path) {
+                    let provider = providers
+                        .iter()
+                        .find(|item| item.name == pending.provider)
+                        .map(|item| item.name)
+                        .unwrap_or("claude");
+                    all_files.push((path, provider));
+                }
+            }
+            let mut files_shipped = 0usize;
+            let mut events_shipped = 0usize;
+            for (path, provider) in &all_files {
+                let (events, _) = ship_path_storage_v2(
+                    &mut conn,
+                    &client,
+                    &capabilities,
+                    path,
+                    provider,
+                    None,
+                    false,
+                    Duration::from_secs(config.timeout_seconds),
+                )
+                .await?;
+                if events > 0 {
+                    files_shipped += 1;
+                    events_shipped += events;
+                }
+                let pending_entries = Spool::new(&conn)
+                    .pending_entries_for_path_now(&path.to_string_lossy(), 10_000)?;
+                for entry in pending_entries {
+                    Spool::new(&conn).mark_shipped(entry.id)?;
+                }
+            }
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "status": "ok",
+                        "protocol": "storage-v2",
+                        "files_scanned": all_files.len(),
+                        "files_shipped": files_shipped,
+                        "events_shipped": events_shipped,
+                        "dry_run": false,
+                    }))?
+                );
+            } else {
+                println!(
+                    "Shipped {} events from {} files",
+                    events_shipped, files_shipped
+                );
+            }
+            return Ok(());
+        }
+    }
 
     let recovered = shipper::run_startup_recovery(&conn)?;
     if recovered > 0 && !json_output {
@@ -513,6 +631,7 @@ pub async fn cmd_ship_file(
     max_batch_bytes: Option<u64>,
     session_id_override: Option<&str>,
     require_reply_evidence: bool,
+    machine_name: Option<&str>,
 ) -> anyhow::Result<()> {
     if !path.exists() {
         anyhow::bail!("File not found: {}", path.display());
@@ -520,8 +639,14 @@ pub async fn cmd_ship_file(
 
     let provider = detect_provider_for_file(path, provider_override)?;
 
-    let config =
-        ShipperConfig::from_env()?.with_overrides(url, token, db_path, None, None, max_batch_bytes);
+    let config = ShipperConfig::from_env()?.with_overrides(
+        url,
+        token,
+        db_path,
+        None,
+        machine_name,
+        max_batch_bytes,
+    );
     crate::pipeline::compressor::set_machine_name(&config.machine_name);
 
     if !json_output {
@@ -532,7 +657,53 @@ pub async fn cmd_ship_file(
         }
     }
 
-    let conn = open_db(config.db_path.as_deref())?;
+    let mut conn = open_db(config.db_path.as_deref())?;
+
+    if !dry_run {
+        let client = ShipperClient::with_compression(&config, algo)?;
+        let storage_v2 = match client
+            .storage_v2_capabilities(&config.machine_name, Some(Duration::from_secs(5)))
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => {
+                tracing::warn!(%error, "Storage-v2 capability check failed; preserving work through legacy spool");
+                None
+            }
+        };
+        if let Some(capabilities) = storage_v2.filter(|item| item.cutover) {
+            let (events_shipped, reply_evidence_pending) = ship_path_storage_v2(
+                &mut conn,
+                &client,
+                &capabilities,
+                path,
+                &provider,
+                session_id_override,
+                require_reply_evidence,
+                Duration::from_secs(config.timeout_seconds),
+            )
+            .await?;
+            if json_output {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "status": "ok",
+                        "protocol": "storage-v2",
+                        "file": path.display().to_string(),
+                        "provider": provider,
+                        "events_shipped": events_shipped,
+                        "dry_run": false,
+                        "reply_evidence_pending": reply_evidence_pending,
+                    }))?
+                );
+            } else if reply_evidence_pending {
+                println!("No new events with reply evidence");
+            } else {
+                println!("Shipped {} events", events_shipped);
+            }
+            return Ok(());
+        }
+    }
 
     if provider == "opencode" && opencode_db::is_opencode_database_path(path) {
         let (sessions_shipped, events_shipped) = if dry_run {
@@ -842,6 +1013,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         ))
         .unwrap();
 
@@ -904,6 +1076,7 @@ mod tests {
             None,
             None,
             false,
+            None,
         ))
         .unwrap();
         handle.join().unwrap();
@@ -949,6 +1122,7 @@ mod tests {
             None,
             None,
             true,
+            None,
         ))
         .unwrap();
 
@@ -994,6 +1168,7 @@ mod tests {
             None,
             None,
             true,
+            None,
         ))
         .unwrap();
         handle.join().unwrap();

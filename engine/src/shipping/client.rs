@@ -220,7 +220,7 @@ impl ShipperClient {
                             let body = response.text().await.unwrap_or_default();
                             return ShipResult::RetryableClientError(status, body);
                         }
-                        400 | 422 => {
+                        400 | 422 | 426 => {
                             let body = response.text().await.unwrap_or_default();
                             return ShipResult::PayloadRejected(status, body);
                         }
@@ -381,7 +381,10 @@ impl ShipperClient {
         if let Some(request_timeout) = request_timeout {
             request = request.timeout(request_timeout);
         }
-        let response = request.send().await.context("storage-v2 capability request failed")?;
+        let response = request
+            .send()
+            .await
+            .context("storage-v2 capability request failed")?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -418,7 +421,10 @@ impl ShipperClient {
         if let Some(request_timeout) = request_timeout {
             request = request.timeout(request_timeout);
         }
-        let response = request.send().await.context("storage-v2 envelope POST failed")?;
+        let response = request
+            .send()
+            .await
+            .context("storage-v2 envelope POST failed")?;
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
@@ -645,7 +651,7 @@ mod tests {
 
     fn classify_status(status: u16, body: &str) -> ShipResult {
         match status {
-            400 | 422 => ShipResult::PayloadRejected(status, body.to_string()),
+            400 | 422 | 426 => ShipResult::PayloadRejected(status, body.to_string()),
             413 => ShipResult::PayloadTooLarge(body.to_string()),
             401 | 403 | 400..=499 => ShipResult::RetryableClientError(status, body.to_string()),
             500..=599 => ShipResult::ServerError(status, body.to_string()),

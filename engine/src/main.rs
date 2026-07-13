@@ -7,14 +7,14 @@ mod codex_app_server_canary;
 mod codex_attachments;
 mod codex_bridge;
 mod codex_exec;
-mod console_prompt;
-mod cursor_acp;
-mod cursor_helm_control;
 mod codex_source;
 mod codex_ws_relay;
 mod commands;
 mod config;
+mod console_prompt;
 mod control_channel;
+mod cursor_acp;
+mod cursor_helm_control;
 mod daemon;
 mod device;
 mod discovery;
@@ -1278,6 +1278,7 @@ fn main() -> anyhow::Result<()> {
                     max_batch_bytes,
                     session_id.as_deref(),
                     require_reply_evidence,
+                    machine_name.as_deref(),
                 ))?;
             } else {
                 rt.block_on(commands::cmd_ship::cmd_ship(
@@ -1289,6 +1290,7 @@ fn main() -> anyhow::Result<()> {
                     json,
                     algo,
                     max_batch_bytes,
+                    machine_name.as_deref(),
                 ))?;
             }
         }

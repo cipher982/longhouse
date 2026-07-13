@@ -100,7 +100,7 @@ def _wait_ready(url: str, proc: subprocess.Popen[str], timeout: float = 20.0) ->
             r = requests.get(f"{url}/api/health", timeout=1)
             if r.status_code == 200:
                 return
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.RequestException:
             if proc.poll() is not None:
                 break
         time.sleep(0.25)
@@ -139,10 +139,12 @@ def _mint_device_token(url: str) -> str:
     return token
 
 
-def _ship(fixture: str, server: str | dict[str, str], provider: str, engine_db: Path) -> None:
+def _ship(fixture: str, server: str | dict[str, str], provider: str, engine_db: Path) -> dict:
     """Run ``longhouse-engine ship --file`` using the repo-local binary."""
     url = _server_url(server)
     token = _server_token(server)
+    if isinstance(server, dict):
+        engine_db = Path(server["db_path"]).parent / f"engine-{provider}-{Path(fixture).stem}.db"
     result = subprocess.run(
         [
             str(ENGINE_BIN),
@@ -152,6 +154,7 @@ def _ship(fixture: str, server: str | dict[str, str], provider: str, engine_db: 
             "--token", token,
             "--provider", provider,
             "--db", str(engine_db),
+            "--machine-name", "shipper-e2e",
             "--json",
         ],
         capture_output=True,
@@ -163,6 +166,9 @@ def _ship(fixture: str, server: str | dict[str, str], provider: str, engine_db: 
         f"stdout: {result.stdout}\n"
         f"stderr: {result.stderr}"
     )
+    summary = json.loads(result.stdout[result.stdout.find("{"):])
+    assert summary["status"] == "ok", summary
+    return summary
 
 
 def _create_opencode_db(home: Path) -> Path:
@@ -323,6 +329,7 @@ def _create_opencode_db(home: Path) -> Path:
 def _ship_opencode_sqlite(server: str | dict[str, str], tmp_path: Path, engine_db: Path) -> None:
     if isinstance(server, dict):
         home = Path(server["db_path"]).parent / "opencode-home"
+        engine_db = Path(server["db_path"]).parent / "engine-opencode.db"
     else:
         home = tmp_path / "opencode-home"
     shutil.rmtree(home, ignore_errors=True)
@@ -340,6 +347,8 @@ def _ship_opencode_sqlite(server: str | dict[str, str], tmp_path: Path, engine_d
             "opencode",
             "--db",
             str(engine_db),
+            "--machine-name",
+            "shipper-e2e",
             "--json",
         ],
         capture_output=True,
@@ -1040,7 +1049,9 @@ def test_connect_daemon_ships_codex_transcript_from_filesystem_watch(server, tmp
 
 class TestClaudeShipping:
     def test_session_appears_in_db(self, server, tmp_path):
-        _ship(CLAUDE_FIXTURE, server, "claude", tmp_path / "engine.db")
+        summary = _ship(CLAUDE_FIXTURE, server, "claude", tmp_path / "engine.db")
+        assert summary.get("protocol") == "storage-v2", summary
+        assert summary["events_shipped"] == 2, summary
         session = _get_session(server, CLAUDE_SESSION_ID)
         assert session is not None, "Claude session not found after shipping"
         assert session["provider"] == "claude"
@@ -1353,19 +1364,15 @@ class TestOpenCodeSQLiteShipping:
         assert "Patch: /tmp/opencode-work/a.txt, /tmp/opencode-work/b.txt" in contents
         assert "opencode e2e done" in contents
 
-    def test_provider_session_id_is_native_opencode_id(self, server, tmp_path):
-        rows = _sqlite_rows(
-            server,
-            """
-            SELECT alias_value
-            FROM session_thread_aliases
-            WHERE provider = ?
-              AND alias_kind = ?
-              AND alias_value = ?
-            """,
-            ("opencode", "provider_session_id", OPENCODE_PROVIDER_SESSION_ID),
+    def test_raw_evidence_preserves_native_provider_session_id(self, server, tmp_path):
+        response = requests.get(
+            f"{_server_url(server)}/api/agents/storage/v2/sessions/{OPENCODE_SESSION_ID}/raw",
+            headers={"X-Agents-Token": _server_token(server)},
+            timeout=5,
         )
-        assert rows and rows[0]["alias_value"] == OPENCODE_PROVIDER_SESSION_ID
+        response.raise_for_status()
+        raw_records = b"".join(base64.b64decode(record["data_b64"]) for record in response.json()["records"])
+        assert OPENCODE_PROVIDER_SESSION_ID.encode() in raw_records
 
     def test_reship_is_idempotent(self, server, tmp_path):
         events_before = _get_events(server, OPENCODE_SESSION_ID)
@@ -1409,6 +1416,8 @@ def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path
             "claude",
             "--db",
             str(engine_db),
+            "--machine-name",
+            "shipper-e2e",
             "--json",
         ],
         capture_output=True,
@@ -1431,6 +1440,8 @@ def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path
             _server_token(server),
             "--db",
             str(engine_db),
+            "--machine-name",
+            "shipper-e2e",
             "--json",
         ],
         capture_output=True,
@@ -1445,9 +1456,11 @@ def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path
     summary_start = replay_result.stdout.find("{")
     assert summary_start >= 0, f"expected JSON summary in stdout, got: {replay_result.stdout!r}"
     summary = json.loads(replay_result.stdout[summary_start:])
-    assert summary["files_shipped"] == 0
-    assert summary["spool_replayed"] == 1
-    assert summary["spool_pending"] == 0
+    assert summary["protocol"] == "storage-v2"
+    assert summary["files_shipped"] == 1
+    assert summary["events_shipped"] == 2
+    with sqlite3.connect(engine_db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM spool_queue WHERE status = 'pending'").fetchone()[0] == 0
 
     session = _get_session(server, session_id)
     assert session is not None, "pending spool backlog should replay even when there are no new files to scan"
@@ -1455,62 +1468,42 @@ def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path
 
 
 @pytest.mark.parametrize(
-    ("fixture", "provider", "session_id", "expect_event_raw_payload"),
+    ("fixture", "provider", "session_id"),
     [
-        (CLAUDE_FIXTURE, "claude", CLAUDE_SESSION_ID, True),
-        (ANTIGRAVITY_LEGACY_FIXTURE, "antigravity", ANTIGRAVITY_LEGACY_SESSION_ID, False),
-        (CODEX_FIXTURE, "codex", CODEX_SESSION_ID, True),
+        (CLAUDE_FIXTURE, "claude", CLAUDE_SESSION_ID),
+        (ANTIGRAVITY_LEGACY_FIXTURE, "antigravity", ANTIGRAVITY_LEGACY_SESSION_ID),
+        (CODEX_FIXTURE, "codex", CODEX_SESSION_ID),
     ],
 )
-def test_raw_archive_chunks_replace_legacy_row_payloads_on_real_ingest(
+def test_storage_v2_raw_objects_preserve_source_bytes(
     server,
     tmp_path,
     fixture: str,
     provider: str,
     session_id: str,
-    expect_event_raw_payload: bool,
 ):
-    """Full shipper path stores raw bytes in sealed chunks, not row payloads."""
+    """Full shipper path preserves exact source bytes in immutable raw objects."""
 
     _ship(fixture, server, provider, tmp_path / f"{provider}-storage.db")
 
-    event_rows = _sqlite_rows(
-        server,
-        "SELECT raw_json, raw_json_z, raw_json_codec FROM events WHERE session_id = ? ORDER BY id",
-        (session_id,),
-    )
-    source_line_rows = _sqlite_rows(
-        server,
-        "SELECT raw_json, raw_json_z, raw_json_codec FROM source_lines WHERE session_id = ? ORDER BY id",
-        (session_id,),
-    )
-    source_chunks = _sqlite_rows(
-        server,
-        "SELECT * FROM archive_chunks WHERE session_id = ? AND stream = 'source_lines' ORDER BY id",
-        (session_id,),
-    )
-    event_chunks = _sqlite_rows(
-        server,
-        "SELECT * FROM archive_chunks WHERE session_id = ? AND stream = 'events' ORDER BY id",
-        (session_id,),
-    )
-
-    assert event_rows, f"{provider} ingest produced no event rows"
-    assert source_line_rows, f"{provider} ingest produced no source_line rows"
-    assert source_chunks, f"{provider} ingest produced no sealed source-line chunks"
-    assert all(row["state"] == "sealed" for row in source_chunks)
-    assert all(row["compressed_bytes"] > 0 for row in source_chunks)
-    assert all(row["uncompressed_bytes"] > 0 for row in source_chunks)
-    assert all(len(row["file_sha256"]) == 64 for row in source_chunks)
-    assert all(row["raw_json_codec"] == 0 for row in source_line_rows)
-    assert all(row["raw_json_z"] is None for row in source_line_rows)
-    assert all(row["raw_json"] == "" for row in source_line_rows)
-
-    assert all(row["raw_json"] is None for row in event_rows)
-    assert all(row["raw_json_z"] is None for row in event_rows)
-    assert all(row["raw_json_codec"] == 0 for row in event_rows)
-    if expect_event_raw_payload:
-        assert event_chunks, f"{provider} ingest should preserve raw events in sealed chunks"
+    cursor = None
+    records: list[bytes] = []
+    while True:
+        params = {"cursor": cursor} if cursor else None
+        response = requests.get(
+            f"{_server_url(server)}/api/agents/storage/v2/sessions/{session_id}/raw",
+            params=params,
+            headers={"X-Agents-Token": _server_token(server)},
+            timeout=5,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        assert payload["v"] == 2
+        records.extend(base64.b64decode(record["data_b64"]) for record in payload["records"])
+        cursor = payload.get("next_cursor")
+        if not payload.get("has_more"):
+            break
+    assert b"".join(records) == (FIXTURES_DIR / fixture).read_bytes()
 
 
 @pytest.mark.parametrize(

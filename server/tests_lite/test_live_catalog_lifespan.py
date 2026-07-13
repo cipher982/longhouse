@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 import zerg.database as database_module
 import zerg.lifespan as lifespan_module
+import zerg.services.maintenance as maintenance_module
 
 
 @pytest.mark.asyncio
@@ -28,6 +29,18 @@ async def test_live_catalog_lifespan_never_initializes_or_configures_archive(mon
     app = FastAPI()
     async with lifespan_module.lifespan(app):
         assert calls == ["live_init", "live_writer"]
+
+
+@pytest.mark.asyncio
+async def test_live_catalog_maintenance_never_opens_legacy_notification_database(monkeypatch):
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr(
+        database_module,
+        "get_session_factory",
+        lambda: (_ for _ in ()).throw(AssertionError("maintenance opened the legacy database")),
+    )
+
+    await maintenance_module._process_queued_notifications_once()
 
 
 @pytest.mark.asyncio

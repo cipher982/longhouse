@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 test.describe('Runner onboarding install modes', () => {
   test('runners page exposes desktop and server install commands', async ({ page }) => {
-    await page.goto('/runners');
+    await page.goto('/runners', { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('[data-ready="true"]', { timeout: 15_000 });
 
     const addRunnerButton = page.getByTestId('runners-add-button');

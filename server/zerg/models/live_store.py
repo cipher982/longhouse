@@ -10,6 +10,7 @@ from sqlalchemy import BigInteger
 from sqlalchemy import Boolean
 from sqlalchemy import Column
 from sqlalchemy import DateTime
+from sqlalchemy import ForeignKey
 from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
@@ -48,6 +49,90 @@ class LiveUser(LiveBase):
     last_login = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class LiveRunner(LiveBase):
+    """Bounded runner identity and connection configuration."""
+
+    __tablename__ = "runners"
+    __table_args__ = (UniqueConstraint("owner_id", "name", name="uix_runner_owner_name"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    availability_policy = Column(String, nullable=False)
+    labels = Column(JSON, nullable=True)
+    capabilities = Column(JSON, nullable=False)
+    status = Column(String, nullable=False)
+    last_seen_at = Column(DateTime, nullable=True)
+    auth_secret_hash = Column(String, nullable=False)
+    runner_metadata = Column(JSON, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class LiveRunnerEnrollToken(LiveBase):
+    """Short-lived one-time runner enrollment credential."""
+
+    __tablename__ = "runner_enroll_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    token_hash = Column(String, nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class LiveRunnerJob(LiveBase):
+    """Bounded runner execution audit state."""
+
+    __tablename__ = "runner_jobs"
+
+    id = Column(String, primary_key=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    correlation_id = Column(String, nullable=True, index=True)
+    run_id = Column(String, nullable=True)
+    runner_id = Column(Integer, ForeignKey("runners.id", ondelete="CASCADE"), nullable=False, index=True)
+    command = Column(Text, nullable=False)
+    timeout_secs = Column(Integer, nullable=False)
+    status = Column(String, nullable=False)
+    exit_code = Column(Integer, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    finished_at = Column(DateTime, nullable=True)
+    stdout_trunc = Column(Text, nullable=True)
+    stderr_trunc = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+    artifacts = Column(JSON, nullable=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
+class LiveRunnerHealthIncident(LiveBase):
+    """Bounded deduplicated runner health incident state."""
+
+    __tablename__ = "runner_health_incidents"
+    __table_args__ = (
+        Index("ix_runner_health_incidents_runner_status", "runner_id", "status"),
+        Index("ix_runner_health_incidents_owner_status", "owner_id", "status"),
+        Index("ix_runner_health_incidents_opened", "opened_at"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    runner_id = Column(Integer, ForeignKey("runners.id", ondelete="CASCADE"), nullable=False, index=True)
+    incident_type = Column(String, nullable=False)
+    status = Column(String, nullable=False)
+    reason_code = Column(String, nullable=False)
+    summary = Column(Text, nullable=True)
+    context = Column(JSON, nullable=True)
+    opened_at = Column(DateTime, server_default=func.now(), nullable=False)
+    last_observed_at = Column(DateTime, server_default=func.now(), nullable=False)
+    resolved_at = Column(DateTime, nullable=True)
+    alert_sent_at = Column(DateTime, nullable=True)
+    alert_channel = Column(String, nullable=True)
+    alert_count = Column(Integer, nullable=False)
+    wakeup_sent_at = Column(DateTime, nullable=True)
+    wakeup_count = Column(Integer, nullable=False)
 
 
 class LiveRefreshSession(LiveBase):

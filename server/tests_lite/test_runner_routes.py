@@ -12,6 +12,7 @@ from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import Runner
 from zerg.models.models import User
+from zerg.routers import runners as runners_router
 from zerg.routers.runners import get_runner_status
 
 
@@ -48,6 +49,7 @@ def _make_client(tmp_path: Path):
             return user
 
         api_app.dependency_overrides[get_db] = override_get_db
+        api_app.dependency_overrides[runners_router._catalog_db_dependency] = override_get_db
         api_app.dependency_overrides[get_current_user] = override_current_user
         client = TestClient(api_app)
         return client, api_app, db, user
@@ -81,9 +83,12 @@ def test_delete_runner_removes_offline_runner(tmp_path: Path):
         db.close()
 
 
-def test_runner_status_is_empty_compatibility_view_in_catalog_mode():
+def test_runner_status_reads_bounded_catalog_in_catalog_mode():
     response = Response()
-    with patch("zerg.routers.runners.live_catalog_enabled", return_value=True):
+    with (
+        patch("zerg.routers.runners.live_catalog_enabled", return_value=True),
+        patch("zerg.routers.runners.runner_crud.get_runners", return_value=[]),
+    ):
         result = get_runner_status(
             response=response,
             db=SimpleNamespace(),

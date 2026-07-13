@@ -214,7 +214,7 @@ test.describe("Sessions Page", () => {
   });
 
   test("Filter bar is visible and interactive", async ({ page, request }) => {
-    await page.goto("/timeline");
+    await page.goto("/timeline", { waitUntil: "domcontentloaded" });
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Seed demos first so toolbar is visible (hero state has no toolbar)

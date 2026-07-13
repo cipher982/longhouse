@@ -17,7 +17,7 @@ from typing import List
 from zerg.config import get_settings
 from zerg.connectors.context import get_credential_resolver
 from zerg.crud import runner_crud
-from zerg.database import get_db
+from zerg.database import get_catalog_session_factory
 from zerg.services.command_validator import CommandValidator
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_health import assess_runner_health
@@ -59,7 +59,7 @@ def _resolve_target(owner_id: int, target: str) -> tuple[int, str] | None:
     Returns:
         Tuple of (runner_id, runner_name) or None if not found
     """
-    db = next(get_db())
+    db = get_catalog_session_factory()()
 
     try:
         # Check for explicit ID format
@@ -204,7 +204,7 @@ def runner_exec(
     runner_id, runner_name = resolved
 
     # Check runner status and get runner capabilities
-    db = next(get_db())
+    db = get_catalog_session_factory()()
     try:
         runner = runner_crud.get_runner(db, runner_id)
         if not runner:

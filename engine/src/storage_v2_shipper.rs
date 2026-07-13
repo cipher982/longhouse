@@ -36,6 +36,7 @@ pub(crate) struct PreparedStorageV2Envelope {
     pub range_start: u64,
     pub range_end: u64,
     pub event_count: usize,
+    pub has_reply_evidence: bool,
     pub raw_bytes: u64,
     pub has_more: bool,
     pub media_objects: Vec<ParsedMediaObject>,
@@ -74,6 +75,10 @@ pub(crate) fn prepare_next_envelope(
         SourceChangeHint::None,
     )?;
     let position = source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
+    let source_len = std::fs::metadata(path)?.len();
+    if position >= source_len {
+        return Ok(None);
+    }
     let framing = if provider.eq_ignore_ascii_case("antigravity") {
         RawSourceFraming::WholeDocument
     } else {
@@ -117,7 +122,6 @@ pub(crate) fn prepare_next_envelope(
     let render_records = render_records_for_batch(&parse_result, &raw_batch)?;
     let render_generation = render_generation_id(session_uuid);
     let session = session_facts(&parse_result.metadata, &render_records, &resolution)?;
-    let source_len = std::fs::metadata(path)?.len();
     let media_objects = parse_result
         .media_objects
         .iter()
@@ -170,6 +174,10 @@ pub(crate) fn prepare_next_envelope(
                     && event.source_offset < raw_batch.range_end
             })
             .count(),
+        has_reply_evidence: parse_result.events.iter().any(|event| {
+            event.source_offset >= raw_batch.range_start
+                && matches!(event.role, Role::Assistant | Role::Tool)
+        }),
         raw_bytes: raw_batch.range_end - raw_batch.range_start,
         has_more: raw_batch.range_end < source_len,
         media_objects,
@@ -191,6 +199,19 @@ pub(crate) async fn ship_next_envelope(
     else {
         return Ok(None);
     };
+    ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
+        .await
+        .map(Some)
+}
+
+pub(crate) async fn ship_prepared_envelope(
+    conn: &mut Connection,
+    client: &ShipperClient,
+    capabilities: &StorageV2Capabilities,
+    prepared: PreparedStorageV2Envelope,
+    lane: &str,
+    request_timeout: Duration,
+) -> Result<StorageV2ShipOutcome> {
     crate::media_upload::ensure_storage_v2_media_uploaded(
         client,
         capabilities,
@@ -214,11 +235,11 @@ pub(crate) async fn ship_next_envelope(
         prepared.range_start,
         prepared.range_end,
     )?;
-    Ok(Some(StorageV2ShipOutcome {
+    Ok(StorageV2ShipOutcome {
         bytes_shipped: prepared.raw_bytes,
         events_shipped: prepared.event_count,
         has_more: prepared.has_more,
-    }))
+    })
 }
 
 pub(crate) fn prepare_next_opencode_envelope(
@@ -336,6 +357,10 @@ pub(crate) fn prepare_next_opencode_envelope(
             range_start,
             range_end,
             event_count,
+            has_reply_evidence: parse_result
+                .events
+                .iter()
+                .any(|event| matches!(event.role, Role::Assistant | Role::Tool)),
             raw_bytes,
             has_more: range_end < logical_len || candidate_index + 1 < candidates.len(),
             media_objects,

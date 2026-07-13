@@ -16,10 +16,10 @@ _maintenance_task: asyncio.Task | None = None
 
 
 async def _reconcile_runner_health_once() -> None:
-    from zerg.database import get_session_factory
+    from zerg.database import get_catalog_session_factory
     from zerg.services.runner_health_reconciler import reconcile_runner_health
 
-    db = get_session_factory()()
+    db = get_catalog_session_factory()()
     try:
         await reconcile_runner_health(db)
     finally:
@@ -27,6 +27,11 @@ async def _reconcile_runner_health_once() -> None:
 
 
 async def _process_queued_notifications_once() -> None:
+    from zerg.database import live_catalog_enabled
+
+    if live_catalog_enabled():
+        return
+
     from zerg.database import get_session_factory
     from zerg.services.notification_queue import process_queued_notification_events
 

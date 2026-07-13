@@ -355,6 +355,28 @@ impl<'a> Spool<'a> {
         Ok(result)
     }
 
+    /// Get pending paths regardless of retry backoff during protocol cutover.
+    pub fn pending_paths_now(&self, limit: usize) -> Result<Vec<PendingPath>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT provider, file_path,
+                    SUM(CASE WHEN end_offset > start_offset THEN end_offset - start_offset ELSE 0 END)
+             FROM spool_queue
+             WHERE status = 'pending'
+             GROUP BY provider, file_path
+             ORDER BY MIN(id) ASC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit.max(1) as i64], |row| {
+            Ok(PendingPath {
+                provider: row.get(0)?,
+                file_path: row.get(1)?,
+                pending_bytes: row.get::<_, i64>(2)?.max(0) as u64,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     /// Get pending retry entries for a single file path, oldest-first.
     #[cfg(test)]
     pub fn pending_entries_for_path(
