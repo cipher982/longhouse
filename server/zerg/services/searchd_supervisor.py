@@ -21,7 +21,7 @@ from zerg.searchd.store import SCHEMA_GENERATION
 from zerg.searchd.store import SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
-SEARCHD_PROJECTOR_RPC_TIMEOUT_SECONDS = 30.0
+SEARCHD_PROJECTOR_RPC_TIMEOUT_SECONDS = 240.0
 
 
 def searchd_paths() -> tuple[Path, Path]:

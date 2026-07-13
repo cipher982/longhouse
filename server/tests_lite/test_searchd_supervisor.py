@@ -100,4 +100,4 @@ def test_search_projector_has_background_write_budget(supervisor_paths):
     supervisor = SearchdSupervisor(database_path=database_path, socket_path=socket_path)
 
     assert supervisor.client.default_timeout_seconds == 1.0
-    assert supervisor.projector_client.default_timeout_seconds == 30.0
+    assert supervisor.projector_client.default_timeout_seconds == 240.0
