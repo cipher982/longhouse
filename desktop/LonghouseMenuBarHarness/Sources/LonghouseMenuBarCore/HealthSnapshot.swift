@@ -158,6 +158,22 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return replacingManagedSessions(sessions, replacementEngineStatus: updatedEngine)
     }
 
+    func preservingSessionTitles(from previous: HealthSnapshot?) -> HealthSnapshot {
+        guard let previousSessions = previous?.managedSessions else { return self }
+        let previousById = Dictionary(
+            uniqueKeysWithValues: previousSessions.compactMap { session in
+                session.sessionId.map { ($0, session) }
+            }
+        )
+        let sessions = managedSessions?.map { session in
+            guard let sessionId = session.sessionId,
+                  let previousSession = previousById[sessionId]
+            else { return session }
+            return session.preservingTitle(from: previousSession)
+        }
+        return replacingManagedSessions(sessions)
+    }
+
     private func replacingManagedSessions(
         _ sessions: [ManagedSessionSnapshot]?,
         replacementEngineStatus: EngineStatusSnapshot? = nil
@@ -1568,6 +1584,23 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             bridgeStatus: local.bridgeStatus ?? bridgeStatus, bridgePid: bridgePid,
             bridgeHeartbeatAt: bridgeHeartbeatAt, launchMode: launchMode, uiAttached: uiAttached,
             uiPresence: uiPresence, reasonCodes: reasonCodes
+        )
+    }
+
+    func preservingTitle(from previous: ManagedSessionSnapshot) -> ManagedSessionSnapshot {
+        ManagedSessionSnapshot(
+            sessionId: sessionId, provider: provider, workspaceLabel: workspaceLabel,
+            timelineTitle: timelineTitle ?? previous.timelineTitle,
+            summaryTitle: summaryTitle ?? previous.summaryTitle,
+            firstUserMessage: firstUserMessage ?? previous.firstUserMessage,
+            titleState: titleState ?? previous.titleState,
+            titleSource: titleSource ?? previous.titleSource,
+            titleProvenance: titleProvenance ?? previous.titleProvenance,
+            branch: branch, state: state, phase: phase, rawPhase: rawPhase,
+            phaseProvenance: phaseProvenance, phaseObservedAt: phaseObservedAt,
+            lastActivityAt: lastActivityAt, bridgeStatus: bridgeStatus, bridgePid: bridgePid,
+            bridgeHeartbeatAt: bridgeHeartbeatAt, launchMode: launchMode,
+            uiAttached: uiAttached, uiPresence: uiPresence, reasonCodes: reasonCodes
         )
     }
 

@@ -205,7 +205,8 @@ public final class SnapshotStore: ObservableObject {
             }
 
             switch result {
-            case let .success(snapshot):
+            case let .success(loadedSnapshot):
+                let snapshot = loadedSnapshot.preservingSessionTitles(from: self.snapshot)
                 self.snapshot = snapshot
                 self.connectRealtimeIfNeeded(snapshot.realtime)
                 self.monitorLocalStatusIfNeeded(snapshot.engineStatus?.path)

@@ -432,7 +432,12 @@ impl AdaptiveLimiter {
             .ewma_queue_wait_ms
             .is_some_and(|ewma| ewma > TARGET_QUEUE_WAIT_MS)
         {
-            return (false, "host_queue_pressure", Some("host_queue_pressure"));
+            // Queue pressure already forces one archive worker and the minimum
+            // batch size. Do not also suppress paths whose remaining range is
+            // large: if only large paths remain, that creates a closed loop
+            // with no future observation capable of clearing the EWMA. The
+            // explicit retry-after cooldown above is the admission gate.
+            return (true, "host_queue_pressure", None);
         }
         (true, "normal", None)
     }
@@ -1936,7 +1941,7 @@ mod tests {
     }
 
     #[test]
-    fn adaptive_limiter_suppresses_huge_ranges_under_host_queue_pressure() {
+    fn adaptive_limiter_probes_huge_ranges_after_pressure_cooldown() {
         let limiter = AdaptiveLimiter::new();
         assert!(limiter.huge_range_eligible());
 
@@ -1945,12 +1950,13 @@ mod tests {
         }
 
         let snap = limiter.snapshot();
-        assert!(!limiter.huge_range_eligible());
-        assert!(!snap.huge_range_eligible);
+        assert!(limiter.huge_range_eligible());
+        assert!(snap.huge_range_eligible);
         assert_eq!(snap.pressure_state, "host_queue_pressure");
+        assert_eq!(snap.huge_range_suppressed_reason, None);
         assert_eq!(
-            snap.huge_range_suppressed_reason,
-            Some("host_queue_pressure")
+            limiter.archive_target_batch_bytes(),
+            ARCHIVE_BATCH_TARGET_MIN_BYTES
         );
     }
 

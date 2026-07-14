@@ -541,10 +541,12 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         phase_overlay=phase_overlay,
         fast=fast,
     )
-    # Session/process discovery stays local on the menu-bar fast path, but the
-    # resolved title is a Runtime Host projection. Fetch only this tiny overlay:
-    # requests are parallel, bounded to eight rows, and individually timed out.
-    _enrich_managed_session_titles(resolved_base_dir, managed_sessions)
+    # The menu-bar fast path is a local machine snapshot. Never put DNS or the
+    # Runtime Host on its critical path: after wake, networking may not exist
+    # yet. The desktop app preserves cached titles and receives fresh title
+    # projections over SSE once the connection is available.
+    if not fast:
+        _enrich_managed_session_titles(resolved_base_dir, managed_sessions)
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
     archive_repair = collect_archive_backlog(resolved_base_dir, engine_status_payload=engine_status.get("payload"))

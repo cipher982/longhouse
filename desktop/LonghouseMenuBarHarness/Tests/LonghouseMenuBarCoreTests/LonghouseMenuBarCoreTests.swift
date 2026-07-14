@@ -111,6 +111,43 @@ private func watchingAttentionSnapshot() -> HealthSnapshot {
 
 struct LonghouseMenuBarCoreTests {
     @Test
+    func localRefreshPreservesRealtimeTitleProjection() {
+        let titled = ManagedSessionSnapshot(
+            sessionId: "session-1", provider: "codex", workspaceLabel: "zerg",
+            timelineTitle: "Fix wake recovery", summaryTitle: "Fix wake recovery",
+            firstUserMessage: "Fix the menu bar after wake", titleState: "ready",
+            titleSource: "prompt", titleProvenance: "remote_sse", branch: "main",
+            state: "attached", phase: "idle", lastActivityAt: nil,
+            bridgeStatus: "ready", bridgePid: 42, bridgeHeartbeatAt: nil,
+            reasonCodes: []
+        )
+        let localOnly = ManagedSessionSnapshot(
+            sessionId: "session-1", provider: "codex", workspaceLabel: "zerg",
+            branch: "main", state: "attached", phase: "thinking", lastActivityAt: nil,
+            bridgeStatus: "ready", bridgePid: 42, bridgeHeartbeatAt: nil,
+            reasonCodes: []
+        )
+        let previous = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-07-14T17:00:00Z",
+            healthState: "healthy", severity: "green", headline: "Healthy",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, managedSessions: [titled],
+            launchReadiness: nil
+        )
+        let refreshed = HealthSnapshot(
+            schemaVersion: 1, collectedAt: "2026-07-14T17:00:01Z",
+            healthState: "healthy", severity: "green", headline: "Healthy",
+            reasons: [], suggestedActions: [], service: nil, engineStatus: nil,
+            outbox: nil, activitySummary: nil, managedSessions: [localOnly],
+            launchReadiness: nil
+        ).preservingSessionTitles(from: previous)
+
+        #expect(refreshed.managedSessions?.first?.timelineTitle == "Fix wake recovery")
+        #expect(refreshed.managedSessions?.first?.titleProvenance == "remote_sse")
+        #expect(refreshed.managedSessions?.first?.phase == "thinking")
+    }
+
+    @Test
     func realtimeProjectionUpdatesTitleAndPhaseWithoutReloadingSnapshot() {
         let session = ManagedSessionSnapshot(
             sessionId: "session-1",

@@ -143,9 +143,6 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func statusItemAttentionColor() -> NSColor? {
-        if store.staleCachedSnapshotFailureMessage(relativeTo: Date()) != nil {
-            return .systemRed
-        }
         if store.loadError != nil && store.snapshot == nil {
             return .systemRed
         }
@@ -176,9 +173,6 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func statusItemAttentionLabel() -> String? {
-        if store.staleCachedSnapshotFailureMessage(relativeTo: Date()) != nil {
-            return "Longhouse status is stale"
-        }
         if store.loadError != nil && store.snapshot == nil {
             return "Longhouse needs attention"
         }
