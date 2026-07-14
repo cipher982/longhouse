@@ -206,7 +206,7 @@ public final class SnapshotStore: ObservableObject {
                 self.loadError = nil
                 self.exitBootingIfReady(for: snapshot)
             case let .failure(message, transient):
-                self.isRecovering = transient && self.snapshot == nil
+                self.isRecovering = transient
                 self.loadError = message
                 if transient {
                     self.scheduleTransientRetry()
@@ -237,12 +237,37 @@ public final class SnapshotStore: ObservableObject {
         let monitor = LocalStatusMonitor(statusPath: path) { [weak self] projection in
             Task { @MainActor [weak self] in
                 guard let self, let snapshot = self.snapshot else { return }
+                let currentIds = Set((snapshot.managedSessions ?? []).compactMap(\.sessionId))
+                let nextIds = Set(projection.sessions.map(\.sessionId))
+                let classificationChanged = Self.classificationChanged(
+                    from: snapshot.engineStatus?.payload,
+                    to: projection.engine
+                )
                 self.snapshot = snapshot.applyingLocalProjection(projection)
-                self.refresh(reason: .background)
+                if currentIds != nextIds || classificationChanged {
+                    self.refresh(reason: .background)
+                }
             }
         }
         localStatusMonitor = monitor
         monitor.start()
+    }
+
+    private static func classificationChanged(
+        from current: EngineStatusPayload?,
+        to next: EngineStatusPayload?
+    ) -> Bool {
+        guard let next else { return false }
+        let currentArchive = current?.archiveBacklog
+        let nextArchive = next.archiveBacklog
+        return current?.isOffline != next.isOffline
+            || (current?.spoolPendingCount ?? 0 > 0) != (next.spoolPendingCount ?? 0 > 0)
+            || (current?.spoolDeadCount ?? 0 > 0) != (next.spoolDeadCount ?? 0 > 0)
+            || (current?.consecutiveShipFailures ?? 0 > 0) != (next.consecutiveShipFailures ?? 0 > 0)
+            || currentArchive?.state != nextArchive?.state
+            || currentArchive?.mode != nextArchive?.mode
+            || (currentArchive?.pendingRanges ?? 0 > 0) != (nextArchive?.pendingRanges ?? 0 > 0)
+            || (currentArchive?.deadRanges ?? 0 > 0) != (nextArchive?.deadRanges ?? 0 > 0)
     }
 
     private func connectRealtimeIfNeeded(_ connection: RealtimeConnectionSnapshot?) {

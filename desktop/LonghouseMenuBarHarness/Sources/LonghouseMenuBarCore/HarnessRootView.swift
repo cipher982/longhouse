@@ -23,7 +23,7 @@ public struct HarnessRootView: View {
 
     public var body: some View {
         Group {
-            if store.isRecovering {
+            if store.isRecovering && store.snapshot == nil {
                 MenuBarSettlingView()
             } else if store.isBooting && (store.snapshot?.parsedSeverity ?? .gray) != .green {
                 MenuBarBootingView()
@@ -35,7 +35,7 @@ public struct HarnessRootView: View {
                     feedback: store.feedback,
                     setFeedback: store.setFeedback,
                     actionSink: actionSink,
-                    isManualRefreshing: store.isManualRefreshActive,
+                    isManualRefreshing: store.isManualRefreshActive || store.isRecovering,
                     headerSummaryVariant: headerSummaryVariant
                 ) {
                     store.refresh(reason: .manual)
