@@ -167,6 +167,13 @@ def test_directory_returns_online_machine_with_supports(tmp_path):
     assert entry.launchable_providers == ("claude", "codex")
     assert entry.launch_blocked_by is None
     assert entry.engine_build == "test-build"
+    assert entry.launch.blocked_by is None
+    assert [(option.provider, option.execution_lifetimes) for option in entry.launch.providers] == [
+        ("claude", ("live_control",)),
+        ("codex", ("live_control",)),
+    ]
+    assert entry.launch.default_provider == "codex"
+    assert entry.launch.default_execution_lifetime == "live_control"
 
 
 def test_directory_surfaces_offline_enrolled_machine_with_empty_supports(tmp_path):
@@ -183,6 +190,8 @@ def test_directory_surfaces_offline_enrolled_machine_with_empty_supports(tmp_pat
     assert entries[0].can_launch_codex is False
     assert entries[0].launchable_providers == ()
     assert entries[0].launch_blocked_by == "control_down"
+    assert entries[0].launch.providers == ()
+    assert entries[0].launch.blocked_by == "control_down"
 
 
 def test_directory_surfaces_online_machine_without_codex_launch_as_blocked(tmp_path):
@@ -243,6 +252,77 @@ def test_directory_reports_antigravity_send_without_launchability(tmp_path):
     assert entries[0].can_launch_codex is False
     assert entries[0].launchable_providers == ()
     assert entries[0].launch_blocked_by == "no_launch_support"
+    assert entries[0].launch.blocked_by == "no_launch_support"
+
+
+def test_directory_projects_run_once_only_machine_as_console_ready(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(registry, owner_id=OWNER_ID, device_id="cursor-host", supports=("cursor.run_once",))
+
+    entry = build_machines_directory(
+        owner_id=OWNER_ID,
+        enrollments=_enrollments(SessionLocal),
+        registry=registry,
+    )[0]
+
+    assert entry.launchable_providers == ()
+    assert entry.launch_blocked_by == "no_launch_support"
+    assert [(option.provider, option.execution_lifetimes) for option in entry.launch.providers] == [
+        ("cursor", ("one_shot",)),
+    ]
+    assert entry.launch.blocked_by is None
+    assert entry.launch.default_provider == "cursor"
+    assert entry.launch.default_execution_lifetime == "one_shot"
+
+
+def test_directory_prefers_one_shot_mode_before_codex_provider(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(
+        registry,
+        owner_id=OWNER_ID,
+        device_id="mixed-host",
+        supports=("cursor.run_once", "codex.launch"),
+    )
+
+    entry = build_machines_directory(
+        owner_id=OWNER_ID,
+        enrollments=_enrollments(SessionLocal),
+        registry=registry,
+    )[0]
+
+    assert entry.launch.default_provider == "cursor"
+    assert entry.launch.default_execution_lifetime == "one_shot"
+
+
+def test_directory_sorts_ready_then_connected_blocked_then_offline_by_name(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    _seed_device_token(SessionLocal, "z-offline")
+    _seed_device_token(SessionLocal, "a-offline")
+    registry = MachineControlChannelRegistry()
+    _register(registry, owner_id=OWNER_ID, device_id="z-ready", supports=("claude.launch",))
+    _register(registry, owner_id=OWNER_ID, device_id="a-ready", supports=("codex.run_once",))
+    _register(registry, owner_id=OWNER_ID, device_id="z-blocked", supports=("antigravity.send",))
+    _register(registry, owner_id=OWNER_ID, device_id="a-blocked", supports=("codex.send",))
+
+    entries = build_machines_directory(
+        owner_id=OWNER_ID,
+        enrollments=_enrollments(SessionLocal),
+        registry=registry,
+    )
+
+    assert [entry.device_id for entry in entries] == [
+        "a-ready",
+        "z-ready",
+        "a-blocked",
+        "z-blocked",
+        "a-offline",
+        "z-offline",
+    ]
 
 
 def test_directory_prefers_online_record_over_persisted_row(tmp_path):
@@ -377,6 +457,12 @@ def test_agents_machines_route_matches_timeline_route(tmp_path):
     assert body["machines"][0]["can_launch_codex"] is True
     assert body["machines"][0]["launchable_providers"] == ["codex"]
     assert body["machines"][0]["launch_blocked_by"] is None
+    assert body["machines"][0]["launch"] == {
+        "blocked_by": None,
+        "providers": [{"provider": "codex", "execution_lifetimes": ["live_control"]}],
+        "default_provider": "codex",
+        "default_execution_lifetime": "live_control",
+    }
     assert body["machines"][1]["online"] is False
     assert body["machines"][1]["supports"] == []
     assert body["machines"][1]["control_channel_status"] == "disconnected"
@@ -384,6 +470,12 @@ def test_agents_machines_route_matches_timeline_route(tmp_path):
     assert body["machines"][1]["can_launch_codex"] is False
     assert body["machines"][1]["launchable_providers"] == []
     assert body["machines"][1]["launch_blocked_by"] == "control_down"
+    assert body["machines"][1]["launch"] == {
+        "blocked_by": "control_down",
+        "providers": [],
+        "default_provider": None,
+        "default_execution_lifetime": None,
+    }
 
 
 def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):

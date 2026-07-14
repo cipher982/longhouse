@@ -28,6 +28,32 @@ CONTROL_CONNECTED = "connected"
 CONTROL_DISCONNECTED = "disconnected"
 LAUNCH_BLOCKED_CONTROL_DOWN = "control_down"
 LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT = "no_launch_support"
+ONE_SHOT = "one_shot"
+LIVE_CONTROL = "live_control"
+
+
+@dataclass(frozen=True)
+class MachineLaunchProviderOption:
+    provider: str
+    execution_lifetimes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class MachineLaunchProjection:
+    blocked_by: str | None
+    providers: tuple[MachineLaunchProviderOption, ...]
+    default_provider: str | None
+    default_execution_lifetime: str | None
+
+    def to_response(self) -> dict[str, object]:
+        return {
+            "blocked_by": self.blocked_by,
+            "providers": [
+                {"provider": option.provider, "execution_lifetimes": list(option.execution_lifetimes)} for option in self.providers
+            ],
+            "default_provider": self.default_provider,
+            "default_execution_lifetime": self.default_execution_lifetime,
+        }
 
 
 @dataclass(frozen=True)
@@ -43,6 +69,7 @@ class MachineEntry:
     launch_blocked_by: str | None
     last_seen_at: datetime | None
     engine_build: str | None
+    launch: MachineLaunchProjection
 
     def to_response(self) -> dict[str, object]:
         return {
@@ -59,7 +86,42 @@ class MachineEntry:
             "launch_blocked_by": self.launch_blocked_by,
             "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
             "engine_build": self.engine_build,
+            "launch": self.launch.to_response(),
         }
+
+
+def _launch_projection(
+    operations_by_provider: dict[str, tuple[str, ...]],
+    *,
+    connected: bool,
+) -> MachineLaunchProjection:
+    options: list[MachineLaunchProviderOption] = []
+    for provider, operations in sorted(operations_by_provider.items()):
+        lifetimes: list[str] = []
+        if "run_once" in operations:
+            lifetimes.append(ONE_SHOT)
+        if "launch" in operations:
+            lifetimes.append(LIVE_CONTROL)
+        if lifetimes:
+            options.append(MachineLaunchProviderOption(provider=provider, execution_lifetimes=tuple(lifetimes)))
+
+    if not options:
+        return MachineLaunchProjection(
+            blocked_by=LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT if connected else LAUNCH_BLOCKED_CONTROL_DOWN,
+            providers=(),
+            default_provider=None,
+            default_execution_lifetime=None,
+        )
+
+    default_lifetime = ONE_SHOT if any(ONE_SHOT in option.execution_lifetimes for option in options) else LIVE_CONTROL
+    candidates = [option.provider for option in options if default_lifetime in option.execution_lifetimes]
+    default_provider = "codex" if "codex" in candidates else candidates[0]
+    return MachineLaunchProjection(
+        blocked_by=None,
+        providers=tuple(options),
+        default_provider=default_provider,
+        default_execution_lifetime=default_lifetime,
+    )
 
 
 def _enrolled_device_ids(enrollments: list[dict[str, Any]]) -> dict[str, datetime | None]:
@@ -111,6 +173,7 @@ def build_machines_directory(
             )
         )
         can_launch_codex = "codex" in launchable_providers
+        launch = _launch_projection(control_operations_by_provider, connected=True)
         entry = MachineEntry(
             device_id=conn_info.device_id,
             machine_name=conn_info.machine_name or conn_info.device_id,
@@ -123,6 +186,7 @@ def build_machines_directory(
             launch_blocked_by=None if launchable_providers else LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT,
             last_seen_at=conn_info.last_seen_at,
             engine_build=conn_info.engine_build,
+            launch=launch,
         )
         seen[entry.device_id] = entry
 
@@ -143,14 +207,15 @@ def build_machines_directory(
             launch_blocked_by=LAUNCH_BLOCKED_CONTROL_DOWN,
             last_seen_at=_as_utc(last_used),
             engine_build=None,
+            launch=_launch_projection({}, connected=False),
         )
 
     return sorted(
         seen.values(),
         key=lambda m: (
-            0 if m.online else 1,
-            -(m.last_seen_at or datetime.min.replace(tzinfo=timezone.utc)).timestamp(),
+            0 if m.launch.providers else 1 if m.online else 2,
             m.machine_name.lower(),
+            m.device_id,
         ),
     )
 
