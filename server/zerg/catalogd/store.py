@@ -2377,7 +2377,6 @@ class CatalogStore:
                         and existing.owner_id == launch["owner_id"]
                         and str(existing.provider) == plan.provider
                         and str(existing.host_id or "") == plan.source_name
-                        and _as_aware_utc(existing.expires_at) == _as_aware_utc(launch["expires_at"])
                         and catalog is not None
                         and str(catalog.cwd or "") == plan.cwd
                         and str(catalog.project or "") == plan.project
@@ -2388,7 +2387,6 @@ class CatalogStore:
                         and stored_launch.get("owner_id") == launch["owner_id"]
                         and stored_launch.get("git_repo") == launch.get("git_repo")
                         and stored_launch.get("git_branch") == launch.get("git_branch")
-                        and stored_launch.get("started_at") == {"__longhouse_datetime__": observed_at.isoformat()}
                         and stored_launch.get("plan") == expected_plan
                     )
                     result = live_launch_result(existing) if exact_replay else None

@@ -437,6 +437,13 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     )
     launch_actor: str | None = Field(None, description="Positive launch actor provenance when known")
     launch_surface: str | None = Field(None, description="Launch surface provenance when known")
+    session_id: uuid.UUID | None = Field(
+        None,
+        description=(
+            "Optional client-minted session UUID for Degraded Helm. Retries and later "
+            "convergence must reuse this identity instead of minting a replacement."
+        ),
+    )
 
 
 class SessionChatError(BaseModel):
@@ -1722,6 +1729,7 @@ async def launch_managed_local_this_device(
             permission_mode=body.permission_mode,
             launch_actor=body.launch_actor,
             launch_surface=body.launch_surface,
+            session_id=body.session_id,
         )
         # Managed-local launch is user-facing and hot-path critical. Claim live
         # readiness first; the archive row converges through LiveArchiveOutbox.

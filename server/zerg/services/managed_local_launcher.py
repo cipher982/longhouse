@@ -87,6 +87,9 @@ class ManagedLocalLaunchParams:
     permission_mode: str = "bypass"
     launch_actor: str | None = None
     launch_surface: str | None = None
+    # Optional client-minted identity for Degraded Helm: retries/convergence
+    # must reuse this UUID instead of minting a replacement session.
+    session_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -235,7 +238,7 @@ def build_managed_local_launch_plan(
         raise ManagedLocalLaunchError("cwd is required", status_code=400)
 
     source_name = str(getattr(runner, "name", "") or params.runner_target).strip()
-    plan_session_id = session_id or uuid4()
+    plan_session_id = session_id or params.session_id or uuid4()
     provider_session_id = _initial_provider_session_id_for_spawn(provider)
     project = _derive_project(cwd, params.project)
     display_name = (params.display_name or project).strip() or project
