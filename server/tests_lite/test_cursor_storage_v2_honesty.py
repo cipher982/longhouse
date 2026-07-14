@@ -27,7 +27,11 @@ def test_cursor_is_control_only_until_the_native_storage_v2_source_exists():
 
 def test_cursor_cli_and_helm_do_not_produce_legacy_ingest_payloads():
     repo_root = Path(__file__).resolve().parents[2]
-    for relative_path in ("server/zerg/cli/cursor.py", "server/zerg/cli/cursor_helm.py"):
+    for relative_path in (
+        "server/zerg/cli/cursor.py",
+        "server/zerg/cli/cursor_helm.py",
+        "server/zerg/services/cursor_transcript.py",
+    ):
         source = (repo_root / relative_path).read_text(encoding="utf-8")
         assert "/api/agents/ingest" not in source
-        assert "SessionIngest" not in source
+        assert "AgentsStore" not in source
