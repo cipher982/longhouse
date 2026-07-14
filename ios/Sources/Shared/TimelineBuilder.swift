@@ -204,6 +204,13 @@ enum TimelineBuilder {
         }
 
         for item in projectionItems {
+            if item.kind == "seam" {
+                // Seams are presentation boundaries even when this builder does
+                // not render a dedicated seam row — flush so exploration runs
+                // cannot span across them (parity with web).
+                flushEvents()
+                continue
+            }
             if item.kind == "action", let action = item.action {
                 flushEvents()
                 out.append(.action(action, timestamp: item.timestamp))

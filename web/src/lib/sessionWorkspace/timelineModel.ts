@@ -392,6 +392,13 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
     if (event.role === "assistant" && event.tool_name) {
       const interaction = byCallEventId.get(event.id);
       if (!interaction) continue;
+      // Prose co-located on a tool-call event is a visible boundary (matches iOS).
+      if ((event.content_text || "").trim()) {
+        items.push({
+          kind: "message",
+          event: { ...event, tool_name: null, tool_input_json: null, tool_call_id: null },
+        });
+      }
       items.push({ kind: "tool", interaction });
       toolItems.push(interaction);
       continue;
