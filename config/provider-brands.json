@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "defaults": {
+    "brand": "#9A8F7E",
+    "glyph_style": "original",
+    "mark_color": null,
+    "chip": {
+      "fill": { "type": "brand_alpha", "alpha": 0.16 },
+      "stroke": { "type": "brand_alpha", "alpha": 0.22, "width": 0.5 },
+      "corner_radius_factor": 0.28
+    }
+  },
+  "providers": {
+    "claude": {
+      "brand": "#D97757"
+    },
+    "antigravity": {
+      "aliases": ["gemini"],
+      "brand": "#4F87ED"
+    },
+    "codex": {
+      "aliases": ["openai"],
+      "brand": "#F3EAD9",
+      "glyph_style": "template",
+      "mark_color": "#FFFFFFEB",
+      "chip": {
+        "fill": { "type": "solid", "color": "#141517" },
+        "stroke": { "type": "solid", "color": "#FFFFFF52", "width": 0.5 },
+        "corner_radius_factor": 0.5
+      }
+    },
+    "opencode": {
+      "brand": "#C9C4C4",
+      "glyph_style": "template",
+      "mark_color": "#85D1FA",
+      "chip": {
+        "fill": { "type": "solid", "color": "#1F2B38" },
+        "stroke": { "type": "solid", "color": "#66BDEB73", "width": 0.5 },
+        "corner_radius_factor": 0.18
+      }
+    },
+    "cursor": {
+      "brand": "#14120B",
+      "glyph_style": "template",
+      "mark_color": "#EDECEC",
+      "chip": {
+        "fill": { "type": "solid", "color": "#14120B" },
+        "stroke": { "type": "solid", "color": "#FFFFFF47", "width": 0.5 }
+      }
+    },
+    "zai": {
+      "brand": "#B06E8A"
+    }
+  }
+}

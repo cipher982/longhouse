@@ -3,6 +3,8 @@ import AppKit
 
 /// Provider brand glyph — the real logo mark for each AI coding agent. This
 /// mirrors the iOS shared ProviderGlyph surface and uses the same vector PDFs.
+/// Colors and rendering rules are driven by config/provider-brands.json
+/// via the generated ProviderBrands enum.
 struct ProviderGlyph: View {
     enum Variant {
         case chip
@@ -42,61 +44,39 @@ struct ProviderGlyph: View {
         }
     }
 
-    private var brand: Color {
-        providerColor(key)
+    private var config: ProviderBrandConfig {
+        ProviderBrands.lookup(provider)
     }
 
     private var chipFill: Color {
-        switch key {
-        case "codex", "openai":
-            return Color(red: 0.08, green: 0.09, blue: 0.09)
-        case "opencode":
-            return Color(red: 0.12, green: 0.17, blue: 0.22)
-        case "cursor":
-            // Match Cursor's dark app-icon plate (#14120B).
-            return Color(red: 0.08, green: 0.07, blue: 0.04)
+        switch config.chipFillType {
+        case "solid":
+            return config.chipFillColor ?? config.brand.opacity(config.chipFillAlpha ?? 0.16)
+        case "brand_alpha":
+            return config.brand.opacity(config.chipFillAlpha ?? 0.16)
         default:
-            return brand.opacity(0.16)
+            return config.brand.opacity(0.16)
         }
     }
 
     private var chipStroke: Color {
-        switch key {
-        case "codex", "openai":
-            return Color.white.opacity(0.32)
-        case "opencode":
-            return Color(red: 0.40, green: 0.74, blue: 0.92).opacity(0.45)
-        case "cursor":
-            return Color.white.opacity(0.28)
+        switch config.chipStrokeType {
+        case "solid":
+            return config.chipStrokeColor ?? config.brand.opacity(config.chipStrokeAlpha ?? 0.22)
+        case "brand_alpha":
+            return config.brand.opacity(config.chipStrokeAlpha ?? 0.22)
         default:
-            return brand.opacity(0.22)
+            return config.brand.opacity(0.22)
         }
     }
 
     private var chipCornerRadius: CGFloat {
-        switch key {
-        case "codex", "openai":
-            return size / 2
-        case "opencode":
-            return max(3, size * 0.18)
-        default:
-            return max(4, size * 0.28)
-        }
+        max(3, size * config.cornerRadiusFactor)
     }
 
     private var templateMarkColor: Color? {
-        switch key {
-        case "codex", "openai":
-            return Color.white.opacity(0.92)
-        case "opencode":
-            return Color(red: 0.52, green: 0.82, blue: 0.98)
-        case "cursor":
-            // Official cube is a single-color mark; cream on the dark plate
-            // matches cursor.com favicon / brand avatar treatment.
-            return Color(red: 0xED / 255, green: 0xEC / 255, blue: 0xEC / 255)
-        default:
-            return nil
-        }
+        guard config.glyphStyle == "template" else { return nil }
+        return config.markColor
     }
 
     private var providerImage: NSImage? {

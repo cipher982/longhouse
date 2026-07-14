@@ -17,7 +17,7 @@ CLAUDE_AGENTS_TOKEN ?=
 CLAUDE_DEVICE_ID ?=
 PERF_PROOF_OUTPUT ?= artifacts/perf-proof/perf-proof.json
 
-.PHONY: help check-push-readiness dev dev-demo stop test test-ios test-ios-session-open ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-tools validate-sdk validate-ios-api validate-makefile validate-build-identity validate-playwright-install validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-universal-live-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-tools generate-sdk generate-ios-api qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-synthetic-live-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
+.PHONY: help check-push-readiness dev dev-demo stop test test-ios test-ios-session-open ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-tools validate-sdk validate-ios-api validate-provider-brands validate-makefile validate-build-identity validate-playwright-install validate-public-surface validate-managed-codex-contract validate-managed-session-contract validate-no-python-device-path validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-universal-smoke provider-release-proof-universal-live-smoke provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-tools generate-sdk generate-ios-api generate-provider-brands qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-synthetic-live-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest dogfood dogfood-refresh dogfood-check observability-up observability-down
 .PHONY: validate-dogfood-runtime
 .PHONY: validate-native-device-entrypoints
 .PHONY: perf-proof validate-perf-proof
@@ -331,6 +331,7 @@ validate: ## Run all contract checks
 	@$(MAKE) validate-build-identity
 	@$(MAKE) validate-playwright-install
 	@$(MAKE) validate-public-surface
+	@$(MAKE) validate-provider-brands
 	@$(MAKE) validate-legacy-nouns
 	@$(MAKE) validate-managed-codex-contract
 	@$(MAKE) validate-managed-session-contract
@@ -560,6 +561,13 @@ validate-sdk: ## @internal OpenAPI/SDK drift check
 validate-ios-api: ## @internal iOS OpenAPI DTO drift check
 	@python3 scripts/generate/ios_api_models.py --check
 
+validate-provider-brands: ## @internal Provider brand config drift check
+	@$(MAKE) generate-provider-brands >/dev/null
+	@if ! git diff --quiet -- web/src/generated/provider-brands.ts ios/Sources/Shared/ProviderBrands.generated.swift desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/ProviderBrands.generated.swift; then \
+		echo "Provider brands out of sync — run 'make generate-provider-brands'"; \
+		exit 1; \
+	fi
+
 validate-makefile: ## @internal Verify .PHONY vs documented targets
 	@failed=0; \
 	for t in $$(grep -E '^\.PHONY:' Makefile | sed -E 's/^\.PHONY:[[:space:]]*//; s/\\//g' | tr ' ' '\n' | sed '/^$$/d'); do \
@@ -591,6 +599,9 @@ generate-sdk: ## Regenerate OpenAPI types
 
 generate-ios-api: ## Regenerate iOS OpenAPI DTOs from openapi.json
 	@python3 scripts/generate/ios_api_models.py
+
+generate-provider-brands: ## Regenerate provider brand config (TS + Swift) from config/provider-brands.json
+	@python3 scripts/generate/provider_brands.py
 
 import-smoke: ## @internal Fast import + CSS reference smoke (<5s)
 	@cd server && uv run python ../scripts/ci/import-smoke.py

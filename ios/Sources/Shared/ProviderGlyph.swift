@@ -3,7 +3,8 @@ import SwiftUI
 /// Provider brand glyph — the real logo mark for each AI coding agent, drawn
 /// from vector PDFs in the asset catalog (ProviderCodex, ProviderClaude,
 /// ProviderGemini, ProviderOpencode, ProviderAntigravity).
-/// `template-rendering-intent = original` and we do NOT apply a tint.
+/// Colors and rendering rules are driven by config/provider-brands.json
+/// via the generated ProviderBrands enum.
 public struct ProviderGlyph: View {
     public enum Variant {
         case chip   // tinted rounded-square background behind the mark
@@ -36,27 +37,55 @@ public struct ProviderGlyph: View {
         }
     }
 
-    /// Real brand tint, used only for the chip background wash (not the mark).
-    private var brand: Color {
-        switch key {
-        case "claude": return Color(red: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255)
-        case "codex", "openai": return Color(white: 0.92)
-        case "opencode": return Color(white: 0.78)
-        case "antigravity": return Color(red: 0x4F / 255, green: 0x87 / 255, blue: 0xED / 255)
-        case "cursor": return Color(red: 0x14 / 255, green: 0x12 / 255, blue: 0x0B / 255)
-        default: return .secondary
+    private var config: ProviderBrandConfig {
+        ProviderBrands.lookup(provider)
+    }
+
+    private var chipFill: Color {
+        switch config.chipFillType {
+        case "solid":
+            return config.chipFillColor ?? config.brand.opacity(config.chipFillAlpha ?? 0.16)
+        case "brand_alpha":
+            return config.brand.opacity(config.chipFillAlpha ?? 0.16)
+        default:
+            return config.brand.opacity(0.16)
         }
+    }
+
+    private var chipStroke: (color: Color, width: Double) {
+        let width = config.chipStrokeWidth
+        let color: Color
+        switch config.chipStrokeType {
+        case "solid":
+            color = config.chipStrokeColor ?? config.brand.opacity(config.chipStrokeAlpha ?? 0.22)
+        case "brand_alpha":
+            color = config.brand.opacity(config.chipStrokeAlpha ?? 0.22)
+        default:
+            color = config.brand.opacity(0.22)
+        }
+        return (color, width)
+    }
+
+    private var chipCornerRadius: CGFloat {
+        max(3, size * config.cornerRadiusFactor)
     }
 
     @ViewBuilder
     private var mark: some View {
         if let assetName {
-            Image(assetName)
-                .resizable()
-                .renderingMode(.original)
-                .aspectRatio(contentMode: .fit)
+            if config.glyphStyle == "template", let markColor = config.markColor {
+                Image(assetName)
+                    .resizable()
+                    .renderingMode(.template)
+                    .foregroundStyle(markColor)
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Image(assetName)
+                    .resizable()
+                    .renderingMode(.original)
+                    .aspectRatio(contentMode: .fit)
+            }
         } else {
-            // Unknown provider — neutral terminal chevron fallback.
             Image(systemName: "chevron.left.forwardslash.chevron.right")
                 .font(.system(size: size * 0.6, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -70,16 +99,17 @@ public struct ProviderGlyph: View {
                 .frame(width: size, height: size)
         case .chip:
             let markSize = size * 0.64
+            let stroke = chipStroke
             mark
                 .frame(width: markSize, height: markSize)
                 .frame(width: size, height: size)
                 .background(
-                    RoundedRectangle(cornerRadius: max(4, size * 0.28), style: .continuous)
-                        .fill(brand.opacity(0.16))
+                    RoundedRectangle(cornerRadius: chipCornerRadius, style: .continuous)
+                        .fill(chipFill)
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: max(4, size * 0.28), style: .continuous)
-                        .strokeBorder(brand.opacity(0.22), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: chipCornerRadius, style: .continuous)
+                        .strokeBorder(stroke.color, lineWidth: stroke.width)
                 )
         }
     }
