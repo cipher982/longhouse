@@ -399,6 +399,45 @@ final class TimelineBuilderTests: XCTestCase {
         guard case .assistant = items[2] else { return XCTFail("assistant prose") }
         guard case .passiveGroup(let grp) = items[3] else { return XCTFail("second group") }
         XCTAssertEqual(grp.map(\.call.id), ["5", "7"])
+        XCTAssertEqual(TimelineBuilder.explorationSummary(for: grp), "Searched 1 · Listed 1")
+    }
+
+    func testReadJoinsConsecutiveExplorationRun() {
+        let events = [
+            event(id: 1, role: "user", text: "go"),
+            event(id: 2, role: "assistant", tool: "Read", callId: "t1"),
+            event(id: 3, role: "tool", output: "ok", callId: "t1"),
+            event(id: 4, role: "assistant", tool: "Grep", callId: "t2"),
+            event(id: 5, role: "tool", output: "ok", callId: "t2"),
+            event(id: 6, role: "assistant", tool: "Glob", callId: "t3"),
+            event(id: 7, role: "tool", output: "ok", callId: "t3"),
+        ]
+        let items = TimelineBuilder.build(events: events)
+        XCTAssertEqual(items.count, 2)
+        guard case .passiveGroup(let calls) = items[1] else {
+            return XCTFail("Read+Grep+Glob should collapse into one exploration run")
+        }
+        XCTAssertEqual(calls.map(\.call.toolName), ["Read", "Grep", "Glob"])
+        XCTAssertEqual(TimelineBuilder.explorationSummary(for: calls), "Searched 1 · Read 1 · Listed 1")
+    }
+
+    func testWebFetchBreaksExplorationRun() {
+        let events = [
+            event(id: 1, role: "user", text: "go"),
+            event(id: 2, role: "assistant", tool: "Grep", callId: "t1"),
+            event(id: 3, role: "tool", output: "ok", callId: "t1"),
+            event(id: 4, role: "assistant", tool: "Grep", callId: "t2"),
+            event(id: 5, role: "tool", output: "ok", callId: "t2"),
+            event(id: 6, role: "assistant", tool: "WebFetch", callId: "t3"),
+            event(id: 7, role: "tool", output: "html", callId: "t3"),
+        ]
+        let items = TimelineBuilder.build(events: events)
+        XCTAssertEqual(items.count, 3)
+        guard case .passiveGroup(let greps) = items[1] else { return XCTFail("grep group") }
+        XCTAssertEqual(greps.count, 2)
+        guard case .tool(let fetch, _, _) = items[2], fetch.toolName == "WebFetch" else {
+            return XCTFail("WebFetch stays individual")
+        }
     }
 
     func testPassiveGroupStableID() {

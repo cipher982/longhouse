@@ -13,9 +13,8 @@ export type ToolInteraction = {
 };
 
 /**
- * Run of 2+ consecutive low-signal tool calls (Grep/Glob/LS/ToolSearch/…).
- * Collapses into a single "Explored N" chip; expand reveals each call as
- * a one-liner.
+ * Run of 2+ consecutive exploration-eligible tool calls (search/read/list).
+ * Collapses into a semantic summary chip; expand reveals each call.
  */
 export type NoiseGroup = {
   key: string;

@@ -12,6 +12,7 @@ import type {
 } from "../../lib/sessionWorkspace";
 import {
   formatContinuationStamp,
+  formatExplorationSummary,
   formatTime,
   getTimelineMessagePreview,
   getToolDisplayInfo,
@@ -24,6 +25,7 @@ import {
   isToolInteractionDropped,
   isToolInteractionRunning,
   parseLonghouseOutput,
+  splitExplorationOverflow,
   timelineItemContainsSelection,
 } from "../../lib/sessionWorkspace";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
@@ -666,14 +668,21 @@ function NoiseChip({
   onToggleInteraction: (key: string) => void;
   renderMedia: boolean;
 }) {
-  const counts = new Map<string, number>();
-  for (const interaction of group.interactions) {
-    const info = getToolDisplayInfo(interaction.toolName);
-    counts.set(info.displayName, (counts.get(info.displayName) ?? 0) + 1);
-  }
-  const summary = Array.from(counts.entries())
-    .map(([name, n]) => (n > 1 ? `${name} × ${n}` : name))
-    .join(", ");
+  const [showEarlier, setShowEarlier] = useState(false);
+  const summary = formatExplorationSummary(group.interactions) || "Explored";
+  const { earlier, latest } = splitExplorationOverflow(group.interactions);
+  const visibleInteractions = showEarlier ? group.interactions : latest;
+
+  useEffect(() => {
+    if (!expanded) setShowEarlier(false);
+  }, [expanded]);
+
+  useEffect(() => {
+    if (!expandedInteractionKey) return;
+    if (earlier.some((interaction) => interaction.key === expandedInteractionKey)) {
+      setShowEarlier(true);
+    }
+  }, [earlier, expandedInteractionKey]);
 
   return (
     <div
@@ -692,14 +701,22 @@ function NoiseChip({
         aria-expanded={expanded}
       >
         <span className="tl-noise__arrow">↳</span>
-        <span className="tl-noise__label">Explored</span>
         <span className="tl-noise__summary">{summary}</span>
         <span className="tl-noise__count">{group.interactions.length}</span>
         <span className={`tl-noise__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
       </button>
       {expanded ? (
         <div className="tl-noise__list">
-          {group.interactions.map((interaction) => {
+          {!showEarlier && earlier.length > 0 ? (
+            <button
+              type="button"
+              className="tl-noise__earlier"
+              onClick={() => setShowEarlier(true)}
+            >
+              Show {earlier.length} earlier
+            </button>
+          ) : null}
+          {visibleInteractions.map((interaction) => {
             const info = getToolDisplayInfo(interaction.toolName);
             const sum = getToolSummary(interaction);
             const isOpen = expandedInteractionKey === interaction.key;

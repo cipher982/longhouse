@@ -1737,6 +1737,21 @@
     margin: 2px 0 6px 30px;
     gap: 1px;
   }
+  .tl-noise__earlier {
+    align-self: flex-start;
+    margin: 2px 0 4px 10px;
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-muted);
+    font: inherit;
+    font-size: 11.5px;
+    font-family: var(--font-family-mono);
+    cursor: pointer;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .tl-noise__earlier:hover { color: var(--color-text-secondary); }
   .tl-noise__item { border-radius: 4px; }
   .tl-noise__item.is-expanded { background: rgba(18, 11, 9, 0.6); }
   .tl-noise__item-head {

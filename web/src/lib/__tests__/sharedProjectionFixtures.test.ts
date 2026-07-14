@@ -108,7 +108,12 @@ function summarizeRows(items: TimelineItem[]): ExpectedRow[] {
 }
 
 describe("shared session projection fixtures", () => {
-  it.each(["tool-pairing-fifo.json", "context-boundary-noise-collapse.json", "session-action-interrupt.json"])(
+  it.each([
+    "tool-pairing-fifo.json",
+    "context-boundary-noise-collapse.json",
+    "session-action-interrupt.json",
+    "exploration-run-web-breaks.json",
+  ])(
     "matches %s",
     (fixtureName) => {
       const fixture = loadFixture(fixtureName);
