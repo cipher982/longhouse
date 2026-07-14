@@ -54,6 +54,17 @@ pub(crate) struct StorageV2ShipOutcome {
     pub has_more: bool,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("storage-v2 source preparation failed: {source:#}")]
+pub(crate) struct StorageV2PreparationError {
+    #[source]
+    source: anyhow::Error,
+}
+
+fn preparation_result<T>(result: Result<T>) -> Result<T> {
+    result.map_err(|source| StorageV2PreparationError { source }.into())
+}
+
 pub(crate) fn prepare_next_envelope(
     conn: &mut Connection,
     capabilities: &StorageV2Capabilities,
@@ -223,8 +234,13 @@ pub(crate) async fn ship_next_envelope(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let Some(prepared) =
-        prepare_next_envelope(conn, capabilities, path, provider, session_id_override)?
+    let Some(prepared) = preparation_result(prepare_next_envelope(
+        conn,
+        capabilities,
+        path,
+        provider,
+        session_id_override,
+    ))?
     else {
         return Ok(None);
     };
@@ -741,7 +757,9 @@ pub(crate) async fn ship_next_opencode_envelope(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let Some(prepared) = prepare_next_opencode_envelope(conn, capabilities, db_path)? else {
+    let Some(prepared) =
+        preparation_result(prepare_next_opencode_envelope(conn, capabilities, db_path))?
+    else {
         return Ok(None);
     };
     crate::media_upload::ensure_storage_v2_media_uploaded(
@@ -782,7 +800,9 @@ pub(crate) async fn ship_next_cursor_envelope(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let Some(prepared) = prepare_next_cursor_envelope(conn, capabilities, db_path)? else {
+    let Some(prepared) =
+        preparation_result(prepare_next_cursor_envelope(conn, capabilities, db_path))?
+    else {
         return Ok(None);
     };
     ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
@@ -798,7 +818,9 @@ pub(crate) async fn ship_next_cursor_acp_envelope(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let Some(prepared) = prepare_next_cursor_acp_envelope(conn, capabilities, path)? else {
+    let Some(prepared) =
+        preparation_result(prepare_next_cursor_acp_envelope(conn, capabilities, path))?
+    else {
         return Ok(None);
     };
     ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
@@ -1120,6 +1142,13 @@ mod tests {
         "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
     const CURSOR_MESSAGE_C: &str =
         "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+
+    #[test]
+    fn preparation_errors_are_distinct_from_transport_failures() {
+        let error = preparation_result::<()>(Err(anyhow::anyhow!("unsupported local shape")))
+            .unwrap_err();
+        assert!(error.downcast_ref::<StorageV2PreparationError>().is_some());
+    }
 
     fn capabilities() -> StorageV2Capabilities {
         StorageV2Capabilities {

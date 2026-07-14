@@ -3129,6 +3129,18 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 }
             }
             Err(error) => {
+                if error
+                    .downcast_ref::<crate::storage_v2_shipper::StorageV2PreparationError>()
+                    .is_some()
+                {
+                    tracing::warn!(
+                        path = %result.job.path.display(),
+                        provider = result.job.provider,
+                        error = %error,
+                        "Storage-v2 source preparation failed; waiting for another source observation"
+                    );
+                    return finish_path_task(result, task_started);
+                }
                 let backpressure = error
                     .downcast_ref::<crate::shipping::client::StorageV2Backpressure>();
                 task_context.ship_stats.record_with_lane_detail_and_stages(
