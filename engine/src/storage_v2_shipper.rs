@@ -423,16 +423,22 @@ pub(crate) fn prepare_next_cursor_envelope(
         &snapshot.conversation_uuid,
     )?;
     let opaque_source_id = cursor_store::cursor_opaque_source_id(&snapshot.conversation_uuid);
-    let root_relation = cursor_store_root::observe_cursor_root(
-        conn,
-        &snapshot.conversation_uuid,
-        &snapshot.root_blob_id,
-        &snapshot.root_message_blob_ids,
-    )?;
+    let root_relation = match snapshot.root_blob_id.as_deref() {
+        Some(root_blob_id) => cursor_store_root::observe_cursor_root(
+            conn,
+            &snapshot.conversation_uuid,
+            root_blob_id,
+            &snapshot.root_message_blob_ids,
+        )?,
+        None => cursor_store_root::CursorRootOrderRelation::Inconclusive,
+    };
     let incarnation = snapshot.store_incarnation.clone();
-    let existing_len = cursor_store_records::active_cursor_record_count(conn, "cursor", &opaque_source_id)?;
-    let active_incarnation = source_epoch::active_source_incarnation(conn, "cursor", &opaque_source_id)?;
-    let source_len_before_capture = if root_relation == cursor_store_root::CursorRootOrderRelation::Rewrite
+    let existing_len =
+        cursor_store_records::active_cursor_record_count(conn, "cursor", &opaque_source_id)?;
+    let active_incarnation =
+        source_epoch::active_source_incarnation(conn, "cursor", &opaque_source_id)?;
+    let source_len_before_capture = if root_relation
+        == cursor_store_root::CursorRootOrderRelation::Rewrite
         || active_incarnation.as_deref() != Some(incarnation.as_str())
     {
         0
@@ -451,7 +457,11 @@ pub(crate) fn prepare_next_cursor_envelope(
         claimed_session_id.as_deref(),
         root_relation.source_change_hint(),
     )?;
-    cursor_store_records::append_unseen_cursor_records(conn, resolution.source_epoch, &snapshot.records)?;
+    cursor_store_records::append_unseen_cursor_records(
+        conn,
+        resolution.source_epoch,
+        &snapshot.records,
+    )?;
     let logical_len = cursor_store_records::cursor_record_count(conn, resolution.source_epoch)?;
     // Refresh max_observed_len after adding local records. `None` revision is
     // intentional: an append changes Cursor's root blob every turn but must
@@ -468,7 +478,8 @@ pub(crate) fn prepare_next_cursor_envelope(
         None,
         SourceChangeHint::None,
     )?;
-    let range_start = source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
+    let range_start =
+        source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
     if range_start >= logical_len {
         return Ok(None);
     }
@@ -488,7 +499,10 @@ pub(crate) fn prepare_next_cursor_envelope(
         .context("Cursor source position overflow")?;
     let raw_bytes = selected.iter().try_fold(0u64, |total, record| {
         total
-            .checked_add(u64::try_from(record.bytes.len()).context("Cursor raw record length exceeds u64")?)
+            .checked_add(
+                u64::try_from(record.bytes.len())
+                    .context("Cursor raw record length exceeds u64")?,
+            )
             .context("Cursor raw bytes overflow")
     })?;
     let identity = EnvelopeIdentity {
@@ -501,16 +515,19 @@ pub(crate) fn prepare_next_cursor_envelope(
         range_start,
         range_end,
         record_hashes: storage_v2_contract::hash_records(
-            &selected.iter().map(|record| record.bytes.clone()).collect::<Vec<_>>(),
+            &selected
+                .iter()
+                .map(|record| record.bytes.clone())
+                .collect::<Vec<_>>(),
         ),
     };
     // A normal Cursor store is durable but not watchable as a managed Helm
     // session.  A verified probe binding is persisted by source_epoch so that
     // expiry cannot split an already-bound conversation mid-archive.
     let managed_session_id = resolution.bound_session_id.clone();
-    let session_id = managed_session_id
-        .clone()
-        .unwrap_or_else(|| cursor_store::longhouse_session_id_for_cursor(&snapshot.conversation_uuid));
+    let session_id = managed_session_id.clone().unwrap_or_else(|| {
+        cursor_store::longhouse_session_id_for_cursor(&snapshot.conversation_uuid)
+    });
     let started_at = snapshot
         .created_at_ms
         .and_then(DateTime::from_timestamp_millis)
@@ -577,49 +594,112 @@ pub(crate) fn prepare_next_cursor_acp_envelope(
     capabilities: &StorageV2Capabilities,
     path: &Path,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
-    let session_id = path.parent().and_then(Path::file_name).and_then(|v| v.to_str())
+    let session_id = path
+        .parent()
+        .and_then(Path::file_name)
+        .and_then(|v| v.to_str())
         .context("Cursor ACP source path has no managed session directory")?;
     Uuid::parse_str(session_id).context("Cursor ACP source session id is not a UUID")?;
-    let run_id = path.file_stem().and_then(|v| v.to_str())
+    let run_id = path
+        .file_stem()
+        .and_then(|v| v.to_str())
         .context("Cursor ACP source path has no run id")?;
     let opaque_source_id = format!("cursor-acp-v1:{session_id}:{run_id}");
     let resolution = source_epoch::observe_file(
-        conn, "cursor", &opaque_source_id, path, SourceLane::Durable, 0, None,
-        Some(session_id), SourceChangeHint::None,
+        conn,
+        "cursor",
+        &opaque_source_id,
+        path,
+        SourceLane::Durable,
+        0,
+        None,
+        Some(session_id),
+        SourceChangeHint::None,
     )?;
     let position = source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
     let source_len = std::fs::metadata(path)?.len();
-    if position >= source_len { return Ok(None); }
+    if position >= source_len {
+        return Ok(None);
+    }
     let maximum_record_bytes = usize::try_from(capabilities.max_raw_record_bytes)
         .context("storage-v2 raw record limit exceeds usize")?;
     let Some(batch) = read_next_raw_batch_with_limits(
-        path, RawSourceFraming::LfDelimited, position, MAX_RAW_BATCH_BYTES, maximum_record_bytes,
-    )? else { return Ok(None); };
-    let raw_bytes: Vec<Vec<u8>> = batch.records.iter().map(|record| record.bytes.clone()).collect();
+        path,
+        RawSourceFraming::LfDelimited,
+        position,
+        MAX_RAW_BATCH_BYTES,
+        maximum_record_bytes,
+    )?
+    else {
+        return Ok(None);
+    };
+    let raw_bytes: Vec<Vec<u8>> = batch
+        .records
+        .iter()
+        .map(|record| record.bytes.clone())
+        .collect();
     let identity = EnvelopeIdentity {
-        tenant_id: capabilities.tenant_id.clone(), machine_id: capabilities.machine_id.clone(),
-        provider: "cursor".to_string(), opaque_source_id: opaque_source_id.clone(),
-        source_epoch: resolution.source_epoch, range_kind: RangeKind::ByteOffset,
-        range_start: batch.range_start, range_end: batch.range_end,
+        tenant_id: capabilities.tenant_id.clone(),
+        machine_id: capabilities.machine_id.clone(),
+        provider: "cursor".to_string(),
+        opaque_source_id: opaque_source_id.clone(),
+        source_epoch: resolution.source_epoch,
+        range_kind: RangeKind::ByteOffset,
+        range_start: batch.range_start,
+        range_end: batch.range_end,
         record_hashes: storage_v2_contract::hash_records(&raw_bytes),
     };
     let observed_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
-        .expect("source epoch opened_at is generated internally").with_timezone(&Utc);
+        .expect("source epoch opened_at is generated internally")
+        .with_timezone(&Utc);
     Ok(Some(PreparedStorageV2Envelope {
         envelope: StorageV2Envelope {
-            protocol_version: 2, tenant_id: capabilities.tenant_id.clone(), machine_id: capabilities.machine_id.clone(),
-            session_id: session_id.to_string(), provider: "cursor".to_string(), opaque_source_id,
-            source_epoch: resolution.source_epoch.to_string(), predecessor_source_epoch: resolution.predecessor_epoch.map(|v| v.to_string()),
-            epoch_opened_at: resolution.opened_at, range_kind: "byte_offset".to_string(), range_start: batch.range_start, range_end: batch.range_end,
-            render: None, media: Vec::new(),
-            session: StorageV2SessionFacts { environment: "local".to_string(), project: None, cwd: None, git_repo: None, git_branch: None,
-                started_at: observed_at.to_rfc3339(), last_activity_at: observed_at.to_rfc3339(), ended_at: None,
-                origin_kind: Some("cursor_acp".to_string()), hidden_from_default_timeline: false, launch_actor: None, launch_surface: None },
-            records: batch.records.into_iter().map(|record| StorageV2Record { source_position: record.range_start, data_b64: BASE64_STANDARD.encode(record.bytes) }).collect(),
+            protocol_version: 2,
+            tenant_id: capabilities.tenant_id.clone(),
+            machine_id: capabilities.machine_id.clone(),
+            session_id: session_id.to_string(),
+            provider: "cursor".to_string(),
+            opaque_source_id,
+            source_epoch: resolution.source_epoch.to_string(),
+            predecessor_source_epoch: resolution.predecessor_epoch.map(|v| v.to_string()),
+            epoch_opened_at: resolution.opened_at,
+            range_kind: "byte_offset".to_string(),
+            range_start: batch.range_start,
+            range_end: batch.range_end,
+            render: None,
+            media: Vec::new(),
+            session: StorageV2SessionFacts {
+                environment: "local".to_string(),
+                project: None,
+                cwd: None,
+                git_repo: None,
+                git_branch: None,
+                started_at: observed_at.to_rfc3339(),
+                last_activity_at: observed_at.to_rfc3339(),
+                ended_at: None,
+                origin_kind: Some("cursor_acp".to_string()),
+                hidden_from_default_timeline: false,
+                launch_actor: None,
+                launch_surface: None,
+            },
+            records: batch
+                .records
+                .into_iter()
+                .map(|record| StorageV2Record {
+                    source_position: record.range_start,
+                    data_b64: BASE64_STANDARD.encode(record.bytes),
+                })
+                .collect(),
             expected_envelope_id: hex_hash(storage_v2_contract::envelope_id(&identity)?),
-        }, source_epoch: resolution.source_epoch, range_start: batch.range_start, range_end: batch.range_end,
-        event_count: 0, has_reply_evidence: false, raw_bytes: batch.range_end - batch.range_start,
-        has_more: batch.range_end < source_len, media_objects: Vec::new(),
+        },
+        source_epoch: resolution.source_epoch,
+        range_start: batch.range_start,
+        range_end: batch.range_end,
+        event_count: 0,
+        has_reply_evidence: false,
+        raw_bytes: batch.range_end - batch.range_start,
+        has_more: batch.range_end < source_len,
+        media_objects: Vec::new(),
     }))
 }
 
@@ -711,11 +791,19 @@ pub(crate) async fn ship_next_cursor_envelope(
 }
 
 pub(crate) async fn ship_next_cursor_acp_envelope(
-    conn: &mut Connection, client: &ShipperClient, capabilities: &StorageV2Capabilities,
-    path: &Path, lane: &str, request_timeout: Duration,
+    conn: &mut Connection,
+    client: &ShipperClient,
+    capabilities: &StorageV2Capabilities,
+    path: &Path,
+    lane: &str,
+    request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let Some(prepared) = prepare_next_cursor_acp_envelope(conn, capabilities, path)? else { return Ok(None); };
-    ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout).await.map(Some)
+    let Some(prepared) = prepare_next_cursor_acp_envelope(conn, capabilities, path)? else {
+        return Ok(None);
+    };
+    ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
+        .await
+        .map(Some)
 }
 
 fn storage_v2_media_refs(media_objects: &[ParsedMediaObject]) -> Vec<StorageV2MediaRef> {
@@ -1026,9 +1114,12 @@ mod tests {
     const CURSOR_ROOT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const CURSOR_ROOT_B: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     const CURSOR_ROOT_C: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-    const CURSOR_MESSAGE_A: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    const CURSOR_MESSAGE_B: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
-    const CURSOR_MESSAGE_C: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    const CURSOR_MESSAGE_A: &str =
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const CURSOR_MESSAGE_B: &str =
+        "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    const CURSOR_MESSAGE_C: &str =
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
 
     fn capabilities() -> StorageV2Capabilities {
         StorageV2Capabilities {
@@ -1063,7 +1154,10 @@ mod tests {
         let json = format!(
             r#"{{"agentId":"{CURSOR_CONVERSATION_ID}","latestRootBlobId":"{root_blob_id}","createdAt":1773403200000}}"#
         );
-        json.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect()
+        json.as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 
     fn make_cursor_store(path: &Path) -> Connection {
@@ -1125,15 +1219,29 @@ mod tests {
         assert_eq!(first.envelope.session_id, session_id);
         assert_eq!(first.envelope.provider, "cursor");
         assert!(first.envelope.render.is_none());
-        assert_eq!(BASE64_STANDARD.decode(&first.envelope.records[0].data_b64).unwrap(), raw);
+        assert_eq!(
+            BASE64_STANDARD
+                .decode(&first.envelope.records[0].data_b64)
+                .unwrap(),
+            raw
+        );
         assert_eq!(
             source_epoch::lane_position(&conn, first.source_epoch, SourceLane::Durable).unwrap(),
             0,
         );
         source_epoch::acknowledge_position(
-            &mut conn, first.source_epoch, SourceLane::Durable, first.range_start, first.range_end,
-        ).unwrap();
-        assert!(prepare_next_cursor_acp_envelope(&mut conn, &capabilities(), &path).unwrap().is_none());
+            &mut conn,
+            first.source_epoch,
+            SourceLane::Durable,
+            first.range_start,
+            first.range_end,
+        )
+        .unwrap();
+        assert!(
+            prepare_next_cursor_acp_envelope(&mut conn, &capabilities(), &path)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1147,7 +1255,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(first.envelope.provider, "cursor");
-        assert_eq!(first.envelope.opaque_source_id, format!("cursor-store-v1:{CURSOR_CONVERSATION_ID}"));
+        assert_eq!(
+            first.envelope.opaque_source_id,
+            format!("cursor-store-v1:{CURSOR_CONVERSATION_ID}")
+        );
         assert!(first.envelope.render.is_none());
         assert!(first.envelope.records.iter().any(|record| {
             let bytes = BASE64_STANDARD.decode(&record.data_b64).unwrap();
@@ -1201,6 +1312,34 @@ mod tests {
             Some(first.source_epoch.to_string())
         );
         assert_eq!(rewrite.range_start, 0);
+    }
+
+    #[test]
+    fn cursor_prepares_raw_records_without_a_root_pointer() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        let metadata =
+            format!(r#"{{"agentId":"{CURSOR_CONVERSATION_ID}","createdAt":1773403200000}}"#);
+        let encoded: String = metadata
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        store
+            .execute("UPDATE meta SET value = ?1 WHERE key = '0'", [encoded])
+            .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let prepared = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(prepared.envelope.provider, "cursor");
+        assert!(prepared.envelope.records.iter().all(|record| {
+            let bytes = BASE64_STANDARD.decode(&record.data_b64).unwrap();
+            let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            raw["kind"] != "root_observation"
+        }));
     }
 
     #[test]

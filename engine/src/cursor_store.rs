@@ -26,7 +26,7 @@ use crate::state::file_identity::identity_from_metadata;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorStoreSnapshot {
     pub conversation_uuid: String,
-    pub root_blob_id: String,
+    pub root_blob_id: Option<String>,
     pub created_at_ms: Option<i64>,
     pub meta_rows: Vec<CursorStoreMetaRow>,
     pub blob_rows: Vec<CursorStoreBlobRow>,
@@ -71,7 +71,7 @@ pub enum RootMessageBlobIds {
 #[derive(Debug, Clone)]
 pub struct CursorStoreRawSnapshot {
     pub conversation_uuid: String,
-    pub root_blob_id: String,
+    pub root_blob_id: Option<String>,
     pub store_incarnation: String,
     pub created_at_ms: Option<i64>,
     pub root_message_blob_ids: RootMessageBlobIds,
@@ -130,17 +130,23 @@ pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
         .context("Cursor store has no meta['0'] root metadata")?;
     let root_metadata = decode_root_metadata(&root_meta.value_bytes)?;
     let conversation_uuid = required_string(&root_metadata, "agentId")?;
-    let root_blob_id = required_string(&root_metadata, "latestRootBlobId")?;
+    let root_blob_id = optional_string(&root_metadata, "latestRootBlobId");
     let created_at_ms = root_metadata.get("createdAt").and_then(Value::as_i64);
     let blob_rows = read_blob_rows(&snapshot)?;
-    let root_blob = blob_rows
-        .iter()
-        .find(|row| row.id == root_blob_id)
-        .with_context(|| format!("Cursor root blob {root_blob_id} is missing from blobs"))?;
-    let root_message_blob_ids = match parse_root_message_blob_ids(&root_blob.data_bytes) {
-        Ok(ids) => RootMessageBlobIds::Parsed(ids),
-        Err(error) => RootMessageBlobIds::Unavailable {
-            reason: error.to_string(),
+    let root_message_blob_ids = match root_blob_id.as_deref() {
+        Some(root_blob_id) => match blob_rows.iter().find(|row| row.id == root_blob_id) {
+            Some(root_blob) => match parse_root_message_blob_ids(&root_blob.data_bytes) {
+                Ok(ids) => RootMessageBlobIds::Parsed(ids),
+                Err(error) => RootMessageBlobIds::Unavailable {
+                    reason: error.to_string(),
+                },
+            },
+            None => RootMessageBlobIds::Unavailable {
+                reason: format!("Cursor root blob {root_blob_id} is missing from blobs"),
+            },
+        },
+        None => RootMessageBlobIds::Unavailable {
+            reason: "Cursor meta['0'] has no latestRootBlobId".to_string(),
         },
     };
     snapshot.commit()?;
@@ -163,14 +169,9 @@ pub fn cursor_store_raw_snapshot(path: &Path) -> Result<CursorStoreRawSnapshot> 
     let metadata = path
         .metadata()
         .with_context(|| format!("reading Cursor store metadata {}", path.display()))?;
-    let store_incarnation = identity_from_metadata(&metadata)
-        .context("Cursor store has no stable file incarnation")?;
+    let store_incarnation =
+        identity_from_metadata(&metadata).context("Cursor store has no stable file incarnation")?;
     let snapshot = read_cursor_store(path)?;
-    let root_blob = snapshot
-        .blob_rows
-        .iter()
-        .find(|row| row.id == snapshot.root_blob_id)
-        .expect("read_cursor_store verifies the root blob exists");
     let mut records = Vec::with_capacity(snapshot.meta_rows.len() + snapshot.blob_rows.len() + 1);
     for row in &snapshot.meta_rows {
         records.push(serde_json::to_vec(&RawMetaRecord {
@@ -194,15 +195,23 @@ pub fn cursor_store_raw_snapshot(path: &Path) -> Result<CursorStoreRawSnapshot> 
             blob_storage_class: row.data_storage_class.as_str(),
         })?);
     }
-    records.push(serde_json::to_vec(&RawRootObservationRecord {
-        v: 1,
-        kind: "root_observation",
-        conversation_uuid: &snapshot.conversation_uuid,
-        store_incarnation: &store_incarnation,
-        root_blob_id: &snapshot.root_blob_id,
-        root_blob_bytes_b64: BASE64_STANDARD.encode(&root_blob.data_bytes),
-        root_blob_storage_class: root_blob.data_storage_class.as_str(),
-    })?);
+    if let Some((root_blob_id, root_blob)) = snapshot.root_blob_id.as_deref().and_then(|root_id| {
+        snapshot
+            .blob_rows
+            .iter()
+            .find(|row| row.id == root_id)
+            .map(|row| (root_id, row))
+    }) {
+        records.push(serde_json::to_vec(&RawRootObservationRecord {
+            v: 1,
+            kind: "root_observation",
+            conversation_uuid: &snapshot.conversation_uuid,
+            store_incarnation: &store_incarnation,
+            root_blob_id,
+            root_blob_bytes_b64: BASE64_STANDARD.encode(&root_blob.data_bytes),
+            root_blob_storage_class: root_blob.data_storage_class.as_str(),
+        })?);
+    }
     Ok(CursorStoreRawSnapshot {
         conversation_uuid: snapshot.conversation_uuid,
         root_blob_id: snapshot.root_blob_id,
@@ -309,6 +318,14 @@ fn required_string(value: &Value, key: &str) -> Result<String> {
         .map(str::to_owned)
         .filter(|value| !value.is_empty())
         .with_context(|| format!("Cursor meta['0'] is missing {key}"))
+}
+
+fn optional_string(value: &Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .filter(|value| !value.is_empty())
 }
 
 fn decode_hex(value: &[u8]) -> Result<Vec<u8>> {
@@ -451,8 +468,7 @@ mod tests {
             "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
             rusqlite::params![
                 MESSAGE_ID,
-                br#"{"role":"assistant","content":[{"type":"unknown","binary":true}]}"#
-                    .to_vec()
+                br#"{"role":"assistant","content":[{"type":"unknown","binary":true}]}"#.to_vec()
             ],
         )
         .unwrap();
@@ -536,6 +552,30 @@ mod tests {
             RootMessageBlobIds::Unavailable { .. }
         ));
         assert_eq!(cursor_store_raw_snapshot(&path).unwrap().records.len(), 5);
+    }
+
+    #[test]
+    fn missing_root_pointer_keeps_meta_and_blob_capture() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("store.db");
+        let conn = fixture(&path);
+        let metadata = format!(r#"{{"agentId":"{CONVERSATION_ID}"}}"#);
+        let encoded: String = metadata
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        conn.execute("UPDATE meta SET value = ?1 WHERE key = '0'", [encoded])
+            .unwrap();
+        drop(conn);
+
+        let snapshot = cursor_store_raw_snapshot(&path).unwrap();
+        assert_eq!(snapshot.root_blob_id, None);
+        assert!(matches!(
+            snapshot.root_message_blob_ids,
+            RootMessageBlobIds::Unavailable { .. }
+        ));
+        assert_eq!(snapshot.records.len(), 4);
     }
 
     #[test]
