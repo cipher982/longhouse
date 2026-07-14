@@ -169,6 +169,17 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             root_blob_id TEXT NOT NULL,
             message_blob_ids_json TEXT,
             updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS cursor_store_raw_record (
+            source_epoch TEXT NOT NULL,
+            record_hash TEXT NOT NULL,
+            source_position INTEGER NOT NULL,
+            record_bytes BLOB NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (source_epoch, record_hash),
+            UNIQUE (source_epoch, source_position),
+            FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
         );",
     )?;
 
