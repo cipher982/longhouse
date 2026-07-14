@@ -950,9 +950,18 @@
     gap: var(--space-3);
   }
 
+  /* Solid dark tile behind each brand mark so provider colors hold on the
+     landing's warm background (the shared tinted chip washes out here). */
   .landing-provider-row-glyph {
-    color: var(--color-brand-primary);
-    display: flex;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex: 0 0 auto;
+    border-radius: 7px;
+    background: #0c0a08;
+    box-shadow: inset 0 0 0 1px rgba(243, 234, 217, 0.1);
   }
 
   .landing-providers-cell.yes {

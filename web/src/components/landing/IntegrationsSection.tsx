@@ -54,7 +54,7 @@ export function IntegrationsSection() {
                   <th scope="row" className="landing-providers-cell-provider">
                     <span className="landing-providers-provider-label">
                       <span className="landing-provider-row-glyph">
-                        <ProviderGlyph provider={p.id} size={24} />
+                        <ProviderGlyph provider={p.id} size={16} variant="bare" />
                       </span>
                       <span className="landing-provider-row-name">{p.marketingName}</span>
                     </span>
