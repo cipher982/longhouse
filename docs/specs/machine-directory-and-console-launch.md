@@ -68,6 +68,19 @@ fixed at enrollment lifecycle boundaries, never hidden by client name filters.
 
 ## Product Decisions
 
+### Provider Scope
+
+Cursor is a supported Console target through `cursor.run_once` backed by
+`cursor-agent acp`. It must appear in both launchers even though it does not
+advertise the long-lived remote `cursor.launch` operation; consequently it
+offers one-shot only and no **Keep runtime open** choice. Cursor Helm remains
+the separate terminal-owned `longhouse cursor` path.
+
+Antigravity is not a launch target yet. Its proven Machine Agent surface is
+`antigravity.send`; it has neither remote launch nor run-once evidence. Adding
+it requires a provider execution path, lifecycle/binding contract, and live
+proof—not merely exposing another picker row.
+
 ### 1. Offline Machines Remain Visible
 
 An enrolled machine is part of the user's machine directory even when its
