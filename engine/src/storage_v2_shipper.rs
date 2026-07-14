@@ -1099,6 +1099,33 @@ mod tests {
     }
 
     #[test]
+    fn cursor_acp_source_preserves_exact_notifications_and_needs_a_receipt_to_advance() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_id = "019c638d-0000-0000-0000-000000000099";
+        let path = dir.path().join(session_id).join("run-1.jsonl");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let raw = b" {\"jsonrpc\":\"2.0\",\"method\":\"session/update\"}\n";
+        fs::write(&path, raw).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let first = prepare_next_cursor_acp_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.envelope.session_id, session_id);
+        assert_eq!(first.envelope.provider, "cursor");
+        assert!(first.envelope.render.is_none());
+        assert_eq!(BASE64_STANDARD.decode(&first.envelope.records[0].data_b64).unwrap(), raw);
+        assert_eq!(
+            source_epoch::lane_position(&conn, first.source_epoch, SourceLane::Durable).unwrap(),
+            0,
+        );
+        source_epoch::acknowledge_position(
+            &mut conn, first.source_epoch, SourceLane::Durable, first.range_start, first.range_end,
+        ).unwrap();
+        assert!(prepare_next_cursor_acp_envelope(&mut conn, &capabilities(), &path).unwrap().is_none());
+    }
+
+    #[test]
     fn cursor_prepares_source_faithful_raw_records_and_rotates_only_on_root_rewrite() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("store.db");
