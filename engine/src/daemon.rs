@@ -438,25 +438,22 @@ fn apply_archive_repair_control(
     payload.archive_backlog.pause_reason = None;
     payload.archive_backlog.pause_updated_at = None;
     if mode == ArchiveRepairMode::Paused && payload.archive_backlog.pending_ranges > 0 {
-        payload.archive_backlog.state = "blocked".to_string();
+        payload.archive_backlog.state = "paused".to_string();
         payload.archive_backlog.pause_actor = control.actor.clone();
         payload.archive_backlog.pause_reason = control.reason.clone();
         payload.archive_backlog.pause_updated_at = control.updated_at.clone();
         return;
     }
     if payload.archive_backlog.dead_ranges > 0 {
-        payload.archive_backlog.state = "blocked".to_string();
+        payload.archive_backlog.state = "dead_lettered".to_string();
         return;
     }
     if payload.archive_backlog.pending_ranges == 0 {
-        let scanning = payload.ship_scheduler.as_ref().is_some_and(|scheduler| {
-            scheduler.ready_scan > 0 || scheduler.in_flight_scan > 0
-        });
-        payload.archive_backlog.state = if scanning { "scanning" } else { "complete" }.to_string();
+        payload.archive_backlog.state = "complete".to_string();
         return;
     }
     let uploading = payload.ship_scheduler.as_ref().is_some_and(|scheduler| {
-        scheduler.in_flight_retry > 0 || scheduler.in_flight_scan > 0
+        scheduler.in_flight_retry > 0
     });
     payload.archive_backlog.state = if uploading {
         "uploading"
@@ -3151,12 +3148,15 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     .downcast_ref::<crate::storage_v2_shipper::StorageV2PreparationError>()
                     .is_some()
                 {
-                    tracing::warn!(
-                        path = %result.job.path.display(),
-                        provider = result.job.provider,
-                        error = %error,
-                        "Storage-v2 source preparation failed; waiting for another source observation"
-                    );
+                    if task_context.tracker.record_error() {
+                        tracing::warn!(
+                            path = %result.job.path.display(),
+                            provider = result.job.provider,
+                            error = %error,
+                            "Storage-v2 source preparation failed; retrying locally"
+                        );
+                    }
+                    result.local_retry_after = Some(local_retry_delay(result.job.priority));
                     return finish_path_task(result, task_started);
                 }
                 let backpressure = error
@@ -4949,7 +4949,7 @@ mod tests {
         apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
 
         assert_eq!(payload.archive_backlog.mode, "paused");
-        assert_eq!(payload.archive_backlog.state, "blocked");
+        assert_eq!(payload.archive_backlog.state, "paused");
         assert_eq!(payload.archive_backlog.pause_actor.as_deref(), Some("menu_bar"));
         assert_eq!(
             payload.archive_backlog.pause_reason.as_deref(),

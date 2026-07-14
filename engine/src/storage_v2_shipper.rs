@@ -141,7 +141,9 @@ pub(crate) fn prepare_next_envelope(
     );
     let session_uuid =
         Uuid::parse_str(&session_id).context("storage-v2 session id is not a UUID")?;
-    crate::state::session_title::observe_parse_result(conn, &session_id, &parse_result)?;
+    if let Err(error) = crate::state::session_title::observe_parse_result(conn, &session_id, &parse_result) {
+        tracing::warn!(session_id, error = %error, "Unable to persist local prompt title");
+    }
     let raw_bytes: Vec<Vec<u8>> = raw_batch
         .records
         .iter()
@@ -344,7 +346,9 @@ pub(crate) fn prepare_next_opencode_envelope(
             .unwrap_or_else(|| parse_result.metadata.session_id.clone());
             let session_uuid = Uuid::parse_str(&session_id)
                 .context("storage-v2 OpenCode session id is not a UUID")?;
-            crate::state::session_title::observe_parse_result(conn, &session_id, &parse_result)?;
+            if let Err(error) = crate::state::session_title::observe_parse_result(conn, &session_id, &parse_result) {
+                tracing::warn!(session_id, error = %error, "Unable to persist local OpenCode prompt title");
+            }
             let start =
                 usize::try_from(range_start).context("OpenCode range start exceeds usize")?;
             let end = usize::try_from(range_end).context("OpenCode range end exceeds usize")?;
