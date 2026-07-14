@@ -97,8 +97,16 @@ Use it for directed session actions such as:
 
 ### Machine health and transport summaries
 
+- `GET /api/agents/machines` — enrolled machine directory plus current control
+  operations and the canonical human-launch projection
 - `GET /api/agents/machines/health`
 - `POST /api/agents/machines/{device_id}/provider-live-proof`
+
+The directory preserves raw `supports` and provider operations for agents and
+diagnostics. Human clients consume its derived `launch` projection instead of
+reconstructing launchability or defaults from those raw fields. The
+user-authenticated `/api/timeline/machines` route is a veneer over the same
+service projection and response model.
 
 This route is the canonical machine-facing summary for latest heartbeat-derived
 transport state. It should answer, per device, whether Longhouse shipping is

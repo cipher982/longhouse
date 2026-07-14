@@ -4,6 +4,10 @@ Status: Active epic
 Owner: Machine Agent control path + launch UX
 Updated: 2026-05-13
 
+Follow-on: `docs/specs/machine-directory-and-console-launch.md` owns the
+cross-surface directory contract, Console-mode parity, and machine lifecycle
+cleanup. This document remains the foundation for raw control-channel truth.
+
 ## Goal
 
 Make remote launch boring to dogfood.
