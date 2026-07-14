@@ -437,19 +437,37 @@ fn apply_archive_repair_control(
     payload.archive_backlog.pause_actor = None;
     payload.archive_backlog.pause_reason = None;
     payload.archive_backlog.pause_updated_at = None;
-    if payload.archive_backlog.pending_ranges > 0 {
-        payload.archive_backlog.state = match mode {
-            ArchiveRepairMode::Paused => "paused",
-            ArchiveRepairMode::Trickle => "pending",
-            ArchiveRepairMode::Drain => "draining",
-        }
-        .to_string();
-        if mode == ArchiveRepairMode::Paused {
-            payload.archive_backlog.pause_actor = control.actor.clone();
-            payload.archive_backlog.pause_reason = control.reason.clone();
-            payload.archive_backlog.pause_updated_at = control.updated_at.clone();
-        }
+    if mode == ArchiveRepairMode::Paused && payload.archive_backlog.pending_ranges > 0 {
+        payload.archive_backlog.state = "blocked".to_string();
+        payload.archive_backlog.pause_actor = control.actor.clone();
+        payload.archive_backlog.pause_reason = control.reason.clone();
+        payload.archive_backlog.pause_updated_at = control.updated_at.clone();
+        return;
     }
+    if payload.archive_backlog.dead_ranges > 0 {
+        payload.archive_backlog.state = "blocked".to_string();
+        return;
+    }
+    if payload.archive_backlog.pending_ranges == 0 {
+        let scanning = payload.ship_scheduler.as_ref().is_some_and(|scheduler| {
+            scheduler.ready_scan > 0 || scheduler.in_flight_scan > 0
+        });
+        payload.archive_backlog.state = if scanning { "scanning" } else { "complete" }.to_string();
+        return;
+    }
+    let uploading = payload.ship_scheduler.as_ref().is_some_and(|scheduler| {
+        scheduler.in_flight_retry > 0 || scheduler.in_flight_scan > 0
+    });
+    payload.archive_backlog.state = if uploading {
+        "uploading"
+    } else if payload.archive_backlog.ready_ranges == 0
+        && payload.archive_backlog.deferred_ranges > 0
+    {
+        "blocked"
+    } else {
+        "scanning"
+    }
+    .to_string();
 }
 
 fn archive_repair_is_paused(default_mode: ArchiveRepairMode) -> bool {
@@ -1594,9 +1612,9 @@ fn write_local_status_snapshot(
     };
     let mut payload = heartbeat::HeartbeatPayload::build(&stats);
     let archive_control = read_archive_repair_control();
-    apply_archive_repair_control(&mut payload, &archive_control, archive_repair_mode);
     payload.adaptive_backlog_limiter = limiter.map(|l| l.snapshot());
     payload.ship_scheduler = scheduler.map(PathScheduler::snapshot);
+    apply_archive_repair_control(&mut payload, &archive_control, archive_repair_mode);
     let now = chrono::Utc::now();
     payload.managed_sessions =
         heartbeat::leases_from_observations(conn, machine_id, observations, now);
@@ -4931,7 +4949,7 @@ mod tests {
         apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
 
         assert_eq!(payload.archive_backlog.mode, "paused");
-        assert_eq!(payload.archive_backlog.state, "paused");
+        assert_eq!(payload.archive_backlog.state, "blocked");
         assert_eq!(payload.archive_backlog.pause_actor.as_deref(), Some("menu_bar"));
         assert_eq!(
             payload.archive_backlog.pause_reason.as_deref(),
@@ -4944,6 +4962,7 @@ mod tests {
     fn test_archive_trickle_status_does_not_keep_stale_paused_state() {
         let mut payload = empty_heartbeat_payload();
         payload.archive_backlog.pending_ranges = 2;
+        payload.archive_backlog.ready_ranges = 2;
         payload.archive_backlog.state = "paused".to_string();
         let control = ArchiveRepairControl {
             mode: Some("trickle".to_string()),
@@ -4956,7 +4975,20 @@ mod tests {
         apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
 
         assert_eq!(payload.archive_backlog.mode, "trickle");
-        assert_eq!(payload.archive_backlog.state, "pending");
+        assert_eq!(payload.archive_backlog.state, "scanning");
+
+        let mut scheduler = PathScheduler::new(2);
+        scheduler.enqueue(PathBuf::from("/archive.jsonl"), "codex", WorkPriority::Retry);
+        let _job = scheduler.pop_launchable().unwrap();
+        payload.ship_scheduler = Some(scheduler.snapshot());
+        apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
+        assert_eq!(payload.archive_backlog.state, "uploading");
+
+        payload.ship_scheduler = None;
+        payload.archive_backlog.ready_ranges = 0;
+        payload.archive_backlog.deferred_ranges = 2;
+        apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
+        assert_eq!(payload.archive_backlog.state, "blocked");
     }
 
     #[tokio::test]

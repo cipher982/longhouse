@@ -125,7 +125,7 @@ pub struct ArchiveBacklogSnapshot {
 impl Default for ArchiveBacklogSnapshot {
     fn default() -> Self {
         Self {
-            state: "idle".to_string(),
+            state: "complete".to_string(),
             mode: "idle".to_string(),
             pending_ranges: 0,
             ready_ranges: 0,
@@ -951,11 +951,11 @@ impl<'a> Spool<'a> {
         ) = aggregate;
 
         let state = if dead_ranges > 0 {
-            "dead_lettered"
+            "blocked"
         } else if pending_ranges > 0 {
-            "pending"
+            "scanning"
         } else {
-            "idle"
+            "complete"
         }
         .to_string();
 
@@ -1405,6 +1405,7 @@ mod tests {
         let snapshot = spool.archive_backlog_snapshot().unwrap();
 
         assert_eq!(snapshot.pending_ranges, 3);
+        assert_eq!(snapshot.state, "scanning");
         assert_eq!(snapshot.ready_ranges, 2);
         assert_eq!(snapshot.deferred_ranges, 1);
         assert_eq!(

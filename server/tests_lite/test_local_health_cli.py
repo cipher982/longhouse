@@ -1582,7 +1582,7 @@ def test_collect_local_health_surfaces_archive_backlog_without_breaking_live_shi
             "spool_pending_count": 6375,
             "spool_dead_count": 0,
             "archive_backlog": {
-                "state": "pending",
+                "state": "blocked",
                 "mode": "trickle",
                 "pending_ranges": 6375,
                 "pending_paths": 6374,
@@ -1598,7 +1598,7 @@ def test_collect_local_health_surfaces_archive_backlog_without_breaking_live_shi
 
     assert snapshot["health_state"] == "degraded"
     assert snapshot["severity"] == "yellow"
-    assert snapshot["headline"] == "Longhouse archive repair pending"
+    assert snapshot["headline"] == "Archive upload blocked"
     assert "archive_backlog_pending" in snapshot["reasons"]
     assert snapshot["attention"]["state"] == "needs_attention"
     assert snapshot["transport_health"]["status"] == "healthy"
@@ -1656,7 +1656,7 @@ def test_collect_local_health_watches_active_archive_drain_with_live_healthy_cop
             "spool_pending_count": 6375,
             "spool_dead_count": 0,
             "archive_backlog": {
-                "state": "draining",
+                "state": "uploading",
                 "mode": "drain",
                 "pending_ranges": 6375,
                 "pending_paths": 6374,
@@ -1672,12 +1672,12 @@ def test_collect_local_health_watches_active_archive_drain_with_live_healthy_cop
 
     assert snapshot["health_state"] == "degraded"
     assert snapshot["severity"] == "yellow"
-    assert snapshot["headline"] == "Live shipping healthy; archive repair draining"
+    assert snapshot["headline"] == "Uploading archive backlog"
     assert "archive_repair_draining" in snapshot["reasons"]
     assert snapshot["attention"] == {
         "state": "watching",
-        "headline": "Live shipping healthy; archive repair draining",
-        "summary": "Live shipping is healthy. Archive repair is draining 15.6 GB across 6375 range(s).",
+        "headline": "Uploading archive backlog",
+        "summary": "Live shipping is healthy. Longhouse is uploading 15.6 GB across 6375 range(s).",
         "reasons": snapshot["reasons"],
         "suggested_actions": [],
     }

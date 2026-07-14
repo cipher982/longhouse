@@ -47,7 +47,7 @@ def archive_control_path(base_dir: Path | None = None) -> Path:
 def default_archive_backlog(*, source: str = "missing") -> dict[str, Any]:
     return {
         "source": source,
-        "state": "idle",
+        "state": "complete",
         "mode": "idle",
         "pending_ranges": 0,
         "ready_ranges": 0,
@@ -453,7 +453,7 @@ def _collect_archive_backlog_from_conn(conn: sqlite3.Connection, *, source: str)
     ).fetchone()
     pending_ranges = _int(aggregate["pending_ranges"])
     dead_ranges = _int(aggregate["dead_ranges"])
-    state = "dead_lettered" if dead_ranges else "pending" if pending_ranges else "idle"
+    state = "blocked" if dead_ranges else "scanning" if pending_ranges else "complete"
     return {
         "source": source,
         "state": state,

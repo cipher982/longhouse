@@ -37,6 +37,7 @@ class _HealthClassificationContext:
     engine_age: Any
     spool_pending: int
     archive_state: str
+    archive_mode: str
     archive_pending_ranges: int
     archive_pending_bytes: int
     archive_dead_ranges: int
@@ -434,6 +435,7 @@ def _degraded_health_headline(
     service_status: str,
     managed_attached: int,
     managed_detached: int,
+    archive_state: str = "idle",
 ) -> str:
     headline = "Longhouse shipping is degraded"
     # Priority order matters: users should see the most specific actionable state.
@@ -458,11 +460,17 @@ def _degraded_health_headline(
     elif "archive_repair_paused" in reasons:
         headline = "Longhouse archive repair is paused"
     elif "archive_repair_draining" in reasons:
-        headline = "Live shipping healthy; archive repair draining"
+        headline = (
+            "Uploading archive backlog"
+            if archive_state == "uploading"
+            else "Scanning local archive"
+            if archive_state == "scanning"
+            else "Live shipping healthy; archive repair draining"
+        )
     elif "archive_dead_lettered" in reasons:
         headline = "Longhouse archive repair needs attention"
     elif "archive_backlog_pending" in reasons:
-        headline = "Longhouse archive repair pending"
+        headline = "Archive upload blocked" if archive_state == "blocked" else "Longhouse archive repair pending"
     elif "managed_session_detached" in reasons:
         if managed_detached == 1 and managed_attached == 0:
             headline = "Managed session is running in background"
@@ -490,6 +498,7 @@ def _health_classification_context(
     else:
         spool_pending = int(payload.get("spool_pending_count") or 0)
     archive_state = str(archive_repair.get("state") or "idle")
+    archive_mode = str(archive_repair.get("mode") or "idle")
     archive_pending_ranges = int(archive_repair.get("pending_ranges") or 0)
     archive_pending_bytes = int(archive_repair.get("pending_bytes") or 0)
     archive_dead_ranges = int(archive_repair.get("dead_ranges") or 0)
@@ -508,6 +517,7 @@ def _health_classification_context(
         engine_age=engine_status.get("age_seconds"),
         spool_pending=spool_pending,
         archive_state=archive_state,
+        archive_mode=archive_mode,
         archive_pending_ranges=archive_pending_ranges,
         archive_pending_bytes=archive_pending_bytes,
         archive_dead_ranges=archive_dead_ranges,
@@ -580,6 +590,7 @@ def _collect_health_reasons(
         reasons,
         actions,
         archive_state=context.archive_state,
+        archive_mode=context.archive_mode,
         archive_pending_ranges=context.archive_pending_ranges,
         archive_pending_bytes=context.archive_pending_bytes,
         archive_dead_ranges=context.archive_dead_ranges,
@@ -658,7 +669,7 @@ def _archive_draining_state_is_watching(
     context: _HealthClassificationContext,
     reasons: list[str],
 ) -> bool:
-    if context.archive_state != "draining":
+    if context.archive_state not in {"draining", "scanning", "uploading"}:
         return False
     if context.archive_pending_ranges <= 0 and context.archive_pending_bytes <= 0:
         return False
@@ -684,8 +695,9 @@ def _archive_draining_state_is_watching(
 
 
 def _archive_draining_attention_summary(context: _HealthClassificationContext) -> str:
+    activity = "uploading" if context.archive_state == "uploading" else "scanning"
     return (
-        "Live shipping is healthy. Archive repair is draining "
+        f"Live shipping is healthy. Longhouse is {activity} "
         f"{_format_compact_bytes(context.archive_pending_bytes)} across "
         f"{context.archive_pending_ranges} range(s)."
     )
@@ -712,7 +724,7 @@ def _derive_attention(
         if _archive_draining_state_is_watching(context=context, reasons=reasons):
             return {
                 "state": "watching",
-                "headline": "Live shipping healthy; archive repair draining",
+                "headline": headline,
                 "summary": _archive_draining_attention_summary(context),
                 "reasons": reasons,
                 "suggested_actions": [],
@@ -820,6 +832,7 @@ def _classify_health(
                 service_status=context.service_status,
                 managed_attached=context.managed_attached,
                 managed_detached=context.managed_detached,
+                archive_state=context.archive_state,
             ),
             reasons,
             actions,
