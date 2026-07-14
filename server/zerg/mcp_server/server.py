@@ -351,7 +351,17 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         try:
             resp = await client.get("/api/agents/recall", params=params)
             if resp.status_code != 200:
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+                payload: dict = {
+                    "error": f"API returned {resp.status_code}",
+                    "detail": resp.text[:500],
+                }
+                if resp.status_code == 503:
+                    payload["retry"] = (
+                        "Call search_sessions (lexical / semantic=false) for the "
+                        "same query, then get_session_detail. recall needs the "
+                        "derived search index; search_sessions uses the primary store."
+                    )
+                return json.dumps(payload)
             return resp.text
         except Exception as exc:
             return _format_error(exc, api_url)
