@@ -1155,8 +1155,8 @@ struct LonghouseMenuBarCoreTests {
             launchReadiness: nil
         )
 
-        #expect(snapshot.attentionSummaryLabel.contains("Archive backlog has 6375 transcript ranges to drain"))
-        #expect(snapshot.attentionSummaryLabel.contains("keep parsing and uploading"))
+        #expect(snapshot.attentionSummaryLabel.contains("6375 transcript ranges are waiting"))
+        #expect(snapshot.attentionSummaryLabel.contains("upload them automatically"))
     }
 
     @Test

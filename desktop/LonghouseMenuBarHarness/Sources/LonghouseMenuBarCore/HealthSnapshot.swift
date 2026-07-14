@@ -367,7 +367,10 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             if outboxFiles > 0 {
                 parts.append("\(outboxFiles) local hook event\(outboxFiles == 1 ? "" : "s")")
             }
-            return "Archive backlog has \(parts.joined(separator: " and ")) to drain. Longhouse should keep parsing and uploading while this Mac and the Runtime Host are reachable."
+            let subject = parts.joined(separator: " and ")
+            let verb = archivePending == 1 && outboxFiles == 0 ? "is" : "are"
+            let pronoun = archivePending == 1 && outboxFiles == 0 ? "it" : "them"
+            return "\(subject.prefix(1).uppercased() + subject.dropFirst()) \(verb) waiting. Longhouse will upload \(pronoun) automatically."
         }
 
         guard pending > 0 || outboxFiles > 0 else {

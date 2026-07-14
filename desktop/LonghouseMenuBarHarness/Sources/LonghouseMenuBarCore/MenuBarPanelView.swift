@@ -219,9 +219,14 @@ public struct MenuBarPanelView: View {
                     if snapshot.hasManagedRuntimeTruth {
                         managedRuntimeSurface
                     }
-                    blockerSection
-                    runbookSection
-                    issueActions
+                    if usesCompactWatchingSurface {
+                        watchingSection
+                        watchingActions
+                    } else {
+                        blockerSection
+                        runbookSection
+                        issueActions
+                    }
                 }
 
                 if let feedback {
@@ -236,6 +241,15 @@ public struct MenuBarPanelView: View {
 
     private var isHealthy: Bool {
         snapshot.parsedSeverity == .green && snapshot.healthState.lowercased() == "healthy"
+    }
+
+    /// Yellow is usually a transient condition that Longhouse is already
+    /// watching or repairing. Keep that state calm and task-oriented; reserve
+    /// the diagnostic table and repair controls for states that need action.
+    private var usesCompactWatchingSurface: Bool {
+        snapshot.parsedSeverity == .yellow
+            && !snapshot.isSetupRequired
+            && !snapshot.isInstallLocationBlocked
     }
 
     private var displayHeadline: String {
@@ -915,6 +929,51 @@ public struct MenuBarPanelView: View {
                     valueIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.value
                 ),
             ])
+        }
+    }
+
+    private var watchingSection: some View {
+        PanelSection(title: "What’s happening") {
+            Text(snapshot.attentionSummaryLabel)
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Section.next.tag(0))
+
+            sectionDivider
+
+            HStack(spacing: 8) {
+                Label(snapshot.lastShipValueLabel(relativeTo: presentationDate), systemImage: "arrow.up.circle")
+                Spacer(minLength: 8)
+                Label(snapshot.pipelineValueLabel, systemImage: "tray")
+            }
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(Color.secondary)
+            .monospacedDigit()
+        }
+    }
+
+    private var watchingActions: some View {
+        HStack(spacing: 8) {
+            Button {
+                perform(.openLonghouse)
+            } label: {
+                Label("Open Longhouse", systemImage: "arrow.up.forward.square")
+                    .frame(maxWidth: .infinity)
+            }
+            .modifier(SecondaryActionButtonStyle())
+            .controlSize(.regular)
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLonghouse)
+
+            Button {
+                perform(.openLogs)
+            } label: {
+                Label("Logs", systemImage: "doc.text.magnifyingglass")
+                    .frame(maxWidth: .infinity)
+            }
+            .modifier(SecondaryActionButtonStyle())
+            .controlSize(.regular)
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLogs)
         }
     }
 
