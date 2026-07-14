@@ -53,7 +53,7 @@ fi
 echo "Running hosted mixed live/archive shipper bench against $API_URL" >&2
 python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
 cd "$ROOT_DIR/engine"
-exec cargo run --profile "${CARGO_PROFILE:-release}" -- bench \
+cargo run --profile "${CARGO_PROFILE:-release}" -- bench \
   --synthetic-files "${HOSTED_SHIPPER_BENCH_FILES:-4}" \
   --synthetic-events-per-file "${HOSTED_SHIPPER_BENCH_EVENTS_PER_FILE:-40}" \
   --synthetic-bytes-per-event "${HOSTED_SHIPPER_BENCH_BYTES_PER_EVENT:-1024}" \
