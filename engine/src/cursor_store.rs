@@ -439,7 +439,7 @@ mod tests {
             rusqlite::params!["extra", vec![0_u8, 0xff, 42]],
         )
         .unwrap();
-        let mut root = vec![0x0a, 0x20];
+        let mut root = vec![0x0a_u8, 0x20];
         root.extend_from_slice(&[0xbb; 32]);
         root.extend_from_slice(&[0x10, 0x01]);
         conn.execute(
