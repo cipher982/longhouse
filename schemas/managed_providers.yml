@@ -178,7 +178,7 @@ providers:
   tail_output: true
   runtime_phase: true
   transcript_binding: true
-  can_resume: false
+  can_resume: true
   operation_evidence:
     launch_local:
       level: live_no_token
@@ -318,11 +318,11 @@ providers:
   - cursor_acp
   - cursor_exec
   launch_local: true
-  # Console cannot start until cursor_acp seals its raw notifications through
-  # storage-v2. Helm remains locally launchable because its control path is
-  # independently real, but it is not yet a durable transcript source.
-  launch_remote: false
-  run_once: false
+  # Console ACP writes every notification to an engine-owned raw source and
+  # advances only after a storage-v2 receipt. Helm remains locally launchable
+  # but is not yet a deterministically bound transcript source.
+  launch_remote: true
+  run_once: true
   reattach: false
   send_input: true
   interrupt: true
@@ -332,7 +332,7 @@ providers:
   tail_output: false
   runtime_phase: false
   transcript_binding: false
-  can_resume: false
+  can_resume: true
   operation_evidence:
     launch_local:
       level: hermetic
@@ -344,11 +344,11 @@ providers:
         the socket. See docs/specs/cursor-transcript-format.md Helm section.'
       next: promote to live_no_token with an interactive send/interrupt canary driven from web/iOS
     launch_remote:
-      level: none
-      source: unavailable until cursor_acp persists its raw notifications through storage-v2
+      level: hermetic
+      source: cursor_acp exact raw JSON-RPC source + storage-v2 receipt-cursor tests
     run_once:
-      level: none
-      source: unavailable until cursor_acp persists its raw notifications through storage-v2
+      level: hermetic
+      source: cursor_acp exact raw JSON-RPC source + storage-v2 receipt-cursor tests
     reattach:
       level: none
       source: 'unsupported: ACP is a headless stdio process per turn; there is no attach-to-live-process
@@ -389,3 +389,5 @@ providers:
   - cursor.send
   - cursor.interrupt
   - cursor.terminate
+  - cursor.run_once
+  - cursor.resume_run_once

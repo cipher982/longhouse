@@ -203,7 +203,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
-      "can_resume": false,
+      "can_resume": true,
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
@@ -361,8 +361,8 @@
         "cursor_exec"
       ],
       "launch_local": true,
-      "launch_remote": false,
-      "run_once": false,
+      "launch_remote": true,
+      "run_once": true,
       "reattach": false,
       "send_input": true,
       "interrupt": true,
@@ -372,7 +372,7 @@
       "tail_output": false,
       "runtime_phase": false,
       "transcript_binding": false,
-      "can_resume": false,
+      "can_resume": true,
       "operation_evidence": {
         "launch_local": {
           "level": "hermetic",
@@ -380,12 +380,12 @@
           "next": "promote to live_no_token with an interactive send/interrupt canary driven from web/iOS"
         },
         "launch_remote": {
-          "level": "none",
-          "source": "unavailable until cursor_acp persists its raw notifications through storage-v2"
+          "level": "hermetic",
+          "source": "cursor_acp exact raw JSON-RPC source + storage-v2 receipt-cursor tests"
         },
         "run_once": {
-          "level": "none",
-          "source": "unavailable until cursor_acp persists its raw notifications through storage-v2"
+          "level": "hermetic",
+          "source": "cursor_acp exact raw JSON-RPC source + storage-v2 receipt-cursor tests"
         },
         "reattach": {
           "level": "none",
@@ -430,7 +430,9 @@
       "machine_control_supports": [
         "cursor.send",
         "cursor.interrupt",
-        "cursor.terminate"
+        "cursor.terminate",
+        "cursor.run_once",
+        "cursor.resume_run_once"
       ]
     }
   ]

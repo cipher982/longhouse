@@ -7,7 +7,7 @@ from pathlib import Path
 from zerg.services.managed_provider_contracts import contract_for_provider
 
 
-def test_cursor_is_control_only_until_the_native_storage_v2_source_exists():
+def test_cursor_console_is_receipt_backed_while_helm_binding_stays_explicitly_gated():
     contract = contract_for_provider("cursor")
 
     assert contract is not None
@@ -15,14 +15,14 @@ def test_cursor_is_control_only_until_the_native_storage_v2_source_exists():
     assert contract.send_input is True
     assert contract.interrupt is True
     assert contract.terminate is True
-    assert contract.launch_remote is False
-    assert contract.run_once is False
-    assert contract.can_resume is False
+    assert contract.launch_remote is True
+    assert contract.run_once is True
+    assert contract.can_resume is True
     assert contract.tail_output is False
     assert contract.runtime_phase is False
     assert contract.transcript_binding is False
-    assert "cursor.run_once" not in contract.machine_control_supports
-    assert "cursor.resume_run_once" not in contract.machine_control_supports
+    assert "cursor.run_once" in contract.machine_control_supports
+    assert "cursor.resume_run_once" in contract.machine_control_supports
 
 
 def test_cursor_cli_and_helm_do_not_produce_legacy_ingest_payloads():
