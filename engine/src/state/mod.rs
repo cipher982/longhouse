@@ -1,3 +1,4 @@
+pub mod cursor_store_root;
 pub mod db;
 pub mod db_pool;
 pub mod file_identity;

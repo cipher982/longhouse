@@ -162,6 +162,13 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             updated_at TEXT NOT NULL,
             PRIMARY KEY (source_epoch, lane),
             FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
+        );
+
+        CREATE TABLE IF NOT EXISTS cursor_store_root_state (
+            conversation_uuid TEXT PRIMARY KEY,
+            root_blob_id TEXT NOT NULL,
+            message_blob_ids_json TEXT,
+            updated_at TEXT NOT NULL
         );",
     )?;
 
