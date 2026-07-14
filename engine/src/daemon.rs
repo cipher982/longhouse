@@ -514,7 +514,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         }
     };
 
-    // 4. Discover providers
+    // 4. Discover providers. ACP creates run files after the daemon starts;
+    // establish its engine-owned root first so the watcher includes it.
+    std::fs::create_dir_all(crate::config::get_agent_dir()?.join("cursor-acp-source"))?;
     let providers = discovery::get_providers();
     if providers.is_empty() {
         tracing::warn!("No provider directories found — nothing to watch");
