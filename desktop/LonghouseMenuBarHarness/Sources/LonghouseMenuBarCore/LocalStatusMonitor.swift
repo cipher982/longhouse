@@ -1,0 +1,77 @@
+import Dispatch
+import Darwin
+import Foundation
+
+final class LocalStatusMonitor: @unchecked Sendable {
+    private let statusURL: URL
+    private let queue = DispatchQueue(label: "ai.longhouse.menu-bar.local-status", qos: .userInitiated)
+    private let onChange: @Sendable () -> Void
+    private var source: DispatchSourceFileSystemObject?
+    private var directoryHandle: CInt = -1
+    private var fingerprint: Data?
+    private var debounce: DispatchWorkItem?
+
+    init(statusPath: String, onChange: @escaping @Sendable () -> Void) {
+        statusURL = URL(fileURLWithPath: statusPath)
+        self.onChange = onChange
+    }
+
+    func start() {
+        queue.async { [self] in
+            guard source == nil else { return }
+            fingerprint = semanticFingerprint()
+            directoryHandle = open(statusURL.deletingLastPathComponent().path, O_EVTONLY)
+            guard directoryHandle >= 0 else { return }
+            let newSource = DispatchSource.makeFileSystemObjectSource(
+                fileDescriptor: directoryHandle,
+                eventMask: [.write, .rename, .extend],
+                queue: queue
+            )
+            newSource.setEventHandler { [weak self] in self?.scheduleRead() }
+            newSource.setCancelHandler { [weak self] in
+                guard let self, self.directoryHandle >= 0 else { return }
+                close(self.directoryHandle)
+                self.directoryHandle = -1
+            }
+            source = newSource
+            newSource.resume()
+        }
+    }
+
+    func stop() {
+        queue.async { [self] in
+            debounce?.cancel()
+            source?.cancel()
+            source = nil
+        }
+    }
+
+    private func scheduleRead() {
+        debounce?.cancel()
+        let item = DispatchWorkItem { [weak self] in self?.readIfChanged() }
+        debounce = item
+        queue.asyncAfter(deadline: .now() + .milliseconds(25), execute: item)
+    }
+
+    private func readIfChanged() {
+        guard let next = semanticFingerprint(), next != fingerprint else { return }
+        fingerprint = next
+        onChange()
+    }
+
+    private func semanticFingerprint() -> Data? {
+        guard let data = try? Data(contentsOf: statusURL),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        let keys = [
+            "archive_backlog", "consecutive_ship_failures", "control_channel",
+            "is_offline", "last_ship_at", "last_ship_error_kind", "last_ship_result",
+            "managed_sessions", "phase_ledger", "sessions_digest", "sessions_sequence",
+            "spool_dead_count", "spool_pending_count", "unmanaged_session_bindings",
+        ]
+        let semantic = Dictionary(uniqueKeysWithValues: keys.compactMap { key in
+            payload[key].map { (key, $0) }
+        })
+        return try? JSONSerialization.data(withJSONObject: semantic, options: [.sortedKeys])
+    }
+}

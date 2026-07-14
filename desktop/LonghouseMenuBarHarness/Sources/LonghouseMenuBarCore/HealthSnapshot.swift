@@ -53,6 +53,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let activitySummary: ActivitySummarySnapshot?
     public let managedSummary: ManagedSummarySnapshot?
     public let managedSessions: [ManagedSessionSnapshot]?
+    public let realtime: RealtimeConnectionSnapshot?
     public let unmanagedProcesses: [UnmanagedProcessSnapshot]?
     public let orphanBridges: [OrphanBridgeSnapshot]?
     public let launchReadiness: LaunchReadinessSnapshot?
@@ -74,6 +75,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         activitySummary: ActivitySummarySnapshot?,
         managedSummary: ManagedSummarySnapshot? = nil,
         managedSessions: [ManagedSessionSnapshot]? = nil,
+        realtime: RealtimeConnectionSnapshot? = nil,
         unmanagedProcesses: [UnmanagedProcessSnapshot]? = nil,
         orphanBridges: [OrphanBridgeSnapshot]? = nil,
         launchReadiness: LaunchReadinessSnapshot?,
@@ -94,6 +96,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.activitySummary = activitySummary
         self.managedSummary = managedSummary
         self.managedSessions = managedSessions
+        self.realtime = realtime
         self.unmanagedProcesses = unmanagedProcesses
         self.orphanBridges = orphanBridges
         self.launchReadiness = launchReadiness
@@ -103,6 +106,34 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     public var parsedSeverity: HarnessSeverity {
         HarnessSeverity(rawValue: severity) ?? .gray
+    }
+
+    func applying(_ projection: SessionProjection) -> HealthSnapshot {
+        let sessions = managedSessions?.map { session in
+            session.sessionId == projection.sessionId ? session.applying(projection) : session
+        }
+        return HealthSnapshot(
+            schemaVersion: schemaVersion,
+            collectedAt: collectedAt,
+            healthState: healthState,
+            severity: severity,
+            headline: headline,
+            reasons: reasons,
+            suggestedActions: suggestedActions,
+            attention: attention,
+            service: service,
+            engineStatus: engineStatus,
+            outbox: outbox,
+            activitySummary: activitySummary,
+            managedSummary: managedSummary,
+            managedSessions: sessions,
+            realtime: realtime,
+            unmanagedProcesses: unmanagedProcesses,
+            orphanBridges: orphanBridges,
+            launchReadiness: launchReadiness,
+            build: build,
+            updateInfo: updateInfo
+        )
     }
 
     public var displaySeverity: HarnessSeverity {
@@ -1145,6 +1176,12 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 }
 
+public struct RealtimeConnectionSnapshot: Codable, Equatable, Sendable {
+    public let runtimeUrl: String?
+    public let machineName: String?
+    public let tokenPath: String?
+}
+
 public struct ServiceSnapshot: Codable, Equatable, Sendable {
     public let platform: String?
     public let status: String?
@@ -1416,6 +1453,32 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
 
     public var id: String {
         sessionId ?? "\(provider ?? "unknown")-\(workspaceLabel ?? "workspace")-\(lastActivityAt ?? "never")"
+    }
+
+    func applying(_ projection: SessionProjection) -> ManagedSessionSnapshot {
+        ManagedSessionSnapshot(
+            sessionId: sessionId,
+            provider: provider,
+            workspaceLabel: workspaceLabel,
+            timelineTitle: projection.timelineTitle ?? timelineTitle,
+            summaryTitle: projection.summaryTitle ?? summaryTitle,
+            firstUserMessage: projection.firstUserMessage ?? firstUserMessage,
+            titleState: projection.titleState ?? titleState,
+            titleSource: projection.titleSource ?? titleSource,
+            branch: branch,
+            state: state,
+            phase: projection.runtimePhase ?? phase,
+            rawPhase: projection.runtimePhase ?? rawPhase,
+            phaseObservedAt: phaseObservedAt,
+            lastActivityAt: projection.lastActivityAt ?? lastActivityAt,
+            bridgeStatus: bridgeStatus,
+            bridgePid: bridgePid,
+            bridgeHeartbeatAt: bridgeHeartbeatAt,
+            launchMode: launchMode,
+            uiAttached: uiAttached,
+            uiPresence: uiPresence,
+            reasonCodes: reasonCodes
+        )
     }
 
     public var normalizedState: String {

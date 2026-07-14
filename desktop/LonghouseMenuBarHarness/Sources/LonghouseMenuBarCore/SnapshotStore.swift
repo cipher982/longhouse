@@ -26,6 +26,10 @@ public final class SnapshotStore: ObservableObject {
     private let source: any HealthSnapshotSource
     private var refreshTask: Task<Void, Never>?
     private var bootGraceTask: Task<Void, Never>?
+    private var realtimeTask: Task<Void, Never>?
+    private var realtimeConnection: RealtimeConnectionSnapshot?
+    private var localStatusMonitor: LocalStatusMonitor?
+    private var localStatusPath: String?
     private var activeRefreshReason: SnapshotRefreshReason?
     private var queuedManualRefresh = false
     private var presentationTimer: Timer?
@@ -68,6 +72,8 @@ public final class SnapshotStore: ObservableObject {
     deinit {
         refreshTask?.cancel()
         bootGraceTask?.cancel()
+        realtimeTask?.cancel()
+        localStatusMonitor?.stop()
     }
 
     private func scheduleBootGraceTimeout() {
@@ -201,6 +207,8 @@ public final class SnapshotStore: ObservableObject {
             switch result {
             case let .success(snapshot):
                 self.snapshot = snapshot
+                self.connectRealtimeIfNeeded(snapshot.realtime)
+                self.monitorLocalStatusIfNeeded(snapshot.engineStatus?.path)
                 self.appendHistorySample(for: snapshot)
                 self.persistCachedSnapshot(snapshot)
                 self.loadError = nil
@@ -210,6 +218,37 @@ public final class SnapshotStore: ObservableObject {
             }
 
             self.completeRefresh(reason: reason)
+        }
+    }
+
+    private func monitorLocalStatusIfNeeded(_ path: String?) {
+        guard path != localStatusPath else { return }
+        localStatusMonitor?.stop()
+        localStatusMonitor = nil
+        localStatusPath = path
+        guard let path, !path.isEmpty else { return }
+        let monitor = LocalStatusMonitor(statusPath: path) { [weak self] in
+            Task { @MainActor [weak self] in self?.refresh(reason: .background) }
+        }
+        localStatusMonitor = monitor
+        monitor.start()
+    }
+
+    private func connectRealtimeIfNeeded(_ connection: RealtimeConnectionSnapshot?) {
+        guard connection != realtimeConnection else { return }
+        realtimeTask?.cancel()
+        realtimeTask = nil
+        realtimeConnection = connection
+        guard let connection,
+              connection.runtimeUrl != nil,
+              connection.tokenPath != nil
+        else { return }
+
+        realtimeTask = Task { [weak self] in
+            for await projection in SessionProjectionStream.projections(connection: connection) {
+                guard !Task.isCancelled, let self, let snapshot = self.snapshot else { return }
+                self.snapshot = snapshot.applying(projection)
+            }
         }
     }
 

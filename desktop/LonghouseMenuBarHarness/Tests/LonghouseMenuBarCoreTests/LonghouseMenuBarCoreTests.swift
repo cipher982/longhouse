@@ -29,6 +29,11 @@ private struct ThrowingHealthSnapshotSource: HealthSnapshotSource {
     }
 }
 
+private actor ChangeCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
+}
+
 private final class CountingHealthSnapshotSource: HealthSnapshotSource, @unchecked Sendable {
     private let lock = NSLock()
     private var snapshots: [HealthSnapshot]
@@ -105,6 +110,66 @@ private func watchingAttentionSnapshot() -> HealthSnapshot {
 }
 
 struct LonghouseMenuBarCoreTests {
+    @Test
+    func realtimeProjectionUpdatesTitleAndPhaseWithoutReloadingSnapshot() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "session-1",
+            provider: "codex",
+            workspaceLabel: "zerg",
+            timelineTitle: "Naming session…",
+            branch: "main",
+            state: "attached",
+            phase: "idle",
+            lastActivityAt: nil,
+            bridgeStatus: nil,
+            bridgePid: nil,
+            bridgeHeartbeatAt: nil,
+            reasonCodes: []
+        )
+        let updated = session.applying(
+            SessionProjection(
+                sessionId: "session-1",
+                timelineTitle: "Make titles immediate",
+                summaryTitle: "Make titles immediate",
+                firstUserMessage: "Make titles immediate please",
+                titleState: "ready",
+                titleSource: "prompt",
+                runtimePhase: "thinking",
+                displayPhase: "Thinking",
+                lastActivityAt: "2026-07-14T05:00:00Z"
+            )
+        )
+
+        #expect(updated.resolvedTitleText == "Make titles immediate")
+        #expect(updated.phase == "thinking")
+        #expect(updated.titleSource == "prompt")
+    }
+
+    @Test
+    func localStatusMonitorIgnoresClockOnlyWritesAndWakesForSessionChanges() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-status-monitor-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let statusURL = directory.appendingPathComponent("engine-status.json")
+        try Data(#"{"last_updated":"one","sessions_sequence":1}"#.utf8).write(to: statusURL, options: .atomic)
+        let changed = ChangeCounter()
+        let monitor = LocalStatusMonitor(statusPath: statusURL.path) {
+            Task { await changed.increment() }
+        }
+        monitor.start()
+        try await Task.sleep(for: .milliseconds(75))
+
+        try Data(#"{"last_updated":"two","sessions_sequence":1}"#.utf8).write(to: statusURL, options: .atomic)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(await changed.value == 0)
+
+        try Data(#"{"last_updated":"three","sessions_sequence":2}"#.utf8).write(to: statusURL, options: .atomic)
+        try await Task.sleep(for: .milliseconds(150))
+        monitor.stop()
+        #expect(await changed.value == 1)
+    }
+
     @Test
     func statusItemSourceIconHasZeroPadding() throws {
         let iconURL = try #require(Bundle.module.url(forResource: "LonghouseMenuIcon", withExtension: "png"))
@@ -217,7 +282,7 @@ struct LonghouseMenuBarCoreTests {
     func defaultsDirectLaunchToLiveStatusWindow() throws {
         let config = try HarnessRuntimeConfig.parse(arguments: [])
 
-        #expect(config.refreshIntervalSeconds == HarnessRuntimeConfig.defaultRefreshIntervalSeconds)
+        #expect(config.refreshIntervalSeconds == nil)
         #expect(config.showStatusWindowOnLaunch == true)
     }
 

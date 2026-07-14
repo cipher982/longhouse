@@ -146,8 +146,6 @@ public enum HealthSnapshotDecoder {
 }
 
 public struct HarnessRuntimeConfig {
-    public static let defaultRefreshIntervalSeconds: TimeInterval = 30
-
     public let outputURL: URL?
     public let source: any HealthSnapshotSource
     public let actionLogURL: URL?
@@ -344,10 +342,6 @@ public struct HarnessRuntimeConfig {
         if inputURL == nil && !useLive {
             useLive = true
         }
-        if useLive && refreshIntervalSeconds == nil {
-            refreshIntervalSeconds = HarnessRuntimeConfig.defaultRefreshIntervalSeconds
-        }
-
         let source: any HealthSnapshotSource
         if let inputURL {
             source = FixtureHealthSnapshotSource(fileURL: inputURL)

@@ -520,6 +520,7 @@ def _collect_managed_session_sources(
 def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = False) -> dict[str, Any]:
     now = _utc_now()
     resolved_base_dir = _coerce_path(claude_dir)
+    _machine_state_path, machine_state, _machine_state_error = read_machine_state(resolved_base_dir)
     phase_overlay = None if fast else _load_managed_session_phase_state(resolved_base_dir, now=now)
     service = _collect_service(resolved_base_dir)
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
@@ -709,6 +710,11 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "activity_summary": activity_summary,
         "managed_summary": managed_summary,
         "managed_sessions": managed_sessions,
+        "realtime": {
+            "runtime_url": machine_state.runtime_url if machine_state else None,
+            "machine_name": machine_state.machine_name if machine_state else None,
+            "token_path": str(get_machine_token_path(resolved_base_dir)),
+        },
         "unmanaged_processes": unmanaged_processes,
         "orphan_bridges": orphan_bridges,
         "launch_readiness": launch_readiness,
