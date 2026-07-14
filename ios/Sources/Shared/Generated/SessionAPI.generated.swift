@@ -517,6 +517,7 @@ struct APISessionWorkspaceResponse: Codable, Hashable, Sendable {
     let thread: APISessionThreadResponse
     let projection: APISessionProjectionResponse
     let workspaceRevision: APISessionWorkspaceRevisionResponse
+    let controlOnly: Bool?
 }
 
 struct APIQueuedInputSummary: Codable, Hashable, Sendable {

@@ -5850,6 +5850,11 @@ export interface components {
              * @description Launch surface provenance when known
              */
             launch_surface?: string | null;
+            /**
+             * Session Id
+             * @description Optional client-minted session UUID for Degraded Helm. Retries and later convergence must reuse this identity instead of minting a replacement.
+             */
+            session_id?: string | null;
         };
         /** ManagedSessionLeaseIn */
         ManagedSessionLeaseIn: {
@@ -9533,6 +9538,12 @@ export interface components {
             projection: components["schemas"]["SessionProjectionResponse"];
             /** @description Durable viewport freshness revision */
             workspace_revision: components["schemas"]["SessionWorkspaceRevisionResponse"];
+            /**
+             * Control Only
+             * @description True when the session has a live managed control path but no transcript source yet.
+             * @default false
+             */
+            control_only: boolean;
         };
         /**
          * SessionWorkspaceRevisionResponse
