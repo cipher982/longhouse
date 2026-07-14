@@ -3518,15 +3518,13 @@ def test_collect_local_health_fast_uses_resolved_sessions_without_process_scan(m
         "_load_managed_session_phase_state",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fast local-health must not read phase overlay")),
     )
-    def enrich_titles(_base_dir: Path, rows: list[dict], **_kwargs):
-        rows[0].update(
-            timeline_title="Fix fast menu titles",
-            summary_title="Fix fast menu titles",
-            title_state="ready",
-            title_source="prompt",
-        )
-
-    monkeypatch.setattr(local_health_service, "_enrich_managed_session_titles", enrich_titles)
+    monkeypatch.setattr(
+        local_health_service,
+        "_enrich_managed_session_titles",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("fast local-health must not fetch remote titles")
+        ),
+    )
     managed_id = "55c61956-7554-4713-8c9b-fb0fa6164c2c"
     unmanaged_id = "019dcac2-fd02-7a97-85b8-6f725b9d6252"
     _write_engine_status(
@@ -3545,6 +3543,10 @@ def test_collect_local_health_fast_uses_resolved_sessions_without_process_scan(m
                     "tool_name": None,
                     "phase_observed_at": "2026-05-05T11:59:58Z",
                     "last_activity_at": "2026-05-05T11:59:58Z",
+                    "timeline_title": "Fix fast menu titles",
+                    "first_user_message": "Fix fast menu titles without networking",
+                    "title_state": "ready",
+                    "title_source": "prompt",
                     "workspace": {
                         "cwd": "/Users/test/git/zerg",
                         "label": "zerg",
@@ -3618,6 +3620,7 @@ def test_collect_local_health_fast_uses_resolved_sessions_without_process_scan(m
     assert snapshot["managed_sessions"][0]["ui_attached"] is None
     assert snapshot["managed_sessions"][0]["ui_presence"] is None
     assert snapshot["managed_sessions"][0]["timeline_title"] == "Fix fast menu titles"
+    assert snapshot["managed_sessions"][0]["title_source"] == "prompt"
     assert snapshot["unmanaged_processes"][0]["provider"] == "claude"
     assert snapshot["unmanaged_processes"][0]["pid"] == 48145
     assert snapshot["unmanaged_processes"][0]["workspace_label"] == "zerg"

@@ -171,12 +171,35 @@ pub struct ResolvedLocalSession {
     pub phase_observed_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_activity_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeline_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_user_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title_source: Option<String>,
     pub workspace: ResolvedWorkspace,
     pub process: ResolvedProcess,
     pub bridge: ResolvedBridge,
     pub evidence: ResolvedEvidence,
     #[serde(default)]
     pub reason_codes: Vec<String>,
+}
+
+pub fn apply_local_titles(conn: &rusqlite::Connection, sessions: &mut [ResolvedLocalSession]) {
+    for session in sessions {
+        let Some(session_id) = session.session_id.as_deref() else {
+            continue;
+        };
+        let Ok(Some(title)) = crate::state::session_title::get(conn, session_id) else {
+            continue;
+        };
+        session.timeline_title = Some(title.title);
+        session.first_user_message = Some(title.first_user_message);
+        session.title_state = Some("ready".to_string());
+        session.title_source = Some("prompt".to_string());
+    }
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
@@ -764,6 +787,10 @@ fn resolved_managed_opencode_session(
         tool_name: lease.tool_name.clone(),
         phase_observed_at: Some(lease.observed_at.clone()),
         last_activity_at: Some(lease.observed_at.clone()),
+        timeline_title: None,
+        first_user_message: None,
+        title_state: None,
+        title_source: None,
         workspace: workspace_from_cwd(obs.and_then(|obs| obs.cwd.clone())),
         process: ResolvedProcess {
             pid: process_pid,
@@ -856,6 +883,10 @@ fn resolved_managed_codex_session(
         tool_name: lease.tool_name.clone(),
         phase_observed_at: Some(lease.observed_at.clone()),
         last_activity_at: Some(lease.observed_at.clone()),
+        timeline_title: None,
+        first_user_message: None,
+        title_state: None,
+        title_source: None,
         workspace: workspace_from_cwd(cwd),
         process: ResolvedProcess {
             pid: process_pid,
@@ -959,6 +990,10 @@ fn resolved_managed_cursor_session(
         tool_name: lease.tool_name.clone(),
         phase_observed_at: Some(lease.observed_at.clone()),
         last_activity_at: Some(lease.observed_at.clone()),
+        timeline_title: None,
+        first_user_message: None,
+        title_state: None,
+        title_source: None,
         workspace: workspace_from_cwd(cwd),
         process: ResolvedProcess {
             pid: cursor_pid,
@@ -1038,6 +1073,10 @@ fn resolved_managed_claude_session(
         tool_name: lease.tool_name.clone(),
         phase_observed_at: Some(lease.observed_at.clone()),
         last_activity_at: Some(lease.observed_at.clone()),
+        timeline_title: None,
+        first_user_message: None,
+        title_state: None,
+        title_source: None,
         workspace: workspace_from_cwd(cwd),
         process: ResolvedProcess {
             pid: process_pid,
@@ -1078,6 +1117,10 @@ fn resolved_managed_generic_session(lease: &ManagedSessionLease) -> ResolvedLoca
         tool_name: lease.tool_name.clone(),
         phase_observed_at: Some(lease.observed_at.clone()),
         last_activity_at: Some(lease.observed_at.clone()),
+        timeline_title: None,
+        first_user_message: None,
+        title_state: None,
+        title_source: None,
         workspace: ResolvedWorkspace::default(),
         process: ResolvedProcess::default(),
         bridge: ResolvedBridge::default(),
@@ -1115,6 +1158,10 @@ fn resolved_unmanaged_session(binding: &UnmanagedSessionBinding) -> ResolvedLoca
         tool_name: None,
         phase_observed_at: None,
         last_activity_at: Some(binding.observed_at.clone()),
+        timeline_title: None,
+        first_user_message: None,
+        title_state: None,
+        title_source: None,
         workspace: workspace_from_cwd(binding.cwd.clone()),
         process: ResolvedProcess {
             pid: binding.pid,

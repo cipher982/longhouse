@@ -1653,6 +1653,7 @@ fn write_local_status_snapshot(
         opencode_observations,
         cursor_observations,
     );
+    heartbeat::apply_local_titles(conn, &mut payload.sessions);
     session_snapshot_state.annotate(&mut payload);
     // Compute the fresh ledger view up front so a read failure is both
     // logged and encoded in the status file as `phase_ledger_status`.
@@ -3563,6 +3564,10 @@ mod tests {
             tool_name: None,
             phase_observed_at: Some("2026-05-05T12:00:01Z".to_string()),
             last_activity_at: Some("2026-05-05T12:00:02Z".to_string()),
+            timeline_title: None,
+            first_user_message: None,
+            title_state: None,
+            title_source: None,
             workspace: heartbeat::ResolvedWorkspace {
                 cwd: Some("/tmp/project".to_string()),
                 label: Some("project".to_string()),

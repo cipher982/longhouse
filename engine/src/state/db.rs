@@ -113,6 +113,14 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             observed_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS session_title_state (
+            session_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            first_user_message TEXT NOT NULL,
+            source TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS managed_session_state (
             session_id TEXT PRIMARY KEY,
             provider TEXT NOT NULL,

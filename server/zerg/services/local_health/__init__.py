@@ -541,10 +541,8 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         phase_overlay=phase_overlay,
         fast=fast,
     )
-    # Keep this best-effort compatibility overlay until every installed app's
-    # native SSE path is proven healthy. SnapshotStore keeps the cached panel
-    # visible if this lookup stalls while networking recovers after wake.
-    _enrich_managed_session_titles(resolved_base_dir, managed_sessions)
+    if not fast:
+        _enrich_managed_session_titles(resolved_base_dir, managed_sessions)
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
     archive_repair = collect_archive_backlog(resolved_base_dir, engine_status_payload=engine_status.get("payload"))
