@@ -188,7 +188,7 @@ struct LaunchSessionSheet: View {
                     if availableProviders.count > 1 {
                         Picker("Provider", selection: $selectedProvider) {
                             ForEach(availableProviders, id: \.self) { provider in
-                                Text(provider).tag(provider)
+                                Text(providerDisplayName(provider)).tag(provider)
                             }
                         }
                         .onChange(of: selectedProvider) { _, _ in
@@ -482,6 +482,8 @@ struct LaunchSessionSheet: View {
             return "control channel disconnected"
         case "no_codex_support":
             return "Codex launch is not advertised"
+        case "no_launch_support":
+            return "No Console launch provider is available"
         case "engine_too_old":
             return "engine too old for Codex launch"
         case "auth_failed":
@@ -490,6 +492,17 @@ struct LaunchSessionSheet: View {
             return "runtime host unreachable"
         default:
             return machine.online ? "interactive launch unavailable" : "control channel disconnected"
+        }
+    }
+
+    private func providerDisplayName(_ provider: String) -> String {
+        switch provider {
+        case "codex": "Codex"
+        case "claude": "Claude"
+        case "opencode": "OpenCode"
+        case "cursor": "Cursor"
+        case "antigravity": "Antigravity"
+        default: provider
         }
     }
 

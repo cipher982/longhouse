@@ -138,10 +138,8 @@ When a provider also supports `live_control`, both clients may offer the same
 advanced **Keep runtime open** choice. That option is explicit and must not be
 silently selected because a client lacks a first-message field.
 
-iOS therefore needs a first-message field and the same execution-lifetime
-choice as web before it switches to the canonical default. Until that UI lands,
-its existing explicit `live_control` request remains a known compatibility
-exception rather than being redefined as Console truth.
+iOS provides a first-message field and the same execution-lifetime choice as
+web, so both surfaces can apply the canonical backend default directly.
 
 ### 5. Provider Defaults Are Product Policy
 

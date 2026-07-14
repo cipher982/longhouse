@@ -269,6 +269,8 @@ export default function LaunchSessionModal({
                       onClick={() => {
                         setDeviceId(machine.device_id);
                         setProvider("");
+                        setExecutionLifetime(machine.launch.default_execution_lifetime ?? "live_control");
+                        setInitialPrompt("");
                         setCwd("");
                         setWorkspaceSearch("");
                         setError(null);
