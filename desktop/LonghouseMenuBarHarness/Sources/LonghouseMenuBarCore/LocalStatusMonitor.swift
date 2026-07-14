@@ -3,15 +3,28 @@ import Darwin
 import Foundation
 
 final class LocalStatusMonitor: @unchecked Sendable {
+    struct Projection: Sendable {
+        let sessions: [SessionState]
+        let engine: EngineStatusPayload?
+    }
+
+    struct SessionState: Sendable {
+        let sessionId: String
+        let state: String?
+        let phase: String?
+        let observedAt: String?
+        let bridgeStatus: String?
+    }
+
     private let statusURL: URL
     private let queue = DispatchQueue(label: "ai.longhouse.menu-bar.local-status", qos: .userInitiated)
-    private let onChange: @Sendable () -> Void
+    private let onChange: @Sendable (Projection) -> Void
     private var source: DispatchSourceFileSystemObject?
     private var directoryHandle: CInt = -1
     private var fingerprint: Data?
     private var debounce: DispatchWorkItem?
 
-    init(statusPath: String, onChange: @escaping @Sendable () -> Void) {
+    init(statusPath: String, onChange: @escaping @Sendable (Projection) -> Void) {
         statusURL = URL(fileURLWithPath: statusPath)
         self.onChange = onChange
     }
@@ -56,7 +69,7 @@ final class LocalStatusMonitor: @unchecked Sendable {
     private func readIfChanged() {
         guard let next = semanticFingerprint(), next != fingerprint else { return }
         fingerprint = next
-        onChange()
+        onChange(Projection(sessions: localSessionStates(), engine: enginePayload()))
     }
 
     private func semanticFingerprint() -> Data? {
@@ -73,5 +86,29 @@ final class LocalStatusMonitor: @unchecked Sendable {
             payload[key].map { (key, $0) }
         })
         return try? JSONSerialization.data(withJSONObject: semantic, options: [.sortedKeys])
+    }
+
+    private func localSessionStates() -> [SessionState] {
+        guard let data = try? Data(contentsOf: statusURL),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = payload["managed_sessions"] as? [[String: Any]]
+        else { return [] }
+        return rows.compactMap { row in
+            guard let sessionId = row["session_id"] as? String else { return nil }
+            return SessionState(
+                sessionId: sessionId,
+                state: row["state"] as? String,
+                phase: row["phase"] as? String,
+                observedAt: row["observed_at"] as? String,
+                bridgeStatus: row["bridge_status"] as? String
+            )
+        }
+    }
+
+    private func enginePayload() -> EngineStatusPayload? {
+        guard let data = try? Data(contentsOf: statusURL) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try? decoder.decode(EngineStatusPayload.self, from: data)
     }
 }

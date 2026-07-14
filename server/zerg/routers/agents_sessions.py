@@ -1,6 +1,7 @@
 """Agents API — session CRUD, listing, and export endpoints."""
 
 import asyncio
+import json
 import logging
 from datetime import date as date_type
 from datetime import datetime
@@ -47,7 +48,7 @@ from zerg.services.catalog_read_gateway import timeline_snapshot
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
-from zerg.services.live_catalog_timeline import stream_live_catalog_timeline
+from zerg.services.live_catalog_timeline import stream_live_catalog_machine_sessions
 from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
@@ -238,23 +239,58 @@ async def stream_agent_sessions(
         context_mode="forensic",
     )
     if database_module.live_catalog_enabled():
-        stream = stream_live_catalog_timeline(
+        stream = stream_live_catalog_machine_sessions(
             request,
             params=params,
             skip_initial_replay=skip_initial_replay,
         )
     else:
         owner_id = getattr(_auth, "owner_id", None)
-        stream = stream_timeline_sessions_for_browser(
+        browser_stream = stream_timeline_sessions_for_browser(
             request,
             session_factory=get_session_factory(),
             params=params,
             skip_initial_replay=skip_initial_replay,
             owner_id=owner_id if isinstance(owner_id, int) else None,
         )
+        stream = _slim_machine_stream(browser_stream)
     response = EventSourceResponse(stream)
     response.headers["X-Limit-Cap"] = "100"
     return response
+
+
+async def _slim_machine_stream(browser_stream):
+    """Keep legacy/self-host storage on the same small wire contract."""
+
+    async for event in browser_stream:
+        if event.get("event") == "session_remove":
+            raw = json.loads(event["data"])
+            yield {
+                "event": "session_remove",
+                "data": json.dumps({"session_id": raw.get("session_id") or raw.get("thread_id"), "source": "runtime_host"}),
+            }
+            continue
+        if event.get("event") != "session_upsert":
+            yield event
+            continue
+        raw = json.loads(event["data"])
+        head = raw["session"]["head"]
+        payload = {
+            "session_id": head["id"],
+            "device_id": head.get("device_id"),
+            "timeline_title": head.get("timeline_title"),
+            "title_state": head.get("title_state"),
+            "title_source": head.get("title_source"),
+            "runtime_phase": head.get("runtime_phase"),
+            "display_phase": head.get("display_phase"),
+            "last_activity_at": head.get("last_activity_at"),
+            "runtime_version": head.get("runtime_version"),
+            "source": "runtime_host",
+        }
+        yield {
+            "event": "session_delta",
+            "data": json.dumps({key: value for key, value in payload.items() if value is not None}),
+        }
 
 
 @router.get("/worklog/day", response_model=WorklogDayExportResponse)

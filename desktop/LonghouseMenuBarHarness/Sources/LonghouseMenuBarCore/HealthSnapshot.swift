@@ -136,6 +136,42 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         )
     }
 
+    func removingSession(_ sessionId: String) -> HealthSnapshot {
+        replacingManagedSessions(managedSessions?.filter { $0.sessionId != sessionId })
+    }
+
+    func applyingLocalProjection(_ projection: LocalStatusMonitor.Projection) -> HealthSnapshot {
+        let states = projection.sessions
+        let byId = Dictionary(uniqueKeysWithValues: states.map { ($0.sessionId, $0) })
+        let sessions = managedSessions?.map { session in
+            guard let state = session.sessionId.flatMap({ byId[$0] }) else { return session }
+            return session.applying(state)
+        }
+        let updatedEngine = EngineStatusSnapshot(
+            path: engineStatus?.path,
+            exists: true,
+            fresh: true,
+            ageSeconds: 0,
+            payload: projection.engine ?? engineStatus?.payload,
+            error: nil
+        )
+        return replacingManagedSessions(sessions, replacementEngineStatus: updatedEngine)
+    }
+
+    private func replacingManagedSessions(
+        _ sessions: [ManagedSessionSnapshot]?,
+        replacementEngineStatus: EngineStatusSnapshot? = nil
+    ) -> HealthSnapshot {
+        HealthSnapshot(
+            schemaVersion: schemaVersion, collectedAt: collectedAt, healthState: healthState,
+            severity: severity, headline: headline, reasons: reasons, suggestedActions: suggestedActions,
+            attention: attention, service: service, engineStatus: replacementEngineStatus ?? engineStatus, outbox: outbox,
+            activitySummary: activitySummary, managedSummary: managedSummary, managedSessions: sessions,
+            realtime: realtime, unmanagedProcesses: unmanagedProcesses, orphanBridges: orphanBridges,
+            launchReadiness: launchReadiness, build: build, updateInfo: updateInfo
+        )
+    }
+
     public var displaySeverity: HarnessSeverity {
         if let managedAttentionSeverity,
            managedAttentionSeverity == .yellow || managedAttentionSeverity == .red {
@@ -1391,10 +1427,12 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     public let firstUserMessage: String?
     public let titleState: String?
     public let titleSource: String?
+    public let titleProvenance: String?
     public let branch: String?
     public let state: String?
     public let phase: String?
     public let rawPhase: String?
+    public let phaseProvenance: String?
     public let phaseObservedAt: String?
     public let lastActivityAt: String?
     public let bridgeStatus: String?
@@ -1414,10 +1452,12 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         firstUserMessage: String? = nil,
         titleState: String? = nil,
         titleSource: String? = nil,
+        titleProvenance: String? = nil,
         branch: String?,
         state: String?,
         phase: String?,
         rawPhase: String? = nil,
+        phaseProvenance: String? = nil,
         phaseObservedAt: String? = nil,
         lastActivityAt: String?,
         bridgeStatus: String?,
@@ -1436,10 +1476,12 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         self.firstUserMessage = firstUserMessage
         self.titleState = titleState
         self.titleSource = titleSource
+        self.titleProvenance = titleProvenance
         self.branch = branch
         self.state = state
         self.phase = phase
         self.rawPhase = rawPhase
+        self.phaseProvenance = phaseProvenance
         self.phaseObservedAt = phaseObservedAt
         self.lastActivityAt = lastActivityAt
         self.bridgeStatus = bridgeStatus
@@ -1456,7 +1498,9 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     }
 
     func applying(_ projection: SessionProjection) -> ManagedSessionSnapshot {
-        ManagedSessionSnapshot(
+        let localPhaseIsAuthoritative = normalizedState == "attached"
+            || bridgeStatus?.lowercased() == "connected"
+        return ManagedSessionSnapshot(
             sessionId: sessionId,
             provider: provider,
             workspaceLabel: workspaceLabel,
@@ -1465,10 +1509,12 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             firstUserMessage: projection.firstUserMessage ?? firstUserMessage,
             titleState: projection.titleState ?? titleState,
             titleSource: projection.titleSource ?? titleSource,
+            titleProvenance: projection.timelineTitle == nil ? titleProvenance : projection.source,
             branch: branch,
             state: state,
-            phase: projection.runtimePhase ?? phase,
-            rawPhase: projection.runtimePhase ?? rawPhase,
+            phase: localPhaseIsAuthoritative ? phase : (projection.runtimePhase ?? phase),
+            rawPhase: localPhaseIsAuthoritative ? rawPhase : (projection.runtimePhase ?? rawPhase),
+            phaseProvenance: localPhaseIsAuthoritative ? (phaseProvenance ?? "machine_agent") : projection.source,
             phaseObservedAt: phaseObservedAt,
             lastActivityAt: projection.lastActivityAt ?? lastActivityAt,
             bridgeStatus: bridgeStatus,
@@ -1478,6 +1524,21 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             uiAttached: uiAttached,
             uiPresence: uiPresence,
             reasonCodes: reasonCodes
+        )
+    }
+
+    func applying(_ local: LocalStatusMonitor.SessionState) -> ManagedSessionSnapshot {
+        ManagedSessionSnapshot(
+            sessionId: sessionId, provider: provider, workspaceLabel: workspaceLabel,
+            timelineTitle: timelineTitle, summaryTitle: summaryTitle, firstUserMessage: firstUserMessage,
+            titleState: titleState, titleSource: titleSource, titleProvenance: titleProvenance,
+            branch: branch, state: local.state ?? state, phase: local.phase ?? phase,
+            rawPhase: local.phase ?? rawPhase, phaseProvenance: "machine_agent",
+            phaseObservedAt: local.observedAt ?? phaseObservedAt,
+            lastActivityAt: local.observedAt ?? lastActivityAt,
+            bridgeStatus: local.bridgeStatus ?? bridgeStatus, bridgePid: bridgePid,
+            bridgeHeartbeatAt: bridgeHeartbeatAt, launchMode: launchMode, uiAttached: uiAttached,
+            uiPresence: uiPresence, reasonCodes: reasonCodes
         )
     }
 

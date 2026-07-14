@@ -459,6 +459,102 @@ def read_live_catalog_session(session_id: UUID) -> tuple[SessionResponse | None,
     return projected, str(provider_alias) if provider_alias else None, commit_seq
 
 
+def project_machine_session_delta(
+    session: SessionResponse,
+    *,
+    commit_seq: str | int | None,
+    fanout: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Project only the facts an ambient machine client can render."""
+
+    payload: dict[str, Any] = {
+        "session_id": session.id,
+        "device_id": session.device_id,
+        "timeline_title": session.timeline_title,
+        "title_state": session.title_state,
+        "title_source": session.title_source,
+        "runtime_phase": session.runtime_phase,
+        "display_phase": session.display_phase,
+        "last_activity_at": session.last_activity_at.isoformat() if session.last_activity_at else None,
+        "runtime_version": session.runtime_version,
+        "commit_seq": str(commit_seq) if commit_seq is not None else None,
+        "source": "runtime_host",
+    }
+    if fanout:
+        payload["fanout_kind"] = fanout.get("kind")
+        payload["server_fanout_at_ms"] = fanout.get("server_fanout_at_ms")
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _machine_session_delta_signature(payload: dict[str, Any]) -> str:
+    rendered = {key: value for key, value in payload.items() if key not in {"commit_seq", "fanout_kind", "server_fanout_at_ms"}}
+    return json.dumps(rendered, sort_keys=True, separators=(",", ":"))
+
+
+async def stream_live_catalog_machine_sessions(
+    request,
+    *,
+    params: TimelineSessionListParams,
+    skip_initial_replay: bool,
+):
+    """Slim, targeted machine session stream; never serializes browser cards."""
+
+    bus = get_pubsub()
+    sequence = bus.peek_latest_seq(TOPIC_TIMELINE)
+    previous: dict[str, str] = {}
+    yield {"event": "connected", "data": json.dumps({"source": "runtime_host"})}
+
+    if not skip_initial_replay:
+        response = await asyncio.to_thread(list_live_catalog_timeline, params=params)
+        for card in response.sessions:
+            delta = project_machine_session_delta(card.head, commit_seq=None)
+            signature = _machine_session_delta_signature(delta)
+            previous[card.head.id] = signature
+            yield {"event": "session_delta", "data": signature}
+
+    with bus.subscribe(TOPIC_TIMELINE, since_seq=sequence) as subscription:
+        while not await request.is_disconnected():
+            message = await subscription.next_message(timeout=30.0)
+            if message is None:
+                yield {
+                    "event": "heartbeat",
+                    "data": json.dumps({"source": "runtime_host"}),
+                }
+                continue
+            session_id = str(message.payload.get("session_id") or "")
+            if not session_id:
+                continue
+            try:
+                session, _provider_alias, commit_seq = await asyncio.to_thread(
+                    read_live_catalog_session,
+                    UUID(session_id),
+                )
+            except (ValueError, TypeError):
+                continue
+            if session is None or (params.device_id and session.device_id != params.device_id):
+                if session_id in previous:
+                    previous.pop(session_id, None)
+                    yield {
+                        "event": "session_remove",
+                        "data": json.dumps({"session_id": session_id, "source": "runtime_host"}),
+                    }
+                continue
+            delta = project_machine_session_delta(session, commit_seq=commit_seq)
+            signature = _machine_session_delta_signature(delta)
+            if previous.get(session_id) == signature:
+                continue
+            previous[session_id] = signature
+            event_delta = project_machine_session_delta(
+                session,
+                commit_seq=commit_seq,
+                fanout=message.payload,
+            )
+            yield {
+                "event": "session_delta",
+                "data": json.dumps(event_delta, sort_keys=True, separators=(",", ":")),
+            }
+
+
 async def stream_live_catalog_timeline(
     request,
     *,

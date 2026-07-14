@@ -227,8 +227,17 @@ public final class SnapshotStore: ObservableObject {
         localStatusMonitor = nil
         localStatusPath = path
         guard let path, !path.isEmpty else { return }
-        let monitor = LocalStatusMonitor(statusPath: path) { [weak self] in
-            Task { @MainActor [weak self] in self?.refresh(reason: .background) }
+        let monitor = LocalStatusMonitor(statusPath: path) { [weak self] projection in
+            Task { @MainActor [weak self] in
+                guard let self, let snapshot = self.snapshot else { return }
+                let currentIds = Set((snapshot.managedSessions ?? []).compactMap(\.sessionId))
+                let nextIds = Set(projection.sessions.map(\.sessionId))
+                if currentIds != nextIds {
+                    self.refresh(reason: .background)
+                } else {
+                    self.snapshot = snapshot.applyingLocalProjection(projection)
+                }
+            }
         }
         localStatusMonitor = monitor
         monitor.start()
@@ -245,9 +254,14 @@ public final class SnapshotStore: ObservableObject {
         else { return }
 
         realtimeTask = Task { [weak self] in
-            for await projection in SessionProjectionStream.projections(connection: connection) {
+            for await event in SessionProjectionStream.projections(connection: connection) {
                 guard !Task.isCancelled, let self, let snapshot = self.snapshot else { return }
-                self.snapshot = snapshot.applying(projection)
+                switch event {
+                case let .delta(projection):
+                    self.snapshot = snapshot.applying(projection)
+                case let .remove(sessionId):
+                    self.snapshot = snapshot.removingSession(sessionId)
+                }
             }
         }
     }

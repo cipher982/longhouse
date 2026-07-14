@@ -136,13 +136,16 @@ struct LonghouseMenuBarCoreTests {
                 titleSource: "prompt",
                 runtimePhase: "thinking",
                 displayPhase: "Thinking",
-                lastActivityAt: "2026-07-14T05:00:00Z"
+                lastActivityAt: "2026-07-14T05:00:00Z",
+                source: "runtime_host"
             )
         )
 
         #expect(updated.resolvedTitleText == "Make titles immediate")
-        #expect(updated.phase == "thinking")
+        #expect(updated.phase == "idle")
         #expect(updated.titleSource == "prompt")
+        #expect(updated.titleProvenance == "runtime_host")
+        #expect(updated.phaseProvenance == "machine_agent")
     }
 
     @Test
@@ -154,7 +157,7 @@ struct LonghouseMenuBarCoreTests {
         let statusURL = directory.appendingPathComponent("engine-status.json")
         try Data(#"{"last_updated":"one","sessions_sequence":1}"#.utf8).write(to: statusURL, options: .atomic)
         let changed = ChangeCounter()
-        let monitor = LocalStatusMonitor(statusPath: statusURL.path) {
+        let monitor = LocalStatusMonitor(statusPath: statusURL.path) { _ in
             Task { await changed.increment() }
         }
         monitor.start()

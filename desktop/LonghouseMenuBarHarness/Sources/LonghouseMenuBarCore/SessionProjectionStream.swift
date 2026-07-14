@@ -10,19 +10,17 @@ struct SessionProjection: Sendable {
     let runtimePhase: String?
     let displayPhase: String?
     let lastActivityAt: String?
+    let source: String
+}
+
+enum SessionProjectionEvent: Sendable {
+    case delta(SessionProjection)
+    case remove(sessionId: String)
 }
 
 enum SessionProjectionStream {
-    private struct UpsertEnvelope: Decodable {
-        let session: Card
-    }
-
-    private struct Card: Decodable {
-        let head: Head
-    }
-
-    private struct Head: Decodable {
-        let id: String
+    private struct Delta: Decodable {
+        let sessionId: String
         let timelineTitle: String?
         let summaryTitle: String?
         let firstUserMessage: String?
@@ -31,9 +29,12 @@ enum SessionProjectionStream {
         let runtimePhase: String?
         let displayPhase: String?
         let lastActivityAt: String?
+        let source: String
     }
 
-    static func projections(connection: RealtimeConnectionSnapshot) -> AsyncStream<SessionProjection> {
+    private struct Remove: Decodable { let sessionId: String }
+
+    static func projections(connection: RealtimeConnectionSnapshot) -> AsyncStream<SessionProjectionEvent> {
         AsyncStream { continuation in
             let task = Task.detached(priority: .userInitiated) {
                 var backoff = Duration.milliseconds(250)
@@ -56,7 +57,7 @@ enum SessionProjectionStream {
 
     private static func drain(
         connection: RealtimeConnectionSnapshot,
-        continuation: AsyncStream<SessionProjection>.Continuation
+        continuation: AsyncStream<SessionProjectionEvent>.Continuation
     ) async throws {
         guard let rawURL = connection.runtimeUrl,
               let baseURL = URL(string: rawURL),
@@ -70,10 +71,14 @@ enum SessionProjectionStream {
             url: baseURL.appendingPathComponent("/api/agents/sessions/stream"),
             resolvingAgainstBaseURL: false
         )!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "limit", value: "40"),
             URLQueryItem(name: "skip_initial_replay", value: "false"),
         ]
+        if let machineName = connection.machineName {
+            queryItems.append(URLQueryItem(name: "device_id", value: machineName))
+        }
+        components.queryItems = queryItems
         var request = URLRequest(url: components.url!)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue(token, forHTTPHeaderField: "X-Agents-Token")
@@ -87,25 +92,30 @@ enum SessionProjectionStream {
         var dataLines: [String] = []
         for try await line in bytes.lines {
             if line.isEmpty {
-                if eventName == "session_upsert", !dataLines.isEmpty {
+                if eventName == "session_delta", !dataLines.isEmpty {
                     let data = Data(dataLines.joined(separator: "\n").utf8)
                     let decoder = JSONDecoder()
                     decoder.keyDecodingStrategy = .convertFromSnakeCase
-                    let payload = try decoder.decode(UpsertEnvelope.self, from: data)
-                    let head = payload.session.head
+                    let delta = try decoder.decode(Delta.self, from: data)
                     continuation.yield(
-                        SessionProjection(
-                            sessionId: head.id,
-                            timelineTitle: head.timelineTitle,
-                            summaryTitle: head.summaryTitle,
-                            firstUserMessage: head.firstUserMessage,
-                            titleState: head.titleState,
-                            titleSource: head.titleSource,
-                            runtimePhase: head.runtimePhase,
-                            displayPhase: head.displayPhase,
-                            lastActivityAt: head.lastActivityAt
-                        )
+                        .delta(SessionProjection(
+                            sessionId: delta.sessionId,
+                            timelineTitle: delta.timelineTitle,
+                            summaryTitle: nil,
+                            firstUserMessage: nil,
+                            titleState: delta.titleState,
+                            titleSource: delta.titleSource,
+                            runtimePhase: delta.runtimePhase,
+                            displayPhase: delta.displayPhase,
+                            lastActivityAt: delta.lastActivityAt,
+                            source: delta.source
+                        ))
                     )
+                } else if eventName == "session_remove", !dataLines.isEmpty {
+                    let data = Data(dataLines.joined(separator: "\n").utf8)
+                    let decoder = JSONDecoder()
+                    decoder.keyDecodingStrategy = .convertFromSnakeCase
+                    continuation.yield(.remove(sessionId: try decoder.decode(Remove.self, from: data).sessionId))
                 }
                 eventName = ""
                 dataLines.removeAll(keepingCapacity: true)
