@@ -20,12 +20,10 @@ struct LaunchSessionSheet: View {
     @State private var executionLifetime: RemoteExecutionLifetime = .liveControl
     @State private var initialPrompt: String = ""
     @State private var workspaces: [WorkspaceSuggestion]
-    @State private var workspaceSearch: String = ""
     @State private var loadingWorkspaces = false
     @State private var workspaceError: String?
     @State private var cwd: String = ""
     @State private var displayName: String = ""
-    @State private var showManualPath = false
 
     init(
         previewMachines: [MachineDirectoryEntry]? = nil,
@@ -47,9 +45,6 @@ struct LaunchSessionSheet: View {
         }
         if let firstPath = previewWorkspaces?.first?.path {
             _cwd = State(initialValue: firstPath)
-        }
-        if previewWorkspaces?.isEmpty == true {
-            _showManualPath = State(initialValue: true)
         }
     }
 
@@ -88,25 +83,6 @@ struct LaunchSessionSheet: View {
             && normalizedCwd.starts(with: "/")
             && supportedExecutionLifetimes.contains(executionLifetime)
             && (executionLifetime != .oneShot || !initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-    }
-
-    private var filteredWorkspaces: [WorkspaceSuggestion] {
-        let q = workspaceSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return workspaces }
-        return workspaces.filter { $0.path.lowercased().contains(q) || $0.label.lowercased().contains(q) }
-    }
-
-    private var hasWorkspaceSuggestions: Bool {
-        !workspaces.isEmpty
-    }
-
-    private var pathValidationMessage: String? {
-        if normalizedCwd.isEmpty { return nil }
-        if normalizedCwd.starts(with: "/") { return nil }
-        if normalizedCwd.starts(with: "~") {
-            return "Use the full absolute path for the target machine."
-        }
-        return "Path must start with /."
     }
 
     private var usesPreviewData: Bool {
@@ -221,7 +197,6 @@ struct LaunchSessionSheet: View {
                             errorMessage: workspaceError
                         ) { path in
                             cwd = path
-                            showManualPath = false
                             submitError = nil
                         }
                     } label: {
@@ -369,10 +344,8 @@ struct LaunchSessionSheet: View {
         selectedProvider = machine.defaultProvider ?? ""
         executionLifetime = machine.launch.defaultExecutionLifetime ?? .liveControl
         cwd = ""
-        workspaceSearch = ""
         workspaceError = nil
         submitError = nil
-        showManualPath = false
     }
 
     private func applyDefaultLifetimeForSelectedProvider() {
@@ -391,12 +364,11 @@ struct LaunchSessionSheet: View {
         guard !usesPreviewData, !deviceId.isEmpty, let api = LonghouseAPI(host: appState.serverURL) else {
             return
         }
+        guard deviceId == selectedDeviceId else { return }
         guard Self.canStartInteractiveSession(machines.first(where: { $0.deviceId == deviceId })) else {
             workspaces = []
             cwd = ""
-            workspaceSearch = ""
             workspaceError = nil
-            showManualPath = false
             return
         }
         // Render cached workspaces instantly, then revalidate.
@@ -407,23 +379,27 @@ struct LaunchSessionSheet: View {
             }
         }
         loadingWorkspaces = true
-        defer { loadingWorkspaces = false }
+        defer {
+            if deviceId == selectedDeviceId {
+                loadingWorkspaces = false
+            }
+        }
         workspaceError = nil
         do {
             let suggestions = try await api.workspaceSuggestions(deviceId: deviceId)
+            guard !Task.isCancelled, deviceId == selectedDeviceId else { return }
             workspaces = suggestions
             if normalizedCwd.isEmpty, let first = suggestions.first?.path {
                 cwd = first
             }
-            showManualPath = suggestions.isEmpty
             WorkspaceSuggestionsCacheStore.save(workspaces: suggestions, serverURL: appState.serverURL, deviceId: deviceId)
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled {
                 return
             }
+            guard deviceId == selectedDeviceId else { return }
             if workspaces.isEmpty {
                 workspaceError = "Recent workspaces unavailable."
-                showManualPath = true
             }
         }
     }
@@ -482,8 +458,10 @@ struct LaunchSessionSheet: View {
     }
 
     private func lastSeenLabel(_ machine: MachineDirectoryEntry) -> String {
-        guard let raw = machine.lastSeenAt,
-              let date = ISO8601DateFormatter().date(from: raw) else { return "Offline" }
+        guard let raw = machine.lastSeenAt else { return "Offline" }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = fractional.date(from: raw) ?? ISO8601DateFormatter().date(from: raw) else { return "Offline" }
         guard date <= Date() else { return "Offline" }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
@@ -605,6 +583,27 @@ private struct LaunchSummaryRow: View {
     }
 }
 
+private struct MachineAvailabilityIcon: View {
+    let machine: MachineDirectoryEntry
+
+    var body: some View {
+        Group {
+            switch machine.launch.blockedBy {
+            case "control_down":
+                Circle().stroke(Color.secondary, lineWidth: 2)
+            case "auth_failed", "runtime_unreachable":
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+            default:
+                Image(systemName: "info.circle.fill")
+                    .foregroundStyle(.orange)
+            }
+        }
+        .frame(width: 14, height: 14)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct MachineSelectionView: View {
     @Environment(\.dismiss) private var dismiss
 
@@ -658,9 +657,7 @@ private struct MachineSelectionView: View {
                 Section("Unavailable") {
                     ForEach(unavailable, id: \.deviceId) { machine in
                         HStack(spacing: 12) {
-                            Circle()
-                                .stroke(machine.online ? Color.orange : Color.secondary, lineWidth: 2)
-                                .frame(width: 10, height: 10)
+                            MachineAvailabilityIcon(machine: machine)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(machine.machineName).foregroundStyle(.primary)
                                 Text(statusText(machine)).font(.subheadline).foregroundStyle(.secondary)
@@ -849,45 +846,6 @@ enum WorkspaceSuggestionsCacheStore {
     }
 }
 
-private struct WorkspaceSuggestionList: View {
-    let workspaces: [WorkspaceSuggestion]
-    let selectedPath: String
-    let onSelect: (String) -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            ForEach(workspaces) { workspace in
-                Button {
-                    onSelect(workspace.path)
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: workspace.path == selectedPath ? "checkmark.circle.fill" : iconName(workspace))
-                            .foregroundStyle(workspace.path == selectedPath ? Color.accentColor : Color.secondary)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(workspace.label)
-                                .font(.body)
-                                .lineLimit(1)
-                            Text(LonghouseAPI.compactWorkspacePath(workspace.path))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        Spacer(minLength: 0)
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(workspace.path == selectedPath ? .isSelected : [])
-                .padding(.vertical, 7)
-            }
-        }
-    }
-
-    private func iconName(_ workspace: WorkspaceSuggestion) -> String {
-        workspace.gitRepo != nil ? "arrow.triangle.branch" : "folder"
-    }
-}
-
 private func previewMachine(
     deviceId: String = "cinder",
     machineName: String = "cinder",
@@ -918,10 +876,10 @@ private func previewMachine(
         lastSeenAt: lastSeenAt,
         engineBuild: "dev",
         launch: MachineLaunchProjection(
-            blockedBy: online ? nil : (launchBlockedBy ?? "control_down"),
+            blockedBy: launchProviders.isEmpty ? (launchBlockedBy ?? (online ? "no_launch_support" : "control_down")) : nil,
             providers: launchProviders,
-            defaultProvider: online ? (providers.contains("codex") ? "codex" : providers.first) : nil,
-            defaultExecutionLifetime: online ? (providers.contains("codex") ? .oneShot : .liveControl) : nil
+            defaultProvider: launchProviders.isEmpty ? nil : (providers.contains("codex") ? "codex" : providers.first),
+            defaultExecutionLifetime: launchProviders.isEmpty ? nil : (providers.contains("codex") ? .oneShot : .liveControl)
         )
     )
 }
@@ -992,9 +950,27 @@ private func previewMachine(
                     providers: [],
                     launchBlockedBy: "control_down"
                 ),
+                previewMachine(
+                    deviceId: "old-engine",
+                    machineName: "studio mac",
+                    providers: [],
+                    launchBlockedBy: "no_launch_support"
+                ),
+                previewMachine(
+                    deviceId: "repair-host",
+                    machineName: "lab",
+                    providers: [],
+                    launchBlockedBy: "auth_failed"
+                ),
             ],
             selectedDeviceId: "cinder",
-            statusText: { machine in machine.online ? "Console launch unavailable" : "Offline · Last seen 2 days ago" },
+            statusText: { machine in
+                switch machine.launch.blockedBy {
+                case "auth_failed", "runtime_unreachable": "Needs repair"
+                case "control_down": "Offline · Last seen 2 days ago"
+                default: "Console launch unavailable"
+                }
+            },
             onSelect: { _ in }
         )
     }

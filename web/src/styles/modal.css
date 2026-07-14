@@ -168,6 +168,11 @@
     border-top: 1px solid var(--color-border-subtle);
   }
 
+  .launch-machine-options {
+    display: grid;
+    gap: 0.25rem;
+  }
+
   .launch-choice-panel.is-static {
     margin-top: var(--space-3);
     border: 1px solid var(--color-border-subtle);

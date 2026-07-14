@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import {
@@ -70,6 +70,7 @@ export default function LaunchSessionModal({
   const machinePickerRef = useRef<HTMLDetailsElement | null>(null);
   const providerPickerRef = useRef<HTMLDetailsElement | null>(null);
   const workspacePickerRef = useRef<HTMLDetailsElement | null>(null);
+  const advancedPickerRef = useRef<HTMLDetailsElement | null>(null);
   const [deviceId, setDeviceId] = useState<string>("");
   const [provider, setProvider] = useState<string>("");
   const [cwd, setCwd] = useState<string>("");
@@ -121,6 +122,20 @@ export default function LaunchSessionModal({
       (w) => w.path.toLowerCase().includes(q) || w.label.toLowerCase().includes(q),
     );
   }, [workspaces, workspaceSearch]);
+
+  const handleMachineListKeyDown = useCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const options = Array.from(event.currentTarget.querySelectorAll<HTMLElement>("[role='option']"));
+    if (!options.length) return;
+    const currentIndex = options.indexOf(document.activeElement as HTMLElement);
+    let nextIndex: number | null = null;
+    if (event.key === "ArrowDown") nextIndex = currentIndex < 0 ? 0 : Math.min(currentIndex + 1, options.length - 1);
+    if (event.key === "ArrowUp") nextIndex = currentIndex < 0 ? options.length - 1 : Math.max(currentIndex - 1, 0);
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = options.length - 1;
+    if (nextIndex === null) return;
+    event.preventDefault();
+    options[nextIndex]?.focus();
+  }, []);
 
   // Auto-select the first launchable machine.
   useEffect(() => {
@@ -174,6 +189,13 @@ export default function LaunchSessionModal({
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        const openPicker = [workspacePickerRef.current, providerPickerRef.current, machinePickerRef.current, advancedPickerRef.current]
+          .find((picker) => picker?.open);
+        if (openPicker) {
+          openPicker.open = false;
+          openPicker.querySelector<HTMLElement>("summary")?.focus();
+          return;
+        }
         onClose();
       }
     };
@@ -224,7 +246,7 @@ export default function LaunchSessionModal({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-header">
-          <h2>Start Session</h2>
+          <h2>New Session</h2>
           <button
             type="button"
             className="modal-close-button"
@@ -254,50 +276,55 @@ export default function LaunchSessionModal({
             >
               <span className="launch-section-label">Machine</span>
               <details ref={machinePickerRef} className="launch-choice" data-testid="launch-machine-select">
-                <summary>
+                <summary aria-haspopup="listbox">
                   <span className="launch-choice-copy">
                     <strong>{selectedMachine?.machine_name ?? "Choose a machine"}</strong>
                     <small><span className="launch-machine-status is-ready" aria-hidden="true" />Ready</small>
                   </span>
                 </summary>
                 <div className="launch-choice-panel">
-                  <span className="launch-machine-group-label">Available</span>
-                  {launchable.map((machine) => (
-                    <button
-                      key={machine.device_id}
-                      type="button"
-                      className={`launch-machine-row${machine.device_id === deviceId ? " is-selected" : ""}`}
-                      aria-pressed={machine.device_id === deviceId}
-                      onClick={() => {
-                        const nextProvider = defaultProvider(machine);
-                        setDeviceId(machine.device_id);
-                        setProvider(nextProvider);
-                        setExecutionLifetime(defaultExecutionLifetime(machine, nextProvider));
-                        setCwd("");
-                        setWorkspaceSearch("");
-                        setError(null);
-                        if (machinePickerRef.current) machinePickerRef.current.open = false;
-                      }}
-                    >
-                      <span className="launch-machine-status is-ready" aria-hidden="true" />
-                      <span className="launch-machine-copy"><strong>{machine.machine_name}</strong><small>Ready</small></span>
-                      <span>{machine.device_id === deviceId ? "✓" : ""}</span>
-                    </button>
-                  ))}
+                  <span id="launch-available-machines" className="launch-machine-group-label">Available</span>
+                  <div className="launch-machine-options" role="listbox" aria-labelledby="launch-available-machines" onKeyDown={handleMachineListKeyDown}>
+                    {launchable.map((machine) => (
+                      <button
+                        key={machine.device_id}
+                        type="button"
+                        role="option"
+                        aria-selected={machine.device_id === deviceId}
+                        className={`launch-machine-row${machine.device_id === deviceId ? " is-selected" : ""}`}
+                        onClick={() => {
+                          const nextProvider = defaultProvider(machine);
+                          setDeviceId(machine.device_id);
+                          setProvider(nextProvider);
+                          setExecutionLifetime(defaultExecutionLifetime(machine, nextProvider));
+                          setCwd("");
+                          setWorkspaceSearch("");
+                          setError(null);
+                          if (machinePickerRef.current) machinePickerRef.current.open = false;
+                        }}
+                      >
+                        <span className="launch-machine-status is-ready" aria-hidden="true" />
+                        <span className="launch-machine-copy"><strong>{machine.machine_name}</strong><small>Ready</small></span>
+                        <span>{machine.device_id === deviceId ? "✓" : ""}</span>
+                      </button>
+                    ))}
+                  </div>
                   {unavailable.length > 0 && (
                     <>
-                      <span className="launch-machine-group-label">Unavailable</span>
-                      {unavailable.map((machine) => (
-                        <div
-                          key={machine.device_id}
-                          className="launch-machine-row is-unavailable"
-                          aria-label={`${machine.machine_name}, ${launchBlockedLabel(machine)}, Not available`}
-                        >
-                          <span className={`launch-machine-status ${machineStatusClass(machine)}`} aria-hidden="true" />
-                          <span className="launch-machine-copy"><strong>{machine.machine_name}</strong><small>{launchBlockedLabel(machine)}</small></span>
-                          <span />
-                        </div>
-                      ))}
+                      <span id="launch-unavailable-machines" className="launch-machine-group-label">Unavailable</span>
+                      <div className="launch-machine-options" role="group" aria-labelledby="launch-unavailable-machines">
+                        {unavailable.map((machine) => (
+                          <div
+                            key={machine.device_id}
+                            className="launch-machine-row is-unavailable"
+                            aria-label={`${machine.machine_name}, ${launchBlockedLabel(machine)}, Not available`}
+                          >
+                            <span className={`launch-machine-status ${machineStatusClass(machine)}`} aria-hidden="true" />
+                            <span className="launch-machine-copy"><strong>{machine.machine_name}</strong><small>{launchBlockedLabel(machine)}</small></span>
+                            <span />
+                          </div>
+                        ))}
+                      </div>
                     </>
                   )}
                 </div>
@@ -364,7 +391,7 @@ export default function LaunchSessionModal({
                 </label>
               )}
 
-              <details className="launch-advanced" data-testid="launch-advanced-runtime">
+              <details ref={advancedPickerRef} className="launch-advanced" data-testid="launch-advanced-runtime">
                 <summary>Advanced options</summary>
                 <div className="form-field">
                   <span>Runtime</span>
@@ -417,7 +444,7 @@ export default function LaunchSessionModal({
                   disabled={!canSubmit}
                   data-testid="launch-submit"
                 >
-                  {submitting ? "Starting…" : "Start"}
+                  {submitting ? "Starting…" : "Start session"}
                 </Button>
               </div>
             </form>

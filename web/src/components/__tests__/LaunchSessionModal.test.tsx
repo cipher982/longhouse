@@ -205,6 +205,29 @@ describe("LaunchSessionModal", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
+  it("supports keyboard navigation and closes the machine chooser before the modal", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({ device_id: "cinder", machine_name: "cinder" }),
+        machine({ device_id: "cube", machine_name: "cube" }),
+      ],
+    });
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderModal({ onClose });
+
+    const picker = await screen.findByTestId("launch-machine-select");
+    await user.click(picker.querySelector("summary")!);
+    const cinder = screen.getByRole("option", { name: /cinder Ready/ });
+    const cube = screen.getByRole("option", { name: /cube Ready/ });
+    cinder.focus();
+    await user.keyboard("{ArrowDown}");
+    expect(cube).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(picker).not.toHaveAttribute("open");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("keeps offline machines visible below ready machines without build hashes", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [
@@ -244,10 +267,10 @@ describe("LaunchSessionModal", () => {
 
     const prompt = await screen.findByTestId("launch-initial-prompt");
     await user.type(prompt, "Keep this task");
-    await user.click(screen.getByRole("button", { name: /cube Ready/ }));
+    await user.click(screen.getByRole("option", { name: /cube Ready/ }));
 
     expect(prompt).toHaveValue("Keep this task");
-    expect(screen.getByRole("button", { name: /cube Ready/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("option", { name: /cube Ready/ })).toHaveAttribute("aria-selected", "true");
   });
 
   it("submits a launch and invokes onLaunched with the session id", async () => {
