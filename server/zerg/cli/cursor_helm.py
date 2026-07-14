@@ -56,15 +56,11 @@ from zerg.cli._common import git_output
 from zerg.cli._common import interactive_stdio
 from zerg.cli._common import load_api_credentials
 from zerg.cli._managed_launch import interactive_human_shell_launch_provenance
-from zerg.cli.cursor_helm_ingest import probe_ingest_path
-from zerg.cli.cursor_helm_ingest import probe_runtime_ingest_compatibility
-from zerg.cli.cursor_helm_ingest import run_helm_ingest_thread
 from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.machine_identity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 from zerg.session_loop_mode import SessionLoopMode
-from zerg.utils.log import BestEffortLogger
 
 EXIT_SETUP_FAILED = 78
 EXIT_NOT_INTERACTIVE = 79
@@ -726,22 +722,11 @@ def run_helm(
     # screen would clear a printed banner; the title persists.
     _set_window_title("Longhouse Helm · cursor-agent")
 
-    # Launch-time ingest self-check: exercise the exact import + model-build
-    # path the tailer uses on every poll. If a transitive import (e.g.
-    # zerg.database config validation) would crash without DATABASE_URL, warn
-    # NOW — before the alt-screen — so the user knows the session will be
-    # steerable but won't appear on the timeline, instead of discovering it
-    # from an empty session URL after the first turn.
-    ingest_ok, ingest_err = probe_ingest_path()
-    if ingest_ok:
-        ingest_ok, ingest_err = probe_runtime_ingest_compatibility(resolved_url, resolved_token)
-    if not ingest_ok:
-        typer.secho(
-            "Warning: Cursor Helm live transcript ingest is unavailable "
-            f"({ingest_err}). The session will be steerable but won't appear "
-            "on the timeline through this legacy tailer.",
-            fg=typer.colors.YELLOW,
-        )
+    typer.secho(
+        "Cursor Helm remote control is live when Longhouse registration and the machine lease succeed. "
+        "Transcript archive is unavailable until the native Cursor storage-v2 source is enabled.",
+        fg=typer.colors.YELLOW,
+    )
 
     launch_ui.launch_panel(
         provider_label=launch_ui.PROVIDER_LABELS["cursor"],
@@ -861,30 +846,6 @@ def run_helm(
     )
     server_thread.start()
 
-    # Live transcript tailer: stream new turn events from cursor's store.db to
-    # the Runtime Host so the Helm session appears on the timeline as turns
-    # commit (not just live+steerable). Best-effort daemon thread; see
-    # zerg.cli.cursor_helm_ingest + docs/specs/cursor-live-ingest.md.
-    ingest_bf = BestEffortLogger("zerg.cursor_helm.ingest")
-    launch_time = datetime.now(timezone.utc)
-    ingest_thread: threading.Thread | None = None
-    if ingest_ok:
-        ingest_thread = threading.Thread(
-            target=run_helm_ingest_thread,
-            kwargs={
-                "launch_time": launch_time,
-                "session_id": session_id,
-                "url": resolved_url,
-                "token": resolved_token,
-                "stop_event": stop_event,
-                "verbose": verbose,
-                "bf": ingest_bf,
-            },
-            daemon=True,
-            name="cursor-helm-ingest",
-        )
-        ingest_thread.start()
-
     try:
         tty.setraw(real_stdin)
     except termios.error as exc:
@@ -954,7 +915,7 @@ def run_helm(
         stop_event.set()
         # Bounded join covers one in-flight register attempt; unknown outcomes
         # still get a best-effort terminalize (see _reconcile_registration_on_exit).
-        final_registered = _reconcile_registration_on_exit(
+        _reconcile_registration_on_exit(
             url=resolved_url,
             token=resolved_token,
             session_id=session_id,
@@ -962,11 +923,6 @@ def run_helm(
             registration_box=registration_box,
             registration_lock=registration_lock,
         )
-        # Let the ingest tailer flush a final poll + record its last outcome
-        # before we summarize. Bounded so a hung decode can't wedge exit.
-        if ingest_thread is not None:
-            ingest_thread.join(timeout=5.0)
-            ingest_bf.summarize("cursor helm ingest")
         try:
             termios.tcsetattr(real_stdin, termios.TCSADRAIN, saved_term)
         except termios.error:
@@ -984,7 +940,10 @@ def run_helm(
         except OSError:
             pass
         _remove_state(session_id, sock_path)
-        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name, durable=final_registered)
+        # Catalog registration proves remote control ownership, not transcript
+        # durability. Cursor stays explicitly control-only until storage-v2
+        # receipts exist for its native source.
+        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name, durable=False)
         if open_browser:
             typer.echo(f"Timeline: {build_session_url(resolved_url, session_id)}")
 

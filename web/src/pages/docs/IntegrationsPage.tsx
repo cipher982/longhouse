@@ -132,20 +132,17 @@ export default function IntegrationsPage() {
 
       <h2>Cursor Agent</h2>
       <p>
-        Cursor sessions land in the timeline two ways. Bare{" "}
-        <code>cursor-agent</code> runs import from{" "}
-        <code>~/.cursor/chats</code> as unmanaged, searchable history. Launching
-        through Longhouse with <code>longhouse cursor</code> starts a{" "}
+        Launching through Longhouse with <code>longhouse cursor</code> starts a{" "}
         <strong>Helm</strong> session: the same interactive{" "}
         <code>cursor-agent</code> TUI in your terminal, with a background control
-        channel and a live transcript streamed to the timeline as turns commit.
-        From the web or iOS you can send, interrupt, and terminate. Headless
-        one-shot launches (Console mode) are also available via the web/iOS
-        launch modal using Cursor&rsquo;s ACP surface.
+        channel. From the web or iOS you can send, interrupt, and terminate.
+        Cursor transcript archive is temporarily unavailable while Longhouse
+        moves it to a native, source-faithful storage-v2 adapter; Console mode
+        is unavailable during that migration.
       </p>
       <CodeBlock title="terminal">
-        {`longhouse cursor              # start Cursor Agent (steerable TUI + live transcript)
-longhouse cursor import        # backfill bare cursor-agent sessions from ~/.cursor/chats`}
+        {`longhouse cursor              # start Cursor Agent (steerable TUI)
+longhouse cursor decode <store.db>  # inspect a local Cursor source without uploading it`}
       </CodeBlock>
       <table>
         <thead>
@@ -155,12 +152,12 @@ longhouse cursor import        # backfill bare cursor-agent sessions from ~/.cur
           </tr>
         </thead>
         <tbody>
-          <tr><td>Session import</td><td>Full</td></tr>
-          <tr><td>Search & detail</td><td>Full</td></tr>
+          <tr><td>Session import / archive</td><td>Native storage-v2 migration in progress</td></tr>
+          <tr><td>Search & detail</td><td>Available after native archive ships</td></tr>
           <tr><td>Launch through Longhouse (Helm)</td><td>Supported</td></tr>
-          <tr><td>Headless launch (Console / ACP)</td><td>Supported</td></tr>
+          <tr><td>Headless launch (Console / ACP)</td><td>Unavailable during archive migration</td></tr>
           <tr><td>Live control</td><td>Send, interrupt, and terminate</td></tr>
-          <tr><td>Live transcript</td><td>Supported (Helm)</td></tr>
+          <tr><td>Live transcript</td><td>Unavailable until receipt-backed source proof</td></tr>
           <tr><td>Continue / branch</td><td>Not yet</td></tr>
         </tbody>
       </table>

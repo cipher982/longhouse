@@ -318,18 +318,21 @@ providers:
   - cursor_acp
   - cursor_exec
   launch_local: true
-  launch_remote: true
-  run_once: true
+  # Console cannot start until cursor_acp seals its raw notifications through
+  # storage-v2. Helm remains locally launchable because its control path is
+  # independently real, but it is not yet a durable transcript source.
+  launch_remote: false
+  run_once: false
   reattach: false
   send_input: true
   interrupt: true
   steer_active_turn: false
   answer_pause: false
   terminate: true
-  tail_output: true
-  runtime_phase: true
-  transcript_binding: true
-  can_resume: true
+  tail_output: false
+  runtime_phase: false
+  transcript_binding: false
+  can_resume: false
   operation_evidence:
     launch_local:
       level: hermetic
@@ -341,16 +344,11 @@ providers:
         the socket. See docs/specs/cursor-transcript-format.md Helm section.'
       next: promote to live_no_token with an interactive send/interrupt canary driven from web/iOS
     launch_remote:
-      level: hermetic
-      source: engine cursor_acp spawns `cursor-agent acp`, performs ACP initialize/session/new/session/prompt
-        handshake, and ships session/update notifications; server one-shot launch dispatch
-        tests
-      next: promote with live-token cursor-agent acp transcript canary
+      level: none
+      source: unavailable until cursor_acp persists its raw notifications through storage-v2
     run_once:
-      level: hermetic
-      source: engine cursor_acp drives a single ACP session/prompt turn and ships agent_message_chunk
-        / tool / stopReason events with real receipt timestamps
-      next: promote with live one-shot transcript canary
+      level: none
+      source: unavailable until cursor_acp persists its raw notifications through storage-v2
     reattach:
       level: none
       source: 'unsupported: ACP is a headless stdio process per turn; there is no attach-to-live-process
@@ -379,25 +377,15 @@ providers:
         pid with kill_on_drop for the one-shot path.'
       next: promote with live terminate canary
     tail_output:
-      level: hermetic
-      source: cursor_acp consumes ACP session/update notifications (agent_message_chunk,
-        tool calls) as the durable transcript stream; cursor_helm relies on engine ingest
-        of cursor-agent store.db / transcript files for the interactive path
-      next: promote with live transcript assertion
+      level: none
+      source: unavailable until the native Cursor store.db adapter has storage-v2 receipt proof
     runtime_phase:
-      level: hermetic
-      source: ACP session/update notifications drive phase/progress/terminal runtime signals
-        for the one-shot path; cursor_helm runtime signals derive from transcript ingest
-        + lease liveness
-      next: prove freshness in live one-shot canary
+      level: none
+      source: unavailable until the native Cursor source and shared runtime outbox are receipt-backed
     transcript_binding:
-      level: hermetic
-      source: cursor_acp binds tool calls by their ACP tool identifier and sessionId from
-        session/new
-      next: promote with live transcript binding assertion
+      level: none
+      source: unavailable until the native Cursor source has deterministic provider-native binding proof
   machine_control_supports:
-  - cursor.run_once
-  - cursor.resume_run_once
   - cursor.send
   - cursor.interrupt
   - cursor.terminate

@@ -6,12 +6,9 @@ channel, matching the claude/codex/opencode managed pattern. See
 :mod:`zerg.cli.cursor_helm` for the PTY pass-through + per-session socket
 mechanism.
 
-Subcommands:
-- ``longhouse cursor import`` scans ``~/.cursor/chats`` for cursor-agent
-  ``store.db`` sessions (unmanaged Shadow ingest) and posts canonical
-  ``SessionIngest`` to the Runtime Host.
-- ``longhouse cursor decode`` is a local debug path that prints what would be
-  ingested without contacting the server.
+``longhouse cursor decode`` is a local diagnostic path. It never uploads
+Cursor data; it is retained only for source-format inspection while the native
+storage-v2 source adapter is built.
 
 See ``docs/specs/cursor-transcript-format.md``.
 """
@@ -20,12 +17,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import httpx
 import typer
 
-from zerg.cli._common import load_api_credentials
-from zerg.services.shipper import get_zerg_url
-from zerg.services.shipper import load_token
 from zerg.session_loop_mode import SessionLoopMode
 
 app = typer.Typer(
@@ -33,22 +26,6 @@ app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
 )
-
-
-def _load_creds(url: str | None, token: str | None, config_dir: Path | None) -> tuple[str, str]:
-    return load_api_credentials(
-        url=url,
-        token=token,
-        config_dir=config_dir,
-        resolve_url=get_zerg_url,
-        resolve_token=load_token,
-    )
-
-
-def _scan_stores(cursor_dir: Path | None) -> list[Path]:
-    from zerg.services.cursor_transcript import iter_local_cursor_stores
-
-    return sorted(iter_local_cursor_stores(cursor_dir), key=lambda p: p.stat().st_mtime, reverse=True)
 
 
 @app.callback(invoke_without_command=True)
@@ -98,93 +75,6 @@ def launch(
         cursor_args=cursor_args,
         verbose=verbose,
         open_browser=open_browser,
-    )
-
-
-@app.command(name="import")
-def import_(
-    url: str | None = typer.Option(None, "--url", "-u", help="Runtime Host base URL."),
-    token: str | None = typer.Option(None, "--token", "-t", help="Device token (uses stored token if not set)."),
-    cursor_dir: Path | None = typer.Option(
-        None,
-        "--cursor-dir",
-        help="Override ~/.cursor root (defaults to ~/.cursor/chats).",
-    ),
-    limit: int = typer.Option(0, "--limit", help="Max sessions to import (0 = all)."),
-    dry_run: bool = typer.Option(False, "--dry-run", help="Decode only; do not POST to the Runtime Host."),
-) -> None:
-    """Scan local Cursor sessions and ingest them into Longhouse (unmanaged)."""
-    stores = _scan_stores(cursor_dir)
-    if limit > 0:
-        stores = stores[:limit]
-    if not stores:
-        typer.secho("No Cursor store.db sessions found under ~/.cursor/chats.", fg=typer.colors.YELLOW)
-        raise typer.Exit()
-
-    base_url = ""
-    resolved_token = ""
-    if not dry_run:
-        base_url, resolved_token = _load_creds(url=url, token=token, config_dir=None)
-
-    ingested = 0
-    skipped_gap = 0
-    failed = 0
-    from zerg.services.cursor_transcript import decode_store_db
-
-    for store_path in stores:
-        result = decode_store_db(store_path)
-        title = result.diagnostics.title or store_path.parent.name
-        if result.session is None:
-            gap = result.diagnostics.unsupported_gap or "unknown"
-            skipped_gap += 1
-            typer.secho(
-                f"SKIP  {store_path.parent.name}  [{gap}]  {title}",
-                fg=typer.colors.YELLOW,
-            )
-            continue
-        if dry_run:
-            typer.secho(
-                f"DRY   {store_path.parent.name}  msgs={result.diagnostics.message_count} "
-                f"events={result.diagnostics.event_count}  {title}",
-                fg=typer.colors.CYAN,
-            )
-            ingested += 1
-            continue
-        try:
-            with httpx.Client(timeout=60) as client:
-                resp = client.post(
-                    f"{base_url.rstrip('/')}/api/agents/ingest",
-                    headers={"X-Agents-Token": resolved_token, "Content-Type": "application/json"},
-                    content=result.session.model_dump_json(),
-                )
-        except httpx.HTTPError as exc:
-            failed += 1
-            typer.secho(f"ERROR {store_path.parent.name}  {exc}", fg=typer.colors.RED)
-            continue
-        if resp.status_code >= 400:
-            failed += 1
-            typer.secho(
-                f"FAIL  {store_path.parent.name}  HTTP {resp.status_code}  {title}",
-                fg=typer.colors.RED,
-            )
-            continue
-        body = {}
-        try:
-            body = resp.json()
-        except ValueError:
-            pass
-        inserted = body.get("events_inserted", "?")
-        typer.secho(
-            f"OK    {store_path.parent.name}  inserted={inserted}  {title}",
-            fg=typer.colors.GREEN,
-        )
-        ingested += 1
-
-    typer.echo("")
-    typer.secho(
-        f"done: ingested={ingested} skipped_gap={skipped_gap} failed={failed} " f"(dry_run={dry_run})",
-        fg=typer.colors.CYAN,
-        bold=True,
     )
 
 

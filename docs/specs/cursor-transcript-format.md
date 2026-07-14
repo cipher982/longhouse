@@ -1,13 +1,14 @@
 # Cursor Agent Transcript Format
 
-**Status:** Reverse-engineered from on-disk sessions (cursor-agent `2026.06.26`)
+**Status:** reverse-engineered source-format reference; legacy ingest notes below are superseded
 **Owner:** Longhouse
 **Last updated:** 2026-06-30
 
-Targeted by `server/zerg/services/cursor_transcript.py` (unmanaged ingest).
-This documents what Cursor durably stores per agent session and how Longhouse
-decodes it into canonical events. It is intentionally narrow: unmanaged
-ingest only. Managed control is a separate, later phase.
+Targeted by `server/zerg/services/cursor_transcript.py` as a local diagnostic
+decoder. The former Python upload paths are removed: they discarded unknown
+source material and targeted retired ingest. Current implementation status and
+the native Rust storage-v2 design live in
+`docs/specs/cursor-storage-v2-source-fidelity.md`.
 
 ## Scope and non-goals
 
@@ -299,7 +300,14 @@ may change between cursor-agent releases. The decoder must be tolerant:
   first-class events vs. fold into assistant text with a marker). Prefer
   first-class to match the universal-harness `raw_evidence` rule.
 
-## Provider contract registration
+## Historical legacy implementation notes (superseded)
+
+The remainder records the pre-storage-v2 contract and exploration history. It
+is not current product behavior: Cursor Helm is control-only, and Cursor
+Console, archive/tail, runtime-phase, and transcript-binding claims remain
+disabled until receipt-backed native sources exist.
+
+### Provider contract registration
 
 Cursor **is** registered in `schemas/managed_providers.yml` and the generated
 `server/zerg/config/managed_provider_contracts.json` for **Console mode only**
@@ -316,7 +324,7 @@ call `require_contract_for_provider`, so unmanaged Shadow ingest works
 independently of the contract entry. `SessionIngest.provider` accepts
 `"cursor"` as a free-form string.
 
-## Discovery and live-binding status
+### Discovery and live-binding status
 
 Three layers, landed explicitly:
 
@@ -340,7 +348,7 @@ Three layers, landed explicitly:
   an explicit gap; `longhouse cursor import` is the path to timeline presence
   until then.
 
-## Managed Cursor — Shadow / Console / Helm
+### Managed Cursor — Shadow / Console / Helm
 
 Per the Shadow / Helm / Console vocabulary (see `AGENTS.md`), Cursor ships in
 two of the three session modes today; Helm is the open one.

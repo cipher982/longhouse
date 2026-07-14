@@ -216,8 +216,8 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
         "run_once",
         "resume_run_once",
     )
-    assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode", "cursor"})
-    assert run_once_supported_providers() == frozenset({"codex", "cursor"})
+    assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
+    assert run_once_supported_providers() == frozenset({"codex"})
 
 
 def test_codex_and_managed_claude_advertise_remote_pause_answering():
@@ -232,10 +232,9 @@ def test_codex_and_managed_claude_advertise_remote_pause_answering():
 
 
 def test_continue_supported_providers_matches_manifest_can_resume():
-    # Driven by manifest can_resume=true. opencode/antigravity must stay out.
-    # codex/claude resume via live Helm continue; cursor resumes via Console
-    # one-shot --resume <chatId> (resume_run_once). All three have can_resume.
-    assert continue_supported_providers() == frozenset({"codex", "claude", "cursor"})
+    # Cursor's former ACP resume path used retired legacy ingest, so only
+    # receipt-backed providers may advertise continuation.
+    assert continue_supported_providers() == frozenset({"codex", "claude"})
 
 
 def test_claude_contract_is_first_class_channel_control_provider():
@@ -564,7 +563,6 @@ def test_agents_service_package_imports_without_database_url():
         "from zerg.services.agents.models import EventIngest, SessionIngest; "
         "from zerg.services.agents import SessionIngest as S2, IngestResult; "
         "from zerg.services.cursor_transcript import decode_store_db; "
-        "from zerg.cli.cursor_helm_ingest import _build_delta_payload; "
         "print('IMPORT_OK')"
     )
     repo_root = Path(__file__).resolve().parents[2]
@@ -582,8 +580,7 @@ def test_agents_service_package_imports_without_database_url():
         timeout=60,
     )
     assert result.returncode == 0, (
-        f"agents package import failed without DATABASE_URL (the cursor Helm "
-        f"tailer would silently crash on every poll):\nSTDOUT:\n{result.stdout}\n"
+        f"agents package import failed without DATABASE_URL:\nSTDOUT:\n{result.stdout}\n"
         f"STDERR:\n{result.stderr}"
     )
     assert "IMPORT_OK" in result.stdout
