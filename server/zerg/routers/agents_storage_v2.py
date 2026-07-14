@@ -1337,7 +1337,11 @@ async def commit_storage_v2_envelope(
     raw_workers = get_raw_object_worker_pool()
     render_workers = get_render_object_worker_pool()
     try:
-        async with raw_workers.admission(lane), render_workers.admission(lane):
+        # Raw admission bounds request parsing and raw sealing. Render sealing
+        # is optional and already owns a bounded lane inside `seal`; reserving
+        # render capacity here made raw-only Cursor envelopes block rendered
+        # Claude/Codex traffic without doing any render work.
+        async with raw_workers.admission(lane):
             return await _commit_admitted_envelope(
                 request,
                 auth_token,

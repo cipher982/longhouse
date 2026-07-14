@@ -47,6 +47,13 @@ class _BusyPool:
         yield
 
 
+class _ForbiddenRenderAdmission:
+    @asynccontextmanager
+    async def admission(self, _lane):
+        raise AssertionError("request-level render admission must not be reserved")
+        yield
+
+
 class _InlineRenderPool:
     def __init__(self, root):
         self.root = root
@@ -468,6 +475,28 @@ async def test_storage_v2_busy_lane_returns_typed_backpressure(monkeypatch):
     assert response.headers["x-longhouse-storage-backpressure"] == "storage_lane_busy"
     assert response.headers["x-longhouse-storage-lane"] == "repair"
     assert response.headers["retry-after"] == "5"
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_request_admission_does_not_reserve_optional_render_lane(monkeypatch):
+    async def commit_stub(*_args, **_kwargs):
+        return {"ok": True}
+
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", _AdmissionOnlyPool)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", _ForbiddenRenderAdmission)
+    monkeypatch.setattr(storage_router, "_commit_admitted_envelope", commit_stub)
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/agents/storage/v2/envelopes",
+            content=b"{}",
+            headers={"X-Longhouse-Storage-Lane": "live"},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
 
 
 @pytest.mark.asyncio
