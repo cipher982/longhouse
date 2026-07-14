@@ -257,7 +257,7 @@ extension APISessionResponse {
 extension APIEventResponse {
     var sessionEvent: SessionEvent {
         SessionEvent(
-            id: String(id),
+            id: id.sessionEventIdentifier,
             role: role,
             contentText: contentText,
             toolName: toolName,
@@ -272,6 +272,18 @@ extension APIEventResponse {
             eventOrigin: eventOrigin,
             mediaRefs: mediaRefs?.map(\.sessionEventMediaRef) ?? []
         )
+    }
+}
+
+private extension JSONValue {
+    var sessionEventIdentifier: String {
+        switch self {
+        case .string(let value): value
+        case .int(let value): String(value)
+        case .double(let value): String(value)
+        case .bool(let value): String(value)
+        case .array, .object, .null: "invalid-event-id"
+        }
     }
 }
 
