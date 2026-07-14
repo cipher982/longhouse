@@ -839,10 +839,6 @@ async fn execute_command(
             let launch_surface = payload_optional_string(&payload, "launch_surface");
             let provider_prompt =
                 run_once_provider_prompt(&initial_prompt, resume_target.is_some());
-            let api_token = config.api_token.clone().ok_or_else(|| CommandError {
-                code: "provider_launch_failed".to_string(),
-                message: "Machine Agent has no device token configured".to_string(),
-            })?;
             let local_db_path = config
                 .db_path
                 .clone()
@@ -853,8 +849,6 @@ async fn execute_command(
                     session_id: session_id.clone(),
                     run_id: run_id.clone(),
                     cwd,
-                    api_url: config.api_url.clone(),
-                    api_token,
                     cursor_bin: DEFAULT_CURSOR_BIN.to_string(),
                     prompt: provider_prompt,
                     launch_actor: launch_actor.clone(),
@@ -880,6 +874,11 @@ async fn execute_command(
                     "argv": summary.argv,
                 }));
             }
+
+            let api_token = config.api_token.clone().ok_or_else(|| CommandError {
+                code: "provider_launch_failed".to_string(),
+                message: "Machine Agent has no device token configured".to_string(),
+            })?;
 
             let summary = start_codex_exec_once(CodexExecRunConfig {
                 session_id: session_id.clone(),
