@@ -113,6 +113,19 @@ struct LaunchSessionSheet: View {
         previewMachines != nil
     }
 
+    private var selectedWorkspaceTitle: String {
+        if let workspace = workspaces.first(where: { $0.path == normalizedCwd }) {
+            return workspace.label
+        }
+        guard !normalizedCwd.isEmpty else { return loadingWorkspaces ? "Loading workspaces…" : "Choose a workspace" }
+        return URL(fileURLWithPath: normalizedCwd).lastPathComponent
+    }
+
+    private var selectedWorkspaceSubtitle: String {
+        guard !normalizedCwd.isEmpty else { return "Workspace" }
+        return "Workspace · \(LonghouseAPI.compactWorkspacePath(normalizedCwd))"
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -120,8 +133,15 @@ struct LaunchSessionSheet: View {
                     ProgressView("Loading machines...")
                 } else if let loadError {
                     errorView(loadError)
-                } else if launchableMachines.isEmpty {
+                } else if machines.isEmpty {
                     emptyView
+                } else if launchableMachines.isEmpty {
+                    MachineSelectionView(
+                        machines: machines,
+                        selectedDeviceId: selectedDeviceId,
+                        statusText: launchBlockedLabel,
+                        onSelect: selectMachine
+                    )
                 } else {
                     formView
                 }
@@ -141,165 +161,152 @@ struct LaunchSessionSheet: View {
     }
 
     private var formView: some View {
-        Form {
-            Section("Machine") {
-                Menu {
-                    Section("Available") {
-                        ForEach(launchableMachines, id: \.deviceId) { machine in
-                            Button {
-                                selectMachine(machine)
-                            } label: {
-                                Label(machine.machineName, systemImage: machine.deviceId == selectedDeviceId ? "checkmark" : "circle.fill")
-                            }
-                        }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                launchSectionTitle("Machine")
+                LaunchCard {
+                    NavigationLink {
+                        MachineSelectionView(
+                            machines: machines,
+                            selectedDeviceId: selectedDeviceId,
+                            statusText: launchBlockedLabel,
+                            onSelect: selectMachine
+                        )
+                    } label: {
+                        LaunchSummaryRow(
+                            title: selectedMachine?.machineName ?? "Choose a machine",
+                            subtitle: selectedMachine.map { Self.canStartInteractiveSession($0) ? "Ready" : launchBlockedLabel($0) },
+                            status: selectedMachine.map(machineStatusStyle),
+                            showsChevron: true
+                        )
                     }
-
-                    if !unavailableMachines.isEmpty {
-                        Section("Unavailable") {
-                            ForEach(unavailableMachines, id: \.deviceId) { machine in
-                                Label("\(machine.machineName) — \(launchBlockedLabel(machine))", systemImage: "circle")
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 10) {
-                        Circle()
-                            .fill(Color.green)
-                            .frame(width: 10, height: 10)
-                        Text(selectedMachine?.machineName ?? "Choose a machine")
-                        Spacer()
-                        Text("Ready")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    .buttonStyle(.plain)
                 }
-            }
 
-            if let machine = selectedMachine, !Self.canStartInteractiveSession(machine) {
-                Section("Status") {
-                    Label(launchBlockedLabel(machine), systemImage: "xmark.circle.fill")
-                        .foregroundStyle(.red)
-                }
-            } else {
-                Section("Coding agent") {
+                launchSectionTitle("Session")
+                LaunchCard {
                     if availableProviders.count > 1 {
-                        Picker("Provider", selection: $selectedProvider) {
-                            ForEach(availableProviders, id: \.self) { provider in
-                                Text(providerDisplayName(provider)).tag(provider)
+                        NavigationLink {
+                            ProviderSelectionView(
+                                providers: availableProviders,
+                                selectedProvider: selectedProvider,
+                                displayName: providerDisplayName
+                            ) { provider in
+                                selectedProvider = provider
+                                submitError = nil
+                                applyDefaultLifetimeForSelectedProvider()
                             }
+                        } label: {
+                            LaunchSummaryRow(
+                                title: providerDisplayName(selectedProvider),
+                                subtitle: "Agent · \(executionLifetimeLabel(executionLifetime))",
+                                showsChevron: true
+                            )
                         }
-                        .onChange(of: selectedProvider) { _, _ in
-                            submitError = nil
-                            applyDefaultLifetimeForSelectedProvider()
-                        }
+                        .buttonStyle(.plain)
                     } else {
-                        HStack(spacing: 10) {
-                            Image(systemName: "terminal")
-                                .foregroundStyle(.secondary)
-                            Text(selectedProvider.isEmpty ? "codex" : selectedProvider)
-                        }
-                    }
-                }
-
-                if executionLifetime == .oneShot {
-                    Section("First message") {
-                        TextField("What should the agent do?", text: $initialPrompt, axis: .vertical)
-                            .lineLimit(3 ... 8)
-                            .onChange(of: initialPrompt) { _, _ in submitError = nil }
-                    }
-                }
-
-                if supportedExecutionLifetimes.count > 1 {
-                    Section("Advanced") {
-                        Picker("Runtime", selection: $executionLifetime) {
-                            Text("Default").tag(RemoteExecutionLifetime.oneShot)
-                            Text("Keep runtime open").tag(RemoteExecutionLifetime.liveControl)
-                        }
-                        .pickerStyle(.segmented)
-                        .onChange(of: executionLifetime) { _, _ in submitError = nil }
-                    }
-                }
-
-                Section("Recent workspaces") {
-                    if loadingWorkspaces {
-                        ProgressView("Loading recent workspaces...")
+                        LaunchSummaryRow(
+                            title: providerDisplayName(selectedProvider),
+                            subtitle: "Agent · \(executionLifetimeLabel(executionLifetime))"
+                        )
                     }
 
-                    if !workspaces.isEmpty {
-                        TextField("Filter workspaces", text: $workspaceSearch)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-                        WorkspaceSuggestionList(workspaces: filteredWorkspaces, selectedPath: normalizedCwd) { path in
+                    Divider().padding(.leading, 16)
+
+                    NavigationLink {
+                        WorkspaceSelectionView(
+                            workspaces: workspaces,
+                            selectedPath: normalizedCwd,
+                            loading: loadingWorkspaces,
+                            errorMessage: workspaceError
+                        ) { path in
                             cwd = path
                             showManualPath = false
                             submitError = nil
                         }
-                    } else if !loadingWorkspaces {
-                        Text(workspaceError ?? "No recent workspaces found for this machine.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                Section("Manual path") {
-                    DisclosureGroup(isExpanded: $showManualPath) {
-                        TextField("Absolute path", text: $cwd)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled(true)
-
-                        if let pathValidationMessage {
-                            Text(pathValidationMessage)
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                        } else {
-                            Text("Existing absolute directory on the target machine.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
                     } label: {
-                        Label("Use a different path", systemImage: "keyboard")
+                        LaunchSummaryRow(
+                            title: selectedWorkspaceTitle,
+                            subtitle: selectedWorkspaceSubtitle,
+                            showsChevron: true
+                        )
                     }
-                    .onChange(of: cwd) { _, _ in
-                        submitError = nil
-                    }
-
-                    if !hasWorkspaceSuggestions && !loadingWorkspaces {
-                        Text("Use this when the workspace has not appeared in recent sessions yet.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    .buttonStyle(.plain)
                 }
 
-                Section("Optional") {
-                    TextField("Display name", text: $displayName)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
+                if executionLifetime == .oneShot {
+                    launchSectionTitle("Task")
+                    TextField("What should the agent do?", text: $initialPrompt, axis: .vertical)
+                        .lineLimit(4 ... 8)
+                        .padding(14)
+                        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+                        .onChange(of: initialPrompt) { _, _ in submitError = nil }
                 }
-            }
 
-            if let submitError {
-                Section {
+                LaunchCard {
+                    DisclosureGroup("Advanced options") {
+                        VStack(alignment: .leading, spacing: 14) {
+                            if supportedExecutionLifetimes.count > 1 {
+                                Text("Execution")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                ForEach(supportedExecutionLifetimes, id: \.self) { lifetime in
+                                    Button {
+                                        executionLifetime = lifetime
+                                        submitError = nil
+                                    } label: {
+                                        HStack {
+                                            Text(executionLifetimeLabel(lifetime))
+                                                .foregroundStyle(.primary)
+                                            Spacer()
+                                            if lifetime == executionLifetime {
+                                                Image(systemName: "checkmark")
+                                            }
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                Divider()
+                            }
+                            TextField("Session name (optional)", text: $displayName)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled(true)
+                        }
+                        .padding(.top, 14)
+                    }
+                    .padding(16)
+                    .tint(.primary)
+                }
+
+                if let submitError {
                     Text(submitError)
                         .font(.footnote)
                         .foregroundStyle(.red)
                 }
             }
-
-            Section {
-                Button {
-                    Task { await submit() }
-                } label: {
-                    if submitting {
-                        ProgressView().frame(maxWidth: .infinity)
-                    } else {
-                        Text("Create").frame(maxWidth: .infinity)
-                    }
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 24)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Button {
+                Task { await submit() }
+            } label: {
+                if submitting {
+                    ProgressView().frame(maxWidth: .infinity)
+                } else {
+                    Text("Start session")
+                        .fontWeight(.semibold)
+                        .frame(maxWidth: .infinity)
                 }
-                .disabled(!canSubmit)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(!canSubmit)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .background(.bar)
         }
     }
 
@@ -308,31 +315,12 @@ struct LaunchSessionSheet: View {
             Image(systemName: "desktopcomputer")
                 .font(.system(size: 42))
                 .foregroundStyle(.secondary)
-            if machines.isEmpty {
-                Text("No enrolled machines yet.")
-                    .font(.headline)
-                Text("Install Longhouse on a machine with `longhouse connect` first.")
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-            } else {
-                Text("No machine can start an interactive session right now.")
-                    .font(.headline)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                ForEach(machines, id: \.deviceId) { machine in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(machine.machineName).font(.footnote)
-                            Text(launchBlockedLabel(machine))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                    }
-                    .padding(.horizontal, 24)
-                }
-            }
+            Text("No enrolled machines yet.")
+                .font(.headline)
+            Text("Install Longhouse on a machine with `longhouse connect` first.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal)
         }
     }
 
@@ -380,7 +368,6 @@ struct LaunchSessionSheet: View {
         selectedDeviceId = machine.deviceId
         selectedProvider = machine.defaultProvider ?? ""
         executionLifetime = machine.launch.defaultExecutionLifetime ?? .liveControl
-        initialPrompt = ""
         cwd = ""
         workspaceSearch = ""
         workspaceError = nil
@@ -398,7 +385,6 @@ struct LaunchSessionSheet: View {
         } else {
             executionLifetime = .liveControl
         }
-        initialPrompt = ""
     }
 
     private func loadWorkspaceSuggestions(for deviceId: String) async {
@@ -479,20 +465,51 @@ struct LaunchSessionSheet: View {
     private func launchBlockedLabel(_ machine: MachineDirectoryEntry) -> String {
         switch machine.launch.blockedBy {
         case "control_down":
-            return "control channel disconnected"
+            return lastSeenLabel(machine)
         case "no_codex_support":
-            return "Codex launch is not advertised"
+            return "Console launch unavailable"
         case "no_launch_support":
-            return "No Console launch provider is available"
+            return "Console launch unavailable"
         case "engine_too_old":
-            return "engine too old for Codex launch"
+            return "Update required"
         case "auth_failed":
-            return "control channel auth failed"
+            return "Needs repair"
         case "runtime_unreachable":
-            return "runtime host unreachable"
+            return "Needs repair"
         default:
-            return machine.online ? "interactive launch unavailable" : "control channel disconnected"
+            return machine.online ? "Console launch unavailable" : lastSeenLabel(machine)
         }
+    }
+
+    private func lastSeenLabel(_ machine: MachineDirectoryEntry) -> String {
+        guard let raw = machine.lastSeenAt,
+              let date = ISO8601DateFormatter().date(from: raw) else { return "Offline" }
+        guard date <= Date() else { return "Offline" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return "Offline · Last seen \(formatter.localizedString(for: date, relativeTo: Date()))"
+    }
+
+    private func machineStatusStyle(_ machine: MachineDirectoryEntry) -> LaunchStatusStyle {
+        if Self.canStartInteractiveSession(machine) { return .ready }
+        switch machine.launch.blockedBy {
+        case "control_down": return .offline
+        case "auth_failed", "runtime_unreachable": return .repair
+        default: return .warning
+        }
+    }
+
+    private func executionLifetimeLabel(_ lifetime: RemoteExecutionLifetime) -> String {
+        lifetime == .oneShot ? "Run once" : "Keep session open"
+    }
+
+    @ViewBuilder
+    private func launchSectionTitle(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 2)
+            .accessibilityAddTraits(.isHeader)
     }
 
     private func providerDisplayName(_ provider: String) -> String {
@@ -515,6 +532,244 @@ struct LaunchSessionSheet: View {
             return "Launch state was not recognized by this app build."
         }
         return "Launch failed."
+    }
+}
+
+private enum LaunchStatusStyle {
+    case ready
+    case offline
+    case warning
+    case repair
+
+    var color: Color {
+        switch self {
+        case .ready: .green
+        case .offline: .secondary
+        case .warning: .orange
+        case .repair: .red
+        }
+    }
+}
+
+private struct LaunchCard<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(spacing: 0) { content }
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+private struct LaunchSummaryRow: View {
+    let title: String
+    let subtitle: String?
+    var status: LaunchStatusStyle?
+    var showsChevron = false
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if let status {
+                ZStack {
+                    if status == .offline {
+                        Circle().stroke(status.color, lineWidth: 2)
+                    } else {
+                        Circle().fill(status.color)
+                    }
+                }
+                .frame(width: 10, height: 10)
+                .accessibilityHidden(true)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                if let subtitle, !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer(minLength: 12)
+            if showsChevron {
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(minHeight: 48)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct MachineSelectionView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let machines: [MachineDirectoryEntry]
+    let selectedDeviceId: String
+    let statusText: (MachineDirectoryEntry) -> String
+    let onSelect: (MachineDirectoryEntry) -> Void
+
+    private var ready: [MachineDirectoryEntry] { machines.filter(\.isLaunchable) }
+    private var unavailable: [MachineDirectoryEntry] { machines.filter { !$0.isLaunchable } }
+
+    var body: some View {
+        List {
+            if ready.isEmpty {
+                Section {
+                    Text("No machines ready to launch")
+                        .font(.headline)
+                    Text("Your machines remain listed below and will become available when their Console connection returns.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            if !ready.isEmpty {
+                Section("Available") {
+                    ForEach(ready, id: \.deviceId) { machine in
+                        Button {
+                            onSelect(machine)
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 12) {
+                                Circle().fill(Color.green).frame(width: 10, height: 10)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(machine.machineName).foregroundStyle(.primary)
+                                    Text("Ready").font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                if machine.deviceId == selectedDeviceId {
+                                    Image(systemName: "checkmark").fontWeight(.semibold)
+                                }
+                            }
+                            .padding(.vertical, 5)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("\(machine.machineName), Ready")
+                        .accessibilityAddTraits(machine.deviceId == selectedDeviceId ? .isSelected : [])
+                    }
+                }
+            }
+
+            if !unavailable.isEmpty {
+                Section("Unavailable") {
+                    ForEach(unavailable, id: \.deviceId) { machine in
+                        HStack(spacing: 12) {
+                            Circle()
+                                .stroke(machine.online ? Color.orange : Color.secondary, lineWidth: 2)
+                                .frame(width: 10, height: 10)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(machine.machineName).foregroundStyle(.primary)
+                                Text(statusText(machine)).font(.subheadline).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 5)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(machine.machineName), \(statusText(machine)), Not available")
+                    }
+                }
+            }
+        }
+        .navigationTitle("Choose Machine")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct ProviderSelectionView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let providers: [String]
+    let selectedProvider: String
+    let displayName: (String) -> String
+    let onSelect: (String) -> Void
+
+    var body: some View {
+        List(providers, id: \.self) { provider in
+            Button {
+                onSelect(provider)
+                dismiss()
+            } label: {
+                HStack {
+                    Text(displayName(provider)).foregroundStyle(.primary)
+                    Spacer()
+                    if provider == selectedProvider { Image(systemName: "checkmark") }
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(provider == selectedProvider ? .isSelected : [])
+        }
+        .navigationTitle("Choose Agent")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+private struct WorkspaceSelectionView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let workspaces: [WorkspaceSuggestion]
+    let selectedPath: String
+    let loading: Bool
+    let errorMessage: String?
+    let onSelect: (String) -> Void
+
+    @State private var search = ""
+    @State private var manualPath = ""
+
+    private var filtered: [WorkspaceSuggestion] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return workspaces }
+        return workspaces.filter { $0.label.lowercased().contains(query) || $0.path.lowercased().contains(query) }
+    }
+
+    private var normalizedManualPath: String { manualPath.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        List {
+            if loading { ProgressView("Loading recent workspaces…") }
+            if let errorMessage, workspaces.isEmpty {
+                Text(errorMessage).foregroundStyle(.secondary)
+            }
+            if !filtered.isEmpty {
+                Section("Recent") {
+                    ForEach(filtered) { workspace in
+                        Button {
+                            onSelect(workspace.path)
+                            dismiss()
+                        } label: {
+                            HStack(spacing: 12) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(workspace.label).foregroundStyle(.primary).lineLimit(1)
+                                    Text(LonghouseAPI.compactWorkspacePath(workspace.path))
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer()
+                                if workspace.path == selectedPath { Image(systemName: "checkmark") }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            Section("Other") {
+                TextField("Absolute path", text: $manualPath)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled(true)
+                Button("Use this path") {
+                    onSelect(normalizedManualPath)
+                    dismiss()
+                }
+                .disabled(!normalizedManualPath.starts(with: "/"))
+            }
+        }
+        .searchable(text: $search, prompt: "Filter workspaces")
+        .navigationTitle("Choose Workspace")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -634,10 +889,13 @@ private struct WorkspaceSuggestionList: View {
 }
 
 private func previewMachine(
+    deviceId: String = "cinder",
+    machineName: String = "cinder",
     online: Bool = true,
     controlChannelStatus: String? = "connected",
     providers: [String] = ["claude", "codex", "opencode"],
-    launchBlockedBy: String? = nil
+    launchBlockedBy: String? = nil,
+    lastSeenAt: String? = nil
 ) -> MachineDirectoryEntry {
     let launchProviders = online
         ? providers.map { provider in
@@ -648,8 +906,8 @@ private func previewMachine(
         }
         : []
     return MachineDirectoryEntry(
-        deviceId: "cinder",
-        machineName: "cinder",
+        deviceId: deviceId,
+        machineName: machineName,
         online: online,
         controlChannelStatus: controlChannelStatus,
         supports: ["codex.launch", "codex.run_once", "codex.send", "claude.launch"],
@@ -657,7 +915,7 @@ private func previewMachine(
         canLaunchCodex: true,
         launchableProviders: providers,
         launchBlockedBy: launchBlockedBy,
-        lastSeenAt: "2026-05-24T00:00:00Z",
+        lastSeenAt: lastSeenAt,
         engineBuild: "dev",
         launch: MachineLaunchProjection(
             blockedBy: online ? nil : (launchBlockedBy ?? "control_down"),
@@ -693,6 +951,7 @@ private func previewMachine(
         ]
     ) { _ in }
     .environmentObject(AppState())
+    .preferredColorScheme(.dark)
 }
 
 #Preview("Launch session without recent workspaces") {
@@ -701,6 +960,7 @@ private func previewMachine(
         previewWorkspaces: []
     ) { _ in }
     .environmentObject(AppState())
+    .preferredColorScheme(.dark)
 }
 
 #Preview("Launch session offline machine") {
@@ -716,4 +976,27 @@ private func previewMachine(
         previewWorkspaces: []
     ) { _ in }
     .environmentObject(AppState())
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Launch machine chooser") {
+    NavigationStack {
+        MachineSelectionView(
+            machines: [
+                previewMachine(),
+                previewMachine(
+                    deviceId: "cube-canary",
+                    machineName: "cube",
+                    online: false,
+                    controlChannelStatus: "disconnected",
+                    providers: [],
+                    launchBlockedBy: "control_down"
+                ),
+            ],
+            selectedDeviceId: "cinder",
+            statusText: { machine in machine.online ? "Console launch unavailable" : "Offline · Last seen 2 days ago" },
+            onSelect: { _ in }
+        )
+    }
+    .preferredColorScheme(.dark)
 }
