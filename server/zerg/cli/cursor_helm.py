@@ -40,6 +40,8 @@ import termios
 import threading
 import time
 import tty
+import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -48,7 +50,6 @@ import httpx
 import typer
 
 from zerg.cli import _launch_ui as launch_ui
-from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli._common import build_session_url
 from zerg.cli._common import ensure_managed_launch_preflight
 from zerg.cli._common import git_output
@@ -91,11 +92,22 @@ _INJECT_TEXT_SETTLE_SECONDS = _env_seconds("LH_CURSOR_HELM_TEXT_SETTLE_MS", 300)
 _INJECT_ESCAPE_SETTLE_SECONDS = _env_seconds("LH_CURSOR_HELM_ESCAPE_SETTLE_MS", 100)
 _SOCKET_BACKLOG = 4
 _COMMAND_READ_TIMEOUT = 8.0
-_REGISTER_TIMEOUT = 30.0
+# Keep short so Helm exit can join an in-flight attempt without wedging for 30s.
+_REGISTER_TIMEOUT = 5.0
+_REGISTER_RETRY_DELAYS_SECONDS = (0.0, 0.5, 1.5, 3.0)
+_REGISTER_EXIT_JOIN_SECONDS = _REGISTER_TIMEOUT + 1.0
 _TERMINAL_POST_TIMEOUT = 5.0
 _PROVIDER = "cursor"
 _CONTROL_PLANE = "cursor_helm"
 _STATE_PROVIDER_DIR = "cursor-helm"
+
+
+@dataclass(frozen=True)
+class _RegistrationOutcome:
+    session_id: str
+    registered: bool
+    attach_command: str = ""
+    error: str | None = None
 
 
 def _now_iso() -> str:
@@ -121,6 +133,8 @@ def _write_state(
     cursor_pid: int,
     cwd: Path,
     ready: bool,
+    registration: str = "pending",
+    registration_error: str | None = None,
 ) -> None:
     state_dir = _state_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -134,6 +148,8 @@ def _write_state(
         "cursor_pid": cursor_pid,
         "cwd": str(cwd),
         "ready": ready,
+        "registration": registration,
+        "registration_error": registration_error,
         "started_at": _now_iso(),
         "updated_at": _now_iso(),
     }
@@ -186,8 +202,11 @@ def _register_session(
     loop_mode: SessionLoopMode,
     machine_name: str,
     permission_mode: str,
+    session_id: str,
     verbose: bool = False,
-) -> ManagedLocalLaunchResponse:
+) -> _RegistrationOutcome:
+    """Attempt host registration. Remote failures return degraded outcome; do not exit."""
+
     git_repo, git_branch = _infer_git_context(cwd)
     payload = {
         "cwd": str(cwd),
@@ -199,6 +218,7 @@ def _register_session(
         "loop_mode": loop_mode.value,
         "machine_name": machine_name,
         "permission_mode": permission_mode,
+        "session_id": session_id,
     }
     launch_actor, launch_surface = interactive_human_shell_launch_provenance()
     if launch_actor:
@@ -211,32 +231,29 @@ def _register_session(
     try:
         with httpx.Client(timeout=_REGISTER_TIMEOUT) as client:
             response = client.post(launch_url, headers={"X-Agents-Token": token}, json=payload)
-    except httpx.ConnectError:
-        typer.secho(f"Could not connect to {url}", fg=typer.colors.RED)
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
+    except httpx.ConnectError as exc:
+        return _RegistrationOutcome(session_id=session_id, registered=False, error=f"connect failed: {exc}")
     except httpx.TimeoutException:
-        typer.secho(
-            f"Timed out waiting for Longhouse to create the managed cursor session at {url}.",
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
+        return _RegistrationOutcome(session_id=session_id, registered=False, error="registration timed out")
 
     if response.status_code == 401:
-        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
+        # Soft-fail: Degraded Helm still runs the local TUI; do not Exit from a
+        # background registration thread (typer.Exit would not stop the launcher).
+        return _RegistrationOutcome(
+            session_id=session_id,
+            registered=False,
+            error="authentication failed; run 'longhouse auth' to re-authenticate",
+        )
     if response.status_code == 422:
         try:
             errors = response.json()
         except ValueError:
             errors = response.text[:200]
-        typer.secho(
-            "Longhouse server rejected the launch request (422).\n"
-            "Your CLI likely drifted from the server schema. Update with:\n"
-            "  cd ~/git/zerg/longhouse && make dogfood-refresh\n"
-            f"Server detail: {errors}",
-            fg=typer.colors.RED,
+        return _RegistrationOutcome(
+            session_id=session_id,
+            registered=False,
+            error=f"server rejected launch (422): {errors}",
         )
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
     if response.status_code != 200:
         detail = ""
         try:
@@ -244,37 +261,177 @@ def _register_session(
             detail = str(body.get("detail") or "").strip()
         except ValueError:
             detail = response.text.strip()
-        typer.secho(detail or "Longhouse session launch failed", fg=typer.colors.RED)
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
+        return _RegistrationOutcome(
+            session_id=session_id,
+            registered=False,
+            error=detail or f"registration failed HTTP {response.status_code}",
+        )
 
     body = response.json()
-    raw_provider_session_id = body.get("provider_session_id")
-    provider_session_id = str(raw_provider_session_id).strip() if raw_provider_session_id else None
-    return ManagedLocalLaunchResponse(
-        session_id=str(body["session_id"]),
-        provider_session_id=provider_session_id,
-        attach_command=str(body["attach_command"]),
-        source_runner_name=str(body.get("source_runner_name") or machine_name),
-        managed_transport=str(body.get("managed_transport") or "") or None,
-        permission_mode=str(body.get("permission_mode") or "bypass"),
+    returned_id = str(body.get("session_id") or "").strip()
+    if returned_id and returned_id != session_id:
+        return _RegistrationOutcome(
+            session_id=session_id,
+            registered=False,
+            error=f"server returned different session_id {returned_id}",
+        )
+    return _RegistrationOutcome(
+        session_id=session_id,
+        registered=True,
+        attach_command=str(body.get("attach_command") or ""),
     )
+
+
+def _registration_worker(
+    *,
+    url: str,
+    token: str,
+    cwd: Path,
+    project: str | None,
+    name: str | None,
+    loop_mode: SessionLoopMode,
+    machine_name: str,
+    permission_mode: str,
+    session_id: str,
+    sock_path: Path,
+    stop_event: threading.Event,
+    outcome_box: list[_RegistrationOutcome],
+    outcome_lock: threading.Lock,
+    verbose: bool,
+) -> None:
+    last_error: str | None = None
+    for delay in _REGISTER_RETRY_DELAYS_SECONDS:
+        if stop_event.is_set():
+            return
+        if delay:
+            stop_event.wait(delay)
+            if stop_event.is_set():
+                return
+        outcome = _register_session(
+            url=url,
+            token=token,
+            cwd=cwd,
+            project=project,
+            name=name,
+            loop_mode=loop_mode,
+            machine_name=machine_name,
+            permission_mode=permission_mode,
+            session_id=session_id,
+            verbose=verbose,
+        )
+        if stop_event.is_set():
+            if outcome.registered:
+                # Host materialized after local exit — terminalize immediately.
+                _post_terminal_event(url, token, session_id, "helm_exit_before_ready")
+            return
+        if outcome.registered:
+            with outcome_lock:
+                outcome_box[:] = [outcome]
+            try:
+                current = json.loads(_state_file_path(session_id).read_text())
+                _write_state(
+                    session_id,
+                    socket_path=sock_path,
+                    cursor_pid=int(current.get("cursor_pid") or 0),
+                    cwd=cwd,
+                    ready=bool(current.get("ready")),
+                    registration="registered",
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                _write_state(
+                    session_id,
+                    socket_path=sock_path,
+                    cursor_pid=0,
+                    cwd=cwd,
+                    ready=False,
+                    registration="registered",
+                )
+            return
+        last_error = outcome.error
+    with outcome_lock:
+        outcome_box[:] = [_RegistrationOutcome(session_id=session_id, registered=False, error=last_error or "registration failed")]
+    try:
+        current = json.loads(_state_file_path(session_id).read_text())
+        _write_state(
+            session_id,
+            socket_path=sock_path,
+            cursor_pid=int(current.get("cursor_pid") or 0),
+            cwd=cwd,
+            ready=bool(current.get("ready")),
+            registration="degraded",
+            registration_error=last_error,
+        )
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        _write_state(
+            session_id,
+            socket_path=sock_path,
+            cursor_pid=0,
+            cwd=cwd,
+            ready=False,
+            registration="degraded",
+            registration_error=last_error,
+        )
 
 
 def _post_terminal_event(url: str, token: str, session_id: str, reason: str) -> None:
     """Best-effort: tell the Runtime Host the Helm session ended."""
-    endpoint = f"{url.rstrip('/')}/api/agents/runtime/event"
-    payload = {
+    occurred_at = _now_iso()
+    device_id = get_machine_name_label()
+    event = {
+        "runtime_key": f"{_PROVIDER}:{session_id}",
         "session_id": session_id,
         "provider": _PROVIDER,
-        "kind": "terminal",
-        "reason": reason,
-        "timestamp": _now_iso(),
+        "device_id": device_id,
+        "source": "cursor_helm",
+        "kind": "terminal_signal",
+        "phase": "finished",
+        "occurred_at": occurred_at,
+        "dedupe_key": f"cursor-helm-terminal:{session_id}:{reason}:{occurred_at}",
+        "payload": {
+            "terminal_state": "session_ended",
+            "terminal_reason": reason,
+            "terminal_source": "cursor_helm",
+            "exit_code": 0,
+        },
     }
+    endpoint = f"{url.rstrip('/')}/api/agents/runtime/events/batch"
     try:
         with httpx.Client(timeout=_TERMINAL_POST_TIMEOUT) as client:
-            client.post(endpoint, headers={"X-Agents-Token": token}, json=payload)
+            client.post(
+                endpoint,
+                headers={"X-Agents-Token": token},
+                json={"events": [event]},
+            )
     except httpx.HTTPError:
         pass
+
+
+def _reconcile_registration_on_exit(
+    *,
+    url: str,
+    token: str,
+    session_id: str,
+    registration_thread: threading.Thread,
+    registration_box: list[_RegistrationOutcome],
+    registration_lock: threading.Lock,
+    join_timeout: float = _REGISTER_EXIT_JOIN_SECONDS,
+) -> bool:
+    """Join registration briefly and close any host session that may exist.
+
+    Returns True when registration succeeded (durable exit copy).
+    If the outcome is still unknown after the bounded join, best-effort
+    terminalize so a late host commit cannot linger as falsely live.
+    """
+    registration_thread.join(timeout=join_timeout)
+    with registration_lock:
+        outcome = registration_box[0] if registration_box else None
+    if outcome is not None and outcome.registered:
+        _post_terminal_event(url, token, session_id, "helm_exit")
+        return True
+    if outcome is None:
+        # Abandoned / killed mid-HTTP — host may have committed after our join.
+        _post_terminal_event(url, token, session_id, "helm_exit_before_ready")
+    return False
 
 
 def _set_window_title(text: str) -> None:
@@ -478,30 +635,21 @@ def run_helm(
     cursor_bin = _resolve_cursor_bin()
 
     launch_ui.progress("Preparing your session…")
-    result = _register_session(
-        url=resolved_url,
-        token=resolved_token,
-        cwd=cwd,
-        project=project,
-        name=name,
-        loop_mode=loop_mode,
-        machine_name=machine_name,
-        permission_mode=permission_mode,
-        verbose=verbose,
-    )
-    session_id = result.session_id
-    if verbose:
-        typer.echo(f"Longhouse: {resolved_url}")
-        typer.echo(f"Session:   {session_id}")
-        typer.echo(f"Timeline:  {build_session_url(resolved_url, session_id)}")
-
+    session_id = str(uuid.uuid4())
     state_dir = _state_dir()
     state_dir.mkdir(parents=True, exist_ok=True)
     sock_path = _socket_path(session_id)
-    _write_state(session_id, socket_path=sock_path, cursor_pid=0, cwd=cwd, ready=False)
+    _write_state(
+        session_id,
+        socket_path=sock_path,
+        cursor_pid=0,
+        cwd=cwd,
+        ready=False,
+        registration="pending",
+    )
 
-    # Bind the control socket before forking so the engine can connect as soon
-    # as the lease is observed.
+    # Bind the control socket before forking. ready=false until the child is
+    # running so the engine does not publish a live remote-control lease early.
     try:
         if sock_path.exists():
             sock_path.unlink()
@@ -513,6 +661,56 @@ def run_helm(
         typer.secho(f"Failed to bind cursor-helm control socket: {exc}", fg=typer.colors.RED)
         _remove_state(session_id, sock_path)
         raise typer.Exit(code=EXIT_SETUP_FAILED)
+
+    stop_event = threading.Event()
+    registration_box: list[_RegistrationOutcome] = []
+    registration_lock = threading.Lock()
+    registration_thread = threading.Thread(
+        target=_registration_worker,
+        kwargs={
+            "url": resolved_url,
+            "token": resolved_token,
+            "cwd": cwd,
+            "project": project,
+            "name": name,
+            "loop_mode": loop_mode,
+            "machine_name": machine_name,
+            "permission_mode": permission_mode,
+            "session_id": session_id,
+            "sock_path": sock_path,
+            "stop_event": stop_event,
+            "outcome_box": registration_box,
+            "outcome_lock": registration_lock,
+            "verbose": verbose,
+        },
+        daemon=True,
+        name="cursor-helm-register",
+    )
+    registration_thread.start()
+    # Brief race: if registration is fast, print steerable panel; never wait
+    # for the full HTTP timeout before starting the TUI.
+    registration_thread.join(timeout=0.3)
+    with registration_lock:
+        early = registration_box[0] if registration_box else None
+    if early is not None and early.registered:
+        panel_capability = "steerable"
+        attach_command = early.attach_command or None
+    elif early is not None and not early.registered:
+        panel_capability = "local_only"
+        attach_command = None
+        typer.secho(
+            f"Warning: Longhouse registration failed ({early.error}). "
+            "Continuing local Cursor Helm; remote steer/timeline may be unavailable.",
+            fg=typer.colors.YELLOW,
+        )
+    else:
+        panel_capability = "registering"
+        attach_command = None
+
+    if verbose:
+        typer.echo(f"Longhouse: {resolved_url}")
+        typer.echo(f"Session:   {session_id}")
+        typer.echo(f"Timeline:  {build_session_url(resolved_url, session_id)}")
 
     # Ownership signal: set the terminal window title. The TUI's alternate
     # screen would clear a printed banner; the title persists.
@@ -535,18 +733,14 @@ def run_helm(
             fg=typer.colors.YELLOW,
         )
 
-    # Hearth splash: print once the control socket is bound (the steer surface
-    # is up, so the "steer from anywhere" claim is honest) and before pty.fork,
-    # so it lands on the cooked terminal before cursor-agent's alt-screen
-    # clears it. It remains in scrollback and reappears when the TUI exits.
     launch_ui.launch_panel(
         provider_label=launch_ui.PROVIDER_LABELS["cursor"],
         base_url=resolved_url,
         machine_name=machine_name,
         session_id=session_id,
         verbose=verbose,
-        steerable=True,
-        attach_command=result.attach_command or None,
+        capability=panel_capability,
+        attach_command=attach_command,
     )
 
     argv = [cursor_bin, *(cursor_args or [])]
@@ -606,11 +800,34 @@ def run_helm(
             sys.stderr.write(f"longhouse cursor: failed to exec {argv[0]}: {exc}\n")
             os._exit(127)
 
-    # Parent: own the PTY master + child pid.
-    _write_state(session_id, socket_path=sock_path, cursor_pid=pid, cwd=cwd, ready=True)
+    # Parent: own the PTY master + child pid. ready=true publishes the live lease.
+    registration_status = "pending"
+    registration_error: str | None = None
+    with registration_lock:
+        if registration_box and registration_box[0].registered:
+            registration_status = "registered"
+        elif registration_box and not registration_box[0].registered:
+            registration_status = "degraded"
+            registration_error = registration_box[0].error
+    try:
+        current = json.loads(_state_file_path(session_id).read_text())
+        if registration_status == "pending":
+            registration_status = str(current.get("registration") or "pending")
+            err = current.get("registration_error")
+            registration_error = err if isinstance(err, str) else None
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    _write_state(
+        session_id,
+        socket_path=sock_path,
+        cursor_pid=pid,
+        cwd=cwd,
+        ready=True,
+        registration=registration_status,
+        registration_error=registration_error,
+    )
     _set_pty_size(master_fd, real_rows, real_cols)
 
-    stop_event = threading.Event()
     master_lock = threading.Lock()
 
     def _on_winch(*_args: object) -> None:
@@ -725,6 +942,16 @@ def run_helm(
             pass
     finally:
         stop_event.set()
+        # Bounded join covers one in-flight register attempt; unknown outcomes
+        # still get a best-effort terminalize (see _reconcile_registration_on_exit).
+        final_registered = _reconcile_registration_on_exit(
+            url=resolved_url,
+            token=resolved_token,
+            session_id=session_id,
+            registration_thread=registration_thread,
+            registration_box=registration_box,
+            registration_lock=registration_lock,
+        )
         # Let the ingest tailer flush a final poll + record its last outcome
         # before we summarize. Bounded so a hung decode can't wedge exit.
         if ingest_thread is not None:
@@ -747,8 +974,7 @@ def run_helm(
         except OSError:
             pass
         _remove_state(session_id, sock_path)
-        _post_terminal_event(resolved_url, resolved_token, session_id, "helm_exit")
-        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name)
+        launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name, durable=final_registered)
         if open_browser:
             typer.echo(f"Timeline: {build_session_url(resolved_url, session_id)}")
 

@@ -35,7 +35,14 @@ def test_state_file_round_trip(monkeypatch, tmp_path):
     _state_dir_for(monkeypatch, tmp_path)
     session_id = "11111111-1111-4111-8111-111111111111"
     sock = cursor_helm._socket_path(session_id)
-    cursor_helm._write_state(session_id, socket_path=sock, cursor_pid=123, cwd=tmp_path, ready=True)
+    cursor_helm._write_state(
+        session_id,
+        socket_path=sock,
+        cursor_pid=123,
+        cwd=tmp_path,
+        ready=True,
+        registration="registered",
+    )
 
     raw = cursor_helm._state_file_path(session_id).read_text()
     state = json.loads(raw)
@@ -46,10 +53,213 @@ def test_state_file_round_trip(monkeypatch, tmp_path):
     assert state["launcher_pid"] == os.getpid()
     assert state["cursor_pid"] == 123
     assert state["ready"] is True
+    assert state["registration"] == "registered"
 
     cursor_helm._remove_state(session_id, sock)
     assert not cursor_helm._state_file_path(session_id).exists()
     assert not sock.exists()
+
+
+def test_register_session_soft_fails_on_connect_error(monkeypatch, tmp_path):
+    class BoomClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, *args, **kwargs):
+            raise cursor_helm.httpx.ConnectError("down")
+
+    monkeypatch.setattr(cursor_helm.httpx, "Client", BoomClient)
+    outcome = cursor_helm._register_session(
+        url="https://example.invalid",
+        token="tok",
+        cwd=tmp_path,
+        project="demo",
+        name=None,
+        loop_mode=cursor_helm.SessionLoopMode.ASSIST,
+        machine_name="cinder",
+        permission_mode="bypass",
+        session_id="11111111-1111-4111-8111-111111111111",
+    )
+    assert outcome.registered is False
+    assert outcome.session_id.endswith("1111")
+    assert "connect failed" in (outcome.error or "")
+
+
+def test_registration_worker_terminalizes_when_exit_races_success(monkeypatch, tmp_path):
+    """If register commits after Helm exit, terminalize immediately."""
+    _state_dir_for(monkeypatch, tmp_path)
+    session_id = "22222222-2222-4222-8222-222222222222"
+    sock = cursor_helm._socket_path(session_id)
+    terminal_reasons: list[str] = []
+    stop = threading.Event()
+
+    def _register_then_mark_exit(**_kwargs):
+        stop.set()
+        return cursor_helm._RegistrationOutcome(
+            session_id=session_id,
+            registered=True,
+            attach_command="",
+        )
+
+    monkeypatch.setattr(cursor_helm, "_register_session", _register_then_mark_exit)
+    monkeypatch.setattr(
+        cursor_helm,
+        "_post_terminal_event",
+        lambda _url, _token, _sid, reason: terminal_reasons.append(reason),
+    )
+    monkeypatch.setattr(cursor_helm, "_REGISTER_RETRY_DELAYS_SECONDS", (0.0,))
+
+    outcome_box: list = []
+    cursor_helm._registration_worker(
+        url="https://example.invalid",
+        token="tok",
+        cwd=tmp_path,
+        project="demo",
+        name=None,
+        loop_mode=cursor_helm.SessionLoopMode.ASSIST,
+        machine_name="cinder",
+        permission_mode="bypass",
+        session_id=session_id,
+        sock_path=sock,
+        stop_event=stop,
+        outcome_box=outcome_box,
+        outcome_lock=threading.Lock(),
+        verbose=False,
+    )
+
+    assert terminal_reasons == ["helm_exit_before_ready"]
+    assert outcome_box == []
+
+
+def test_reconcile_registration_on_exit_terminalizes_unknown_outcome(monkeypatch):
+    terminal_reasons: list[str] = []
+    monkeypatch.setattr(
+        cursor_helm,
+        "_post_terminal_event",
+        lambda _url, _token, _sid, reason: terminal_reasons.append(reason),
+    )
+
+    finished = threading.Event()
+
+    def _linger():
+        finished.wait(timeout=0.05)
+
+    thread = threading.Thread(target=_linger, daemon=True)
+    thread.start()
+    durable = cursor_helm._reconcile_registration_on_exit(
+        url="https://example.invalid",
+        token="tok",
+        session_id="33333333-3333-4333-8333-333333333333",
+        registration_thread=thread,
+        registration_box=[],
+        registration_lock=threading.Lock(),
+        join_timeout=0.2,
+    )
+    assert durable is False
+    assert terminal_reasons == ["helm_exit_before_ready"]
+
+
+def test_reconcile_registration_on_exit_closes_registered_session(monkeypatch):
+    terminal_reasons: list[str] = []
+    monkeypatch.setattr(
+        cursor_helm,
+        "_post_terminal_event",
+        lambda _url, _token, _sid, reason: terminal_reasons.append(reason),
+    )
+    thread = threading.Thread(target=lambda: None, daemon=True)
+    thread.start()
+    thread.join(timeout=1.0)
+    box = [
+        cursor_helm._RegistrationOutcome(
+            session_id="44444444-4444-4444-8444-444444444444",
+            registered=True,
+            attach_command="",
+        )
+    ]
+    durable = cursor_helm._reconcile_registration_on_exit(
+        url="https://example.invalid",
+        token="tok",
+        session_id="44444444-4444-4444-8444-444444444444",
+        registration_thread=thread,
+        registration_box=box,
+        registration_lock=threading.Lock(),
+        join_timeout=0.1,
+    )
+    assert durable is True
+    assert terminal_reasons == ["helm_exit"]
+
+
+def test_register_session_soft_fails_on_401(monkeypatch, tmp_path):
+    class AuthClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, *args, **kwargs):
+            return cursor_helm.httpx.Response(401, request=cursor_helm.httpx.Request("POST", "https://x"))
+
+    monkeypatch.setattr(cursor_helm.httpx, "Client", AuthClient)
+    outcome = cursor_helm._register_session(
+        url="https://example.invalid",
+        token="tok",
+        cwd=tmp_path,
+        project="demo",
+        name=None,
+        loop_mode=cursor_helm.SessionLoopMode.ASSIST,
+        machine_name="cinder",
+        permission_mode="bypass",
+        session_id="11111111-1111-4111-8111-111111111111",
+    )
+    assert outcome.registered is False
+    assert "authentication failed" in (outcome.error or "")
+
+
+def test_post_terminal_event_uses_runtime_events_batch(monkeypatch):
+    captured: dict = {}
+
+    class CaptureClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, endpoint, headers=None, json=None):
+            captured["endpoint"] = endpoint
+            captured["headers"] = headers
+            captured["json"] = json
+            return cursor_helm.httpx.Response(200, request=cursor_helm.httpx.Request("POST", endpoint))
+
+    monkeypatch.setattr(cursor_helm.httpx, "Client", CaptureClient)
+    monkeypatch.setattr(cursor_helm, "get_machine_name_label", lambda: "cinder")
+    cursor_helm._post_terminal_event(
+        "https://david010.longhouse.ai",
+        "tok",
+        "55555555-5555-4555-8555-555555555555",
+        "helm_exit",
+    )
+    assert captured["endpoint"] == "https://david010.longhouse.ai/api/agents/runtime/events/batch"
+    assert captured["headers"]["X-Agents-Token"] == "tok"
+    event = captured["json"]["events"][0]
+    assert event["kind"] == "terminal_signal"
+    assert event["provider"] == "cursor"
+    assert event["source"] == "cursor_helm"
+    assert event["payload"]["terminal_state"] == "session_ended"
+    assert event["payload"]["terminal_reason"] == "helm_exit"
 
 
 def test_handle_command_send_writes_text_escape_enter_sequence():

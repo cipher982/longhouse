@@ -71,18 +71,32 @@ def launch_panel(
     verbose: bool,
     steerable: bool = True,
     attach_command: str | None = None,
+    capability: str | None = None,
 ) -> None:
     """Opening hearth panel: the session is live and yours to drive from anywhere.
 
     Leads with the steer-from-anywhere capability (the product's wedge) rather
-    than a static status lamp. `steerable=False` softens the claim to a watch-only
-    link for providers without a proven live control surface at launch.
+    than a static status lamp. Callers that lack proven remote control must pass
+    ``capability`` (or ``steerable=False``) so copy stays honest.
 
-    Verbose appends the diagnostic block: full session id, full timeline URL, and
-    the attach command when one is supplied.
+    ``capability`` values:
+    - ``steerable``: remote control proven / host registration succeeded
+    - ``registering``: local TUI starting; host registration still in flight
+    - ``local_only``: remote plane failed; local Helm continues
+    - ``watch``: observe link only (e.g. Antigravity without proven steer)
     """
+    resolved_capability = capability
+    if resolved_capability is None:
+        resolved_capability = "steerable" if steerable else "watch"
     short_link = display_host(build_short_session_url(base_url, session_id))
-    call_to_action = "Steer from anywhere" if steerable else "Watch on your timeline"
+    if resolved_capability == "steerable":
+        call_to_action = "Steer from anywhere"
+    elif resolved_capability == "registering":
+        call_to_action = "Registering with Longhouse — local Helm is up"
+    elif resolved_capability == "local_only":
+        call_to_action = "Local Helm — remote steer unavailable until Longhouse recovers"
+    else:
+        call_to_action = "Watch on your timeline"
 
     try:
         from rich.box import ROUNDED
@@ -129,17 +143,25 @@ def exit_bookend(
     machine_name: str,
     reattach_command: str | None = None,
     reattachable_on_nonzero_exit: bool = False,
+    durable: bool = True,
 ) -> None:
     """Closing bookend keyed on the real process exit code. Print-only.
 
     - clean exit                              -> the hearth is banked, thread saved
+    - clean exit, not durable                 -> local session ended (not synced)
     - crash, reattachable_on_nonzero_exit     -> the hearth still burns, rejoin it
       (codex: the bridge is left running and is reattachable, so "scattered/dead"
        would be a lie)
     - crash, otherwise                        -> the fire scattered, rekindle it
     """
     if exit_code == 0:
-        typer.secho(f"·  The hearth banked on {machine_name} — thread saved.", fg=typer.colors.BRIGHT_BLACK)
+        if durable:
+            typer.secho(f"·  The hearth banked on {machine_name} — thread saved.", fg=typer.colors.BRIGHT_BLACK)
+        else:
+            typer.secho(
+                f"·  Local Helm ended on {machine_name} — session was not synced to Longhouse.",
+                fg=typer.colors.BRIGHT_BLACK,
+            )
         return
 
     if reattachable_on_nonzero_exit:

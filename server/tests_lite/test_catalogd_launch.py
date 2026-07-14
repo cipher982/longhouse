@@ -302,6 +302,34 @@ def _local_launch_payload(
 
 
 @pytest.mark.asyncio
+async def test_catalogd_local_launch_replays_when_retry_timestamps_differ(daemon_paths):
+    database_path, socket_path = daemon_paths
+    session_id = uuid4()
+    first = _local_launch_payload(
+        session_id=session_id,
+        provider="cursor",
+        managed_transport="cursor_helm",
+        attach_command="",
+    )
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        created = await client.call("session.launch.local.create.v2", {"launch": first})
+        assert created["created"] is True
+        later = dict(first)
+        later["started_at"] = (datetime.now(UTC) + timedelta(seconds=30)).isoformat()
+        later["expires_at"] = (datetime.now(UTC) + timedelta(minutes=10)).isoformat()
+        replay = await client.call("session.launch.local.create.v2", {"launch": later})
+        assert replay["exact_replay"] is True
+        assert replay["idempotency_conflict"] is False
+        assert replay["launch"]["session_id"] == str(session_id)
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("provider", "managed_transport"),
     [

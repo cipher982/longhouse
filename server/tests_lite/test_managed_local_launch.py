@@ -4,6 +4,7 @@ import asyncio
 import os
 from datetime import datetime
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from cryptography.fernet import Fernet
@@ -377,6 +378,41 @@ def test_this_device_launch_does_not_require_runner_record(monkeypatch, tmp_path
     assert payload["source_runner_id"] is None
     assert payload["source_runner_name"] == "cinder"
     assert payload["managed_transport"] == "codex_app_server"
+
+
+def test_this_device_launch_returns_client_minted_session_id_unchanged(monkeypatch, tmp_path):
+    from zerg.services import managed_local_launcher
+
+    SessionLocal = _make_db(tmp_path)
+    minted = uuid4()
+
+    with SessionLocal() as db:
+        user, _runner = _seed_user_and_runner(db)
+        device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
+        client, api_app = _make_device_client(db, device_token)
+        monkeypatch.setattr(
+            managed_local_launcher,
+            "get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda *_args: False),
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                json={
+                    "cwd": "/tmp/demo",
+                    "provider": "cursor",
+                    "project": "demo",
+                    "session_id": str(minted),
+                },
+            )
+        finally:
+            api_app.dependency_overrides = {}
+
+        payload = response.json()
+
+    assert response.status_code == 200, response.text
+    assert payload["session_id"] == str(minted)
 
 
 def test_this_device_launch_uses_live_store_not_archive_writer(monkeypatch, tmp_path, managed_launch_live_store):
