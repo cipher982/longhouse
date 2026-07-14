@@ -137,6 +137,94 @@ def test_registration_worker_terminalizes_when_exit_races_success(monkeypatch, t
     assert outcome_box == []
 
 
+def test_reconcile_registration_on_exit_terminalizes_unknown_outcome(monkeypatch):
+    terminal_reasons: list[str] = []
+    monkeypatch.setattr(
+        cursor_helm,
+        "_post_terminal_event",
+        lambda _url, _token, _sid, reason: terminal_reasons.append(reason),
+    )
+
+    finished = threading.Event()
+
+    def _linger():
+        finished.wait(timeout=0.05)
+
+    thread = threading.Thread(target=_linger, daemon=True)
+    thread.start()
+    durable = cursor_helm._reconcile_registration_on_exit(
+        url="https://example.invalid",
+        token="tok",
+        session_id="33333333-3333-4333-8333-333333333333",
+        registration_thread=thread,
+        registration_box=[],
+        registration_lock=threading.Lock(),
+        join_timeout=0.2,
+    )
+    assert durable is False
+    assert terminal_reasons == ["helm_exit_before_ready"]
+
+
+def test_reconcile_registration_on_exit_closes_registered_session(monkeypatch):
+    terminal_reasons: list[str] = []
+    monkeypatch.setattr(
+        cursor_helm,
+        "_post_terminal_event",
+        lambda _url, _token, _sid, reason: terminal_reasons.append(reason),
+    )
+    thread = threading.Thread(target=lambda: None, daemon=True)
+    thread.start()
+    thread.join(timeout=1.0)
+    box = [
+        cursor_helm._RegistrationOutcome(
+            session_id="44444444-4444-4444-8444-444444444444",
+            registered=True,
+            attach_command="",
+        )
+    ]
+    durable = cursor_helm._reconcile_registration_on_exit(
+        url="https://example.invalid",
+        token="tok",
+        session_id="44444444-4444-4444-8444-444444444444",
+        registration_thread=thread,
+        registration_box=box,
+        registration_lock=threading.Lock(),
+        join_timeout=0.1,
+    )
+    assert durable is True
+    assert terminal_reasons == ["helm_exit"]
+
+
+def test_register_session_soft_fails_on_401(monkeypatch, tmp_path):
+    class AuthClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, *args, **kwargs):
+            return cursor_helm.httpx.Response(401, request=cursor_helm.httpx.Request("POST", "https://x"))
+
+    monkeypatch.setattr(cursor_helm.httpx, "Client", AuthClient)
+    outcome = cursor_helm._register_session(
+        url="https://example.invalid",
+        token="tok",
+        cwd=tmp_path,
+        project="demo",
+        name=None,
+        loop_mode=cursor_helm.SessionLoopMode.ASSIST,
+        machine_name="cinder",
+        permission_mode="bypass",
+        session_id="11111111-1111-4111-8111-111111111111",
+    )
+    assert outcome.registered is False
+    assert "authentication failed" in (outcome.error or "")
+
+
 def test_handle_command_send_writes_text_escape_enter_sequence():
     read_fd, write_fd = os.pipe()
     lock = threading.Lock()

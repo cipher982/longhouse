@@ -92,8 +92,10 @@ _INJECT_TEXT_SETTLE_SECONDS = _env_seconds("LH_CURSOR_HELM_TEXT_SETTLE_MS", 300)
 _INJECT_ESCAPE_SETTLE_SECONDS = _env_seconds("LH_CURSOR_HELM_ESCAPE_SETTLE_MS", 100)
 _SOCKET_BACKLOG = 4
 _COMMAND_READ_TIMEOUT = 8.0
-_REGISTER_TIMEOUT = 30.0
+# Keep short so Helm exit can join an in-flight attempt without wedging for 30s.
+_REGISTER_TIMEOUT = 5.0
 _REGISTER_RETRY_DELAYS_SECONDS = (0.0, 0.5, 1.5, 3.0)
+_REGISTER_EXIT_JOIN_SECONDS = _REGISTER_TIMEOUT + 1.0
 _TERMINAL_POST_TIMEOUT = 5.0
 _PROVIDER = "cursor"
 _CONTROL_PLANE = "cursor_helm"
@@ -235,9 +237,13 @@ def _register_session(
         return _RegistrationOutcome(session_id=session_id, registered=False, error="registration timed out")
 
     if response.status_code == 401:
-        # Auth is a local enrollment problem — hard fail.
-        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
+        # Soft-fail: Degraded Helm still runs the local TUI; do not Exit from a
+        # background registration thread (typer.Exit would not stop the launcher).
+        return _RegistrationOutcome(
+            session_id=session_id,
+            registered=False,
+            error="authentication failed; run 'longhouse auth' to re-authenticate",
+        )
     if response.status_code == 422:
         try:
             errors = response.json()
@@ -382,6 +388,34 @@ def _post_terminal_event(url: str, token: str, session_id: str, reason: str) -> 
             client.post(endpoint, headers={"X-Agents-Token": token}, json=payload)
     except httpx.HTTPError:
         pass
+
+
+def _reconcile_registration_on_exit(
+    *,
+    url: str,
+    token: str,
+    session_id: str,
+    registration_thread: threading.Thread,
+    registration_box: list[_RegistrationOutcome],
+    registration_lock: threading.Lock,
+    join_timeout: float = _REGISTER_EXIT_JOIN_SECONDS,
+) -> bool:
+    """Join registration briefly and close any host session that may exist.
+
+    Returns True when registration succeeded (durable exit copy).
+    If the outcome is still unknown after the bounded join, best-effort
+    terminalize so a late host commit cannot linger as falsely live.
+    """
+    registration_thread.join(timeout=join_timeout)
+    with registration_lock:
+        outcome = registration_box[0] if registration_box else None
+    if outcome is not None and outcome.registered:
+        _post_terminal_event(url, token, session_id, "helm_exit")
+        return True
+    if outcome is None:
+        # Abandoned / killed mid-HTTP — host may have committed after our join.
+        _post_terminal_event(url, token, session_id, "helm_exit_before_ready")
+    return False
 
 
 def _set_window_title(text: str) -> None:
@@ -892,8 +926,16 @@ def run_helm(
             pass
     finally:
         stop_event.set()
-        # Bounded: do not wait for full registration HTTP timeout on exit.
-        registration_thread.join(timeout=2.0)
+        # Bounded join covers one in-flight register attempt; unknown outcomes
+        # still get a best-effort terminalize (see _reconcile_registration_on_exit).
+        final_registered = _reconcile_registration_on_exit(
+            url=resolved_url,
+            token=resolved_token,
+            session_id=session_id,
+            registration_thread=registration_thread,
+            registration_box=registration_box,
+            registration_lock=registration_lock,
+        )
         # Let the ingest tailer flush a final poll + record its last outcome
         # before we summarize. Bounded so a hung decode can't wedge exit.
         if ingest_thread is not None:
@@ -916,10 +958,6 @@ def run_helm(
         except OSError:
             pass
         _remove_state(session_id, sock_path)
-        with registration_lock:
-            final_registered = bool(registration_box and registration_box[0].registered)
-        if final_registered:
-            _post_terminal_event(resolved_url, resolved_token, session_id, "helm_exit")
         launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name, durable=final_registered)
         if open_browser:
             typer.echo(f"Timeline: {build_session_url(resolved_url, session_id)}")
