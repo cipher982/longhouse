@@ -110,6 +110,12 @@ pub struct ArchiveBacklogSnapshot {
     pub next_retry_at_min: Option<String>,
     pub next_retry_at_max: Option<String>,
     pub next_deferred_retry_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pause_actor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pause_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pause_updated_at: Option<String>,
     pub providers: Vec<ArchiveProviderSummary>,
     pub size_buckets: BTreeMap<String, ArchiveSizeBucketSummary>,
 }
@@ -134,6 +140,9 @@ impl Default for ArchiveBacklogSnapshot {
             next_retry_at_min: None,
             next_retry_at_max: None,
             next_deferred_retry_at: None,
+            pause_actor: None,
+            pause_reason: None,
+            pause_updated_at: None,
             providers: Vec::new(),
             size_buckets: BTreeMap::new(),
         }
@@ -963,6 +972,9 @@ impl<'a> Spool<'a> {
             next_retry_at_min,
             next_retry_at_max,
             next_deferred_retry_at,
+            pause_actor: None,
+            pause_reason: None,
+            pause_updated_at: None,
             providers: self.archive_provider_summaries()?,
             size_buckets: self.archive_size_buckets()?,
         })

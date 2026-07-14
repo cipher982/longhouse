@@ -64,6 +64,11 @@ def default_archive_backlog(*, source: str = "missing") -> dict[str, Any]:
         "next_retry_at_min": None,
         "next_retry_at_max": None,
         "next_deferred_retry_at": None,
+        "pause_actor": None,
+        "pause_reason": None,
+        "pause_updated_at": None,
+        "archive_bytes_per_sec": None,
+        "archive_eta_seconds": None,
         "providers": [],
         "size_buckets": {},
         "shipper": {},
@@ -99,12 +104,16 @@ def normalize_archive_backlog(
             "next_retry_at_min": _optional_str(raw.get("next_retry_at_min")),
             "next_retry_at_max": _optional_str(raw.get("next_retry_at_max")),
             "next_deferred_retry_at": _optional_str(raw.get("next_deferred_retry_at")),
+            "pause_actor": _optional_str(raw.get("pause_actor")),
+            "pause_reason": _optional_str(raw.get("pause_reason")),
+            "pause_updated_at": _optional_str(raw.get("pause_updated_at")),
             "providers": list(raw.get("providers") or []),
             "size_buckets": dict(raw.get("size_buckets") or {}),
             "db_exists": bool(raw.get("db_exists", True)),
         }
     )
     _attach_shipper_diagnostics(result, engine_status_payload)
+    _attach_archive_progress(result, engine_status_payload)
     return result
 
 
@@ -180,12 +189,15 @@ def write_archive_control(
     max_tick_bytes: int | None = None,
     include_huge: bool | None = None,
     lease_minutes: int = 60,
+    actor: str = "cli",
+    reason: str | None = None,
 ) -> dict[str, Any]:
     normalized_mode = _normalize_mode(mode)
     now = datetime.now(timezone.utc)
     payload: dict[str, Any] = {
         "mode": normalized_mode,
         "updated_at": now.isoformat().replace("+00:00", "Z"),
+        "actor": str(actor or "cli").strip() or "cli",
     }
     if normalized_mode != "paused":
         payload["expires_at"] = (now + timedelta(minutes=max(1, lease_minutes))).isoformat().replace("+00:00", "Z")
@@ -193,6 +205,8 @@ def write_archive_control(
         payload["max_tick_bytes"] = max(1, int(max_tick_bytes))
     if include_huge is not None:
         payload["include_huge"] = bool(include_huge)
+    if reason and reason.strip():
+        payload["reason"] = reason.strip()
 
     path = archive_control_path(base_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -329,6 +343,26 @@ def _attach_shipper_diagnostics(result: dict[str, Any], engine_status_payload: M
             shipper[key] = value
     if shipper:
         result["shipper"] = shipper
+
+
+def _attach_archive_progress(result: dict[str, Any], engine_status_payload: Mapping[str, Any] | None) -> None:
+    """Add the only honest ETA: pending bytes divided by acknowledged archive rate."""
+    if not isinstance(engine_status_payload, Mapping):
+        return
+    lanes = engine_status_payload.get("ship_lanes")
+    archive_lane = lanes.get("archive") if isinstance(lanes, Mapping) else None
+    if not isinstance(archive_lane, Mapping):
+        return
+    try:
+        bytes_per_second = float(archive_lane.get("bytes_per_sec_ewma_10s") or 0)
+    except (TypeError, ValueError):
+        return
+    if bytes_per_second <= 0:
+        return
+    result["archive_bytes_per_sec"] = bytes_per_second
+    pending_bytes = _int(result.get("pending_bytes"))
+    if pending_bytes > 0:
+        result["archive_eta_seconds"] = int(pending_bytes / bytes_per_second)
 
 
 def parse_byte_budget(value: str | None) -> int | None:

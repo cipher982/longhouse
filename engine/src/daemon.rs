@@ -334,6 +334,9 @@ struct ArchiveRepairControl {
     expires_at: Option<String>,
     max_tick_bytes: Option<u64>,
     include_huge: Option<bool>,
+    actor: Option<String>,
+    reason: Option<String>,
+    updated_at: Option<String>,
 }
 
 impl ArchiveRepairControl {
@@ -431,6 +434,9 @@ fn apply_archive_repair_control(
 ) {
     let mode = control.normalized_mode(default_mode);
     payload.archive_backlog.mode = mode.as_str().to_string();
+    payload.archive_backlog.pause_actor = None;
+    payload.archive_backlog.pause_reason = None;
+    payload.archive_backlog.pause_updated_at = None;
     if payload.archive_backlog.pending_ranges > 0 {
         payload.archive_backlog.state = match mode {
             ArchiveRepairMode::Paused => "paused",
@@ -438,6 +444,11 @@ fn apply_archive_repair_control(
             ArchiveRepairMode::Drain => "draining",
         }
         .to_string();
+        if mode == ArchiveRepairMode::Paused {
+            payload.archive_backlog.pause_actor = control.actor.clone();
+            payload.archive_backlog.pause_reason = control.reason.clone();
+            payload.archive_backlog.pause_updated_at = control.updated_at.clone();
+        }
     }
 }
 
@@ -4819,6 +4830,7 @@ mod tests {
             expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()),
             max_tick_bytes: None,
             include_huge: None,
+            ..Default::default()
         };
         assert_eq!(
             operator_control.normalized_mode(ArchiveRepairMode::Paused),
@@ -4830,6 +4842,7 @@ mod tests {
             expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()),
             max_tick_bytes: None,
             include_huge: None,
+            ..Default::default()
         };
         assert_eq!(
             invalid_control.normalized_mode(ArchiveRepairMode::Paused),
@@ -4841,6 +4854,7 @@ mod tests {
             expires_at: Some((chrono::Utc::now() - chrono::Duration::minutes(1)).to_rfc3339()),
             max_tick_bytes: Some(4 * 1024 * 1024 * 1024),
             include_huge: Some(true),
+            ..Default::default()
         };
         assert_eq!(
             expired_control.normalized_mode(ArchiveRepairMode::Paused),
@@ -4853,6 +4867,7 @@ mod tests {
             expires_at: None,
             max_tick_bytes: Some(4 * 1024 * 1024 * 1024),
             include_huge: Some(true),
+            ..Default::default()
         };
         assert_eq!(
             legacy_drain.normalized_mode(ArchiveRepairMode::Drain),
@@ -4865,12 +4880,23 @@ mod tests {
         let mut payload = empty_heartbeat_payload();
         payload.archive_backlog.pending_ranges = 2;
         payload.archive_backlog.state = "ready".to_string();
-        let control = ArchiveRepairControl::default();
+        let control = ArchiveRepairControl {
+            mode: Some("paused".to_string()),
+            actor: Some("menu_bar".to_string()),
+            reason: Some("user paused while travelling".to_string()),
+            updated_at: Some("2026-07-13T12:00:00Z".to_string()),
+            ..Default::default()
+        };
 
         apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);
 
         assert_eq!(payload.archive_backlog.mode, "paused");
         assert_eq!(payload.archive_backlog.state, "paused");
+        assert_eq!(payload.archive_backlog.pause_actor.as_deref(), Some("menu_bar"));
+        assert_eq!(
+            payload.archive_backlog.pause_reason.as_deref(),
+            Some("user paused while travelling")
+        );
         assert!(!payload.is_offline);
     }
 
@@ -4884,6 +4910,7 @@ mod tests {
             expires_at: Some((chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()),
             max_tick_bytes: None,
             include_huge: None,
+            ..Default::default()
         };
 
         apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);

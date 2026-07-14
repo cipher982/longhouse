@@ -295,8 +295,21 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         typer.echo("Archive Repair")
         typer.echo(f"  state: {archive_repair.get('state') or '-'}")
         typer.echo(f"  mode: {archive_repair.get('mode') or '-'}")
+        if archive_repair.get("pause_actor") or archive_repair.get("pause_reason"):
+            typer.echo(
+                "  pause: "
+                f"{archive_repair.get('pause_reason') or 'explicitly paused'} "
+                f"(by {archive_repair.get('pause_actor') or 'unknown'}, "
+                f"{archive_repair.get('pause_updated_at') or 'time unknown'})"
+            )
         typer.echo(f"  pending ranges: {archive_repair.get('pending_ranges', 0)}")
         typer.echo(f"  pending bytes: {_format_bytes(archive_repair.get('pending_bytes'))}")
+        archive_rate = archive_repair.get("archive_bytes_per_sec")
+        archive_eta = archive_repair.get("archive_eta_seconds")
+        if archive_rate:
+            typer.echo(f"  throughput: {_format_bytes(archive_rate)}/s")
+        if archive_eta is not None:
+            typer.echo(f"  ETA: {_format_age(int(archive_eta))}")
         typer.echo(f"  pending paths: {archive_repair.get('pending_paths', 0)}")
         if archive_repair.get("pending_sessions"):
             typer.echo(f"  pending sessions: {archive_repair.get('pending_sessions', 0)}")

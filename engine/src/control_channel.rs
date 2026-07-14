@@ -1368,7 +1368,11 @@ async fn run_archive_backlog_control_command(
     let mut control = json!({
         "mode": normalized_mode,
         "updated_at": timestamp_now(),
+        "actor": payload.get("actor").and_then(Value::as_str).unwrap_or("machine_api"),
     });
+    if let Some(reason) = payload.get("reason").and_then(Value::as_str).map(str::trim).filter(|reason| !reason.is_empty()) {
+        control["reason"] = json!(reason);
+    }
     if normalized_mode != "paused" {
         let lease_seconds = payload
             .get("lease_seconds")

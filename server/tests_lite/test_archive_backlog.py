@@ -85,11 +85,20 @@ def test_archive_inspect_and_control(tmp_path: Path):
         }
     ]
 
-    result = write_archive_control(tmp_path, mode="drain", max_tick_bytes=123, include_huge=True)
+    result = write_archive_control(
+        tmp_path,
+        mode="drain",
+        max_tick_bytes=123,
+        include_huge=True,
+        actor="menu_bar",
+        reason="catch up after first install",
+    )
     payload = json.loads(Path(result["path"]).read_text())
     assert payload["mode"] == "drain"
     assert payload["max_tick_bytes"] == 123
     assert payload["include_huge"] is True
+    assert payload["actor"] == "menu_bar"
+    assert payload["reason"] == "catch up after first install"
     assert payload["expires_at"] > payload["updated_at"]
 
 
@@ -183,6 +192,8 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
 
     assert summary["source"] == "engine_status"
     assert summary["pending_ranges"] == 3
+    assert summary["archive_bytes_per_sec"] == 512.0
+    assert summary["archive_eta_seconds"] == 8
     assert summary["shipper"]["adaptive_backlog_limiter"]["current_cap"] == 2
     assert summary["shipper"]["ship_scheduler"]["ready_scan"] == 3
 
