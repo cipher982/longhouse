@@ -104,6 +104,76 @@
     gap: var(--space-2);
   }
 
+  .launch-machine-picker {
+    display: grid;
+    gap: 0.35rem;
+    padding: 0.45rem;
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--color-surface-raised) 84%, transparent);
+  }
+
+  .launch-machine-group-label {
+    padding: 0.35rem 0.5rem 0.15rem;
+    color: var(--color-text-muted);
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .launch-machine-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.6rem;
+    min-height: 2.65rem;
+    padding: 0.55rem 0.65rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--color-text-primary);
+    background: transparent;
+    text-align: left;
+  }
+
+  button.launch-machine-row {
+    width: 100%;
+    cursor: pointer;
+  }
+
+  button.launch-machine-row:hover,
+  button.launch-machine-row:focus-visible,
+  .launch-machine-row.is-selected {
+    border-color: var(--color-border-default);
+    background: var(--color-surface-hover);
+  }
+
+  .launch-machine-row > span:last-child {
+    color: var(--color-text-muted);
+    font-size: 0.8rem;
+  }
+
+  .launch-machine-row.is-unavailable {
+    color: var(--color-text-secondary);
+  }
+
+  .launch-machine-status {
+    width: 0.6rem;
+    height: 0.6rem;
+    border: 2px solid var(--color-text-muted);
+    border-radius: 999px;
+  }
+
+  .launch-machine-status.is-ready {
+    border-color: #53b56d;
+    background: #53b56d;
+  }
+
+  .launch-machine-status.is-warning {
+    border-color: #d7a84a;
+    background: #d7a84a;
+  }
+
   .launch-path-chip {
     max-width: 100%;
     border: 1px solid var(--color-border-primary);

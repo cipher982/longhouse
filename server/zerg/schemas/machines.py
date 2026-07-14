@@ -72,7 +72,7 @@ class MachineDirectoryEntry(UTCBaseModel):
 class MachineLaunchProviderOption(UTCBaseModel):
     provider: str = Field(..., description="Provider identifier.")
     execution_lifetimes: list[RemoteExecutionLifetime] = Field(
-        default_factory=list,
+        ...,
         description="Execution modes this machine can launch for the provider now.",
     )
 
@@ -82,7 +82,7 @@ class MachineLaunchProjection(UTCBaseModel):
         default=None,
         description="Reason no Console launch option is available; null when providers is non-empty.",
     )
-    providers: list[MachineLaunchProviderOption] = Field(default_factory=list)
+    providers: list[MachineLaunchProviderOption] = Field(...)
     default_provider: str | None = None
     default_execution_lifetime: RemoteExecutionLifetime | None = None
 

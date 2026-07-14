@@ -22,41 +22,35 @@ interface LaunchSessionModalProps {
 const WORKSPACE_LIMIT = 12;
 
 function machineCanLaunch(m: MachineDirectoryEntry): boolean {
-  return launchProvidersForMachine(m).length > 0;
+  return m.launch.providers.length > 0;
 }
 
 // Prefer codex for launch-default continuity, else the first advertised provider.
 function defaultProvider(m: MachineDirectoryEntry | undefined): string {
   if (!m) return "";
-  const providers = launchProvidersForMachine(m);
-  if (providers.length === 0) return "";
-  return providers.includes("codex") ? "codex" : providers[0];
+  return m.launch.default_provider ?? "";
 }
 
 function launchProvidersForMachine(m: MachineDirectoryEntry): string[] {
-  const providers = new Set<string>(m.launchable_providers);
-  for (const [provider, operations] of Object.entries(m.control_operations_by_provider ?? {})) {
-    if (operations.includes("launch") || operations.includes("run_once")) {
-      providers.add(provider);
-    }
-  }
-  return [...providers].sort();
+  return m.launch.providers.map((option) => option.provider);
 }
 
-function providerOperations(m: MachineDirectoryEntry | undefined, provider: string): string[] {
-  if (!m || !provider) return [];
-  return m.control_operations_by_provider?.[provider] ?? [];
+function providerLifetimes(m: MachineDirectoryEntry | undefined, provider: string): ExecutionLifetime[] {
+  return (m?.launch.providers.find((option) => option.provider === provider)?.execution_lifetimes ?? []) as ExecutionLifetime[];
 }
 
 function supportsRunOnce(m: MachineDirectoryEntry | undefined, provider: string): boolean {
-  return providerOperations(m, provider).includes("run_once") || Boolean(m?.supports.includes(`${provider}.run_once`));
+  return providerLifetimes(m, provider).includes("one_shot");
 }
 
 function supportsLiveControl(m: MachineDirectoryEntry | undefined, provider: string): boolean {
-  return providerOperations(m, provider).includes("launch") || Boolean(m?.launchable_providers.includes(provider));
+  return providerLifetimes(m, provider).includes("live_control");
 }
 
 function defaultExecutionLifetime(m: MachineDirectoryEntry | undefined, provider: string): ExecutionLifetime {
+  if (m?.launch.default_provider === provider && m.launch.default_execution_lifetime) {
+    return m.launch.default_execution_lifetime;
+  }
   return supportsRunOnce(m, provider) ? "one_shot" : "live_control";
 }
 
@@ -84,10 +78,12 @@ export default function LaunchSessionModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const machines = useMemo(() => machinesQuery.data?.machines ?? [], [machinesQuery.data]);
   const launchable = useMemo(
-    () => machinesQuery.data?.machines.filter(machineCanLaunch) ?? [],
-    [machinesQuery.data],
+    () => machines.filter(machineCanLaunch),
+    [machines],
   );
+  const unavailable = useMemo(() => machines.filter((machine) => !machineCanLaunch(machine)), [machines]);
 
   const selectedMachine = launchable.find((m) => m.device_id === deviceId);
   const selectedCanRunOnce = supportsRunOnce(selectedMachine, provider);
@@ -260,26 +256,46 @@ export default function LaunchSessionModal({
                 void handleSubmit();
               }}
             >
-              <label className="form-field">
+              <div className="form-field">
                 <span>Machine</span>
-                <select
-                  value={deviceId}
-                  onChange={(e) => {
-                    setDeviceId(e.target.value);
-                    setProvider("");
-                    setCwd("");
-                    setWorkspaceSearch("");
-                    setError(null);
-                  }}
-                  data-testid="launch-machine-select"
-                >
-                  {launchable.map((m) => (
-                    <option key={m.device_id} value={m.device_id}>
-                      {m.machine_name} {m.engine_build ? `(${m.engine_build})` : ""}
-                    </option>
+                <div className="launch-machine-picker" data-testid="launch-machine-select">
+                  <span className="launch-machine-group-label">Available</span>
+                  {launchable.map((machine) => (
+                    <button
+                      key={machine.device_id}
+                      type="button"
+                      className={`launch-machine-row${machine.device_id === deviceId ? " is-selected" : ""}`}
+                      aria-pressed={machine.device_id === deviceId}
+                      onClick={() => {
+                        setDeviceId(machine.device_id);
+                        setProvider("");
+                        setCwd("");
+                        setWorkspaceSearch("");
+                        setError(null);
+                      }}
+                    >
+                      <span className="launch-machine-status is-ready" aria-hidden="true" />
+                      <strong>{machine.machine_name}</strong>
+                      <span>Ready</span>
+                    </button>
                   ))}
-                </select>
-              </label>
+                  {unavailable.length > 0 && (
+                    <>
+                      <span className="launch-machine-group-label">Unavailable</span>
+                      {unavailable.map((machine) => (
+                        <div key={machine.device_id} className="launch-machine-row is-unavailable">
+                          <span
+                            className={`launch-machine-status${machine.launch.blocked_by === "control_down" ? "" : " is-warning"}`}
+                            aria-hidden="true"
+                          />
+                          <strong>{machine.machine_name}</strong>
+                          <span>{launchBlockedLabel(machine)}</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+              </div>
 
               {selectedMachine && launchProvidersForMachine(selectedMachine).length > 1 && (
                 <label className="form-field">
@@ -446,11 +462,11 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
       </div>
     );
   }
-  const blocked = machines.filter((m) => m.launchable_providers.length === 0);
-  const offline = blocked.filter((m) => m.launch_blocked_by === "control_down");
-  const visibleBlocked = blocked.filter((m) => m.launch_blocked_by !== "control_down").slice(0, 5);
+  const blocked = machines.filter((m) => m.launch.providers.length === 0);
+  const offline = blocked.filter((m) => m.launch.blocked_by === "control_down");
+  const visibleBlocked = blocked.filter((m) => m.launch.blocked_by !== "control_down").slice(0, 5);
   const hiddenBlockedCount = Math.max(
-    blocked.filter((m) => m.launch_blocked_by !== "control_down").length - visibleBlocked.length,
+    blocked.filter((m) => m.launch.blocked_by !== "control_down").length - visibleBlocked.length,
     0,
   );
 
@@ -476,7 +492,7 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
 }
 
 function launchBlockedLabel(machine: MachineDirectoryEntry): string {
-  switch (machine.launch_blocked_by) {
+  switch (machine.launch.blocked_by) {
     case "control_down":
       return "control channel disconnected";
     case "no_codex_support":

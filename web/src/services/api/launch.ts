@@ -1,29 +1,8 @@
 import { request } from "./base";
+import type { components } from "../../generated/openapi-types";
 
-export type MachineDirectoryEntry = {
-  device_id: string;
-  machine_name: string;
-  online: boolean;
-  control_channel_status: "connected" | "disconnected";
-  supports: string[];
-  control_operations_by_provider: Record<string, string[]>;
-  can_launch_codex: boolean;
-  launchable_providers: string[];
-  launch_blocked_by:
-    | null
-    | "control_down"
-    | "no_codex_support"
-    | "no_launch_support"
-    | "engine_too_old"
-    | "auth_failed"
-    | "runtime_unreachable";
-  last_seen_at: string | null;
-  engine_build: string | null;
-};
-
-export type MachineDirectoryResponse = {
-  machines: MachineDirectoryEntry[];
-};
+export type MachineDirectoryEntry = components["schemas"]["MachineDirectoryEntry"];
+export type MachineDirectoryResponse = components["schemas"]["MachineDirectoryResponse"];
 
 export async function listMachines(): Promise<MachineDirectoryResponse> {
   return request<MachineDirectoryResponse>("/timeline/machines");

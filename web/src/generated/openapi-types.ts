@@ -2872,6 +2872,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/sessions/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Agent Sessions
+         * @description Stream the canonical session projection to machine clients.
+         *
+         *     The initial replay is the cold-start snapshot. After that, commit-driven
+         *     upsert/remove events are the hot path; reconnecting performs a new replay.
+         */
+        get: operations["stream_agent_sessions_agents_sessions_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/worklog/day": {
         parameters: {
             query?: never;
@@ -5558,6 +5581,8 @@ export interface components {
              * @description Engine build string from the last hello frame; null when offline.
              */
             engine_build?: string | null;
+            /** @description Canonical Console launch options and defaults for human clients. */
+            launch: components["schemas"]["MachineLaunchProjection"];
         };
         /** MachineDirectoryResponse */
         MachineDirectoryResponse: {
@@ -5692,6 +5717,33 @@ export interface components {
              * @default 0
              */
             broken: number;
+        };
+        /** MachineLaunchProjection */
+        MachineLaunchProjection: {
+            /**
+             * Blocked By
+             * @description Reason no Console launch option is available; null when providers is non-empty.
+             */
+            blocked_by?: ("control_down" | "no_codex_support" | "no_launch_support" | "engine_too_old" | "auth_failed" | "runtime_unreachable") | null;
+            /** Providers */
+            providers: components["schemas"]["MachineLaunchProviderOption"][];
+            /** Default Provider */
+            default_provider?: string | null;
+            /** Default Execution Lifetime */
+            default_execution_lifetime?: ("one_shot" | "live_control") | null;
+        };
+        /** MachineLaunchProviderOption */
+        MachineLaunchProviderOption: {
+            /**
+             * Provider
+             * @description Provider identifier.
+             */
+            provider: string;
+            /**
+             * Execution Lifetimes
+             * @description Execution modes this machine can launch for the provider now.
+             */
+            execution_lifetimes: ("one_shot" | "live_control")[];
         };
         /** MachinePresenceIn */
         MachinePresenceIn: {
@@ -15724,6 +15776,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecallResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_agent_sessions_agents_sessions_stream_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by device ID */
+                device_id?: string | null;
+                days_back?: number;
+                limit?: number;
+                skip_initial_replay?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

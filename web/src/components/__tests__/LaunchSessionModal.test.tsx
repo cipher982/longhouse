@@ -40,23 +40,47 @@ function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirecto
   const online = overrides.online ?? true;
   const canLaunch = overrides.can_launch_codex ?? online;
   const controlChannelStatus: MachineDirectoryEntry["control_channel_status"] = online ? "connected" : "disconnected";
-  const launchBlockedBy: MachineDirectoryEntry["launch_blocked_by"] = canLaunch
-    ? null
-    : online
-      ? "no_codex_support"
-      : "control_down";
+  const launchBlockedBy: MachineDirectoryEntry["launch_blocked_by"] =
+    overrides.launch_blocked_by ?? (canLaunch ? null : online ? "no_codex_support" : "control_down");
+  const operations = overrides.control_operations_by_provider ?? (canLaunch ? { codex: ["launch", "run_once"] } : {});
+  const providerOptions = Object.entries(operations)
+    .map(([provider, providerOperations]) => ({
+      provider,
+      execution_lifetimes: [
+        ...(providerOperations.includes("run_once") ? (["one_shot"] as const) : []),
+        ...(providerOperations.includes("launch") ? (["live_control"] as const) : []),
+      ],
+    }))
+    .filter((option) => option.execution_lifetimes.length > 0);
+  const defaultExecutionLifetime = providerOptions.some((option) => option.execution_lifetimes.includes("one_shot"))
+    ? "one_shot"
+    : providerOptions.length > 0
+      ? "live_control"
+      : null;
+  const defaultCandidates = providerOptions.filter((option) =>
+    defaultExecutionLifetime ? option.execution_lifetimes.includes(defaultExecutionLifetime) : false,
+  );
   return {
     device_id: "cinder",
     machine_name: "cinder",
     online,
     control_channel_status: controlChannelStatus,
     supports: canLaunch ? ["codex.launch", "codex.run_once"] : [],
-    control_operations_by_provider: canLaunch ? { codex: ["launch", "run_once"] } : {},
+    control_operations_by_provider: operations,
     can_launch_codex: canLaunch,
     launchable_providers: canLaunch ? ["codex"] : [],
     launch_blocked_by: launchBlockedBy,
     last_seen_at: null,
     engine_build: null,
+    launch: overrides.launch ?? {
+      blocked_by: providerOptions.length > 0 ? null : launchBlockedBy,
+      providers: providerOptions,
+      default_provider:
+        defaultCandidates.find((option) => option.provider === "codex")?.provider ??
+        defaultCandidates[0]?.provider ??
+        null,
+      default_execution_lifetime: defaultExecutionLifetime,
+    },
     ...overrides,
   };
 }
@@ -180,6 +204,33 @@ describe("LaunchSessionModal", () => {
     await screen.findByTestId("launch-cwd-input");
     await user.keyboard("{Escape}");
     await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("keeps offline machines visible below ready machines without build hashes", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({ device_id: "cinder", machine_name: "cinder", engine_build: "abc123" }),
+        machine({
+          device_id: "cube",
+          machine_name: "cube",
+          online: false,
+          control_channel_status: "disconnected",
+          can_launch_codex: false,
+          launch_blocked_by: "control_down",
+        }),
+      ],
+    });
+
+    renderModal();
+
+    const picker = await screen.findByTestId("launch-machine-select");
+    expect(picker).toHaveTextContent("Available");
+    expect(picker).toHaveTextContent("cinder");
+    expect(picker).toHaveTextContent("Ready");
+    expect(picker).toHaveTextContent("Unavailable");
+    expect(picker).toHaveTextContent("cube");
+    expect(picker).toHaveTextContent("control channel disconnected");
+    expect(picker).not.toHaveTextContent("abc123");
   });
 
   it("submits a launch and invokes onLaunched with the session id", async () => {
