@@ -188,12 +188,7 @@ def test_discover_store_db_returns_none_when_nothing_new(tmp_path):
     assert mod.discover_store_db(datetime.now(timezone.utc), cursor_root=root) is None
 
 
-def test_post_delta_treats_4xx_as_failure_not_success(monkeypatch):
-    """Regression: a 4xx (e.g. 422 validation rejection) must return False so
-    the tailer retries without advancing the high-water mark. Previously
-    ``status_code < 500`` returned True for 4xx, silently dropping rejected
-    events forever once hwm advanced.
-    """
+def test_post_delta_surfaces_permanent_4xx_and_retries_transient_failures(monkeypatch):
     import httpx
 
     payload = _session([_ev("user", "a")])
@@ -201,7 +196,7 @@ def test_post_delta_treats_4xx_as_failure_not_success(monkeypatch):
     def _resp(status: int):
         return httpx.Response(status_code=status, text="{}", request=httpx.Request("POST", "http://x"))
 
-    cases = {200: True, 201: True, 204: True, 400: False, 401: False, 403: False, 422: False, 500: False, 503: False}
+    cases = {200: True, 201: True, 204: True, 429: False, 500: False, 503: False}
     for status, expected in cases.items():
         captured: dict[str, object] = {}
 
@@ -224,6 +219,28 @@ def test_post_delta_treats_4xx_as_failure_not_success(monkeypatch):
         assert got is expected, f"status {status}: expected {expected}, got {got}"
         assert captured["endpoint"] == "http://x/api/agents/ingest"
 
+    for status in (400, 401, 403, 422, 426):
+        class _RejectingClient:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def post(self, *_args, **_kwargs):
+                return httpx.Response(
+                    status_code=status,
+                    text='{"detail":{"code":"storage_v2_required"}}',
+                    request=httpx.Request("POST", "http://x"),
+                )
+
+        monkeypatch.setattr(httpx, "Client", _RejectingClient)
+        with pytest.raises(mod.CursorHelmIngestRejected, match=f"HTTP {status}.*storage_v2_required"):
+            mod._post_delta("http://x", "tok", payload)
+
 
 def test_post_delta_returns_false_on_transport_error(monkeypatch):
     import httpx
@@ -245,6 +262,35 @@ def test_post_delta_returns_false_on_transport_error(monkeypatch):
 
     monkeypatch.setattr(httpx, "Client", _BoomClient)
     assert mod._post_delta("http://x", "tok", payload) is False
+
+
+def test_runtime_compatibility_probe_disables_legacy_tailer_after_storage_v2_cutover(monkeypatch):
+    import httpx
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def get(self, endpoint, headers=None):
+            assert endpoint == "https://longhouse.test/api/agents/storage/v2/capabilities"
+            assert headers == {"X-Agents-Token": "tok"}
+            return httpx.Response(
+                200,
+                json={"cutover": True},
+                request=httpx.Request("GET", endpoint),
+            )
+
+    monkeypatch.setattr(httpx, "Client", _FakeClient)
+    ok, error = mod.probe_runtime_ingest_compatibility("https://longhouse.test/", "tok")
+
+    assert ok is False
+    assert "requires storage-v2" in str(error)
 
 
 def test_probe_ingest_path_returns_ok_without_database_url():

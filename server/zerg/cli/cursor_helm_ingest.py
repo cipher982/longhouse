@@ -48,6 +48,10 @@ _INGEST_TIMEOUT = 30.0
 _PROVIDER = "cursor"
 
 
+class CursorHelmIngestRejected(RuntimeError):
+    """Permanent Runtime Host rejection; retrying the same payload cannot help."""
+
+
 def _cursor_chats_root() -> Path:
     return Path.home() / ".cursor" / "chats"
 
@@ -161,7 +165,12 @@ def _post_delta(url: str, token: str, payload: "SessionIngest") -> bool:
             )
     except httpx.HTTPError:
         return False
-    return 200 <= resp.status_code < 300
+    if 200 <= resp.status_code < 300:
+        return True
+    if 400 <= resp.status_code < 500 and resp.status_code != 429:
+        body = resp.text.strip()[:1000]
+        raise CursorHelmIngestRejected(f"HTTP {resp.status_code}: {body or '<empty response>'}")
+    return False
 
 
 def run_transcript_tailer(
@@ -216,6 +225,12 @@ def run_transcript_tailer(
                         # counted in ingest health, then retry without
                         # advancing the high-water mark.
                         bf.failure("ingest post rejected (non-2xx)", RuntimeError("non-2xx response"))
+        except CursorHelmIngestRejected as exc:
+            # A typed 4xx is a contract mismatch, not transient churn. Log the
+            # server response once and stop the retry loop instead of printing
+            # an opaque warning every poll forever.
+            bf.failure("ingest permanently rejected; tailer stopped", exc)
+            return
         except Exception as exc:  # noqa: BLE001 - best-effort tailer must not die
             # Best-effort tailer: never let a decode/post/build error kill the
             # thread. The next poll retries. BestEffortLogger surfaces the
@@ -224,6 +239,37 @@ def run_transcript_tailer(
             # visible without --verbose, not buried in `except: pass`.
             bf.failure("transcript poll", exc)
         stop_event.wait(poll_seconds)
+
+
+def probe_runtime_ingest_compatibility(url: str, token: str) -> tuple[bool, str | None]:
+    """Detect the known legacy-Cursor-vs-storage-v2 contract mismatch.
+
+    Older Runtime Hosts may not expose the capabilities route; those still
+    accept the legacy ingest path, so a 404 keeps the tailer enabled. Network
+    and 5xx failures are transient and are left to normal retry behavior.
+    """
+    endpoint = f"{url.rstrip('/')}/api/agents/storage/v2/capabilities"
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            response = client.get(endpoint, headers={"X-Agents-Token": token})
+    except httpx.HTTPError:
+        return True, None
+    if response.status_code == 404 or response.status_code >= 500:
+        return True, None
+    if response.status_code in {401, 403}:
+        return False, f"Runtime Host rejected machine auth (HTTP {response.status_code})"
+    if response.status_code != 200:
+        return True, None
+    try:
+        capabilities = response.json()
+    except ValueError:
+        return True, None
+    if capabilities.get("cutover") is True:
+        return (
+            False,
+            "Runtime Host requires storage-v2, but Cursor Helm live transcript tailing still uses legacy ingest",
+        )
+    return True, None
 
 
 def probe_ingest_path() -> tuple[bool, str | None]:

@@ -783,7 +783,9 @@ def test_codex_command_preserves_bridge_when_auto_attach_exits_nonzero(monkeypat
     assert contracts[0]["session_id"] == "session-123"
 
 
-def test_codex_command_stops_bridge_when_auto_attach_exits_nonzero_and_readyz_is_dead(monkeypatch, tmp_path):
+def test_codex_command_preserves_provider_when_auto_attach_exits_nonzero_and_readyz_is_dead(
+    monkeypatch, tmp_path
+):
     runner = CliRunner()
     stop_calls: list[dict[str, object]] = []
 
@@ -819,20 +821,16 @@ def test_codex_command_stops_bridge_when_auto_attach_exits_nonzero_and_readyz_is
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert "fire scattered" in result.output
-    assert "still burns" not in result.output
-    assert "Rejoin:" not in result.output
-    assert stop_calls == [
-        {
-            "session_id": "session-123",
-            "reason": codex_cli._CODEX_STOP_REASON_TERMINAL_DISCONNECTED,
-            "timeout_secs": codex_cli._CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
-        }
-    ]
-    assert list_managed_session_contracts(tmp_path / ".longhouse") == []
+    assert "left the provider process running" in result.output
+    assert "Recovery target:" in result.output
+    assert "fire scattered" not in result.output
+    assert stop_calls == []
+    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
+    assert contracts[0]["provider"] == "codex"
+    assert contracts[0]["session_id"] == "session-123"
 
 
-def test_codex_command_signal_cleanup_stops_once(monkeypatch, tmp_path):
+def test_codex_command_signal_cleanup_preserves_provider(monkeypatch, tmp_path):
     runner = CliRunner()
     stop_calls: list[dict[str, object]] = []
     signal_handlers: dict[object, object] = {}
@@ -877,13 +875,7 @@ def test_codex_command_signal_cleanup_stops_once(monkeypatch, tmp_path):
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 128 + codex_cli.signal.SIGHUP
-    assert stop_calls == [
-        {
-            "session_id": "session-123",
-            "reason": codex_cli._CODEX_STOP_REASON_TERMINAL_DISCONNECTED,
-            "timeout_secs": codex_cli._CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
-        }
-    ]
+    assert stop_calls == []
 
 
 def test_stop_native_codex_bridge_passes_reason_and_timeout(monkeypatch):
@@ -913,6 +905,7 @@ def test_stop_native_codex_bridge_passes_reason_and_timeout(monkeypatch):
                 "session-123",
                 "--reason",
                 "terminal_disconnected",
+                "--force",
             ],
             "check": False,
             "capture_output": True,
@@ -922,7 +915,7 @@ def test_stop_native_codex_bridge_passes_reason_and_timeout(monkeypatch):
     ]
 
 
-def test_signal_cleanup_stops_bridge_once_with_terminal_disconnected(monkeypatch):
+def test_signal_cleanup_preserves_bridge(monkeypatch):
     stop_calls: list[dict[str, object]] = []
     signal_calls: list[tuple[object, object]] = []
 
@@ -944,19 +937,13 @@ def test_signal_cleanup_stops_bridge_once_with_terminal_disconnected(monkeypatch
     else:
         raise AssertionError("expected SystemExit")
 
-    assert stop_calls == [
-        {
-            "session_id": "session-123",
-            "reason": codex_cli._CODEX_STOP_REASON_TERMINAL_DISCONNECTED,
-            "timeout_secs": codex_cli._CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
-        }
-    ]
+    assert stop_calls == []
 
     try:
         handler(codex_cli.signal.SIGHUP, None)
     except SystemExit:
         pass
-    assert len(stop_calls) == 1
+    assert stop_calls == []
 
     codex_cli._restore_signal_handlers(previous)
     restored = signal_calls[-len(previous) :]

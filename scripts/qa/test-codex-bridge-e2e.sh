@@ -214,6 +214,7 @@ DETACHED_STOP_OUTPUT=$("$ENGINE" codex-bridge stop \
     --session-id "$DETACHED_SESSION_ID" \
     --state-root "$DETACHED_STATE_ROOT" \
     --reason bridge_e2e_detached_ui \
+    --force \
     2>&1) || {
     fail "detached-ui bridge stop failed"
     dim "$DETACHED_STOP_OUTPUT"
@@ -352,6 +353,7 @@ MAIN_STOP_OUTPUT=$("$ENGINE" codex-bridge stop \
     --session-id "$SESSION_ID" \
     --state-root "$STATE_ROOT" \
     --reason bridge_e2e_main \
+    --force \
     2>&1) || {
     fail "main bridge stop failed"
     dim "$MAIN_STOP_OUTPUT"

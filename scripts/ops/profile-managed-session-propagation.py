@@ -1616,7 +1616,7 @@ except Exception as exc:
                 payload={"reason": "provider_precondition"},
             )
             self.run_observed(
-                ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id],
+                ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id, "--force"],
                 case_id=case_id,
                 ownership=ownership,
                 event_prefix="shutdown",
@@ -1710,7 +1710,7 @@ except Exception as exc:
                     payload={"reason": "warm_live_precondition_timeout"},
                 )
                 self.run_observed(
-                    ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id],
+                    ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id, "--force"],
                     case_id=case_id,
                     ownership=ownership,
                     event_prefix="shutdown",
@@ -1816,7 +1816,7 @@ except Exception as exc:
             session_id=session_id,
         )
         self.run_observed(
-            ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id],
+            ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id, "--force"],
             case_id=case_id,
             ownership=ownership,
             event_prefix="shutdown",

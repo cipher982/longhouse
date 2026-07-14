@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from cryptography.fernet import Fernet
+import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -566,11 +567,16 @@ def test_signal_cleanup_install_and_restore(monkeypatch):
     assert signal_module.getsignal(signal_module.SIGHUP) is not original_sighup
     assert signal_module.getsignal(signal_module.SIGTERM) is not original_sigterm
 
+    with pytest.raises(SystemExit) as exc_info:
+        signal_module.getsignal(signal_module.SIGHUP)(signal_module.SIGHUP, None)
+    assert exc_info.value.code == 128 + signal_module.SIGHUP
+    assert stopped == []
+
     opencode_channel._restore_signal_handlers(previous)
     assert signal_module.getsignal(signal_module.SIGHUP) is original_sighup
     assert signal_module.getsignal(signal_module.SIGTERM) is original_sigterm
     assert session_id  # keep linter calm about unused
-    assert stopped == []  # install/restore alone never fires the stop
+    assert stopped == []
 
 
 def test_launch_mode_and_owner_persisted_then_read_back(monkeypatch, tmp_path):

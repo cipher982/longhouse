@@ -670,11 +670,9 @@ def stop_opencode_server_bridge(
 class OpenCodeServerBridgeStopper:
     """Stops the backing OpenCode server when the attach TUI exits.
 
-    Mirrors the Codex ``_CodexBridgeStopper`` shape (idempotent stop, signal
-    cleanup) but deliberately has NO active-turn-survival check: OpenCode keeps
-    no durable local turn state, and the terminal-owned contract is "TUI exited
-    => server stops". An in-flight remote send is best-effort protected only by
-    the engine reaper's optional busy preflight, not here.
+    Clean user exits stop the terminal-owned server. Transport failures and
+    wrapper signals preserve it so Longhouse degradation cannot terminate the
+    provider execution.
     """
 
     def __init__(self, session_id: str, *, config_dir: Path | None = None) -> None:
@@ -693,12 +691,11 @@ class OpenCodeServerBridgeStopper:
         return None
 
 
-def _install_opencode_signal_cleanup(stopper: OpenCodeServerBridgeStopper) -> dict:
-    """Stop the server on SIGHUP/SIGTERM so closing the terminal tears it down."""
+def _install_opencode_signal_cleanup(_stopper: OpenCodeServerBridgeStopper) -> dict:
+    """Preserve the server when the wrapper loses its terminal or is signaled."""
     previous_handlers: dict = {}
 
     def cleanup_and_exit(signum: int, _frame: object) -> None:
-        stopper.stop_for_terminal_disconnect()
         raise SystemExit(128 + signum)
 
     for signame in ("SIGHUP", "SIGTERM"):

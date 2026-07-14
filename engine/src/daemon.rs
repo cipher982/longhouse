@@ -32,16 +32,14 @@ use crate::heartbeat;
 use crate::managed_bridge_scan;
 use crate::managed_claude_scan;
 use crate::managed_cursor_helm_scan;
-use crate::managed_opencode_reaper::ManagedOpenCodeReaper;
 use crate::managed_opencode_scan;
-use crate::managed_reaper::ManagedBridgeReaper;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
 use crate::scheduler::{AdaptiveLimiter, ObservationTrace, PathJob, PathScheduler, WorkPriority};
 use crate::shipper;
 use crate::shipping::client::ShipperClient;
 use crate::shipping::storage_v2::StorageV2Capabilities;
-use crate::shipping_stats::RecentShipStatsTracker;
+use crate::shipping_stats::{RecentShipStatsTracker, ShipAttemptOutcome, ShipLane};
 use crate::state::db::open_db;
 use crate::state::db_pool::ConnectionPool;
 use crate::state::file_state::FileState;
@@ -671,8 +669,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut managed_codex_transcript_paths: HashSet<PathBuf> = HashSet::new();
-    let mut bridge_reaper = ManagedBridgeReaper::from_env();
-    let mut opencode_reaper = ManagedOpenCodeReaper::from_env();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
@@ -1241,8 +1237,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             config.archive_repair_mode,
                             &mut session_snapshot_state,
                         );
-                        bridge_reaper.tick(&result.codex_observations);
-                        opencode_reaper.tick(&result.opencode_observations);
                         let signature = runtime_truth_signature(&payload);
                         if !runtime_truth_bootstrapped {
                             last_runtime_truth_signature = Some(signature);
@@ -2978,11 +2972,17 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         } else {
             "repair"
         };
+        let stats_lane = if result.job.priority == WorkPriority::Live {
+            ShipLane::Live
+        } else {
+            ShipLane::Repair
+        };
         let timeout = if lane == "live" {
             Duration::from_secs(20)
         } else {
             Duration::from_secs(75)
         };
+        let ship_started = Instant::now();
         let ship_result = if is_opencode_database_job(&result.job) {
             crate::storage_v2_shipper::ship_next_opencode_envelope(
                 &mut conn,
@@ -3008,6 +3008,31 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         };
         match ship_result {
             Ok(Some(outcome)) => {
+                let latency_ms = ship_started.elapsed().as_millis() as u64;
+                task_context.ship_stats.record_with_lane_detail_and_stages(
+                    stats_lane,
+                    ShipAttemptOutcome::Ok,
+                    latency_ms,
+                    None,
+                    None,
+                    None,
+                    outcome.events_shipped as u32,
+                    outcome.bytes_shipped,
+                    false,
+                    None,
+                );
+                task_context.ship_stats.record_events_and_bytes_shipped(
+                    stats_lane,
+                    outcome.events_shipped as u32,
+                    outcome.bytes_shipped,
+                    latency_ms,
+                );
+                if let Some(failures) = task_context.tracker.record_success() {
+                    tracing::info!(
+                        failures,
+                        "Storage-v2 shipping recovered after consecutive failures"
+                    );
+                }
                 result.events_shipped = outcome.events_shipped;
                 if outcome.has_more {
                     result.rerun_priority = Some(result.job.priority);
@@ -3041,6 +3066,18 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 }
             }
             Err(error) => {
+                task_context.ship_stats.record_with_lane_detail_and_stages(
+                    stats_lane,
+                    ShipAttemptOutcome::RetryableClientError,
+                    ship_started.elapsed().as_millis() as u64,
+                    None,
+                    Some("storage_v2_ship_failed"),
+                    Some(&error.to_string()),
+                    0,
+                    0,
+                    false,
+                    None,
+                );
                 if task_context.tracker.record_error() {
                     tracing::warn!(
                         path = %result.job.path.display(),

@@ -91,12 +91,13 @@ launcher owns the Helm session, so it owns that session's live ingest too.
 
 ## Status
 
-**A is implemented** in `server/zerg/cli/cursor_helm_ingest.py`, wired into the
+**A is implemented for legacy-ingest Runtime Hosts** in
+`server/zerg/cli/cursor_helm_ingest.py`, wired into the
 Helm launcher (`run_helm` spawns a `cursor-helm-ingest` daemon thread). It uses
 the append-only high-water-mark approach: each poll decodes the current
 `store.db`, stamps every event with a stable ordinal `source_offset`, ships
 only events with `ordinal >= hwm`, and advances the HWM only after a
-successful (<500) post. Each event is shipped exactly once, so synthesized
+successful 2xx post. Each event is shipped exactly once, so synthesized
 timestamps never shift and no duplicates arise. Chat-dir discovery honors
 `LH_CURSOR_HELM_CHAT_DIR` for deterministic dogfood, else scans
 `~/.cursor/chats/*/*/store.db` for the newest store created around launch.
@@ -107,3 +108,15 @@ Open during first dogfood: confirm the discovery heuristic locks onto the
 right chat dir for a real `cursor-agent` session, and confirm events appear on
 the timeline bound to the managed session id. B (Shadow engine Rust tailer)
 remains deferred.
+
+### Storage-v2 cutover finding (2026-07-13)
+
+The launcher-side tailer is incompatible with a Runtime Host whose storage-v2
+capability reports `cutover=true`: that host rejects `/api/agents/ingest` with
+`426 storage_v2_required`. Retrying the identical legacy payload is not useful.
+The launcher now probes capabilities before starting the tailer and reports the
+gap once; a typed 4xx received after startup also stops the retry loop and
+includes the server response. The proper transcript fix is a Cursor
+storage-v2 producer (or an engine-owned Cursor source adapter), not weakening
+the Runtime Host cutover gate. Helm control remains available while transcript
+durability is explicitly degraded.

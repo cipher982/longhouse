@@ -561,6 +561,7 @@ def _stop_native_codex_bridge(
         session_id,
         "--reason",
         reason,
+        "--force",
     ]
     try:
         completed = subprocess.run(
@@ -607,13 +608,13 @@ class _CodexBridgeStopper:
         )
 
 
-def _install_codex_signal_cleanup(stopper: _CodexBridgeStopper) -> dict[signal.Signals, object]:
+def _install_codex_signal_cleanup(_stopper: _CodexBridgeStopper) -> dict[signal.Signals, object]:
     previous_handlers: dict[signal.Signals, object] = {}
 
     def cleanup_and_exit(signum: int, _frame: object) -> None:
-        stopper.stop_for_terminal_disconnect(
-            timeout_secs=_CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
-        )
+        # A wrapper signal only proves the terminal/control client vanished.
+        # Preserve the provider execution for reattach after an SSH drop,
+        # terminal crash, or Longhouse transport failure.
         raise SystemExit(128 + signum)
 
     for signame in ("SIGHUP", "SIGTERM"):
@@ -962,10 +963,10 @@ def codex(
                 reattachable_on_nonzero_exit=True,
             )
         else:
-            stopped_status = " ".join(
+            degraded_status = " ".join(
                 (
                     f"Managed Codex auto-attach exited with code {exit_code};",
-                    "bridge was not reattachable and will be stopped.",
+                    "provider execution was preserved for recovery.",
                 )
             )
             _emit_warp_cli_agent_event(
@@ -973,23 +974,13 @@ def codex(
                 session_id=result.session_id,
                 cwd=cwd,
                 project=project,
-                response=stopped_status,
+                response=degraded_status,
             )
-            stop_error = bridge_stopper.stop_for_terminal_disconnect(
-                timeout_secs=_CODEX_STOP_SIGNAL_TIMEOUT_SECONDS,
+            typer.secho(
+                "Codex control is degraded; Longhouse left the provider process running.",
+                fg=typer.colors.YELLOW,
             )
-            remove_managed_provider_contract(
-                provider="codex",
-                session_id=result.session_id,
-                config_dir=resolved_config_dir,
-                config_dir_is_provider_home=True,
-            )
-            if stop_error is not None:
-                typer.secho(
-                    f"Managed bridge cleanup failed after Codex TUI exit: {stop_error}",
-                    fg=typer.colors.YELLOW,
-                )
-            launch_ui.exit_bookend(exit_code=exit_code, machine_name=machine_name)
+            typer.echo(f"Recovery target: {attach_cmd}")
         return
 
     stop_error = bridge_stopper.stop(reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED)

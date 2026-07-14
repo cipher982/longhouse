@@ -592,7 +592,16 @@ def poll_for_assistant_nonce(
 
 
 def stop_codex_bridge(session_id: str, *, target_ssh: str | None = None) -> dict[str, Any]:
-    command = ["longhouse-engine", "codex-bridge", "stop", "--session-id", session_id, "--reason", "user_closed"]
+    command = [
+        "longhouse-engine",
+        "codex-bridge",
+        "stop",
+        "--session-id",
+        session_id,
+        "--reason",
+        "user_closed",
+        "--force",
+    ]
     if target_ssh:
         command = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", target_ssh, shlex.join(command)]
     started = time.monotonic()

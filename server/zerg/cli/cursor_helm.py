@@ -56,6 +56,7 @@ from zerg.cli._common import interactive_stdio
 from zerg.cli._common import load_api_credentials
 from zerg.cli._managed_launch import interactive_human_shell_launch_provenance
 from zerg.cli.cursor_helm_ingest import probe_ingest_path
+from zerg.cli.cursor_helm_ingest import probe_runtime_ingest_compatibility
 from zerg.cli.cursor_helm_ingest import run_helm_ingest_thread
 from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.machine_identity import get_machine_name_label
@@ -524,12 +525,13 @@ def run_helm(
     # steerable but won't appear on the timeline, instead of discovering it
     # from an empty session URL after the first turn.
     ingest_ok, ingest_err = probe_ingest_path()
+    if ingest_ok:
+        ingest_ok, ingest_err = probe_runtime_ingest_compatibility(resolved_url, resolved_token)
     if not ingest_ok:
         typer.secho(
-            "Warning: live transcript ingest is broken on this machine "
+            "Warning: Cursor Helm live transcript ingest is unavailable "
             f"({ingest_err}). The session will be steerable but won't appear "
-            "on the timeline until fixed. Run `longhouse machine repair` or "
-            "`longhouse upgrade`.",
+            "on the timeline through this legacy tailer.",
             fg=typer.colors.YELLOW,
         )
 
@@ -638,21 +640,23 @@ def run_helm(
     # zerg.cli.cursor_helm_ingest + docs/specs/cursor-live-ingest.md.
     ingest_bf = BestEffortLogger("zerg.cursor_helm.ingest")
     launch_time = datetime.now(timezone.utc)
-    ingest_thread = threading.Thread(
-        target=run_helm_ingest_thread,
-        kwargs={
-            "launch_time": launch_time,
-            "session_id": session_id,
-            "url": resolved_url,
-            "token": resolved_token,
-            "stop_event": stop_event,
-            "verbose": verbose,
-            "bf": ingest_bf,
-        },
-        daemon=True,
-        name="cursor-helm-ingest",
-    )
-    ingest_thread.start()
+    ingest_thread: threading.Thread | None = None
+    if ingest_ok:
+        ingest_thread = threading.Thread(
+            target=run_helm_ingest_thread,
+            kwargs={
+                "launch_time": launch_time,
+                "session_id": session_id,
+                "url": resolved_url,
+                "token": resolved_token,
+                "stop_event": stop_event,
+                "verbose": verbose,
+                "bf": ingest_bf,
+            },
+            daemon=True,
+            name="cursor-helm-ingest",
+        )
+        ingest_thread.start()
 
     try:
         tty.setraw(real_stdin)
@@ -723,8 +727,9 @@ def run_helm(
         stop_event.set()
         # Let the ingest tailer flush a final poll + record its last outcome
         # before we summarize. Bounded so a hung decode can't wedge exit.
-        ingest_thread.join(timeout=5.0)
-        ingest_bf.summarize("cursor helm ingest")
+        if ingest_thread is not None:
+            ingest_thread.join(timeout=5.0)
+            ingest_bf.summarize("cursor helm ingest")
         try:
             termios.tcsetattr(real_stdin, termios.TCSADRAIN, saved_term)
         except termios.error:

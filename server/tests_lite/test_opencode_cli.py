@@ -119,6 +119,27 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
     ]
 
 
+def test_opencode_nonzero_attach_preserves_provider_server(monkeypatch, tmp_path):
+    runner = CliRunner()
+    stop_calls: list[dict] = []
+    _stub_managed_launch(monkeypatch)
+    monkeypatch.setattr(opencode_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(opencode_channel, "launch_opencode_server_bridge", lambda **_kwargs: {})
+    monkeypatch.setattr(opencode_channel, "run_opencode_attach", lambda **_kwargs: 7)
+    monkeypatch.setattr(
+        opencode_channel,
+        "stop_opencode_server_bridge",
+        lambda **kwargs: stop_calls.append(kwargs) or {},
+    )
+
+    result = runner.invoke(app, ["opencode", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 7
+    assert "left the provider server running" in result.output
+    assert "Rejoin:" in result.output
+    assert stop_calls == []
+
+
 def test_opencode_funnels_model_flag_to_server(monkeypatch, tmp_path):
     runner = CliRunner()
     launch_calls: list[dict] = []

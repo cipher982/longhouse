@@ -58,7 +58,10 @@ Codex launch modes:
 Bridge state:
 
 - Bridge writers persist detached-UI managed sessions as `launch_mode=detached_ui` and TUI sessions as `launch_mode=tui`.
-- Reapers must skip live-bridge reaping for unknown launch modes or future bridge state schema versions.
+- Do not automatically reap managed provider bridges or their app-server/server
+  children. A missing TUI, wrapper signal, nonzero attach exit, or dead control
+  bridge is degradation evidence, not permission to terminate user execution.
+  Only a clean user exit or an explicit terminate/stop action may kill it.
 
 Hard Codex contract:
 

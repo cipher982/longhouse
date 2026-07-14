@@ -222,6 +222,9 @@ pub struct BridgeStopConfig {
     pub session_id: String,
     pub state_root: Option<PathBuf>,
     pub terminal_reason: Option<String>,
+    /// Required acknowledgement that this operation terminates the provider
+    /// app-server, not merely the Longhouse relay/control attachment.
+    pub force: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1786,6 +1789,12 @@ async fn stop_via_ipc_inner(sock_path: &Path, terminal_reason: &str) -> Result<(
 
 #[cfg(unix)]
 pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
+    if !config.force {
+        bail!(
+            "refusing to terminate managed Codex session {}; codex-bridge stop kills the provider execution (pass --force only after an explicit user close)",
+            config.session_id
+        );
+    }
     let paths = resolve_bridge_paths(config.state_root.as_deref(), &config.session_id, None)?;
     let sock_path = ipc_socket_path(&paths.state_file);
     let terminal_reason = normalize_bridge_terminal_reason(config.terminal_reason.as_deref());
@@ -6748,6 +6757,23 @@ mod tests {
         .await;
 
         assert_eq!(reason, TERMINAL_REASON_TERMINAL_DISCONNECTED);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_requires_explicit_provider_termination_acknowledgement() {
+        let error = cmd_codex_bridge_stop(BridgeStopConfig {
+            session_id: "session-123".to_string(),
+            state_root: None,
+            terminal_reason: None,
+            force: false,
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("kills the provider execution"));
+        assert!(error.contains("--force"));
     }
 
     #[cfg(unix)]

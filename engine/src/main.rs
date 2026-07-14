@@ -25,10 +25,7 @@ mod machine_presence;
 mod managed_bridge_scan;
 mod managed_claude_scan;
 mod managed_cursor_helm_scan;
-mod managed_opencode_reaper;
 mod managed_opencode_scan;
-mod managed_reaper;
-mod managed_reaper_core;
 mod media_redaction;
 mod media_upload;
 mod observability;
@@ -972,7 +969,7 @@ enum CodexBridgeCommands {
         json: bool,
     },
 
-    /// Stop a running managed bridge and its local Codex app-server child
+    /// Terminate a managed bridge and its local Codex app-server child
     Stop {
         #[arg(long)]
         session_id: String,
@@ -983,6 +980,10 @@ enum CodexBridgeCommands {
         /// Terminal reason to record when the bridge accepts the stop.
         #[arg(long)]
         reason: Option<String>,
+
+        /// Acknowledge that this terminates the provider execution.
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -1859,11 +1860,13 @@ fn main() -> anyhow::Result<()> {
                     session_id,
                     state_root,
                     reason,
+                    force,
                 } => {
                     rt.block_on(cmd_codex_bridge_stop(BridgeStopConfig {
                         session_id,
                         state_root,
                         terminal_reason: reason,
+                        force,
                     }))?;
                 }
             }
@@ -2322,11 +2325,15 @@ mod tests {
             Commands::CodexBridge {
                 command:
                     CodexBridgeCommands::Stop {
-                        session_id, reason, ..
+                        session_id,
+                        reason,
+                        force,
+                        ..
                     },
             } => {
                 assert_eq!(session_id, "sess-test");
                 assert_eq!(reason.as_deref(), Some("terminal_disconnected"));
+                assert!(!force);
             }
             _ => panic!("expected codex-bridge stop command"),
         }
