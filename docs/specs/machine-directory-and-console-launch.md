@@ -1,6 +1,6 @@
 # Machine Directory and Console Launch
 
-Status: Proposed epic
+Status: Active epic; launch UI revision required before further implementation
 Owner: Runtime Host machine surface + web/iOS launch UX
 Created: 2026-07-14
 Related:
@@ -21,7 +21,7 @@ A user opening **New Session** should immediately understand:
 - which machines can accept a Console launch now;
 - which provider and execution modes are available on each machine;
 - why a machine is unavailable without it disappearing;
-- what action, if any, restores availability.
+- where to inspect the machine when repair is needed.
 
 The Runtime Host owns those semantic decisions. SwiftUI and React own native
 presentation, local form state, and platform interaction. Neither client should
@@ -66,6 +66,15 @@ their producer skipped token revocation. That producer bug is fixed in
 that legitimate offline machines and disposable automation identities must be
 fixed at enrollment lifecycle boundaries, never hidden by client name filters.
 
+The first iOS implementation also exposed a specification failure. The spec
+allowed a native `Menu` without defining its closed state, open state,
+typography, tint, wrapping, or display-name behavior. SwiftUI consequently
+rendered the selected value in accent blue, reduced `Ready` to caption size,
+and concatenated the routing id and technical block reason into one wrapping
+menu label. Passing API and snapshot tests did not make that interaction
+acceptable. The revised contract below replaces the menu and makes visual
+states part of acceptance.
+
 ## Product Decisions
 
 ### Provider Scope
@@ -73,7 +82,7 @@ fixed at enrollment lifecycle boundaries, never hidden by client name filters.
 Cursor is a supported Console target through `cursor.run_once` backed by
 `cursor-agent acp`. It must appear in both launchers even though it does not
 advertise the long-lived remote `cursor.launch` operation; consequently it
-offers one-shot only and no **Keep runtime open** choice. Cursor Helm remains
+offers one-shot only and no **Keep session open** choice. Cursor Helm remains
 the separate terminal-owned `longhouse cursor` path.
 
 Antigravity is not a launch target yet. Its proven Machine Agent surface is
@@ -107,6 +116,24 @@ Each client may remember the last selected machine per Runtime Host identity
 and choose it initially if it is still ready. That preference should not
 reorder the visible directory.
 
+### 2a. Routing Identity Is Not Display Identity
+
+`device_id` is an opaque, stable routing and credential identity. It is never
+humanized, suffix-stripped, title-cased, or otherwise transformed by a client.
+Names such as `cube-canary` may legitimately encode an environment or
+enrollment lane, but that does not make them appropriate primary UI labels.
+
+`machine_name` is the durable user-facing label. The Runtime Host must preserve
+it while the machine is offline instead of falling back to `device_id` merely
+because the live hello frame is gone. Enrollment should carry a display name,
+and a connected Machine Agent hello may refresh that name. Persisting the name
+must not persist stale launch capabilities.
+
+For the current dogfood machines the intended labels are `cinder` and `cube`.
+`cube-canary` remains available in machine details as the technical routing id
+until that enrollment is renamed or replaced. A client must not infer `cube`
+from the `-canary` suffix.
+
 ### 3. Status Is Explicit and Not Color-Only
 
 Human presentation maps canonical state to:
@@ -115,9 +142,10 @@ Human presentation maps canonical state to:
 | --- | --- | --- |
 | ready | green filled dot | Ready |
 | offline | gray hollow dot | Offline · last seen … |
-| connected but unsupported | amber info symbol | Update or configure |
+| connected but unsupported | amber info symbol | Console launch unavailable |
+| engine too old | amber info symbol | Update required |
 | policy restricted | lock or amber info symbol | Restricted |
-| auth/runtime failure | red warning symbol | Connection needs repair |
+| auth/runtime failure | red warning symbol | Needs repair |
 
 Red is reserved for a fault that needs repair. A sleeping laptop or stopped VPS
 is gray, not a red failure. Text accompanies every color.
@@ -135,7 +163,7 @@ falls back honestly to an advertised `live_control` option rather than becoming
 artificially unavailable.
 
 When a provider also supports `live_control`, both clients may offer the same
-advanced **Keep runtime open** choice. That option is explicit and must not be
+advanced **Keep session open** choice. That option is explicit and must not be
 silently selected because a client lacks a first-message field.
 
 iOS provides a first-message field and the same execution-lifetime choice as
@@ -209,7 +237,7 @@ An offline enrollment remains present:
 ```json
 {
   "device_id": "cube-canary",
-  "machine_name": "cube-canary",
+  "machine_name": "cube",
   "control_channel_status": "disconnected",
   "last_seen_at": "2026-07-12T17:30:30Z",
   "supports": [],
@@ -267,40 +295,142 @@ real Control Plane entitlement input.
 | `server/zerg/cli/local_health.py` and dogfood scripts | operator diagnostics over raw truth | continue using raw operations, not human projection copy |
 | `web/src/pages/DevicesPage.tsx` | credential-centric management | deferred machine-management epic |
 
-## Human UX Contract
+## Human Launch Experience
 
-Web and iOS should produce the same information hierarchy with native controls:
+The launch form is a short composition screen, not a directory and not a
+diagnostics dashboard. It has four primary inputs:
+
+1. where the work runs: machine and workspace;
+2. which coding agent runs it;
+3. what the agent should do;
+4. optional execution settings.
+
+Machine is a compact summary row under **Machine**. Agent and workspace are
+compact summary rows under **Session**; they are configuration, not additional
+places where the work runs. The task prompt is the only large editor. **Start
+session** is the single primary action. Execution lifetime and optional session
+name live under **Advanced options**. The one-shot label is **Run once**, never
+**Default**; the alternate label is **Keep session open**. The agent row may
+summarize the selected mode, but Advanced is its only edit surface.
 
 ```text
-Machine
+New Session
 
-Available
-  ● cinder                         Ready
+MACHINE
+  cinder                         >
+  ● Ready
 
-Unavailable
-  ○ cube-canary                    Offline · last seen 2d ago
+SESSION
+  Codex                          >
+  Agent · Run once
+  zerg                           >
+  Workspace · ~/git/zerg
+
+TASK
+  What should the agent do?
+
+Advanced options                >
+
+[ Start session ]
 ```
 
-### Interaction
+### iOS Selection Pattern
+
+Do not use `Menu`, a wheel picker, or an inline dropdown for machines. Machine
+rows contain status detail and need a scalable open state. Tapping the summary
+row pushes a **Choose Machine** destination inside the launch sheet's existing
+`NavigationStack`:
+
+```text
+Choose Machine
+
+AVAILABLE
+  ● cinder
+    Ready                         ✓
+
+UNAVAILABLE
+  ○ cube
+    Offline · Last seen 2 days ago
+```
+
+Use the same summary-row plus destination pattern for agent and workspace when
+there is more than one choice. With one agent, the row is static and has no
+chevron. Workspace selection owns search and the potentially long recent list;
+the launch form itself never embeds the whole workspace list.
+
+### Web Selection Pattern
+
+Web uses the same summary card and information hierarchy. Its machine row may
+open a popover/listbox rather than navigating to another page, provided the
+open surface has enough width for two-line rows and supports keyboard and
+screen-reader listbox behavior. It must not fall back to a native `<select>`
+because native options cannot express grouped availability and secondary copy
+consistently.
+
+Pixel parity is not required. Row anatomy, copy, ordering, defaults, and state
+transitions are shared product behavior.
+
+### Machine Row Anatomy
+
+Every machine row has separate fields, never a constructed sentence:
+
+- status symbol;
+- `machine_name` as the primary label;
+- concise human status as secondary text;
+- selected checkmark for a ready selected row;
+- optional navigation affordance in the closed summary row.
+
+Never concatenate `machine_name`, an em dash, and `launch.blocked_by`. The
+technical reason `control_down` maps to the human state **Offline**. Detailed
+copy such as **Control channel disconnected** belongs in machine details or a
+repair flow, not the chooser. Last-seen context is shown when known.
+
+Unavailable rows remain visible and cannot be selected. In the first slice they
+are readable, non-button rows; VoiceOver announces the name, status, and **Not
+available**. Machine details and repair navigation are out of the chooser until
+there is an explicit trailing details control. A disabled launch row must not
+secretly behave as a details link. Collapse **Unavailable (N)** only after more
+than three rows, and only when real list size justifies building that behavior.
+
+### Typography and Color
+
+- Primary row labels use the platform body style, regular or semibold.
+- Secondary status and path text use subheadline, not caption.
+- Caption is reserved for explanatory footnotes below a group.
+- Primary labels use the normal foreground color. A selectable container must
+  not tint all of its label content with the app accent color.
+- Accent color is reserved for the selected checkmark, focused control, and
+  primary action.
+- Ready uses a green filled dot plus the word **Ready**.
+- Ordinary offline uses a gray ring plus **Offline** and is never red.
+- Connected without provider launch support uses amber **Console launch
+  unavailable**; `engine_too_old` uses amber **Update required**; auth/runtime
+  faults use red **Needs repair**. These remain rows within the single
+  **Unavailable** group; clients map backend reasons to this pinned copy and do
+  not invent another availability enum.
+- Dynamic Type may wrap the secondary line, but a machine name and its status
+  never share one wrapping text node.
+
+### State and Interaction Rules
 
 - Ready rows select the launch target.
-- Unavailable rows remain visible and expose a short reason/remediation, but
-  cannot submit a launch.
-- When no machine is ready, keep the directory visible and lead with “No
-  machines ready to launch.”
+- Selecting another ready machine clears machine-scoped workspace, provider,
+  execution lifetime, and error state, then applies backend defaults. The task
+  prompt is user work and remains intact across target changes.
+- Workspace suggestions are fetched only for the selected ready machine.
+- When no machine is ready, show the directory destination with all enrolled
+  machines and lead with **No machines ready to launch**. Do not render an empty
+  form with a disabled button.
 - When there are no enrollments, show the distinct install/connect empty state.
-- A large unavailable section may collapse behind `Unavailable (N)`, but the
-  machines remain discoverable in the same sheet.
-- Selecting another ready machine clears machine-scoped workspace and provider
-  state, then applies backend defaults.
-- Workspace suggestions are fetched only for a ready selected machine.
-- Both clients display provider names through their normal provider-label
-  presentation, not raw lowercase identifiers.
-- Build hashes do not appear in picker labels.
-
-SwiftUI may use a `Menu`/custom selection sheet if native `Picker` sections
-cannot express status detail cleanly. React may use a small listbox instead of
-an HTML `<select>`. Pixel parity is not a goal; semantic parity is.
+- Both clients display provider names through canonical presentation labels,
+  never raw lowercase identifiers.
+- Build hashes and routing ids do not appear in compact launch rows.
+- The primary action remains reachable without scrolling through a recent
+  workspace list. On iOS it should sit after the compact form or in a safe-area
+  action inset; it must not be buried beneath optional metadata.
+- Execution lifetime is edited only in Advanced. Changing the agent resets it
+  to the backend default valid for that agent; changing the machine resets both
+  agent and lifetime to that machine's backend defaults.
 
 ## Deferred Follow-Ons
 
@@ -359,15 +489,29 @@ observed or in a dedicated automation-hygiene sweep.
 
 ### D. iOS Launch Surface
 
-- Replace the flat picker with availability-grouped native presentation.
+- Replace the shipped machine `Menu` with a summary row and grouped navigation
+  destination.
 - Consume only `machine.launch` for eligibility, provider options, and defaults.
 - Use gray offline status and reserve red for repairable faults.
 - Add first message plus the same runtime choice as web.
 - Move iOS to canonical one-shot Console default after that form exists.
+- Move agent and workspace selection out of the long inline `Form` and into
+  compact summary rows/destinations.
 - Persist last selected ready machine per Runtime Host identity.
-- Keep preview coverage for mixed ready/offline/blocked lists and large names.
+- Keep preview coverage for the closed form and every chooser state.
 
-### E. Diagnostics and Agent Consumers
+### E. Durable Machine Names
+
+- Add a durable machine display-name source to enrollment-backed directory
+  entries; do not introduce another machine registry.
+- Refresh it from explicit enrollment/rename input or a connected hello frame.
+- Return the last durable `machine_name` while offline while keeping current
+  capabilities empty.
+- Expose `device_id` only in machine details and agent/diagnostic responses.
+- Set the dogfood VPS display name to `cube` through the canonical rename or
+  enrollment path, never through a client alias table.
+
+### F. Diagnostics and Agent Consumers
 
 - Keep `supports` and `control_operations_by_provider` available to
   `local-health`, provider proof, dogfood checks, and scripts.
@@ -379,14 +523,21 @@ observed or in a dedicated automation-hygiene sweep.
 
 ## Delivery Sequence
 
-1. Backend projection, sorting, schema tests, and both route veneers.
-2. Generated TypeScript/Swift DTO coverage.
-3. Web grouped picker migrated to `launch`.
-4. iOS grouped picker migrated to `launch` without changing its runtime mode.
-5. iOS first-message/runtime parity, then canonical one-shot default.
-6. Remove client-side legacy inference and compatibility helpers.
-7. Stop. Machine management, producer-wide cleanup, generator expansion, and
-   legacy field deletion are separate follow-ons.
+The launch projection, DTO migration, grouped web picker, and first iOS form
+slice have landed. The screenshots that triggered this revision invalidate the
+iOS interaction, not the backend launch projection.
+
+Before more implementation, approve the closed-form and open-chooser visual
+contract in this document. Then deliver narrow slices:
+
+1. Durable machine display names, including the canonical `cube` dogfood label.
+2. iOS compact form and machine chooser with open-state preview coverage.
+3. iOS agent/workspace destinations and advanced-options cleanup.
+4. Web compact summary card and accessible machine listbox/popover.
+5. Cross-surface state, accessibility, and visual matrix verification.
+6. Remove remaining client compatibility inference and helpers.
+7. Stop. Machine credential management, producer-wide cleanup, generator
+   expansion, and legacy field deletion remain separate follow-ons.
 
 Each slice should be independently shippable. Do not combine API migration,
 both UI rewrites, and machine-management mutations in one change.
@@ -395,7 +546,11 @@ both UI rewrites, and machine-management mutations in one change.
 
 - Web and iOS show the same enrolled machines grouped as available or
   unavailable.
+- The launch form shows compact machine/agent/workspace summaries rather than
+  embedding full option lists.
 - A legitimate offline machine remains visible with last-seen context.
+- Offline machines retain their durable human display name; `device_id` is not
+  substituted into compact UI when the control channel disconnects.
 - An ephemeral automation credential disappears after its owning workflow
   completes because it is revoked, not because a client recognizes its name.
 - Both clients receive identical provider options and defaults from the
@@ -405,6 +560,10 @@ both UI rewrites, and machine-management mutations in one change.
 - Both clients distinguish no enrollment from no ready machine.
 - Both clients use gray for ordinary offline state and explicit text alongside
   status color.
+- Machine names remain normal foreground text in closed and open selection
+  states; platform accent tint does not recolor entire row labels.
+- Name, status, and remediation are separate semantic fields and accessibility
+  elements, never one concatenated wrapping string.
 - Console one-shot is the default on web and iOS whenever the selected machine
   advertises it; live-control is the explicit option or the honest fallback
   when no one-shot provider exists.
@@ -421,12 +580,17 @@ both UI rewrites, and machine-management mutations in one change.
 - Route parity: agent-auth and browser-auth machine responses share one model.
 - Web: grouped rendering, status copy, unavailable interaction, backend
   defaults, last selection, execution-lifetime gating.
-- iOS: DTO decoding, grouped previews, selection reset, offline explanation,
-  backend defaults, one-shot/live-control payloads.
+- iOS: DTO decoding, closed-form preview, pushed chooser previews, selection
+  reset, offline explanation, backend defaults, one-shot/live-control payloads.
 - Automation: retain the focused benchmark cleanup regression from
   `38f05cdc2`; broader producer coverage is deferred.
-- Visual QA: compact and long-name machine lists in light/dark mode and normal
-  accessibility text sizes.
+- Visual QA matrix: closed form, chooser open, one/many/no ready machines,
+  long names, unknown last-seen, light/dark mode, and default plus accessibility
+  Dynamic Type. Capture the actual open selector state; a closed-form snapshot
+  cannot approve its popup or destination.
+- Device/simulator interaction QA: tap every summary row, select and return,
+  verify VoiceOver label/order, verify disabled rows, and verify the primary
+  action remains reachable with the keyboard shown.
 
 ## Non-Goals
 
