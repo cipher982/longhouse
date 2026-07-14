@@ -445,8 +445,8 @@ pub(crate) fn prepare_next_cursor_envelope(
         source_len_before_capture,
         SourceLane::Durable,
         0,
-        claimed_session_id.as_deref(),
         None,
+        claimed_session_id.as_deref(),
         root_relation.source_change_hint(),
     )?;
     cursor_store_records::append_unseen_cursor_records(conn, resolution.source_epoch, &snapshot.records)?;
