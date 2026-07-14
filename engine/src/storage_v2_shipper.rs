@@ -60,6 +60,11 @@ pub(crate) fn prepare_next_envelope(
 ) -> Result<Option<PreparedStorageV2Envelope>> {
     let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let path_text = canonical_path.to_string_lossy();
+    let durable_session_id = match session_id_override {
+        Some(value) => Some(value.to_string()),
+        None => crate::state::session_binding::SessionBinding::new(conn).get(&path_text)?,
+    };
+    let session_id_override = durable_session_id.as_deref();
     let opaque_source_id = opaque_source_id(&path_text);
     let legacy_offset = validated_legacy_offset(conn, &path_text, &canonical_path)?;
     let source_revision = if provider.eq_ignore_ascii_case("antigravity") {
@@ -821,6 +826,31 @@ mod tests {
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn prepare_reuses_durable_managed_binding_without_a_wake_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"user\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n",
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let canonical = fs::canonicalize(&path).unwrap();
+        let managed_session_id = "018f0c3a-7b2d-7f10-8a11-000000000042";
+        crate::state::session_binding::SessionBinding::new(&conn)
+            .bind(&canonical.to_string_lossy(), managed_session_id, "claude")
+            .unwrap();
+
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(prepared.envelope.session_id, managed_session_id);
     }
 
     #[test]

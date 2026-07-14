@@ -145,6 +145,10 @@ pub fn observe_source(
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
 
     let active = load_active_epoch(&tx, provider, opaque_source_id)?;
+    let active_lane_position = match active.as_ref() {
+        Some(active) => load_lane_position(&tx, active.source_epoch, lane)?.unwrap_or(0),
+        None => 0,
+    };
     if active.is_none() && observed_position > observed_source_len {
         bail!(
             "source position {observed_position} exceeds new source length {observed_source_len}"
@@ -162,7 +166,7 @@ pub fn observe_source(
             Some(EpochStartReason::RevisionChange)
         } else if bound_session_id.is_some()
             && active.bound_session_id.as_deref() != bound_session_id
-            && (active.bound_session_id.is_some() || observed_position > 0)
+            && (active.bound_session_id.is_some() || active_lane_position > 0)
         {
             Some(EpochStartReason::SessionRebind)
         } else {
@@ -283,15 +287,23 @@ pub fn observe_source(
 }
 
 pub fn lane_position(conn: &Connection, source_epoch: Uuid, lane: SourceLane) -> Result<u64> {
-    let value = conn
-        .query_row(
-            "SELECT last_position FROM source_epoch_lane_state WHERE source_epoch = ?1 AND lane = ?2",
-            params![source_epoch.to_string(), lane.as_str()],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .ok_or_else(|| anyhow::anyhow!("source epoch lane is not registered"))?;
-    u64::try_from(value).context("source epoch lane position is negative")
+    load_lane_position(conn, source_epoch, lane)?
+        .ok_or_else(|| anyhow::anyhow!("source epoch lane is not registered"))
+}
+
+fn load_lane_position(
+    conn: &Connection,
+    source_epoch: Uuid,
+    lane: SourceLane,
+) -> Result<Option<u64>> {
+    conn.query_row(
+        "SELECT last_position FROM source_epoch_lane_state WHERE source_epoch = ?1 AND lane = ?2",
+        params![source_epoch.to_string(), lane.as_str()],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()?
+    .map(|value| u64::try_from(value).context("source epoch lane position is negative"))
+    .transpose()
 }
 
 pub fn acknowledge_position(
@@ -673,19 +685,20 @@ mod tests {
             "history.jsonl",
             &source,
             SourceLane::Durable,
-            4,
+            0,
             None,
             None,
             SourceChangeHint::None,
         )
         .unwrap();
+        acknowledge_position(&mut conn, parsed.source_epoch, SourceLane::Durable, 0, 4).unwrap();
         let managed = observe_file(
             &mut conn,
             "codex",
             "history.jsonl",
             &source,
             SourceLane::Durable,
-            4,
+            0,
             None,
             Some("managed-session"),
             SourceChangeHint::None,
