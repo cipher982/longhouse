@@ -26,6 +26,11 @@ smaller surface.
 
 ## Scope
 
+`turn-scoped-console-execution.md` narrows launch-attempt ownership: references
+below to `SessionLaunchAttempt` and managed launch apply to Helm and legacy
+compatibility only. New Console dispatch is owned by `SessionTurn` plus
+`SessionRun`.
+
 In scope:
 
 - Separate identity nouns: session, thread, run, connection.
@@ -84,10 +89,8 @@ latest run-keyed runtime_state)`:
 ```text
 session_capabilities(session_id) -> {
   control_label,            # "idle", "live", "reattach", "search-only", "imported"
-  turn_state,               # idle | queued | dispatching | active | terminal_draining
+  turn_state,               # idle | queued | starting | active | draining
   can_start_turn,
-  can_queue_next_turn,
-  can_resume_thread,
   start_turn_blocked_by,
   live_control_available,
   host_reattach_available,
@@ -96,7 +99,6 @@ session_capabilities(session_id) -> {
   can_steer_active_turn,
   can_interrupt_active_turn,
   can_answer_pause,
-  can_terminate_invocation,
   can_tail_output,
   staleness_reason,
 }
@@ -147,13 +149,15 @@ old `managed_transport` enum:
 - `can_start_turn` derives from recorded placement, current machine
   reachability, workspace validity, and adapter support for fresh start or
   resume. It does not require an open run.
-- `can_queue_next_turn` means the Runtime Host can durably accept a FIFO turn;
-  it does not claim immediate provider delivery.
+- A normal send creates a durable turn. When execution is already owned, the
+  Runtime Host queues it FIFO; queueing is product behavior, not a provider
+  capability.
 - `can_steer_active_turn` requires a live connection whose specific invocation
   adapter supports steering. Provider-wide support is insufficient:
   `codex_exec` is not steerable merely because `codex_bridge` is.
-- `can_interrupt_active_turn`, `can_answer_pause`, and
-  `can_terminate_invocation` are likewise adapter/connection capabilities.
+- `can_interrupt_active_turn` and `can_answer_pause` are likewise
+  adapter/connection capabilities. Force-reaping the owned process group is a
+  Machine Agent responsibility, not a provider capability.
 
 ### Runtime overlay rule: down-gate only
 
@@ -173,7 +177,7 @@ implementer's head:
 1. State priority: `attached` > `degraded` > `detached` > `released` > `ended`.
 2. Capability priority within tied state: highest count of granted capability
    flags wins (`can_steer_active_turn`, `can_interrupt_active_turn`,
-   `can_answer_pause`, `can_terminate_invocation`, `can_tail_output`).
+   `can_answer_pause`, `can_tail_output`).
 3. Recency tiebreak: greater `last_health_at` wins.
 4. Final tiebreak: greater `connections.id` wins (creation order).
 
@@ -258,7 +262,6 @@ session_connections(
   can_steer_active_turn,
   can_interrupt_active_turn,
   can_answer_pause,
-  can_terminate_invocation,
   can_tail_output,
   capabilities_extra_json,  -- nullable; provider-specific diagnostics only
   acquired_at,
@@ -282,6 +285,9 @@ session_launch_attempts(
   created_at,
   updated_at
 )
+-- Final scope: Helm/legacy launch compatibility only. Turn-scoped Console uses
+-- SessionTurn for dispatch lifecycle and SessionRun for invocation lifecycle;
+-- it does not create SessionLaunchAttempt rows.
 ```
 
 ```text
@@ -477,12 +483,10 @@ in any other order leaves a parallel-truth window.
 
 1. **Define the API capability response shape from the projection.**
    `SessionCapabilitiesResponse` exposes the kernel fields directly:
-   `control_label`, `turn_state`, `can_start_turn`, `can_queue_next_turn`,
-   `can_resume_thread`, `start_turn_blocked_by`,
+   `control_label`, `turn_state`, `can_start_turn`, `start_turn_blocked_by`,
    `live_control_available`, `host_reattach_available`, `observe_only`,
    `search_only`, `can_steer_active_turn`, `can_interrupt_active_turn`,
-   `can_answer_pause`, `can_terminate_invocation`, `can_tail_output`, and
-   `staleness_reason`.
+   `can_answer_pause`, `can_tail_output`, and `staleness_reason`.
    Keep the small set of presentation helpers (`display_label`,
    `display_detail`, `display_tone`, `input_mode`, `composer_*`) as
    server-derived from the kernel projection — not as another truth source.

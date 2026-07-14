@@ -1,9 +1,8 @@
 # Turn-Scoped Console Execution
 
-Status: Proposed canon; supersedes the Console execution-lifetime decisions in
-`machine-directory-and-console-launch.md`
+Status: Active canon; implementation plan locked 2026-07-14
 Owner: session kernel + Machine Agent + web/iOS session clients
-Created: 2026-07-14
+Supersedes: Console `one_shot` / `live_control` execution-lifetime choices
 Related:
 - `VISION.md`
 - `docs/specs/session-identity-kernel.md`
@@ -12,392 +11,331 @@ Related:
 
 ## Decision
 
-Longhouse persists **threads**, not idle provider processes.
+Longhouse persists conversation threads, not idle provider processes.
 
-For Console, one user message starts one provider turn. The provider invocation
-exists while that turn is nonterminal and is reaped after the provider reports
-the terminal turn outcome. A later message resumes the durable provider thread
-in a new invocation.
+Console has one execution model: a message creates a turn; one provider
+invocation executes that turn; the invocation drains and exits; a later message
+resumes the durable provider thread in a new invocation.
 
-Process persistence is not a session mode, a user preference, or a requirement
-for continued conversation. It may exist while a user has an interactive Helm
-TUI open, or as a bounded implementation cache in the future, but correctness
-must never depend on it.
+Process lifetime is not a user setting. **New Session** creates an empty thread
+and opens the normal conversation. The composer sends the first and every later
+message. Console exposes no Task field, first-message field, **Run once**,
+**Keep runtime open**, `one_shot`, or `live_control` choice.
 
-The current `one_shot` name describes the desired process lifetime but obscures
-the product semantics: the **turn** is one-shot, not the conversation. The
-current `live_control` Console option incorrectly makes provider-process
-lifetime part of the user model. Both are replaced by one Console behavior:
-turn-scoped execution.
+Helm is separate. Its process may remain alive because the user has deliberately
+kept the provider's interactive TUI open. That terminal-owned lease is not a
+second Console mode and is not session identity.
 
-## Why
+## The Five Nouns
 
-The durable object the user returns to is a conversation thread. An idle
-Claude, Codex, Cursor, or OpenCode process adds no product value when Longhouse
-can resume the same provider thread for the next message. Keeping one process
-per Console conversation would make idle resource use grow with historical
-conversation count and require cleanup policy for a resource that should not
-exist.
+**Session** — the product item in the timeline.
 
-Longhouse already has most of the correct kernel:
+**Thread** — durable conversational continuity. It owns provider identity and
+the next-turn execution target: provider, machine, workspace, and non-secret
+provider settings. It may remain idle indefinitely with no process.
 
-- `SessionThread` is causal continuity that survives quit/resume;
-- `SessionTurn` is one user submission through terminal provider outcome;
-- `SessionRun` is one provider CLI process invocation;
-- `SessionConnection` is a control attachment to that invocation.
+**Turn** — one accepted user message and the provider work it causes, through
+the settled terminal outcome.
 
-The remaining error is in launch and capability semantics. Today an idle user
-can only send if a live `SessionConnection` exists, and Console creation asks
-the user to choose `one_shot` or `live_control`. This conflates the durable
-thread, active turn, invocation, and control window.
+**Invocation** — one provider process executing one Console turn. This is the
+existing `SessionRun` concept.
 
-## Canonical Nouns
+**Adapter** — Machine Agent code that translates a provider-neutral turn into
+one upstream provider CLI invocation.
 
-**Session** — the product object in the timeline. It owns title, workspace,
-archive state, and a primary thread.
-
-**Thread** — durable conversational continuity. It owns Longhouse identity and
-provider resume evidence. It may be idle with no process.
-
-**Turn** — one user submission and all provider work through a settled terminal
-outcome. Tool calls, tool results, permission pauses, and model calls remain
-inside the same turn. A provider signal such as `end_turn` begins the final
-drain; the turn is settled only after output capture and invocation exit.
-
-**Invocation** — one provider process used to execute a turn. In the current
-schema this is `SessionRun`. A new turn normally creates a new invocation.
-
-**Connection** — Longhouse's temporary ability to observe or control an active
-invocation. It does not make a thread durable or resumable.
-
-**TUI lease** — a Helm-only process lifetime owned by the user's open terminal.
-It may span several turns because the TUI itself is the selected user
-interface. This is not a Console execution option and does not change the
-thread or turn model.
+Everything else is state or transport, not another product noun.
 
 ## Invariants
 
-1. A thread may exist indefinitely with no provider process.
-2. An idle Console thread has zero provider invocations.
-3. A Console thread has at most one active normal turn and one execution owner.
-4. A provider terminal signal moves the turn into `terminal_draining`. The
-   execution owner remains held until stdout, stderr, and transcript capture is
-   finalized and the invocation exits or is forcibly reaped. Only then is the
-   turn settled and the next queued turn may start.
-5. Starting a later turn resumes provider-owned thread state; it does not
-   reconstruct the provider solely from Longhouse-rendered messages.
-6. A connection grants actions against an active invocation. It is not the gate
-   for starting a new turn on an idle thread.
-7. Provider process death fails or interrupts a turn, not the thread.
-8. A provider may be implemented with a short-lived helper server, but that
-   server is disposable infrastructure and must not become per-thread durable
-   truth.
+1. An idle Console thread has no provider process.
+2. A thread has at most one execution owner.
+3. A normal message always creates a turn; it never implicitly creates a new
+   session or process-lifetime mode.
+4. A provider `end_turn` or equivalent signal begins draining. The turn settles
+   only after output capture finishes and the invocation exits or is reaped.
+5. The next queued turn cannot start before the previous invocation settles.
+6. Provider process death fails or cancels a turn, never the thread.
+7. Later turns resume provider-native state. Longhouse does not reconstruct the
+   provider from normalized messages during the normal path.
+8. Unsupported adapter behavior returns a typed unavailable result. There are
+   no no-op adapters and no lifecycle fallbacks.
 
-## Durable State Is More Than a Message List
-
-The user's intuition is directionally right: conversation continuity belongs
-in durable state, not an idle process. Longhouse must not assume that a
-normalized list of messages is sufficient to reproduce that state, however.
-
-Provider-owned thread state can include:
-
-- provider session/thread identity;
-- compaction and hidden context;
-- tool and approval history;
-- model, mode, and reasoning settings;
-- provider-specific metadata and workspace bindings.
-
-Longhouse keeps its raw durable archive and the provider resume identifiers.
-Each provider adapter resumes the provider's native thread. Reconstructing a
-provider thread from normalized events is a future explicit recovery operation,
-not the normal send path.
-
-## Turn Boundary and Tool Waits
-
-A turn is active until the provider emits its real terminal signal. A long
-Hatch invocation illustrates the rule:
-
-1. the model emits a Hatch tool call;
-2. the Hatch process runs for seconds or minutes;
-3. the tool result returns;
-4. the model is called again with that result;
-5. the model emits its final response and `end_turn`.
-
-The provider invocation remains alive through steps 1–5 because the turn never
-ended. This is not idle process persistence.
-
-If a tool deliberately starts independent background work and immediately
-returns a durable handle, the turn may end. That external work is then a job or
-machine process, not an active agent turn. Longhouse must not keep the provider
-invocation alive merely because such work exists. A later turn can inspect or
-wait on the handle. The handle is transcript evidence only: Longhouse does not
-imply ownership, liveness, cancellation, or automatic wake-up for it.
-
-Runtime phases such as `thinking`, `running_tool`, `blocked`, and `waiting` are
-states inside a nonterminal turn. `idle` is a thread state after a terminal
-turn, not proof that an invocation should remain alive.
-
-## Messages While a Turn Is Active
-
-Submitting text has three distinct meanings:
-
-| Thread state | Meaning | Behavior |
-| --- | --- | --- |
-| no active turn | start next turn | spawn/resume one invocation and send the message |
-| active turn, provider supports steering | steer current turn | deliver to the active invocation without creating a second turn |
-| active turn, provider cannot steer | queue next turn | accept durably and start it after the active turn terminates |
-
-Answers to provider permission or structured-question pauses are responses
-inside the active turn, not new turns.
-
-Longhouse does not start two normal turns concurrently on the same thread. A
-future explicit fork can create a child thread when parallel work is desired.
-
-A queued message creates a durable `SessionTurn(state=queued, run_id=NULL)` and
-input record in one transaction. FIFO dispatch atomically claims the oldest
-queued turn, creates and binds its run, and changes it to `dispatching`; only
-then is `session.turn.start` sent. The target states are `queued`,
-`dispatching`, `active`, `terminal_draining`, `completed`, `failed`, and
-`cancelled`. `dispatching`, `active`, and `terminal_draining` hold the thread's
-single execution-owner lease.
-
-## Console UX
-
-**New Session** creates an empty, ready thread from:
-
-- machine;
-- provider;
-- workspace;
-- advanced provider settings, if any.
-
-It does not ask for a Task, first prompt, run lifetime, or **Keep runtime open**.
-Creation opens the normal empty conversation. The composer is the only place
-the user sends the first and later messages.
-
-The empty thread exists in Longhouse before a provider-native thread id exists.
-The first turn creates that provider thread and records its resume identity.
-The thread therefore owns its durable execution target: `device_id`, `cwd`,
-provider, and non-secret provider settings. `SessionRun` copies the effective
-target as historical evidence; it cannot route the first turn because no run
-exists yet.
-
-The composer is enabled by `can_start_turn`, not by
-`live_control_available`. During an active turn it becomes a steer or queued
-next-message affordance according to the provider capability.
-
-## Capability Contract
-
-The current capability model overloads `can_send_input`. Split it into:
-
-- `can_start_turn`: an idle thread can acquire an invocation on its recorded
-  machine and provider;
-- `can_steer_active_turn`: text can be injected into the current turn;
-- `can_queue_next_turn`: text can be accepted durably while a turn is active;
-- `can_interrupt_active_turn`;
-- `can_answer_pause`;
-- `can_terminate_invocation`;
-- `can_resume_thread`: the provider resume identity is sufficient for a later
-  invocation.
-
-`live_control_available` continues to describe an active connection. It must
-not answer whether an idle Console conversation can receive another message.
-
-The projection has two independent axes: thread execution and active-invocation
-control. `control_label` describes only the active invocation. A Console thread
-whose latest run closed successfully remains an idle managed thread, not
-`imported/process_ended`.
-
-The target flat response is:
+## One State Machine
 
 ```text
-{
-  turn_state,                    # idle | queued | dispatching | active | terminal_draining
-  can_start_turn,
-  can_queue_next_turn,
-  can_resume_thread,
-  start_turn_blocked_by,
-  live_control_available,
-  can_steer_active_turn,
-  can_interrupt_active_turn,
-  can_answer_pause,
-  can_terminate_invocation,
-  can_tail_output,
-}
+queued -> starting -> active -> draining -> completed
+                     |           |
+                     +---------> failed
+                     +---------> cancelled
 ```
 
-`can_start_turn` is derived from durable thread placement plus current machine
-availability and provider adapter support. It is false when the machine is
-offline, the workspace is invalid, or the provider cannot start/resume a
-turn. The thread remains visible and durable in all three cases.
+`starting`, `active`, and `draining` hold the thread's execution-owner lease.
+Terminal states release it. The scheduler then claims the oldest queued turn.
 
-Active-turn capabilities come from the selected invocation adapter and its
-current connection, not the provider's aggregate contract. `codex_exec` is not
-steerable merely because `codex_bridge` is; `cursor_acp` is not steerable.
-Unsupported adapters queue the next turn instead.
+A Runtime Host transaction creates the durable input and
+`SessionTurn(state=queued, run_id=NULL)`. Dispatch atomically claims that turn,
+creates one `SessionRun`, stores `SessionTurn.run_id`, and moves the turn to
+`starting` before contacting the Machine Agent.
 
-## Provider Evidence
+No separate launch lifecycle is required for Console. `SessionTurn` owns
+queue/dispatch lifecycle; `SessionRun` owns process lifecycle; the existing
+`SessionLaunchAttempt` path is not used by the final Console design.
 
-All four intended Console providers expose a process-per-turn primitive in the
-currently installed CLIs:
+## Messages During Active Work
 
-| Provider | Fresh turn | Resume turn | Current Longhouse state |
+A normal composer send creates the next turn:
+
+- if the thread is idle, the scheduler starts it immediately;
+- if another turn owns execution, it remains queued in FIFO order.
+
+At cutover, steering is not a Console capability. Normal send queues the next
+turn. Steering may return later as an explicit active-turn action after the
+first turn-scoped adapter proves it; it will never overload normal send.
+
+Permission answers and structured-question answers belong to the current turn.
+They do not create new turns, but no turn-scoped adapter proves answerable
+pauses at cutover. Each adapter declares the non-blocking approval policy its
+turns run under. An adapter that can stall indefinitely on an unanswerable
+permission prompt is not Console-ready.
+
+Interrupt cancels the active turn. After it drains and releases the execution
+owner, the scheduler starts the oldest queued turn. A separate explicit queue
+clear action may be added if users need **stop everything** semantics; interrupt
+does not silently discard accepted messages.
+
+Longhouse never runs two normal turns concurrently on one thread. Parallel work
+requires an explicit child thread or fork.
+
+## Tool Waits and Background Work
+
+A tool wait is inside the turn. If an agent invokes Hatch, waits five minutes
+for its result, consumes that tool result, and then responds, the invocation
+remains active for the full sequence. No persistence exception is involved; the
+turn simply has not ended.
+
+If a tool deliberately returns a handle to independent background work, the
+turn may end. The handle is transcript evidence only. Longhouse does not imply
+ownership, liveness, cancellation, or automatic wake-up for that external
+process, and it does not keep the provider invocation alive for it.
+
+## Architecture
+
+```text
+web / iOS / CLI
+       |
+       v
+session + turn service          durable thread, input, turn, run
+       |
+       v
+per-thread FIFO scheduler       one execution owner
+       |
+       v
+Machine Agent: session.turn.start(run_id, ...)
+       |
+       v
+Console turn adapter            provider-specific CLI mechanics
+       |
+       v
+user-installed provider CLI
+```
+
+The Runtime Host is provider-neutral. It owns durable identity, ordering,
+idempotency, placement, and user-facing capability projection.
+
+The Machine Agent owns process execution, adapter selection, raw provider
+events, interruption, process-group cleanup, and local crash recovery.
+
+The adapter boundary is intentionally small:
+
+```text
+start(context, message, optional_resume_identity) -> invocation handle/events
+interrupt(handle)                   # optional graceful cancel
+```
+
+The Machine Agent always owns force termination of its invocation process
+group; graceful interrupt is only an optimization. Queueing is a Runtime Host
+behavior; that is not a provider capability either. `steer` or `answer_pause`
+joins this boundary only when a turn-scoped adapter first proves it.
+
+Capabilities belong to the selected adapter, not the provider brand. For
+example, `codex_exec` does not become steerable merely because the separate
+Codex Helm bridge can steer.
+
+### Approval policy at cutover
+
+Turn-scoped Console initially supports the existing `bypass` permission mode
+only. Each adapter maps it to a non-interactive provider policy while preserving
+the configured sandbox. `remote_approve` is unavailable until an adapter proves
+pause detection and same-turn answer delivery. This is a deliberate cutover
+constraint: Console must not hang on an approval prompt nobody can answer.
+
+## Provider Evidence, Not Product Taxonomy
+
+Provider names choose adapters; they do not define launch modes.
+
+| Console adapter | Fresh turn | Resume turn | Current state |
 | --- | --- | --- | --- |
-| Codex | `codex exec` | `codex exec resume <thread>` | implemented as `codex.run_once` / `resume_run_once` |
-| Cursor | ACP `session/new` + `session/prompt` | ACP `session/load` + `session/prompt` | implemented as `cursor.run_once` / `resume_run_once` |
-| Claude | `claude --print --session-id <id>` | `claude --print --resume <id>` | CLI proof exists; managed turn adapter missing |
-| OpenCode | `opencode run` | `opencode run --session <id>` | CLI proof exists; managed turn adapter missing |
+| `codex_exec` | `codex exec` | `codex exec resume <thread>` | execution exists; promote behind common contract |
+| `cursor_acp` | ACP `session/new` | ACP `session/load` | execution exists; promote behind common contract |
+| `claude_print` | `claude --print --session-id` | `claude --print --resume` | feasibility evidence only; managed adapter and live resume proof needed |
+| `opencode_run` | `opencode run` | `opencode run --session` | feasibility evidence only; managed adapter and live resume proof needed |
 
-Cursor's ACP response already provides the exact terminal boundary through
-`stopReason: end_turn`. Codex exits after the exec turn. Claude stream JSON has
-a result event and then exits. OpenCode JSON run output terminates when the run
-completes.
+Console eligibility requires proven fresh-turn and same-thread resume behavior.
+Command help is evidence of feasibility, not release proof. Each adapter must
+also prove transcript binding, terminal detection, process cleanup, and the
+approval policy it uses. Command help is not a run canary.
 
-Therefore Claude and OpenCode are not blocked by a need for persistent
-processes. They need the same managed turn adapter, runtime-event capture,
-resume binding, interruption, and proof already built for Codex/Cursor.
+Helm adapters remain separate because they preserve the upstream interactive
+TUI. They are not selected by Console and do not share Console lifecycle policy.
 
-## API Shape
+## Durability and At-Most-Once Execution
 
-The canonical machine surface should express thread and turn operations rather
-than provider-process lifetime:
+The Runtime Host accepts `client_request_id` on turn creation. In one
+transaction it creates or returns the same input, turn, and run assignment.
+Repeating a client request never creates a second turn.
+
+The Machine Agent command id is the `run_id`. Before spawning, the Machine
+Agent durably claims that run id in its local invocation registry. A duplicate
+command returns the existing claim or result and never spawns again.
+
+The claim records `claimed`, `spawned`, and `terminal`, plus PID,
+boot/process-start identity, provider identity when known, and terminal result.
+After a crash, the Machine Agent reconciles the claim against the exact process
+group and transcript evidence. An ambiguous claimed invocation fails closed;
+it is never automatically replayed. A retry with a new turn is allowed only
+after reconciliation proves the prior prompt was not delivered.
+
+This durable registry is new Machine Agent work. The current in-memory
+completed-command cache and in-flight set are not substitutes. On control
+channel reconnect, the Runtime Host reconciles nonterminal turns from durable
+claim results rather than relying on the original live command-result frame.
+
+This is honest at-most-once process execution. Longhouse does not claim
+distributed exactly-once delivery where the provider offers no idempotency key.
+
+## Canonical API
 
 ```text
 POST /api/agents/sessions
-  create an empty Longhouse session + primary thread
+  create empty session + primary thread + execution target
 
 POST /api/agents/sessions/{session_id}/turns
-  durably accept a user message and start or queue the next turn
+  accept a normal message; start now or queue FIFO
 
-POST /api/agents/sessions/{session_id}/turns/{turn_id}/steer
-POST /api/agents/sessions/{session_id}/turns/{turn_id}/interrupt
+POST /api/agents/sessions/{session_id}/turns/current/interrupt
 ```
 
-Browser and iOS routes are user-auth veneers over the same service. Existing
-`/api/sessions/launch`, `/input`, `session.launch`, and `session.run_once`
-contracts may remain during migration, but clients must not keep choosing an
-execution lifetime.
+Browser and iOS routes are user-auth veneers over the same service.
 
-The Machine Agent converges on one semantic command:
+`session-identity-kernel.md` owns the full cross-mode capability projection.
+The Console-relevant user-facing subset stays small:
 
 ```text
-session.turn.start {
-  session_id,
-  thread_id,
-  turn_id,
-  client_request_id,
-  run_id,
-  provider,
-  cwd,
-  message,
-  provider_resume_identity?
+{
+  turn_state,                 # idle | queued | starting | active | draining
+  can_start_turn,
+  start_turn_blocked_by,
+  can_interrupt_active_turn,
 }
 ```
 
-The provider adapter decides fresh-versus-resume from the resume identity. In
-one Runtime Host transaction, create or return the `SessionTurn` keyed by
-`(thread_id, client_request_id)`, record the accepted message, create exactly
-one `SessionRun`, and set `SessionTurn.run_id` before dispatch. A terminal event
-applies only to the turn owning that `run_id`. Retrying a client request returns
-the same turn/run and never sends a second provider prompt.
+`can_start_turn` derives from the thread's durable execution target, current
+machine reachability, workspace validity, and a proven fresh/resume adapter.
+Interrupt is available while the Machine Agent owns the active invocation.
+Future proven active-turn controls extend this response additively.
 
-Runtime Host idempotency is not sufficient because command delivery can be
-ambiguous across a Machine Agent crash. The command id is deterministically
-derived from `run_id`. Before spawning, the Machine Agent durably claims that
-run id in its local invocation registry. Duplicate commands return the existing
-claim/result and never spawn again.
+Raw diagnostics may expose adapter, connection, resume, and process detail.
+Clients do not infer product actions from raw Machine Agent support strings.
 
-The claim records `claimed`, `spawned`, and `terminal` plus PID,
-boot/process-start identity, provider identity when known, and result metadata.
-Recovery reconciles the claim against the owned process group and transcript
-evidence. If a crash occurred between claim and provable spawn state, recovery
-fails closed instead of sending the prompt again. A new user retry is allowed
-only after reconciliation proves the prior invocation did not deliver it.
+## What We Delete
 
-## Invocation Cleanup
+After compatibility migration:
 
-For Console, terminal turn handling must:
+- Console `execution_lifetime` and its `one_shot` / `live_control` values;
+- launch-form `initial_prompt`, Task, and **Keep runtime open**;
+- provider-facing `session.launch`, `session.run_once`, and
+  `session.resume_run_once` as product semantics;
+- remote detached persistent Console launch paths, according to the disposition
+  table below;
+- Console use of `SessionLaunchAttempt`;
+- provider-level lifecycle booleans that duplicate adapter capabilities;
+- composer gating on `SessionConnection.can_send_input` for idle threads.
+- `wrap_console_run_once_prompt` / `console_prompt.rs`; the first provider
+  message is exactly the composer message, without hidden first-turn wrapping.
 
-1. record the provider terminal signal and enter `terminal_draining`;
-2. finish output and transcript capture;
-3. terminate any provider helper process owned only by that invocation;
-4. close the `SessionRun` with exit status;
-5. release/end its `SessionConnection`;
-6. finish or fail the `SessionTurn`;
-7. preserve provider resume identity and transcript evidence;
-8. release the execution owner and dispatch the next queued turn, if any.
+| Current path | Console disposition | Helm disposition |
+| --- | --- | --- |
+| Codex detached-UI bridge launch | delete after `codex_exec` cutover | keep Codex bridge + TUI attach |
+| Claude remote channel launch | delete after `claude_print` resume proof | keep `longhouse claude` channel/PTY |
+| OpenCode remote server-bridge launch | delete after `opencode_run` resume proof | keep `longhouse opencode` serve + TUI attach |
+| Cursor ACP | keep as Console adapter | n/a |
+| Cursor Helm PTY | n/a | keep |
 
-Cleanup is event-driven from the provider terminal signal and process exit,
-with a bounded orphan reaper as crash recovery. The reaper validates PID plus
-boot/process-start identity and terminates the owned invocation process group,
-not merely the direct CLI child. A periodic idle-session reaper must not be the
-primary lifecycle mechanism.
+Installed older Machine Agents may receive temporary command translation at one
+explicit compatibility boundary. New code must not add callers to the legacy
+commands.
 
-## Migration Plan
+## Implementation Plan
 
-### Slice 1 — Ship the first vertical turn
+### 1. Build the provider-neutral path behind the current UI
 
-- Adopt this spec and update `VISION.md`.
-- Add `can_start_turn` and the active-turn capabilities to the server-owned
-  projection.
-- Create an empty thread and navigate directly to its normal conversation.
-- Make the composer start/resume a turn when no turn is active.
-- Do not ship empty-thread creation before this composer dispatch path.
+- Persist the empty thread execution target.
+- Add the turn transaction, FIFO scheduler, execution-owner lease, and compact
+  capability projection.
+- Add `session.turn.start` with durable Machine Agent run claims.
+- Route existing `codex_exec` and `cursor_acp` through the adapter boundary.
+- Declare and prove each adapter's non-blocking approval policy.
+- Prove first turn, resume turn, queueing, drain/reap, duplicate dispatch, and
+  Machine Agent crash recovery.
 
-### Slice 2 — Remove process lifetime from the launch UI
+Do not expose empty-thread creation to users yet.
 
-- Remove **Task**, first-message, `execution_lifetime`, and **Keep runtime open**
-  from web/iOS launch UX after Slice 1 works end to end.
-- Serialize normal turns per thread; durably queue unsupported mid-turn sends.
-- Stop gating the idle composer on `SessionConnection.can_send_input`.
-- Keep current backend launch fields only as compatibility inputs.
+### 2. Reach provider parity
 
-### Slice 3 — Unify machine dispatch
+- Implement `claude_print` using stream JSON plus native session resume.
+- Implement `opencode_run` using JSON output plus native session resume.
+- Prove same-thread resume and transcript binding with real provider canaries.
+- Advertise only adapter controls that are actually proven.
 
-- Add `session.turn.start` and route Codex/Cursor through it.
-- Treat `SessionTurn` as the idempotent dispatch record and `SessionRun` as the
-  invocation record.
-- Remove new call sites of `session.launch` and `session.run_once`; retain
-  compatibility translation until all installed Machine Agents are upgraded.
+### 3. Cut over the product atomically
 
-### Slice 4 — Provider parity
+- Make **New Session** create the empty thread and open the conversation.
+- Make the composer create the first and later turns.
+- Remove Task, first-message, and process-lifetime controls from web and iOS.
+- Switch the machine directory to providers with proven Console adapters.
 
-- Implement Claude print/resume turn execution with channel/hook transcript
-  binding, pause answers, steering where supported, and terminal proof.
-- Implement OpenCode run/session execution with JSON event capture, abort, and
-  terminal proof.
-- Promote `run_once` evidence for both providers only after real resume-same-
-  thread tests pass.
+The UI cutover occurs only after the empty-thread composer path and intended
+provider set pass end-to-end tests.
 
-### Slice 5 — Delete process-lifetime product state
+### 4. Delete the old split
 
-- Remove Console `live_control` versus `one_shot` policy and UI copy.
-- Rename remaining internal `one_shot` concepts to `turn_scoped` or delete
-  them where the turn record makes the distinction redundant.
-- Delete per-thread idle bridges and their user-facing reattach semantics for
-  Console.
-- Keep Helm TUI attachment as an explicit terminal-owned transport.
+- Remove Console `live_control` and `one_shot` orchestration branches.
+- Remove the engine `COMMAND_RUN_ONCE` handler, `console_prompt.rs`, persistent
+  remote Console launch paths, and legacy capability inference.
+- Remove Console launch-attempt/readiness plumbing made redundant by turns.
+- Collapse provider manifest data to adapter identity, proof, and optional
+  active controls.
+- Keep Helm launch and control code explicit and separate.
 
-## Acceptance Criteria
+## Acceptance Gate
 
-- Creating a Console session starts no provider process.
-- Sending the first message starts one process and produces one turn.
-- After `end_turn`, output drains, the process is reaped, and only then does the
-  composer become ready for the next turn.
-- Sending a second message starts a new process and resumes the same provider
-  thread without transcript or tool-state loss.
-- A multi-minute tool call keeps one turn/invocation active until its result and
-  final assistant response arrive.
-- Mid-turn input steers or queues according to advertised capability; it never
-  starts a concurrent normal turn on the same thread.
-- Machine-offline state disables starting the turn without hiding or deleting
-  the thread.
-- Web and iOS consume the same server-owned capability and launch contract.
-- No Console UI exposes process lifetime.
+- Creating a Console session starts zero provider processes.
+- First send creates one turn and one invocation.
+- `end_turn` drains output, reaps the process group, and leaves the thread idle.
+- Second send creates a new invocation and resumes the same provider thread.
+- A long tool wait keeps exactly one active invocation until the turn settles.
+- Normal mid-turn sends queue FIFO; no Console steer affordance ships at
+  cutover.
+- Duplicate Runtime Host or Machine Agent delivery never spawns twice.
+- Machine-offline state preserves the thread and explains why a turn cannot
+  start.
+- Web and iOS consume the same server-owned contract.
+- No Console UI or public API exposes provider process lifetime.
 
 ## Non-Goals
 
 - Reconstructing provider-native state from normalized Longhouse messages.
-- Keeping a provider warm as a launch-latency optimization.
-- Parallel turns on one thread.
-- Turning background OS processes into a jobs product.
-- Changing the normal upstream TUI experience of Helm sessions.
+- Warm provider pools or process caches.
+- Parallel normal turns on one thread.
+- A general background-jobs product.
+- Changing the upstream TUI experience of Helm sessions.
