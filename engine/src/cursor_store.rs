@@ -436,7 +436,7 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2)",
-            rusqlite::params!["extra", vec![0, 0xff, 42]],
+            rusqlite::params!["extra", vec![0_u8, 0xff, 42]],
         )
         .unwrap();
         let mut root = vec![0x0a, 0x20];
