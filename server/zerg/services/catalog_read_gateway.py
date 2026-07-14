@@ -53,6 +53,13 @@ def enrolled_machines(owner_id: int) -> dict[str, Any]:
     return _call("machine.enrollment.list.v2", {"owner_id": owner_id})
 
 
+def rename_machine(*, owner_id: int, device_id: str, machine_name: str) -> dict[str, Any]:
+    return _call(
+        "machine.enrollment.rename.v2",
+        {"owner_id": owner_id, "device_id": device_id, "machine_name": machine_name},
+    )
+
+
 def active_owner_id() -> int | None:
     result = _call("auth.owner.get.v2", {})
     owner_id = result.get("owner_id")
@@ -125,6 +132,7 @@ __all__ = [
     "machine_operation",
     "machine_workspaces",
     "recent_visible_web_presence",
+    "rename_machine",
     "resolve_session_prefix",
     "session_snapshot",
     "session_batch_snapshot",

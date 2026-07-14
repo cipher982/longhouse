@@ -79,11 +79,19 @@ def _seed_user(SessionLocal, *, user_id: int = OWNER_ID, email: str | None = Non
         db.commit()
 
 
-def _seed_device_token(SessionLocal, device_id: str, *, owner_id: int = OWNER_ID, revoked: bool = False):
+def _seed_device_token(
+    SessionLocal,
+    device_id: str,
+    *,
+    owner_id: int = OWNER_ID,
+    machine_name: str | None = None,
+    revoked: bool = False,
+):
     with SessionLocal() as db:
         token = DeviceToken(
             owner_id=owner_id,
             device_id=device_id,
+            machine_name=machine_name,
             token_hash=f"hash-{device_id}-{owner_id}",
         )
         if revoked:
@@ -102,6 +110,7 @@ def _enrollments(SessionLocal, *, owner_id: int = OWNER_ID):
         return [
             {
                 "device_id": row.device_id,
+                "machine_name": row.machine_name,
                 "last_used_at": row.last_used_at,
                 "created_at": row.created_at,
             }
@@ -192,6 +201,33 @@ def test_directory_surfaces_offline_enrolled_machine_with_empty_supports(tmp_pat
     assert entries[0].launch_blocked_by == "control_down"
     assert entries[0].launch.providers == ()
     assert entries[0].launch.blocked_by == "control_down"
+
+
+def test_directory_preserves_durable_name_while_machine_is_offline(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    _seed_device_token(SessionLocal, "cube-canary", machine_name="cube")
+
+    entries = build_machines_directory(
+        owner_id=OWNER_ID,
+        enrollments=_enrollments(SessionLocal),
+        registry=MachineControlChannelRegistry(),
+    )
+
+    assert entries[0].device_id == "cube-canary"
+    assert entries[0].machine_name == "cube"
+
+
+def test_durable_name_wins_over_connected_hello_label(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    _seed_device_token(SessionLocal, "cube-canary", machine_name="cube")
+    registry = MachineControlChannelRegistry()
+    _register(registry, owner_id=OWNER_ID, device_id="cube-canary", supports=("codex.run_once",))
+
+    entries = build_machines_directory(owner_id=OWNER_ID, enrollments=_enrollments(SessionLocal), registry=registry)
+
+    assert entries[0].machine_name == "cube"
 
 
 def test_directory_surfaces_online_machine_without_codex_launch_as_blocked(tmp_path):
@@ -476,6 +512,24 @@ def test_agents_machines_route_matches_timeline_route(tmp_path):
         "default_provider": None,
         "default_execution_lifetime": None,
     }
+
+
+def test_machine_rename_updates_display_name_without_changing_routing_id(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    _seed_device_token(SessionLocal, "cube-canary")
+    client, api_app = _make_agents_client(SessionLocal)
+    try:
+        response = client.patch("/api/agents/machines/cube-canary", json={"machine_name": "cube"})
+        directory = client.get("/api/agents/machines")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"device_id": "cube-canary", "machine_name": "cube", "changed": True}
+    assert directory.status_code == 200, directory.text
+    assert directory.json()["machines"][0]["device_id"] == "cube-canary"
+    assert directory.json()["machines"][0]["machine_name"] == "cube"
 
 
 def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):

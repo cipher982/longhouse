@@ -91,6 +91,16 @@ class MachineDirectoryResponse(UTCBaseModel):
     machines: list[MachineDirectoryEntry] = Field(default_factory=list)
 
 
+class MachineRenameRequest(UTCBaseModel):
+    machine_name: str = Field(..., min_length=1, max_length=255, description="Durable human-facing machine label.")
+
+
+class MachineRenameResponse(UTCBaseModel):
+    device_id: str
+    machine_name: str
+    changed: bool
+
+
 class WorkspaceSuggestion(UTCBaseModel):
     path: str = Field(..., description="Absolute working directory on the target machine.")
     label: str = Field(..., description="Display label: git repo+branch when known, else compact path.")

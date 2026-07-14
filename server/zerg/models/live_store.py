@@ -160,6 +160,7 @@ class LiveDeviceToken(LiveBase):
     id = Column(String(36), primary_key=True)
     owner_id = Column(Integer, nullable=False, index=True)
     device_id = Column(String(255), nullable=False)
+    machine_name = Column(String(255), nullable=True)
     token_hash = Column(String(64), nullable=False, unique=True, index=True)
     created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     last_used_at = Column(DateTime(timezone=True), nullable=True)

@@ -8,6 +8,7 @@ operator dashboards.
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -29,6 +30,8 @@ from zerg.schemas.machines import ArchiveBacklogResponse
 from zerg.schemas.machines import MachineControlOperationResponse
 from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
+from zerg.schemas.machines import MachineRenameRequest
+from zerg.schemas.machines import MachineRenameResponse
 from zerg.schemas.machines import ProviderLiveProofAcceptedResponse
 from zerg.schemas.machines import ProviderLiveProofRequest
 from zerg.schemas.machines import WorkspaceSuggestion
@@ -42,6 +45,7 @@ from zerg.services.catalog_read_gateway import active_owner_id
 from zerg.services.catalog_read_gateway import enrolled_machines
 from zerg.services.catalog_read_gateway import machine_operation
 from zerg.services.catalog_read_gateway import machine_workspaces
+from zerg.services.catalog_read_gateway import rename_machine
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.machine_control_operations import ActiveMachineControlOperationError
 from zerg.services.machine_control_operations import create_live_provider_live_proof_operation
@@ -55,6 +59,7 @@ from zerg.services.machines_directory import build_machines_directory
 from zerg.services.observability_views import build_machine_health_list_response
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.workspace_suggestions import build_workspace_suggestions
+from zerg.services.write_serializer import get_catalog_write_serializer
 from zerg.services.write_serializer import get_live_write_serializer
 
 router = APIRouter(prefix="/agents/machines", tags=["agents"])
@@ -94,6 +99,7 @@ def _legacy_enrollments(db: Session, owner_id: int) -> list[dict[str, object]]:
     return [
         {
             "device_id": row.device_id,
+            "machine_name": row.machine_name,
             "last_used_at": row.last_used_at,
             "created_at": row.created_at,
         }
@@ -124,6 +130,58 @@ def list_machines(
         raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
     entries = build_machines_directory(owner_id=owner_id, enrollments=enrollments)
     return MachineDirectoryResponse(machines=[MachineDirectoryEntry(**entry.to_response()) for entry in entries])
+
+
+@router.patch("/{device_id}", response_model=MachineRenameResponse)
+async def update_machine_name(
+    device_id: str,
+    request: MachineRenameRequest,
+    db: Session | None = Depends(_machine_read_db_dependency),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> MachineRenameResponse:
+    """Rename one enrolled machine without changing its routing identity."""
+    owner_id = _request_owner_id(db, device_token)
+    machine_name = request.machine_name.strip()
+    if database_module.live_catalog_enabled():
+        try:
+            result = await asyncio.to_thread(
+                rename_machine,
+                owner_id=owner_id,
+                device_id=device_id,
+                machine_name=machine_name,
+            )
+        except CatalogReadError as exc:
+            raise HTTPException(status_code=503, detail={"code": exc.code, "message": exc.message}) from exc
+        if result.get("found") is not True:
+            raise HTTPException(status_code=404, detail="Machine not found")
+        return MachineRenameResponse(device_id=device_id, machine_name=machine_name, changed=result.get("changed") is True)
+
+    assert db is not None
+    rows = (
+        db.query(DeviceToken)
+        .filter(
+            DeviceToken.owner_id == owner_id,
+            DeviceToken.device_id == device_id,
+            DeviceToken.revoked_at.is_(None),
+        )
+        .all()
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Machine not found")
+    changed = any(row.machine_name != machine_name for row in rows)
+    if changed:
+        serializer = get_catalog_write_serializer()
+
+        def _rename(wdb: Session) -> None:
+            wdb.query(DeviceToken).filter(
+                DeviceToken.owner_id == owner_id,
+                DeviceToken.device_id == device_id,
+                DeviceToken.revoked_at.is_(None),
+            ).update({DeviceToken.machine_name: machine_name}, synchronize_session=False)
+
+        await serializer.execute_or_direct(_rename, db, label="machine-rename")
+    return MachineRenameResponse(device_id=device_id, machine_name=machine_name, changed=changed)
 
 
 @router.get("/health", response_model=MachineHealthListResponse)

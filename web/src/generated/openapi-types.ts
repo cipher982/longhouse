@@ -2509,6 +2509,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/machines/{device_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update Machine Name
+         * @description Rename one enrolled machine without changing its routing identity.
+         */
+        patch: operations["update_machine_name_agents_machines__device_id__patch"];
+        trace?: never;
+    };
     "/api/agents/machines/health": {
         parameters: {
             query?: never;
@@ -5797,6 +5817,23 @@ export interface components {
              * Format: date-time
              */
             received_at: string;
+        };
+        /** MachineRenameRequest */
+        MachineRenameRequest: {
+            /**
+             * Machine Name
+             * @description Durable human-facing machine label.
+             */
+            machine_name: string;
+        };
+        /** MachineRenameResponse */
+        MachineRenameResponse: {
+            /** Device Id */
+            device_id: string;
+            /** Machine Name */
+            machine_name: string;
+            /** Changed */
+            changed: boolean;
         };
         /**
          * ManagedLocalSessionLaunchResponse
@@ -15094,6 +15131,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MachineDirectoryResponse"];
+                };
+            };
+        };
+    };
+    update_machine_name_agents_machines__device_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MachineRenameRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachineRenameResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

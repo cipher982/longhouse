@@ -1264,6 +1264,7 @@ class CatalogStore:
                     {
                         "id": str(row["id"]),
                         "device_id": str(row["device_id"]),
+                        "machine_name": row["machine_name"],
                         "created_at": _encode_datetime(row["created_at"]),
                         "last_used_at": _encode_datetime(row["last_used_at"]),
                         "revoked_at": _encode_datetime(row["revoked_at"]),
@@ -1321,6 +1322,7 @@ class CatalogStore:
                     id=token_id,
                     owner_id=owner_id,
                     device_id=device_id,
+                    machine_name=None,
                     token_hash=token_hash,
                     created_at=now,
                 )
@@ -1341,6 +1343,43 @@ class CatalogStore:
                 "token_id": token_id,
                 "device_id": device_id,
                 "created_at": now.isoformat(),
+                "commit_seq": str(commit_seq),
+            }
+
+    def rename_machine(self, *, owner_id: int, device_id: str, machine_name: str) -> dict[str, Any]:
+        """Set one durable display name across active credentials for a machine."""
+
+        token_table = LiveDeviceToken.__table__
+        now = datetime.now(UTC)
+        with _write_transaction(self.engine) as connection:
+            rows = connection.execute(
+                select(token_table.c.id, token_table.c.machine_name).where(
+                    token_table.c.owner_id == owner_id,
+                    token_table.c.device_id == device_id,
+                    token_table.c.revoked_at.is_(None),
+                )
+            ).all()
+            if not rows:
+                return {"found": False, "changed": False, "commit_seq": str(_current_commit_seq(connection))}
+            changed = any(row.machine_name != machine_name for row in rows)
+            if changed:
+                connection.execute(
+                    update(token_table)
+                    .where(
+                        token_table.c.owner_id == owner_id,
+                        token_table.c.device_id == device_id,
+                        token_table.c.revoked_at.is_(None),
+                    )
+                    .values(machine_name=machine_name)
+                )
+                commit_seq = _advance_commit_seq(connection, now)
+            else:
+                commit_seq = _current_commit_seq(connection)
+            return {
+                "found": True,
+                "changed": changed,
+                "device_id": device_id,
+                "machine_name": machine_name,
                 "commit_seq": str(commit_seq),
             }
 
@@ -3531,7 +3570,7 @@ class CatalogStore:
         token = LiveDeviceToken.__table__
         with _read_snapshot(self.engine) as connection:
             rows = connection.execute(
-                select(token.c.device_id, token.c.last_used_at, token.c.created_at)
+                select(token.c.device_id, token.c.machine_name, token.c.last_used_at, token.c.created_at)
                 .where(token.c.owner_id == owner_id, token.c.revoked_at.is_(None))
                 .order_by(token.c.device_id.asc(), token.c.last_used_at.desc(), token.c.created_at.desc())
                 .limit(MACHINE_ENROLLMENT_LIMIT + 1)
@@ -3546,7 +3585,8 @@ class CatalogStore:
                 }
             latest: dict[str, datetime | None] = {}
             created: dict[str, datetime | None] = {}
-            for raw_device_id, last_used_at, created_at in rows:
+            names: dict[str, str | None] = {}
+            for raw_device_id, machine_name, last_used_at, created_at in rows:
                 key = str(raw_device_id or "")
                 if not key:
                     continue
@@ -3554,9 +3594,13 @@ class CatalogStore:
                 if key not in latest or (candidate is not None and (latest[key] is None or candidate > latest[key])):
                     latest[key] = candidate
                     created[key] = _as_aware_utc(created_at)
+                clean_name = str(machine_name or "").strip() or None
+                if clean_name is not None and key not in names:
+                    names[key] = clean_name
             enrollments = [
                 {
                     "device_id": key,
+                    "machine_name": names.get(key),
                     "last_used_at": _encode_datetime(latest[key]),
                     "created_at": _encode_datetime(created[key]),
                 }

@@ -124,19 +124,22 @@ def _launch_projection(
     )
 
 
-def _enrolled_device_ids(enrollments: list[dict[str, Any]]) -> dict[str, datetime | None]:
+def _enrolled_device_ids(enrollments: list[dict[str, Any]]) -> dict[str, tuple[datetime | None, str | None]]:
     """Normalize the catalogd enrollment snapshot for directory merging."""
 
-    latest: dict[str, datetime | None] = {}
+    latest: dict[str, tuple[datetime | None, str | None]] = {}
     for enrollment in enrollments:
         device_id = enrollment.get("device_id")
         if not device_id:
             continue
         key = str(device_id)
         best = _decode_datetime(enrollment.get("last_used_at") or enrollment.get("created_at"))
+        name = str(enrollment.get("machine_name") or "").strip() or None
         existing = latest.get(key)
-        if existing is None or (best is not None and best > existing):
-            latest[key] = best
+        if existing is None or (best is not None and (existing[0] is None or best > existing[0])):
+            latest[key] = (best, name or (existing[1] if existing else None))
+        elif name is not None and existing[1] is None:
+            latest[key] = (existing[0], name)
     return latest
 
 
@@ -156,6 +159,7 @@ def build_machines_directory(
     """
     reg = registry or get_machine_control_channel_registry()
     seen: dict[str, MachineEntry] = {}
+    enrolled = _enrolled_device_ids(enrollments)
 
     # Online first — authoritative for supports, engine_build, and
     # last_seen_at.
@@ -176,7 +180,7 @@ def build_machines_directory(
         launch = _launch_projection(control_operations_by_provider, connected=True)
         entry = MachineEntry(
             device_id=conn_info.device_id,
-            machine_name=conn_info.machine_name or conn_info.device_id,
+            machine_name=enrolled.get(conn_info.device_id, (None, None))[1] or conn_info.machine_name or conn_info.device_id,
             online=True,
             control_channel_status=CONTROL_CONNECTED,
             supports=supports,
@@ -192,12 +196,12 @@ def build_machines_directory(
 
     # Offline enrolled — fill in anything not already present from control
     # channel registry.
-    for device_id, last_used in _enrolled_device_ids(enrollments).items():
+    for device_id, (last_used, machine_name) in enrolled.items():
         if device_id in seen:
             continue
         seen[device_id] = MachineEntry(
             device_id=device_id,
-            machine_name=device_id,
+            machine_name=machine_name or device_id,
             online=False,
             control_channel_status=CONTROL_DISCONNECTED,
             supports=(),

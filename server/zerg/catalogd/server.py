@@ -327,6 +327,8 @@ class CatalogDaemon:
             return await self._resolve_session_prefix(request)
         if request.method == "machine.enrollment.list.v2":
             return await self._list_machine_enrollments(request)
+        if request.method == "machine.enrollment.rename.v2":
+            return await self._rename_machine_enrollment(request)
         if request.method == "machine.workspace.list.v2":
             return await self._list_machine_workspaces(request)
         if request.method == "backup.snapshot.create.v2":
@@ -1719,6 +1721,27 @@ class CatalogDaemon:
         result = await self._run_store(self._store.list_machine_enrollments, owner_id=owner_id)
         if result.get("limit_exceeded") is True:
             return self._error(request, "resource_exhausted", "machine enrollment list exceeds the catalog bound")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _rename_machine_enrollment(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"owner_id", "device_id", "machine_name"}:
+            return self._error(request, "invalid_request", "machine.enrollment.rename.v2 has invalid parameters")
+        owner_id = request.params["owner_id"]
+        device_id = request.params["device_id"]
+        machine_name = request.params["machine_name"]
+        if type(owner_id) is not int or owner_id <= 0:
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        if not isinstance(device_id, str) or not 1 <= len(device_id) <= 255:
+            return self._error(request, "invalid_request", "device_id must contain 1 to 255 characters")
+        if not isinstance(machine_name, str) or not 1 <= len(machine_name) <= 255 or machine_name != machine_name.strip():
+            return self._error(request, "invalid_request", "machine_name must be 1 to 255 trimmed characters")
+        assert self._store is not None
+        result = await self._run_store(
+            self._store.rename_machine,
+            owner_id=owner_id,
+            device_id=device_id,
+            machine_name=machine_name,
+        )
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _list_machine_workspaces(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

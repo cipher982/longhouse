@@ -43,6 +43,7 @@ class DeviceToken(Base):
 
     # Device identification
     device_id = Column(String(255), nullable=False)  # Hostname or user-provided name
+    machine_name = Column(String(255), nullable=True)  # Optional durable human-facing label
 
     # Token hash - SHA-256 hash of the plain token (never store plain token)
     token_hash = Column(String(64), nullable=False, unique=True, index=True)

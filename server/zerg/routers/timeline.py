@@ -137,6 +137,7 @@ def _legacy_machine_enrollments(db: Session, *, owner_id: int) -> list[dict[str,
     return [
         {
             "device_id": row.device_id,
+            "machine_name": row.machine_name,
             "last_used_at": row.last_used_at,
             "created_at": row.created_at,
         }
