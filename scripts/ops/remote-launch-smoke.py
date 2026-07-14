@@ -272,10 +272,21 @@ print("revoked")
 
 
 def machine_supports(machine: dict[str, Any], capability: str) -> bool:
+    provider, separator, operation = capability.partition(".")
+    if separator and operation in {"launch", "run_once"}:
+        launch = machine.get("launch")
+        options = launch.get("providers") if isinstance(launch, dict) else None
+        lifetime = "live_control" if operation == "launch" else "one_shot"
+        if isinstance(options, list):
+            return any(
+                isinstance(option, dict)
+                and option.get("provider") == provider
+                and lifetime in (option.get("execution_lifetimes") or [])
+                for option in options
+            )
+        return False
     supports = machine.get("supports")
     if isinstance(supports, list) and capability in {str(item) for item in supports}:
-        return True
-    if capability == CODEX_LAUNCH_CAPABILITY and machine.get("can_launch_codex") is True:
         return True
     return False
 

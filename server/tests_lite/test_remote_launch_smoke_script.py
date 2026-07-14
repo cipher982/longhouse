@@ -70,12 +70,17 @@ def test_discover_machine_picks_online_codex_capable_machine(monkeypatch) -> Non
                         "online": False,
                         "supports": ["codex.launch"],
                         "can_launch_codex": True,
+                        "launch": {"providers": [], "blocked_by": "control_down"},
                     },
                     {
                         "device_id": "claude-only",
                         "online": True,
                         "supports": ["claude.launch"],
                         "can_launch_codex": False,
+                        "launch": {
+                            "providers": [{"provider": "claude", "execution_lifetimes": ["live_control"]}],
+                            "blocked_by": None,
+                        },
                     },
                     {
                         "device_id": "demo-machine",
@@ -83,6 +88,10 @@ def test_discover_machine_picks_online_codex_capable_machine(monkeypatch) -> Non
                         "online": True,
                         "supports": ["codex.launch"],
                         "can_launch_codex": True,
+                        "launch": {
+                            "providers": [{"provider": "codex", "execution_lifetimes": ["live_control"]}],
+                            "blocked_by": None,
+                        },
                     },
                 ]
             },
@@ -107,12 +116,20 @@ def test_discover_machine_can_require_run_once_capability(monkeypatch) -> None:
                         "online": True,
                         "supports": ["codex.launch"],
                         "can_launch_codex": True,
+                        "launch": {
+                            "providers": [{"provider": "codex", "execution_lifetimes": ["live_control"]}],
+                            "blocked_by": None,
+                        },
                     },
                     {
                         "device_id": "run-once",
                         "online": True,
                         "supports": ["codex.run_once"],
                         "can_launch_codex": False,
+                        "launch": {
+                            "providers": [{"provider": "codex", "execution_lifetimes": ["one_shot"]}],
+                            "blocked_by": None,
+                        },
                     },
                 ]
             },
