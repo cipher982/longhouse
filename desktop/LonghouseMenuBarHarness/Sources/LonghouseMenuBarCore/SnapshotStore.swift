@@ -259,9 +259,13 @@ public final class SnapshotStore: ObservableObject {
                 guard !Task.isCancelled, let self, let snapshot = self.snapshot else { return }
                 switch event {
                 case let .delta(projection):
-                    self.snapshot = snapshot.applying(projection)
+                    let updated = snapshot.applying(projection)
+                    self.snapshot = updated
+                    self.persistCachedSnapshot(updated)
                 case let .remove(sessionId):
-                    self.snapshot = snapshot.removingSession(sessionId)
+                    let updated = snapshot.removingSession(sessionId)
+                    self.snapshot = updated
+                    self.persistCachedSnapshot(updated)
                 }
             }
         }
