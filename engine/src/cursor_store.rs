@@ -118,8 +118,12 @@ struct RawRootObservationRecord<'a> {
 /// renderer concern, not a source-capture failure: the raw meta/blob rows are
 /// still returned with an explicit ordering gap.
 pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
-    let conn = open_readonly(path)?;
-    let meta_rows = read_meta_rows(&conn)?;
+    let mut conn = open_readonly(path)?;
+    // Keep `meta` and `blobs` in one WAL-consistent snapshot. In autocommit
+    // mode SQLite could otherwise advance between the two SELECTs while
+    // cursor-agent is writing a new root.
+    let snapshot = conn.transaction()?;
+    let meta_rows = read_meta_rows(&snapshot)?;
     let root_meta = meta_rows
         .iter()
         .find(|row| row.key == "0")
@@ -128,7 +132,7 @@ pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
     let conversation_uuid = required_string(&root_metadata, "agentId")?;
     let root_blob_id = required_string(&root_metadata, "latestRootBlobId")?;
     let created_at_ms = root_metadata.get("createdAt").and_then(Value::as_i64);
-    let blob_rows = read_blob_rows(&conn)?;
+    let blob_rows = read_blob_rows(&snapshot)?;
     let root_blob = blob_rows
         .iter()
         .find(|row| row.id == root_blob_id)
@@ -139,6 +143,7 @@ pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
             reason: error.to_string(),
         },
     };
+    snapshot.commit()?;
     Ok(CursorStoreSnapshot {
         conversation_uuid,
         root_blob_id,
