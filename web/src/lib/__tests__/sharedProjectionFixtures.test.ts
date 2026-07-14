@@ -113,6 +113,7 @@ describe("shared session projection fixtures", () => {
     "context-boundary-noise-collapse.json",
     "session-action-interrupt.json",
     "exploration-run-web-breaks.json",
+    "parallel-tool-id-pairing.json",
   ])(
     "matches %s",
     (fixtureName) => {

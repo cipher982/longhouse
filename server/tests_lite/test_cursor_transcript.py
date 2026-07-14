@@ -208,6 +208,90 @@ def test_tool_call_result_pairing(tmp_path: Path) -> None:
     assert tool_result.tool_output_text == "hi"
 
 
+def test_multi_tool_call_blocks_in_one_assistant_message(tmp_path: Path) -> None:
+    """One assistant blob with N tool-call blocks → N call events; results by toolCallId."""
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "look around"}]},
+        {
+            "role": "assistant",
+            "id": "1",
+            "content": [
+                {"type": "text", "text": "searching"},
+                {
+                    "type": "tool-call",
+                    "toolCallId": "tc_a",
+                    "toolName": "grep",
+                    "args": {"pattern": "Longhouse"},
+                },
+                {
+                    "type": "tool-call",
+                    "toolCallId": "tc_b",
+                    "toolName": "grep",
+                    "args": {"pattern": "tool_call"},
+                },
+                {
+                    "type": "tool-call",
+                    "toolCallId": "tc_c",
+                    "toolName": "read_file",
+                    "args": {"path": "/repo/README.md"},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "id": "tc_b",
+            "content": [
+                {
+                    "type": "tool-result",
+                    "toolCallId": "tc_b",
+                    "toolName": "grep",
+                    "result": "match-b",
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "id": "tc_a",
+            "content": [
+                {
+                    "type": "tool-result",
+                    "toolCallId": "tc_a",
+                    "toolName": "grep",
+                    "result": "match-a",
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "id": "tc_c",
+            "content": [
+                {
+                    "type": "tool-result",
+                    "toolCallId": "tc_c",
+                    "toolName": "read_file",
+                    "result": "# README",
+                }
+            ],
+        },
+    ]
+    store = _write_store(
+        tmp_path / "sess",
+        agent_id="multi-001",
+        created_at_ms=1_700_000_000_000,
+        updated_at_ms=1_700_000_060_000,
+        messages=messages,
+    )
+    result = decode_store_db(store)
+    assert result.session is not None
+    events = result.session.events
+    calls = [e for e in events if e.role == "assistant" and e.tool_name]
+    results = [e for e in events if e.role == "tool"]
+    assert [c.tool_call_id for c in calls] == ["tc_a", "tc_b", "tc_c"]
+    assert [c.tool_name for c in calls] == ["grep", "grep", "read_file"]
+    assert [r.tool_call_id for r in results] == ["tc_b", "tc_a", "tc_c"]
+    assert [r.tool_output_text for r in results] == ["match-b", "match-a", "# README"]
+
+
 def test_reasoning_preserved_as_first_class(tmp_path: Path) -> None:
     store = _write_store(
         tmp_path / "sess",

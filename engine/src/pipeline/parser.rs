@@ -2329,18 +2329,17 @@ fn extract_codex_events(
             let call_id = payload.call_id.as_deref().unwrap_or("");
             let uuid_suffix = if call_id.is_empty() { "0" } else { call_id };
 
-            // Resolve the tool-result text. String outputs are opaque (kept as-is,
-            // even if they happen to look like JSON). Array outputs are content
-            // items: join their text, and when the only content is image(s), emit a
-            // placeholder so the result event still exists. The image bytes
-            // themselves are captured by source-line media redaction and bound back
-            // to this event via its source coordinate, so we do not extract media here.
+            // Empty success outputs must still emit a result event so the call
+            // does not look orphaned/running forever (same contract as Claude
+            // EMPTY_TOOL_RESULT_PLACEHOLDER). Missing `output` entirely is still
+            // treated as incomplete evidence and skipped.
             let tool_output_text = match payload.output.as_ref() {
                 Some(CodexFunctionOutput::Text(text)) => {
                     if text.is_empty() {
-                        return;
+                        EMPTY_TOOL_RESULT_PLACEHOLDER.to_string()
+                    } else {
+                        text.clone()
                     }
-                    text.clone()
                 }
                 Some(CodexFunctionOutput::Items(items)) => {
                     let image_count = items
@@ -2360,7 +2359,7 @@ fn extract_codex_events(
                     } else if image_count > 1 {
                         format!("[{} image results]", image_count)
                     } else {
-                        return;
+                        EMPTY_TOOL_RESULT_PLACEHOLDER.to_string()
                     }
                 }
                 None => return,
@@ -2922,6 +2921,40 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_multi_tool_use_explodes_and_pairs_by_id_when_reordered() {
+        // One assistant JSONL record with N tool_use blocks → N call events.
+        // Results arriving out of order must still carry tool_use_id → tool_call_id.
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "claude-multi.jsonl",
+            &[
+                r#"{"type":"assistant","uuid":"a-multi","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"text","text":"Looking around"},{"type":"tool_use","id":"toolu_grep1","name":"Grep","input":{"pattern":"Longhouse"}},{"type":"tool_use","id":"toolu_grep2","name":"Grep","input":{"pattern":"tool_call"}},{"type":"tool_use","id":"toolu_read1","name":"Read","input":{"file_path":"/repo/README.md"}}]}}"#,
+                r#"{"type":"user","uuid":"u-r2","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_grep2","content":"match-b"}]}}"#,
+                r#"{"type":"user","uuid":"u-r1","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_grep1","content":"match-a"}]}}"#,
+                r##"{"type":"user","uuid":"u-r3","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_read1","content":"# README"}]}}"##,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 7);
+
+        assert_eq!(result.events[0].content_text.as_deref(), Some("Looking around"));
+        assert_eq!(result.events[1].tool_name.as_deref(), Some("Grep"));
+        assert_eq!(result.events[1].tool_call_id.as_deref(), Some("toolu_grep1"));
+        assert_eq!(result.events[2].tool_call_id.as_deref(), Some("toolu_grep2"));
+        assert_eq!(result.events[3].tool_name.as_deref(), Some("Read"));
+        assert_eq!(result.events[3].tool_call_id.as_deref(), Some("toolu_read1"));
+
+        assert_eq!(result.events[4].role, Role::Tool);
+        assert_eq!(result.events[4].tool_call_id.as_deref(), Some("toolu_grep2"));
+        assert_eq!(result.events[4].tool_output_text.as_deref(), Some("match-b"));
+        assert_eq!(result.events[5].tool_call_id.as_deref(), Some("toolu_grep1"));
+        assert_eq!(result.events[5].tool_output_text.as_deref(), Some("match-a"));
+        assert_eq!(result.events[6].tool_call_id.as_deref(), Some("toolu_read1"));
+    }
+
+    #[test]
     fn test_raw_line_dedup() {
         let dir = tempfile::tempdir().unwrap();
         // Assistant line with 3 content items → should yield 3 events, only first has raw_line
@@ -3197,6 +3230,61 @@ mod tests {
             Some("file1.txt\nfile2.txt")
         );
         assert_eq!(result.events[1].raw_type, "codex_function_call_output");
+    }
+
+    #[test]
+    fn test_codex_empty_function_call_output_emits_placeholder() {
+        // Empty stdout is still a completed tool result. Historically the Codex
+        // parser dropped empty string outputs, leaving the call unpaired.
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-00000000empty.jsonl",
+            &[
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:13Z","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"true\"}","call_id":"call_empty"}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:14Z","payload":{"type":"function_call_output","call_id":"call_empty","output":""}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:15Z","payload":{"type":"function_call_output","call_id":"call_empty_items","output":[]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 3);
+        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("call_empty"));
+        assert_eq!(result.events[1].role, Role::Tool);
+        assert_eq!(result.events[1].tool_call_id.as_deref(), Some("call_empty"));
+        assert_eq!(
+            result.events[1].tool_output_text.as_deref(),
+            Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
+        );
+        assert_eq!(result.events[2].tool_call_id.as_deref(), Some("call_empty_items"));
+        assert_eq!(
+            result.events[2].tool_output_text.as_deref(),
+            Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
+        );
+    }
+
+    #[test]
+    fn test_codex_multi_function_calls_preserve_call_ids_when_reordered() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-00000000multi.jsonl",
+            &[
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:15Z","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"echo a\"}","call_id":"call_a"}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:16Z","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"echo b\"}","call_id":"call_b"}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:17Z","payload":{"type":"function_call_output","call_id":"call_b","output":"b"}}"#,
+                r#"{"type":"response_item","timestamp":"2026-02-15T17:06:18Z","payload":{"type":"function_call_output","call_id":"call_a","output":"a"}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 4);
+        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("call_a"));
+        assert_eq!(result.events[1].tool_call_id.as_deref(), Some("call_b"));
+        assert_eq!(result.events[2].tool_call_id.as_deref(), Some("call_b"));
+        assert_eq!(result.events[2].tool_output_text.as_deref(), Some("b"));
+        assert_eq!(result.events[3].tool_call_id.as_deref(), Some("call_a"));
+        assert_eq!(result.events[3].tool_output_text.as_deref(), Some("a"));
     }
 
     #[test]

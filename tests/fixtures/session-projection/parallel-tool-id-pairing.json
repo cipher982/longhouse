@@ -1,0 +1,134 @@
+{
+  "name": "parallel-tool-id-pairing",
+  "description": "Two same-turn Grep calls with out-of-order results pair by tool_call_id (not FIFO) and collapse into one exploration run.",
+  "projection": {
+    "root_session_id": "fixture-parallel-tools",
+    "focus_session_id": "fixture-parallel-tools",
+    "head_session_id": "fixture-parallel-tools",
+    "path_session_ids": ["fixture-parallel-tools"],
+    "total": 6,
+    "page_offset": 0,
+    "branch_mode": "head",
+    "abandoned_events": 0,
+    "items": [
+      {
+        "kind": "event",
+        "session_id": "fixture-parallel-tools",
+        "timestamp": "2026-05-15T20:00:00Z",
+        "event": {
+          "id": 1,
+          "role": "user",
+          "content_text": "Search both patterns.",
+          "tool_name": null,
+          "tool_input_json": null,
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "timestamp": "2026-05-15T20:00:00Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-parallel-tools",
+        "timestamp": "2026-05-15T20:00:01Z",
+        "event": {
+          "id": 2,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "Grep",
+          "tool_input_json": {"pattern": "alpha"},
+          "tool_output_text": null,
+          "tool_call_id": "grep-a",
+          "timestamp": "2026-05-15T20:00:01Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-parallel-tools",
+        "timestamp": "2026-05-15T20:00:01Z",
+        "event": {
+          "id": 3,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "Grep",
+          "tool_input_json": {"pattern": "beta"},
+          "tool_output_text": null,
+          "tool_call_id": "grep-b",
+          "timestamp": "2026-05-15T20:00:01Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-parallel-tools",
+        "timestamp": "2026-05-15T20:00:02Z",
+        "event": {
+          "id": 4,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "Grep",
+          "tool_input_json": null,
+          "tool_output_text": "beta hits",
+          "tool_call_id": "grep-b",
+          "timestamp": "2026-05-15T20:00:02Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-parallel-tools",
+        "timestamp": "2026-05-15T20:00:03Z",
+        "event": {
+          "id": 5,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "Grep",
+          "tool_input_json": null,
+          "tool_output_text": "alpha hits",
+          "tool_call_id": "grep-a",
+          "timestamp": "2026-05-15T20:00:03Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-parallel-tools",
+        "timestamp": "2026-05-15T20:00:04Z",
+        "event": {
+          "id": 6,
+          "role": "assistant",
+          "content_text": "Found both.",
+          "tool_name": null,
+          "tool_input_json": null,
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "timestamp": "2026-05-15T20:00:04Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      }
+    ]
+  },
+  "expectations": {
+    "rows": [
+      {"kind": "message", "role": "user", "event_id": 1},
+      {
+        "kind": "noise_group",
+        "tool_names": ["Grep", "Grep"],
+        "call_event_ids": [2, 3],
+        "result_event_ids": [5, 4],
+        "pairings": ["id", "id"]
+      },
+      {"kind": "message", "role": "assistant", "event_id": 6}
+    ],
+    "tool_count": 2,
+    "noise_group_count": 1,
+    "orphan_tool_ids": []
+  }
+}

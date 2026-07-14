@@ -1,0 +1,4 @@
+{"type":"assistant","uuid":"a-multi","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"text","text":"Looking around"},{"type":"tool_use","id":"toolu_grep1","name":"Grep","input":{"pattern":"Longhouse"}},{"type":"tool_use","id":"toolu_grep2","name":"Grep","input":{"pattern":"tool_call"}},{"type":"tool_use","id":"toolu_read1","name":"Read","input":{"file_path":"/repo/README.md"}}]}}
+{"type":"user","uuid":"u-r2","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_grep2","content":"match-b"}]}}
+{"type":"user","uuid":"u-r1","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_grep1","content":"match-a"}]}}
+{"type":"user","uuid":"u-r3","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_read1","content":"# README"}]}}

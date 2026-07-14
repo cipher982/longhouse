@@ -1,0 +1,6 @@
+{"type":"response_item","timestamp":"2026-02-15T17:06:13Z","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"true\"}","call_id":"call_empty"}}
+{"type":"response_item","timestamp":"2026-02-15T17:06:14Z","payload":{"type":"function_call_output","call_id":"call_empty","output":""}}
+{"type":"response_item","timestamp":"2026-02-15T17:06:15Z","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"echo a\"}","call_id":"call_a"}}
+{"type":"response_item","timestamp":"2026-02-15T17:06:16Z","payload":{"type":"function_call","name":"shell","arguments":"{\"cmd\":\"echo b\"}","call_id":"call_b"}}
+{"type":"response_item","timestamp":"2026-02-15T17:06:17Z","payload":{"type":"function_call_output","call_id":"call_b","output":"b"}}
+{"type":"response_item","timestamp":"2026-02-15T17:06:18Z","payload":{"type":"function_call_output","call_id":"call_a","output":"a"}}
