@@ -1612,6 +1612,7 @@ fn write_local_status_snapshot(
     payload.adaptive_backlog_limiter = limiter.map(|l| l.snapshot());
     payload.ship_scheduler = scheduler.map(PathScheduler::snapshot);
     apply_archive_repair_control(&mut payload, &archive_control, archive_repair_mode);
+    observe_active_opencode_titles(conn, opencode_observations);
     let now = chrono::Utc::now();
     payload.managed_sessions =
         heartbeat::leases_from_observations(conn, machine_id, observations, now);
@@ -1700,6 +1701,43 @@ fn write_local_status_snapshot(
         status_path,
     );
     payload
+}
+
+fn observe_active_opencode_titles(
+    conn: &rusqlite::Connection,
+    observations: &[managed_opencode_scan::OpenCodeServerObservation],
+) {
+    let Some(home) = std::env::var_os("HOME") else { return };
+    let db_path = PathBuf::from(home)
+        .join(".local")
+        .join("share")
+        .join("opencode")
+        .join("opencode.db");
+    if !db_path.is_file() {
+        return;
+    }
+    for observation in observations {
+        if matches!(crate::state::session_title::get(conn, &observation.session_id), Ok(Some(_))) {
+            continue;
+        }
+        let Ok(parsed) = crate::opencode_db::parse_opencode_session(
+            &db_path,
+            &observation.provider_session_id,
+        ) else {
+            continue;
+        };
+        if let Err(error) = crate::state::session_title::observe_parse_result(
+            conn,
+            &observation.session_id,
+            &parsed,
+        ) {
+            tracing::warn!(
+                session_id = observation.session_id,
+                error = %error,
+                "Unable to persist active OpenCode prompt title"
+            );
+        }
+    }
 }
 
 fn record_flight_sample(
