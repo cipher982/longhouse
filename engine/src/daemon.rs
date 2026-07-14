@@ -236,6 +236,11 @@ fn is_cursor_database_job(job: &PathJob) -> bool {
     job.provider == "cursor" && crate::cursor_store::is_cursor_store_database_path(&job.path)
 }
 
+fn is_cursor_acp_source_job(job: &PathJob) -> bool {
+    job.provider == "cursor_acp"
+        && job.path.extension().and_then(|value| value.to_str()) == Some("jsonl")
+}
+
 struct DeferredRetry {
     due_at: Instant,
     provider: &'static str,
@@ -2900,7 +2905,9 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     // Cursor stores are source-faithful only through the native storage-v2
     // adapter. Never replay an old pointer spool or parse/post a lossy legacy
     // projection when this Runtime Host lacks the v2 cutover.
-    if is_cursor_database_job(&result.job) && task_context.storage_v2.is_none() {
+    if (is_cursor_database_job(&result.job) || is_cursor_acp_source_job(&result.job))
+        && task_context.storage_v2.is_none()
+    {
         if let Err(error) = Spool::new(&conn).dead_letter_pending_for_provider(
             "cursor",
             "Cursor legacy pointer spool retired: storage-v2 source receipt is required",
@@ -3016,6 +3023,16 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             .await
         } else if is_cursor_database_job(&result.job) {
             crate::storage_v2_shipper::ship_next_cursor_envelope(
+                &mut conn,
+                &task_context.client,
+                capabilities,
+                &result.job.path,
+                lane,
+                timeout,
+            )
+            .await
+        } else if is_cursor_acp_source_job(&result.job) {
+            crate::storage_v2_shipper::ship_next_cursor_acp_envelope(
                 &mut conn,
                 &task_context.client,
                 capabilities,

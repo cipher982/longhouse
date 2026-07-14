@@ -561,6 +561,57 @@ pub(crate) fn prepare_next_cursor_envelope(
     }))
 }
 
+pub(crate) fn prepare_next_cursor_acp_envelope(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    path: &Path,
+) -> Result<Option<PreparedStorageV2Envelope>> {
+    let session_id = path.parent().and_then(Path::file_name).and_then(|v| v.to_str())
+        .context("Cursor ACP source path has no managed session directory")?;
+    Uuid::parse_str(session_id).context("Cursor ACP source session id is not a UUID")?;
+    let run_id = path.file_stem().and_then(|v| v.to_str())
+        .context("Cursor ACP source path has no run id")?;
+    let opaque_source_id = format!("cursor-acp-v1:{session_id}:{run_id}");
+    let resolution = source_epoch::observe_file(
+        conn, "cursor", &opaque_source_id, path, SourceLane::Durable, 0, None,
+        Some(session_id), SourceChangeHint::None,
+    )?;
+    let position = source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
+    let source_len = std::fs::metadata(path)?.len();
+    if position >= source_len { return Ok(None); }
+    let maximum_record_bytes = usize::try_from(capabilities.max_raw_record_bytes)
+        .context("storage-v2 raw record limit exceeds usize")?;
+    let Some(batch) = read_next_raw_batch_with_limits(
+        path, RawSourceFraming::LfDelimited, position, MAX_RAW_BATCH_BYTES, maximum_record_bytes,
+    )? else { return Ok(None); };
+    let raw_bytes: Vec<Vec<u8>> = batch.records.iter().map(|record| record.bytes.clone()).collect();
+    let identity = EnvelopeIdentity {
+        tenant_id: capabilities.tenant_id.clone(), machine_id: capabilities.machine_id.clone(),
+        provider: "cursor".to_string(), opaque_source_id: opaque_source_id.clone(),
+        source_epoch: resolution.source_epoch, range_kind: RangeKind::ByteOffset,
+        range_start: batch.range_start, range_end: batch.range_end,
+        record_hashes: storage_v2_contract::hash_records(&raw_bytes),
+    };
+    let observed_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
+        .expect("source epoch opened_at is generated internally").with_timezone(&Utc);
+    Ok(Some(PreparedStorageV2Envelope {
+        envelope: StorageV2Envelope {
+            protocol_version: 2, tenant_id: capabilities.tenant_id.clone(), machine_id: capabilities.machine_id.clone(),
+            session_id: session_id.to_string(), provider: "cursor".to_string(), opaque_source_id,
+            source_epoch: resolution.source_epoch.to_string(), predecessor_source_epoch: resolution.predecessor_epoch.map(|v| v.to_string()),
+            epoch_opened_at: resolution.opened_at, range_kind: "byte_offset".to_string(), range_start: batch.range_start, range_end: batch.range_end,
+            render: None, media: Vec::new(),
+            session: StorageV2SessionFacts { environment: "local".to_string(), project: None, cwd: None, git_repo: None, git_branch: None,
+                started_at: observed_at.to_rfc3339(), last_activity_at: observed_at.to_rfc3339(), ended_at: None,
+                origin_kind: Some("cursor_acp".to_string()), hidden_from_default_timeline: false, launch_actor: None, launch_surface: None },
+            records: batch.records.into_iter().map(|record| StorageV2Record { source_position: record.range_start, data_b64: BASE64_STANDARD.encode(record.bytes) }).collect(),
+            expected_envelope_id: hex_hash(storage_v2_contract::envelope_id(&identity)?),
+        }, source_epoch: resolution.source_epoch, range_start: batch.range_start, range_end: batch.range_end,
+        event_count: 0, has_reply_evidence: false, raw_bytes: batch.range_end - batch.range_start,
+        has_more: batch.range_end < source_len, media_objects: Vec::new(),
+    }))
+}
+
 fn validated_legacy_offset(conn: &Connection, path_text: &str, path: &Path) -> Result<u64> {
     let file_state = FileState::new(conn);
     let offset = file_state.get_offset(path_text)?;
@@ -646,6 +697,14 @@ pub(crate) async fn ship_next_cursor_envelope(
     ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
         .await
         .map(Some)
+}
+
+pub(crate) async fn ship_next_cursor_acp_envelope(
+    conn: &mut Connection, client: &ShipperClient, capabilities: &StorageV2Capabilities,
+    path: &Path, lane: &str, request_timeout: Duration,
+) -> Result<Option<StorageV2ShipOutcome>> {
+    let Some(prepared) = prepare_next_cursor_acp_envelope(conn, capabilities, path)? else { return Ok(None); };
+    ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout).await.map(Some)
 }
 
 fn storage_v2_media_refs(media_objects: &[ParsedMediaObject]) -> Vec<StorageV2MediaRef> {

@@ -68,6 +68,11 @@ fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
             extension: "db",
         },
         ProviderConfig {
+            name: "cursor_acp",
+            root: home.join(".longhouse").join("agent").join("cursor-acp-source"),
+            extension: "jsonl",
+        },
+        ProviderConfig {
             name: "antigravity",
             root: home.join(".gemini").join("tmp"),
             extension: "json",
@@ -176,6 +181,9 @@ fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
     }
     if provider.name == "cursor" {
         return path.file_name().and_then(|name| name.to_str()) == Some("store.db");
+    }
+    if provider.name == "cursor_acp" {
+        return path.extension().and_then(|value| value.to_str()) == Some("jsonl");
     }
     let extension_matches = path
         .extension()

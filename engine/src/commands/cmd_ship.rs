@@ -120,6 +120,8 @@ async fn ship_path_storage_v2(
             crate::storage_v2_shipper::prepare_next_opencode_envelope(conn, capabilities, path)?
         } else if provider == "cursor" && crate::cursor_store::is_cursor_store_database_path(path) {
             crate::storage_v2_shipper::prepare_next_cursor_envelope(conn, capabilities, path)?
+        } else if provider == "cursor_acp" {
+            crate::storage_v2_shipper::prepare_next_cursor_acp_envelope(conn, capabilities, path)?
         } else {
             crate::storage_v2_shipper::prepare_next_envelope(
                 conn,
@@ -735,7 +737,9 @@ pub async fn cmd_ship_file(
         }
     }
 
-    if provider == "cursor" && crate::cursor_store::is_cursor_store_database_path(path) {
+    if (provider == "cursor" && crate::cursor_store::is_cursor_store_database_path(path))
+        || provider == "cursor_acp"
+    {
         anyhow::bail!(
             "Cursor store shipping requires a Runtime Host with storage-v2 cutover; legacy ingest is disabled"
         );
