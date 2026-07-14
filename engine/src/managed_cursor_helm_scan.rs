@@ -47,6 +47,10 @@ struct CursorHelmStateFile {
     started_at: Option<String>,
     #[serde(default)]
     updated_at: Option<String>,
+    /// Launcher publishes ready=true only after the provider child is running.
+    /// Missing/false must not produce a live remote-control lease.
+    #[serde(default)]
+    ready: Option<bool>,
 }
 
 pub fn collect_observations() -> Vec<CursorHelmObservation> {
@@ -99,7 +103,8 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<CursorHelmObservation>
             .as_ref()
             .map(|p| p.exists())
             .unwrap_or(false);
-        let live = launcher_alive && socket_present;
+        let ready = state.ready.unwrap_or(false);
+        let live = launcher_alive && socket_present && ready;
         out.push(CursorHelmObservation {
             session_id,
             state_file: path,
@@ -126,10 +131,21 @@ mod tests {
     }
 
     fn write_state(dir: &Path, session_id: &str, socket: &Path, launcher_pid: Option<u32>) {
+        write_state_with_ready(dir, session_id, socket, launcher_pid, true);
+    }
+
+    fn write_state_with_ready(
+        dir: &Path,
+        session_id: &str,
+        socket: &Path,
+        launcher_pid: Option<u32>,
+        ready: bool,
+    ) {
         let mut value = json!({
             "session_id": session_id,
             "socket_path": socket.to_string_lossy(),
             "cursor_pid": 99999,
+            "ready": ready,
             "started_at": "2026-06-30T00:00:00Z",
             "updated_at": "2026-06-30T00:00:00Z",
         });
@@ -178,6 +194,17 @@ mod tests {
         let obs = collect_observations_from(dir.path());
         let no_sock = obs.iter().find(|o| o.session_id == "sess-no-sock").unwrap();
         assert!(!no_sock.live);
+    }
+
+    #[test]
+    fn not_ready_is_not_live_even_with_pid_and_socket() {
+        let dir = tmp_dir();
+        let socket = dir.path().join("c.sock");
+        fs::File::create(&socket).unwrap();
+        write_state_with_ready(dir.path(), "sess-not-ready", &socket, Some(std::process::id()), false);
+        let obs = collect_observations_from(dir.path());
+        let pending = obs.iter().find(|o| o.session_id == "sess-not-ready").unwrap();
+        assert!(!pending.live);
     }
 
     #[test]
