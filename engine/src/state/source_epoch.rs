@@ -291,6 +291,14 @@ pub fn lane_position(conn: &Connection, source_epoch: Uuid, lane: SourceLane) ->
         .ok_or_else(|| anyhow::anyhow!("source epoch lane is not registered"))
 }
 
+pub fn active_source_incarnation(
+    conn: &Connection,
+    provider: &str,
+    opaque_source_id: &str,
+) -> Result<Option<String>> {
+    Ok(load_active_epoch(conn, provider, opaque_source_id)?.map(|epoch| epoch.file_incarnation))
+}
+
 fn load_lane_position(
     conn: &Connection,
     source_epoch: Uuid,

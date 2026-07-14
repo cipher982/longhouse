@@ -232,6 +232,10 @@ fn is_opencode_database_job(job: &PathJob) -> bool {
     job.provider == "opencode" && crate::opencode_db::is_opencode_database_path(&job.path)
 }
 
+fn is_cursor_database_job(job: &PathJob) -> bool {
+    job.provider == "cursor" && crate::cursor_store::is_cursor_store_database_path(&job.path)
+}
+
 struct DeferredRetry {
     due_at: Instant,
     provider: &'static str,
@@ -2893,6 +2897,23 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         }
     };
 
+    // Cursor stores are source-faithful only through the native storage-v2
+    // adapter. Never replay an old pointer spool or parse/post a lossy legacy
+    // projection when this Runtime Host lacks the v2 cutover.
+    if is_cursor_database_job(&result.job) && task_context.storage_v2.is_none() {
+        if let Err(error) = Spool::new(&conn).dead_letter_pending_for_provider(
+            "cursor",
+            "Cursor legacy pointer spool retired: storage-v2 source receipt is required",
+        ) {
+            tracing::warn!(error = %error, "Unable to retire legacy Cursor spool entries");
+        }
+        tracing::warn!(
+            path = %result.job.path.display(),
+            "Cursor store is not shipped: Runtime Host has no storage-v2 cutover"
+        );
+        return finish_path_task(result, task_started);
+    }
+
     if result.job.priority != WorkPriority::Live && task_context.storage_v2.is_none() {
         let replay_prepare_at_ms = chrono::Utc::now().timestamp_millis();
         let replay_trace = shipper::ShipTraceContext {
@@ -2985,6 +3006,16 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         let ship_started = Instant::now();
         let ship_result = if is_opencode_database_job(&result.job) {
             crate::storage_v2_shipper::ship_next_opencode_envelope(
+                &mut conn,
+                &task_context.client,
+                capabilities,
+                &result.job.path,
+                lane,
+                timeout,
+            )
+            .await
+        } else if is_cursor_database_job(&result.job) {
+            crate::storage_v2_shipper::ship_next_cursor_envelope(
                 &mut conn,
                 &task_context.client,
                 capabilities,

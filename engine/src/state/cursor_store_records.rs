@@ -7,7 +7,7 @@
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -55,6 +55,27 @@ pub fn cursor_record_count(conn: &Connection, source_epoch: Uuid) -> Result<u64>
         |row| row.get(0),
     )?;
     u64::try_from(count).context("Cursor record count is negative")
+}
+
+pub fn active_cursor_record_count(
+    conn: &Connection,
+    provider: &str,
+    opaque_source_id: &str,
+) -> Result<u64> {
+    let epoch: Option<String> = conn
+        .query_row(
+            "SELECT source_epoch
+             FROM source_epoch_registry
+             WHERE provider = ?1 AND opaque_source_id = ?2 AND ended_at IS NULL",
+            params![provider, opaque_source_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(epoch) = epoch else {
+        return Ok(0);
+    };
+    let epoch = Uuid::parse_str(&epoch).context("active Cursor source epoch is not a UUID")?;
+    cursor_record_count(conn, epoch)
 }
 
 pub fn cursor_records_from(

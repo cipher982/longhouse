@@ -118,6 +118,8 @@ async fn ship_path_storage_v2(
     loop {
         let prepared = if provider == "opencode" && opencode_db::is_opencode_database_path(path) {
             crate::storage_v2_shipper::prepare_next_opencode_envelope(conn, capabilities, path)?
+        } else if provider == "cursor" && crate::cursor_store::is_cursor_store_database_path(path) {
+            crate::storage_v2_shipper::prepare_next_cursor_envelope(conn, capabilities, path)?
         } else {
             crate::storage_v2_shipper::prepare_next_envelope(
                 conn,
@@ -204,6 +206,13 @@ pub async fn cmd_ship(
             let providers = discovery::get_providers();
             let mut all_files = discovery::discover_all_files(&providers);
             for pending in Spool::new(&conn).pending_paths_now(10_000)? {
+                if pending.provider == "cursor" {
+                    Spool::new(&conn).dead_letter_pending_for_path(
+                        &pending.file_path,
+                        "Cursor legacy pointer spool retired: storage-v2 source receipt is required",
+                    )?;
+                    continue;
+                }
                 let path = PathBuf::from(&pending.file_path);
                 if path.exists() && !all_files.iter().any(|(known, _)| known == &path) {
                     let provider = providers
@@ -267,7 +276,23 @@ pub async fn cmd_ship(
 
     // Discover files
     let providers = discovery::get_providers();
-    let all_files = discovery::discover_all_files(&providers);
+    let mut all_files = discovery::discover_all_files(&providers);
+    let cursor_sources = all_files
+        .iter()
+        .filter(|(_, provider)| *provider == "cursor")
+        .count();
+    if cursor_sources > 0 {
+        let retired = Spool::new(&conn).dead_letter_pending_for_provider(
+            "cursor",
+            "Cursor legacy pointer spool retired: storage-v2 source receipt is required",
+        )?;
+        tracing::warn!(
+            cursor_sources,
+            retired_legacy_spool_entries = retired,
+            "Skipping Cursor sources because this Runtime Host lacks storage-v2"
+        );
+        all_files.retain(|(_, provider)| *provider != "cursor");
+    }
     if !json_output {
         eprintln!("Found {} session files", all_files.len());
     }
@@ -708,6 +733,12 @@ pub async fn cmd_ship_file(
             }
             return Ok(());
         }
+    }
+
+    if provider == "cursor" && crate::cursor_store::is_cursor_store_database_path(path) {
+        anyhow::bail!(
+            "Cursor store shipping requires a Runtime Host with storage-v2 cutover; legacy ingest is disabled"
+        );
     }
 
     if provider == "opencode" && opencode_db::is_opencode_database_path(path) {

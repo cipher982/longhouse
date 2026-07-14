@@ -12,6 +12,7 @@ use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::cursor_store;
 use crate::opencode_db;
 use crate::pipeline::parser::{
     self, ParseResult, ParsedEvent, ParsedMediaObject, Role, SessionMetadata,
@@ -24,6 +25,8 @@ use crate::shipping::storage_v2::{
     StorageV2Capabilities, StorageV2Envelope, StorageV2MediaRef, StorageV2Record,
 };
 use crate::shipping::storage_v2::{StorageV2Render, StorageV2RenderRecord, StorageV2SessionFacts};
+use crate::state::cursor_store_records;
+use crate::state::cursor_store_root;
 use crate::state::file_identity::{cursor_fingerprint, identity_from_metadata};
 use crate::state::file_state::FileState;
 use crate::state::source_epoch::{self, SourceChangeHint, SourceEpochResolution, SourceLane};
@@ -408,6 +411,156 @@ pub(crate) fn prepare_next_opencode_envelope(
     }
 }
 
+pub(crate) fn prepare_next_cursor_envelope(
+    conn: &mut Connection,
+    capabilities: &StorageV2Capabilities,
+    db_path: &Path,
+) -> Result<Option<PreparedStorageV2Envelope>> {
+    let snapshot = cursor_store::cursor_store_raw_snapshot(db_path)?;
+    let opaque_source_id = cursor_store::cursor_opaque_source_id(&snapshot.conversation_uuid);
+    let root_relation = cursor_store_root::observe_cursor_root(
+        conn,
+        &snapshot.conversation_uuid,
+        &snapshot.root_blob_id,
+        &snapshot.root_message_blob_ids,
+    )?;
+    let incarnation = snapshot.store_incarnation.clone();
+    let existing_len = cursor_store_records::active_cursor_record_count(conn, "cursor", &opaque_source_id)?;
+    let active_incarnation = source_epoch::active_source_incarnation(conn, "cursor", &opaque_source_id)?;
+    let source_len_before_capture = if root_relation == cursor_store_root::CursorRootOrderRelation::Rewrite
+        || active_incarnation.as_deref() != Some(incarnation.as_str())
+    {
+        0
+    } else {
+        existing_len
+    };
+    let resolution = source_epoch::observe_source(
+        conn,
+        "cursor",
+        &opaque_source_id,
+        &incarnation,
+        source_len_before_capture,
+        SourceLane::Durable,
+        0,
+        None,
+        None,
+        root_relation.source_change_hint(),
+    )?;
+    cursor_store_records::append_unseen_cursor_records(conn, resolution.source_epoch, &snapshot.records)?;
+    let logical_len = cursor_store_records::cursor_record_count(conn, resolution.source_epoch)?;
+    // Refresh max_observed_len after adding local records. `None` revision is
+    // intentional: an append changes Cursor's root blob every turn but must
+    // not rotate the epoch.
+    let resolution = source_epoch::observe_source(
+        conn,
+        "cursor",
+        &opaque_source_id,
+        &incarnation,
+        logical_len,
+        SourceLane::Durable,
+        source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?,
+        None,
+        None,
+        SourceChangeHint::None,
+    )?;
+    let range_start = source_epoch::lane_position(conn, resolution.source_epoch, SourceLane::Durable)?;
+    if range_start >= logical_len {
+        return Ok(None);
+    }
+    let selected = cursor_store_records::cursor_records_from(
+        conn,
+        resolution.source_epoch,
+        range_start,
+        capabilities.max_records,
+        capabilities.max_raw_record_bytes,
+    )?;
+    let Some(last) = selected.last() else {
+        return Ok(None);
+    };
+    let range_end = last
+        .source_position
+        .checked_add(1)
+        .context("Cursor source position overflow")?;
+    let raw_bytes = selected.iter().try_fold(0u64, |total, record| {
+        total
+            .checked_add(u64::try_from(record.bytes.len()).context("Cursor raw record length exceeds u64")?)
+            .context("Cursor raw bytes overflow")
+    })?;
+    let identity = EnvelopeIdentity {
+        tenant_id: capabilities.tenant_id.clone(),
+        machine_id: capabilities.machine_id.clone(),
+        provider: "cursor".to_string(),
+        opaque_source_id: opaque_source_id.clone(),
+        source_epoch: resolution.source_epoch,
+        range_kind: RangeKind::RecordOrdinal,
+        range_start,
+        range_end,
+        record_hashes: storage_v2_contract::hash_records(
+            &selected.iter().map(|record| record.bytes.clone()).collect::<Vec<_>>(),
+        ),
+    };
+    let session_id = cursor_store::longhouse_session_id_for_cursor(&snapshot.conversation_uuid);
+    let started_at = snapshot
+        .created_at_ms
+        .and_then(DateTime::from_timestamp_millis)
+        .unwrap_or_else(|| {
+            DateTime::parse_from_rfc3339(&resolution.opened_at)
+                .expect("source epoch opened_at is generated internally")
+                .with_timezone(&Utc)
+        });
+    let observed_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
+        .expect("source epoch opened_at is generated internally")
+        .with_timezone(&Utc);
+    Ok(Some(PreparedStorageV2Envelope {
+        envelope: StorageV2Envelope {
+            protocol_version: 2,
+            tenant_id: capabilities.tenant_id.clone(),
+            machine_id: capabilities.machine_id.clone(),
+            session_id,
+            provider: "cursor".to_string(),
+            opaque_source_id,
+            source_epoch: resolution.source_epoch.to_string(),
+            predecessor_source_epoch: resolution.predecessor_epoch.map(|value| value.to_string()),
+            epoch_opened_at: resolution.opened_at,
+            range_kind: "record_ordinal".to_string(),
+            range_start,
+            range_end,
+            render: None,
+            media: Vec::new(),
+            session: StorageV2SessionFacts {
+                environment: "local".to_string(),
+                project: None,
+                cwd: None,
+                git_repo: None,
+                git_branch: None,
+                started_at: started_at.to_rfc3339(),
+                last_activity_at: observed_at.max(started_at).to_rfc3339(),
+                ended_at: None,
+                origin_kind: Some("cursor_store".to_string()),
+                hidden_from_default_timeline: false,
+                launch_actor: None,
+                launch_surface: None,
+            },
+            records: selected
+                .into_iter()
+                .map(|record| StorageV2Record {
+                    source_position: record.source_position,
+                    data_b64: BASE64_STANDARD.encode(record.bytes),
+                })
+                .collect(),
+            expected_envelope_id: hex_hash(storage_v2_contract::envelope_id(&identity)?),
+        },
+        source_epoch: resolution.source_epoch,
+        range_start,
+        range_end,
+        event_count: 0,
+        has_reply_evidence: false,
+        raw_bytes,
+        has_more: range_end < logical_len,
+        media_objects: Vec::new(),
+    }))
+}
+
 fn validated_legacy_offset(conn: &Connection, path_text: &str, path: &Path) -> Result<u64> {
     let file_state = FileState::new(conn);
     let offset = file_state.get_offset(path_text)?;
@@ -477,6 +630,22 @@ pub(crate) async fn ship_next_opencode_envelope(
         events_shipped: prepared.event_count,
         has_more: prepared.has_more,
     }))
+}
+
+pub(crate) async fn ship_next_cursor_envelope(
+    conn: &mut Connection,
+    client: &ShipperClient,
+    capabilities: &StorageV2Capabilities,
+    db_path: &Path,
+    lane: &str,
+    request_timeout: Duration,
+) -> Result<Option<StorageV2ShipOutcome>> {
+    let Some(prepared) = prepare_next_cursor_envelope(conn, capabilities, db_path)? else {
+        return Ok(None);
+    };
+    ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
+        .await
+        .map(Some)
 }
 
 fn storage_v2_media_refs(media_objects: &[ParsedMediaObject]) -> Vec<StorageV2MediaRef> {
@@ -783,6 +952,14 @@ mod tests {
     use crate::state::db::open_db;
     use crate::state::file_state::FileState;
 
+    const CURSOR_CONVERSATION_ID: &str = "60bf2c11-01da-456e-8216-c5dbd2fa52b4";
+    const CURSOR_ROOT_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const CURSOR_ROOT_B: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    const CURSOR_ROOT_C: &str = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    const CURSOR_MESSAGE_A: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const CURSOR_MESSAGE_B: &str = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    const CURSOR_MESSAGE_C: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+
     fn capabilities() -> StorageV2Capabilities {
         StorageV2Capabilities {
             protocol_version: 2,
@@ -801,6 +978,132 @@ mod tests {
             lanes: vec!["live".to_string(), "repair".to_string()],
             lane_header: "X-Longhouse-Storage-Lane".to_string(),
         }
+    }
+
+    fn cursor_root(ids: &[u8]) -> Vec<u8> {
+        let mut root = Vec::new();
+        for id in ids.chunks_exact(32) {
+            root.extend_from_slice(&[0x0a, 0x20]);
+            root.extend_from_slice(id);
+        }
+        root
+    }
+
+    fn cursor_metadata(root_blob_id: &str) -> String {
+        let json = format!(
+            r#"{{"agentId":"{CURSOR_CONVERSATION_ID}","latestRootBlobId":"{root_blob_id}","createdAt":1773403200000}}"#
+        );
+        json.as_bytes().iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn make_cursor_store(path: &Path) -> Connection {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value BLOB);
+             CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('0', ?1)",
+            [cursor_metadata(CURSOR_ROOT_A)],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO meta (key, value) VALUES ('unknown', X'00FF')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+            params![CURSOR_ROOT_A, cursor_root(&[0xbb; 32])],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO blobs (id, data) VALUES (?1, X'0102')",
+            [CURSOR_MESSAGE_A],
+        )
+        .unwrap();
+        conn
+    }
+
+    fn set_cursor_root(conn: &Connection, root_id: &str, message_ids: &[u8]) {
+        conn.execute(
+            "UPDATE meta SET value = ?1 WHERE key = '0'",
+            [cursor_metadata(root_id)],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO blobs (id, data) VALUES (?1, ?2)",
+            params![root_id, cursor_root(message_ids)],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn cursor_prepares_source_faithful_raw_records_and_rotates_only_on_root_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("store.db");
+        let store = make_cursor_store(&path);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let first = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.envelope.provider, "cursor");
+        assert_eq!(first.envelope.opaque_source_id, format!("cursor-store-v1:{CURSOR_CONVERSATION_ID}"));
+        assert!(first.envelope.render.is_none());
+        assert!(first.envelope.records.iter().any(|record| {
+            let bytes = BASE64_STANDARD.decode(&record.data_b64).unwrap();
+            let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            raw["kind"] == "meta" && raw["meta_key"] == "unknown"
+        }));
+        source_epoch::acknowledge_position(
+            &mut conn,
+            first.source_epoch,
+            SourceLane::Durable,
+            first.range_start,
+            first.range_end,
+        )
+        .unwrap();
+
+        let mut extended_root = vec![0xbb; 32];
+        extended_root.extend_from_slice(&[0xdd; 32]);
+        set_cursor_root(&store, CURSOR_ROOT_B, &extended_root);
+        store
+            .execute(
+                "INSERT INTO blobs (id, data) VALUES (?1, X'0304')",
+                [CURSOR_MESSAGE_B],
+            )
+            .unwrap();
+        let extension = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(extension.source_epoch, first.source_epoch);
+        source_epoch::acknowledge_position(
+            &mut conn,
+            extension.source_epoch,
+            SourceLane::Durable,
+            extension.range_start,
+            extension.range_end,
+        )
+        .unwrap();
+
+        set_cursor_root(&store, CURSOR_ROOT_C, &[0xff; 32]);
+        store
+            .execute(
+                "INSERT INTO blobs (id, data) VALUES (?1, X'0506')",
+                [CURSOR_MESSAGE_C],
+            )
+            .unwrap();
+        let rewrite = prepare_next_cursor_envelope(&mut conn, &capabilities(), &path)
+            .unwrap()
+            .unwrap();
+        assert_ne!(rewrite.source_epoch, first.source_epoch);
+        assert_eq!(
+            rewrite.envelope.predecessor_source_epoch,
+            Some(first.source_epoch.to_string())
+        );
+        assert_eq!(rewrite.range_start, 0);
     }
 
     #[test]

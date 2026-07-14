@@ -589,6 +589,19 @@ impl<'a> Spool<'a> {
         Ok(changed)
     }
 
+    /// Retire every pending pointer for a provider when that provider moves to
+    /// an incompatible durable transport. The rows remain inspectable as dead
+    /// letters; they must never be replayed through a lossy fallback.
+    pub fn dead_letter_pending_for_provider(&self, provider: &str, error: &str) -> Result<usize> {
+        let now = Utc::now().to_rfc3339();
+        Ok(self.conn.execute(
+            "UPDATE spool_queue
+             SET status = 'dead', last_error = ?1, next_retry_at = ?2
+             WHERE provider = ?3 AND status = 'pending'",
+            rusqlite::params![error, now, provider],
+        )?)
+    }
+
     /// Advance the start offset for a pending entry after partial replay progress.
     pub fn advance_start(&self, entry_id: i64, new_start_offset: u64) -> Result<()> {
         self.conn.execute(

@@ -63,6 +63,11 @@ fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
             extension: "db",
         },
         ProviderConfig {
+            name: "cursor",
+            root: home.join(".cursor").join("chats"),
+            extension: "db",
+        },
+        ProviderConfig {
             name: "antigravity",
             root: home.join(".gemini").join("tmp"),
             extension: "json",
@@ -134,11 +139,25 @@ pub fn session_path_for_watcher_event(
             }
             continue;
         }
+        if provider.name == "cursor" {
+            if let Some(db_path) = cursor_database_path_for_event(path) {
+                return Some((db_path, provider.name));
+            }
+            continue;
+        }
         if is_provider_session_file(provider, path) {
             return Some((path.to_path_buf(), provider.name));
         }
     }
     None
+}
+
+fn cursor_database_path_for_event(path: &Path) -> Option<PathBuf> {
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some("store.db") => Some(path.to_path_buf()),
+        Some("store.db-wal") | Some("store.db-shm") => Some(path.with_file_name("store.db")),
+        _ => None,
+    }
 }
 
 fn opencode_database_path_for_event(path: &Path) -> Option<PathBuf> {
@@ -154,6 +173,9 @@ fn opencode_database_path_for_event(path: &Path) -> Option<PathBuf> {
 fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
     if provider.name == "opencode" {
         return path.file_name().and_then(|name| name.to_str()) == Some("opencode.db");
+    }
+    if provider.name == "cursor" {
+        return path.file_name().and_then(|name| name.to_str()) == Some("store.db");
     }
     let extension_matches = path
         .extension()
@@ -332,7 +354,8 @@ mod tests {
             providers[4].root,
             home.join(".local").join("share").join("opencode")
         );
-        assert_eq!(providers[5].root, home.join(".gemini").join("tmp"));
+        assert_eq!(providers[5].root, home.join(".cursor").join("chats"));
+        assert_eq!(providers[6].root, home.join(".gemini").join("tmp"));
     }
 
     #[test]
@@ -397,6 +420,41 @@ mod tests {
         assert_eq!(
             session_path_for_watcher_event(&shm, &providers),
             Some((db, "opencode"))
+        );
+    }
+
+    #[test]
+    fn cursor_provider_only_matches_the_canonical_store_database() {
+        let home = PathBuf::from("/tmp/home");
+        let claude_root = PathBuf::from("/tmp/custom-claude");
+        let providers = provider_candidates(&home, &claude_root);
+        let db = home.join(".cursor").join("chats").join("chat-a").join("store.db");
+        let wal = db.with_file_name("store.db-wal");
+
+        assert_eq!(provider_for_path(&db, &providers), Some("cursor"));
+        assert_eq!(provider_for_path(&wal, &providers), None);
+    }
+
+    #[test]
+    fn cursor_watcher_sidecars_map_to_canonical_store_database() {
+        let home = PathBuf::from("/tmp/home");
+        let claude_root = PathBuf::from("/tmp/custom-claude");
+        let providers = provider_candidates(&home, &claude_root);
+        let db = home.join(".cursor").join("chats").join("chat-a").join("store.db");
+        let wal = db.with_file_name("store.db-wal");
+        let shm = db.with_file_name("store.db-shm");
+
+        assert_eq!(
+            session_path_for_watcher_event(&db, &providers),
+            Some((db.clone(), "cursor"))
+        );
+        assert_eq!(
+            session_path_for_watcher_event(&wal, &providers),
+            Some((db.clone(), "cursor"))
+        );
+        assert_eq!(
+            session_path_for_watcher_event(&shm, &providers),
+            Some((db, "cursor"))
         );
     }
 }

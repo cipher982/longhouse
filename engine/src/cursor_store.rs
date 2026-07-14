@@ -19,11 +19,15 @@ use rusqlite::{Connection, OpenFlags};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use uuid::Uuid;
+
+use crate::state::file_identity::identity_from_metadata;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorStoreSnapshot {
     pub conversation_uuid: String,
     pub root_blob_id: String,
+    pub created_at_ms: Option<i64>,
     pub meta_rows: Vec<CursorStoreMetaRow>,
     pub blob_rows: Vec<CursorStoreBlobRow>,
     pub root_message_blob_ids: RootMessageBlobIds,
@@ -66,6 +70,11 @@ pub enum RootMessageBlobIds {
 
 #[derive(Debug, Clone)]
 pub struct CursorStoreRawSnapshot {
+    pub conversation_uuid: String,
+    pub root_blob_id: String,
+    pub store_incarnation: String,
+    pub created_at_ms: Option<i64>,
+    pub root_message_blob_ids: RootMessageBlobIds,
     pub source_revision: String,
     pub records: Vec<Vec<u8>>,
 }
@@ -75,6 +84,7 @@ struct RawMetaRecord<'a> {
     v: u8,
     kind: &'static str,
     conversation_uuid: &'a str,
+    store_incarnation: &'a str,
     meta_key: &'a str,
     meta_value_bytes_b64: String,
     meta_value_storage_class: &'static str,
@@ -85,6 +95,7 @@ struct RawBlobRecord<'a> {
     v: u8,
     kind: &'static str,
     conversation_uuid: &'a str,
+    store_incarnation: &'a str,
     blob_id: &'a str,
     blob_bytes_b64: String,
     blob_storage_class: &'static str,
@@ -95,6 +106,7 @@ struct RawRootObservationRecord<'a> {
     v: u8,
     kind: &'static str,
     conversation_uuid: &'a str,
+    store_incarnation: &'a str,
     root_blob_id: &'a str,
     root_blob_bytes_b64: String,
     root_blob_storage_class: &'static str,
@@ -115,6 +127,7 @@ pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
     let root_metadata = decode_root_metadata(&root_meta.value_bytes)?;
     let conversation_uuid = required_string(&root_metadata, "agentId")?;
     let root_blob_id = required_string(&root_metadata, "latestRootBlobId")?;
+    let created_at_ms = root_metadata.get("createdAt").and_then(Value::as_i64);
     let blob_rows = read_blob_rows(&conn)?;
     let root_blob = blob_rows
         .iter()
@@ -129,6 +142,7 @@ pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
     Ok(CursorStoreSnapshot {
         conversation_uuid,
         root_blob_id,
+        created_at_ms,
         meta_rows,
         blob_rows,
         root_message_blob_ids,
@@ -141,6 +155,11 @@ pub fn read_cursor_store(path: &Path) -> Result<CursorStoreSnapshot> {
 /// the same exact root bytes are durable evidence of the ordering snapshot
 /// without assigning meaning to unknown protobuf fields.
 pub fn cursor_store_raw_snapshot(path: &Path) -> Result<CursorStoreRawSnapshot> {
+    let metadata = path
+        .metadata()
+        .with_context(|| format!("reading Cursor store metadata {}", path.display()))?;
+    let store_incarnation = identity_from_metadata(&metadata)
+        .context("Cursor store has no stable file incarnation")?;
     let snapshot = read_cursor_store(path)?;
     let root_blob = snapshot
         .blob_rows
@@ -151,8 +170,9 @@ pub fn cursor_store_raw_snapshot(path: &Path) -> Result<CursorStoreRawSnapshot> 
     for row in &snapshot.meta_rows {
         records.push(serde_json::to_vec(&RawMetaRecord {
             v: 1,
-            kind: "cursor_store_meta",
+            kind: "meta",
             conversation_uuid: &snapshot.conversation_uuid,
+            store_incarnation: &store_incarnation,
             meta_key: &row.key,
             meta_value_bytes_b64: BASE64_STANDARD.encode(&row.value_bytes),
             meta_value_storage_class: row.value_storage_class.as_str(),
@@ -161,8 +181,9 @@ pub fn cursor_store_raw_snapshot(path: &Path) -> Result<CursorStoreRawSnapshot> 
     for row in &snapshot.blob_rows {
         records.push(serde_json::to_vec(&RawBlobRecord {
             v: 1,
-            kind: "cursor_store_blob",
+            kind: "blob",
             conversation_uuid: &snapshot.conversation_uuid,
+            store_incarnation: &store_incarnation,
             blob_id: &row.id,
             blob_bytes_b64: BASE64_STANDARD.encode(&row.data_bytes),
             blob_storage_class: row.data_storage_class.as_str(),
@@ -170,16 +191,40 @@ pub fn cursor_store_raw_snapshot(path: &Path) -> Result<CursorStoreRawSnapshot> 
     }
     records.push(serde_json::to_vec(&RawRootObservationRecord {
         v: 1,
-        kind: "cursor_store_root_observation",
+        kind: "root_observation",
         conversation_uuid: &snapshot.conversation_uuid,
+        store_incarnation: &store_incarnation,
         root_blob_id: &snapshot.root_blob_id,
         root_blob_bytes_b64: BASE64_STANDARD.encode(&root_blob.data_bytes),
         root_blob_storage_class: root_blob.data_storage_class.as_str(),
     })?);
     Ok(CursorStoreRawSnapshot {
+        conversation_uuid: snapshot.conversation_uuid,
+        root_blob_id: snapshot.root_blob_id,
+        store_incarnation,
+        created_at_ms: snapshot.created_at_ms,
+        root_message_blob_ids: snapshot.root_message_blob_ids,
         source_revision: revision_for_records(&records),
         records,
     })
+}
+
+pub fn cursor_opaque_source_id(conversation_uuid: &str) -> String {
+    format!("cursor-store-v1:{conversation_uuid}")
+}
+
+pub fn is_cursor_store_database_path(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value == "store.db")
+}
+
+pub fn longhouse_session_id_for_cursor(conversation_uuid: &str) -> String {
+    Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("cursor:{conversation_uuid}").as_bytes(),
+    )
+    .to_string()
 }
 
 fn open_readonly(path: &Path) -> Result<Connection> {
@@ -426,13 +471,14 @@ mod tests {
             .iter()
             .map(|record| serde_json::from_slice(record).unwrap())
             .collect();
-        assert_eq!(records[0]["kind"], "cursor_store_meta");
+        assert_eq!(records[0]["kind"], "meta");
         assert_eq!(records[0]["meta_key"], "0");
         assert_eq!(records[0]["meta_value_storage_class"], "text");
         assert_eq!(records[1]["meta_key"], "extra");
         assert_eq!(records[1]["meta_value_storage_class"], "blob");
-        assert_eq!(records[2]["kind"], "cursor_store_blob");
-        assert_eq!(records[4]["kind"], "cursor_store_root_observation");
+        assert_eq!(records[2]["kind"], "blob");
+        assert_eq!(records[4]["kind"], "root_observation");
+        assert_eq!(records[0]["store_incarnation"], first.store_incarnation);
         let extra = BASE64_STANDARD
             .decode(records[1]["meta_value_bytes_b64"].as_str().unwrap())
             .unwrap();
