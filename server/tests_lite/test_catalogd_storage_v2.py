@@ -181,6 +181,7 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
         assert session["session"]["current_render_generation"] == str(generation_id)
         assert session["session"]["user_messages"] == 1
         assert session["session"]["first_user_message_preview"] == "Build it"
+        assert session["session"]["summary_title"] == "Build it"
         timeline = await client.call(
             "storage.session.timeline.list.v2",
             {
@@ -235,6 +236,39 @@ async def test_ready_render_manifest_switches_generation_with_raw_receipt(daemon
         )
         assert stale["stale_generation"] is True
         assert stale["current_generation_id"] == str(generation_id)
+    finally:
+        await client.close()
+        await daemon.close()
+
+
+@pytest.mark.asyncio
+async def test_storage_title_is_immediate_sanitized_and_write_once(daemon_paths):
+    database_path, socket_path = daemon_paths
+    now = datetime.now(UTC).replace(microsecond=0)
+    epoch = uuid4()
+    session_id = uuid4()
+    generation_id = uuid4()
+    daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
+    await daemon.start()
+    client = CatalogClient(socket_path)
+    try:
+        first = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"first\n",), sealed_at=now)
+        first_manifest = _render_manifest(generation_id)
+        first_manifest["first_user_message_preview"] = "[Image #1]\n\nWhy is OpenCode stuck on naming sessions and how do we fix it?"
+        first.update(render_state="ready", render_manifest=first_manifest)
+        await client.call("storage.raw_object.commit.v2", first)
+
+        stored = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert stored["session"]["summary_title"] == "Why is OpenCode stuck on naming…"
+
+        second = _raw_params(epoch=epoch, session_id=session_id, start=6, end=13, records=(b"second\n",), sealed_at=now)
+        second_manifest = _render_manifest(generation_id, seed=b"second-render", position=6)
+        second_manifest["first_user_message_preview"] = "A later message must not rename the session"
+        second.update(render_state="ready", render_manifest=second_manifest)
+        await client.call("storage.raw_object.commit.v2", second)
+
+        stored = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert stored["session"]["summary_title"] == "Why is OpenCode stuck on naming…"
     finally:
         await client.close()
         await daemon.close()

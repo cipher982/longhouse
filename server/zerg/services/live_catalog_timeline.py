@@ -32,6 +32,7 @@ from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_DISPLAY_WINDOW
 from zerg.services.session_state_contract import build_session_state_facts
+from zerg.services.session_title import sanitize_title
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import build_compat_runtime_display_response
@@ -115,6 +116,12 @@ def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
     return f"{session.provider.title()} session"
 
 
+def _title_source(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
+    title = sanitize_title(session.anchor_title or card.summary_title or session.summary_title, max_words=6)
+    prompt = sanitize_title(card.first_user_message_preview or session.first_user_message_preview, max_words=6)
+    return "prompt" if title and title == prompt else "ai"
+
+
 def _pending_response_from_catalog(
     session: LiveSessionCatalog,
     card: LiveTimelineCard,
@@ -191,7 +198,7 @@ def _pending_response_from_catalog(
             "anchor_title": session.anchor_title,
             "timeline_title": title,
             "title_state": "ready" if session.anchor_title or card.summary_title else "degraded",
-            "title_source": "ai" if session.anchor_title or card.summary_title else "project",
+            "title_source": _title_source(session, card) if session.anchor_title or card.summary_title else "project",
             "summary_status": "ready" if session.summary else "unavailable",
             "first_user_message": card.first_user_message_preview or session.first_user_message_preview,
             "thread_root_session_id": str(session.session_id),
@@ -325,7 +332,7 @@ def _response_from_catalog(
         anchor_title=session.anchor_title,
         timeline_title=title,
         title_state="ready" if session.anchor_title or card.summary_title else "degraded",
-        title_source="ai" if session.anchor_title or card.summary_title else "project",
+        title_source=_title_source(session, card) if session.anchor_title or card.summary_title else "project",
         summary_status="ready" if session.summary else "unavailable",
         first_user_message=card.first_user_message_preview or session.first_user_message_preview,
         thread_root_session_id=str(session.session_id),

@@ -1621,6 +1621,7 @@ struct LonghouseMenuBarCoreTests {
               "timeline_title": "Fix menu bar links",
               "summary_title": "Fix menu bar links",
               "first_user_message": "Can we open rows?",
+              "title_state": "degraded",
               "state": "attached",
               "phase": "idle",
               "last_activity_at": "2026-05-13T23:59:39Z"
@@ -1635,6 +1636,30 @@ struct LonghouseMenuBarCoreTests {
         #expect(session.timelineTitle == "Fix menu bar links")
         #expect(session.summaryTitle == "Fix menu bar links")
         #expect(session.firstUserMessage == "Can we open rows?")
+        #expect(session.resolvedTitleText == "Fix menu bar links")
+    }
+
+    @Test
+    func managedSessionTitleFallbackDoesNotDependOnEnrichmentState() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "session-title-fallback",
+            provider: "codex",
+            workspaceLabel: "zerg",
+            timelineTitle: nil,
+            summaryTitle: nil,
+            firstUserMessage: "Repair storage title projection",
+            titleState: "degraded",
+            branch: nil,
+            state: "attached",
+            phase: "idle",
+            lastActivityAt: nil,
+            bridgeStatus: nil,
+            bridgePid: nil,
+            bridgeHeartbeatAt: nil,
+            reasonCodes: []
+        )
+
+        #expect(session.resolvedTitleText == "Repair storage title projection")
     }
 
     @Test

@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import pytest
 
+from zerg.catalogd.models import StorageSession
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
 from zerg.database import make_live_engine
@@ -197,6 +198,47 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
     assert card.head.capabilities.control_label == "live"
     assert card.head.capabilities.observe_only is False
     assert card.head.capabilities.can_send_input is True
+
+
+def test_storage_v2_untitled_session_uses_first_prompt_as_ready_title(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'storage-title.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    session_id = uuid4()
+    with LiveSession() as db:
+        db.add(
+            StorageSession(
+                session_id=str(session_id),
+                tenant_id="tenant-a",
+                owner_id="1",
+                provider="codex",
+                environment="production",
+                machine_id="cinder",
+                project="longhouse",
+                cwd="/workspace/longhouse",
+                started_at=now,
+                last_activity_at=now,
+                user_messages=1,
+                first_user_message_preview="[Image #1]\n\nRepair storage titles without an AI queue",
+                transcript_revision=1,
+                raw_state="durable",
+                render_state="ready",
+                commit_seq=1,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+        response = project_catalog_timeline_snapshot(_snapshot(db, _params()))
+
+    [card] = response.sessions
+    assert card.head.timeline_title == "Repair storage titles without an AI…"
+    assert card.head.summary_title == "Repair storage titles without an AI…"
+    assert card.head.anchor_title == "Repair storage titles without an AI…"
+    assert card.head.title_state == "ready"
+    assert card.head.title_source == "prompt"
 
 
 def test_live_catalog_timeline_keeps_runtime_and_control_axes_independent(tmp_path):

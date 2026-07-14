@@ -584,7 +584,7 @@ public struct MenuBarPanelView: View {
             id: session.id,
             sessionID: session.sessionId,
             provider: provider.isEmpty ? "unknown" : provider,
-            title: managedSessionTitle(session, fallbackProvider: provider),
+            title: managedSessionTitle(session),
             attention: session.menuBarAttentionKind,
             ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
             detail: managedSessionDetail(session),
@@ -666,7 +666,7 @@ public struct MenuBarPanelView: View {
             return nil
         }
 
-        let title = managedSessionTitle(session, fallbackProvider: session.provider)
+        let title = managedSessionTitle(session)
         return {
             setFeedback(
                 actionSink.handleOpenManagedSession(
@@ -800,15 +800,9 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    private func managedSessionTitle(_ session: ManagedSessionSnapshot, fallbackProvider: String?) -> String {
-        let titleState = session.titleState?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if let titleState, titleState != "ready" {
-            return "Naming session…"
-        }
-        for raw in [session.timelineTitle, session.summaryTitle, session.firstUserMessage] {
-            if let title = compactSessionText(raw, maxCharacters: 72) {
-                return title
-            }
+    private func managedSessionTitle(_ session: ManagedSessionSnapshot) -> String {
+        if let title = compactSessionText(session.resolvedTitleText, maxCharacters: 72) {
+            return title
         }
         return "Naming session…"
     }

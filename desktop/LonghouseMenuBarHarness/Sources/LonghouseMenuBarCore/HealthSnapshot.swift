@@ -1423,6 +1423,16 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         return "unknown"
     }
 
+    public var resolvedTitleText: String? {
+        for value in [timelineTitle, summaryTitle, firstUserMessage] {
+            let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !normalized.isEmpty {
+                return normalized
+            }
+        }
+        return nil
+    }
+
     public var normalizedUIPresence: String? {
         let normalized = uiPresence?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard let normalized, !normalized.isEmpty else {

@@ -67,6 +67,7 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveSessionThreadAlias
 from zerg.models.live_store import LiveTimelineCard
 from zerg.models.live_store import LiveUser
+from zerg.services.session_title import sanitize_title
 from zerg.storage_v2.contracts import DurableReceipt
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import envelope_id as compute_envelope_id
@@ -4357,6 +4358,9 @@ class CatalogStore:
                         + render_manifest["assistant_messages"],
                         "tool_calls": int((existing_session or {}).get("tool_calls") or 0) + render_manifest["tool_calls"],
                     }
+                    immediate_title = sanitize_title(render_manifest["first_user_message_preview"], max_words=6)
+                    if not (existing_session or {}).get("summary_title") and immediate_title:
+                        projection_values["summary_title"] = immediate_title
                     if not (existing_session or {}).get("first_user_message_preview") and render_manifest["first_user_message_preview"]:
                         projection_values["first_user_message_preview"] = render_manifest["first_user_message_preview"]
                     if render_manifest["last_visible_text_preview"]:
@@ -6320,6 +6324,7 @@ class CatalogStore:
 
 
 def _storage_catalog_compat_row(row) -> dict[str, Any]:
+    title = str(row["summary_title"] or "").strip() or sanitize_title(row["first_user_message_preview"], max_words=6)
     return {
         "session_id": str(row["session_id"]),
         "provider": str(row["provider"]),
@@ -6339,8 +6344,8 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "assistant_messages": int(row["assistant_messages"]),
         "tool_calls": int(row["tool_calls"]),
         "summary": None,
-        "summary_title": row["summary_title"],
-        "anchor_title": row["summary_title"],
+        "summary_title": title,
+        "anchor_title": title,
         "first_user_message_preview": row["first_user_message_preview"],
         "transcript_revision": int(row["transcript_revision"]),
         "summary_revision": 0,
@@ -6455,10 +6460,11 @@ def _refresh_legacy_migration_run(connection, run_id: str, commit_seq: int, obse
 
 
 def _storage_card_compat_row(row) -> dict[str, Any]:
+    title = str(row["summary_title"] or "").strip() or sanitize_title(row["first_user_message_preview"], max_words=6)
     return {
         "session_id": str(row["session_id"]),
         "last_activity_at": row["last_activity_at"],
-        "summary_title": row["summary_title"],
+        "summary_title": title,
         "first_user_message_preview": row["first_user_message_preview"],
         "user_messages": int(row["user_messages"]),
         "assistant_messages": int(row["assistant_messages"]),
@@ -7238,6 +7244,13 @@ def _recompute_render_generation_projection(
             user_messages=sum(int(row["user_messages"]) for row in rows),
             assistant_messages=sum(int(row["assistant_messages"]) for row in rows),
             tool_calls=sum(int(row["tool_calls"]) for row in rows),
+            summary_title=func.coalesce(
+                sessions.c.summary_title,
+                sanitize_title(
+                    str(first_preview_row["first_user_message_preview"]) if first_preview_row is not None else None,
+                    max_words=6,
+                ),
+            ),
             first_user_message_preview=(str(first_preview_row["first_user_message_preview"]) if first_preview_row is not None else None),
             last_visible_text_preview=(str(last_preview_row["last_visible_text_preview"]) if last_preview_row is not None else None),
         )
