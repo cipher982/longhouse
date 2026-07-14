@@ -176,7 +176,6 @@ defaults:
     "codex": ["launch", "run_once"]
   },
   "launch": {
-    "status": "ready",
     "blocked_by": null,
     "providers": [
       {
@@ -205,7 +204,6 @@ An offline enrollment remains present:
   "supports": [],
   "control_operations_by_provider": {},
   "launch": {
-    "status": "blocked",
     "blocked_by": "control_down",
     "providers": [],
     "default_provider": null,
@@ -216,9 +214,10 @@ An offline enrollment remains present:
 
 ### Contract Rules
 
-- `launch.status=ready` iff at least one provider has at least one supported
-  execution lifetime now.
-- `launch.blocked_by` is null when ready and required when blocked.
+- A machine is ready iff `launch.providers` contains at least one provider with
+  at least one supported execution lifetime now.
+- `launch.blocked_by` is null when providers are present and required when they
+  are empty. A redundant launch-status enum is intentionally omitted.
 - `launch.providers` is derived once from
   `control_operations_by_provider`; clients do not merge raw `supports` or
   legacy convenience fields.
@@ -232,8 +231,9 @@ An offline enrollment remains present:
 - `supports` and `control_operations_by_provider` remain raw/mechanical
   evidence for agent and diagnostic consumers.
 - `online`, `can_launch_codex`, `launchable_providers`, and
-  `launch_blocked_by` remain additive compatibility fields during migration,
-  then are removed from human-client code before any schema deletion.
+  `launch_blocked_by` remain compatibility and diagnostic fields. Human clients
+  stop reading them for launch decisions; deleting them is not part of this
+  epic.
 
 The first implementation should use the existing blocked-reason vocabulary.
 Do not add speculative status variants. `policy_restricted` lands only with a
@@ -250,11 +250,11 @@ real Control Plane entitlement input.
 | `server/zerg/services/managed_provider_contracts.py` | canonical provider-operation mechanics | remains the input to launch projection |
 | `web/src/services/api/launch.ts` | hand-maintained DTOs | generated machine DTO consumption |
 | `web/src/components/LaunchSessionModal.tsx` | capability merging, defaults, hidden offline machines | native web rendering of backend launch semantics |
-| `ios/Sources/Shared/LonghouseAPI.swift` | hand-maintained DTO plus capability inference | generated DTO plus transport only |
+| `ios/Sources/Shared/LonghouseAPI.swift` | hand-maintained DTO plus capability inference | hand-owned nested DTO plus transport only |
 | `ios/Sources/LonghouseApp/LaunchSessionSheet.swift` | capability/default inference and live-control-only form | native grouped UI plus canonical mode parity |
 | `scripts/ops/remote-launch-smoke.py` | Codex compatibility fallback | canonical launch-option assertion |
 | `server/zerg/cli/local_health.py` and dogfood scripts | operator diagnostics over raw truth | continue using raw operations, not human projection copy |
-| `web/src/pages/DevicesPage.tsx` | credential-centric management | later logical machine plus advanced credential management |
+| `web/src/pages/DevicesPage.tsx` | credential-centric management | deferred machine-management epic |
 
 ## Human UX Contract
 
@@ -291,13 +291,13 @@ SwiftUI may use a `Menu`/custom selection sheet if native `Picker` sections
 cannot express status detail cleanly. React may use a small listbox instead of
 an HTML `<select>`. Pixel parity is not a goal; semantic parity is.
 
-## Machine Lifecycle and Management
+## Deferred Follow-Ons
 
 The directory currently treats non-revoked device credentials grouped by
 `device_id` as enrollment. That is sufficient for this epic and correctly
 collapses duplicate credentials for one real machine.
 
-The follow-on management slice should make that model understandable:
+The later management epic should make that model understandable:
 
 - evolve the web **Device Tokens** page toward **Machines & credentials**;
 - show one logical machine row with its credential count and last-seen state;
@@ -307,8 +307,13 @@ The follow-on management slice should make that model understandable:
 - do not auto-expire legitimate offline machines based only on age;
 - require QA/CI producers to own and verify cleanup of ephemeral credentials.
 
-This slice must use existing revocation mechanics rather than adding a second
-machine registry.
+That work must use existing revocation mechanics rather than adding a second
+machine registry. It is not a blocker for the launch-contract and picker work.
+
+A producer-wide credential cleanup audit is also deferred. This epic preserves
+the benchmark cleanup regression introduced in `38f05cdc2` and requires no
+name-based UI hiding; other producers should be fixed when concrete leakage is
+observed or in a dedicated automation-hygiene sweep.
 
 ## Implementation Workstreams
 
@@ -322,15 +327,14 @@ machine registry.
 - Keep `/api/agents/machines` and `/api/timeline/machines` byte-shape aligned.
 - Add `GET /api/agents/machines` to the machine-surface canon.
 
-### B. Contract Generation and Compatibility
+### B. Contract Types and Compatibility
 
 - Generate TypeScript machine DTOs from OpenAPI instead of maintaining
   `web/src/services/api/launch.ts` copies.
-- Add machine-directory DTOs to the supported iOS OpenAPI generation path
-  rather than hand-maintaining `LonghouseAPI.swift` models.
+- Add the nested launch DTO to the existing hand-owned iOS machine-directory
+  model. Expanding the session-focused iOS generator is not a blocker.
 - Keep legacy response fields for an additive migration window.
-- Remove client compatibility inference before considering backend field
-  deletion.
+- Remove client compatibility inference; backend field deletion is deferred.
 - Add schema invariants proving defaults always reference supported options.
 
 ### C. Web Launch Surface
@@ -352,16 +356,7 @@ machine registry.
 - Persist last selected ready machine per Runtime Host identity.
 - Keep preview coverage for mixed ready/offline/blocked lists and large names.
 
-### E. Machine Lifecycle Hygiene
-
-- Keep the benchmark cleanup regression introduced in `38f05cdc2`.
-- Audit every `qa-live-*`, benchmark, canary, and smoke enrollment producer for
-  create/revoke pairing and failure-path cleanup.
-- Add post-run assertions where hosted automation creates credentials.
-- Specify and implement logical-machine forget behavior on top of token
-  revocation.
-
-### F. Diagnostics and Agent Consumers
+### E. Diagnostics and Agent Consumers
 
 - Keep `supports` and `control_operations_by_provider` available to
   `local-health`, provider proof, dogfood checks, and scripts.
@@ -379,9 +374,8 @@ machine registry.
 4. iOS grouped picker migrated to `launch` without changing its runtime mode.
 5. iOS first-message/runtime parity, then canonical one-shot default.
 6. Remove client-side legacy inference and compatibility helpers.
-7. Machine lifecycle management and remaining automation cleanup audits.
-8. Evaluate removal of legacy response fields only after shipped clients no
-   longer depend on them.
+7. Stop. Machine management, producer-wide cleanup, generator expansion, and
+   legacy field deletion are separate follow-ons.
 
 Each slice should be independently shippable. Do not combine API migration,
 both UI rewrites, and machine-management mutations in one change.
@@ -406,8 +400,8 @@ both UI rewrites, and machine-management mutations in one change.
 - `/api/agents/machines` and `/api/timeline/machines` remain response-shape
   equivalent.
 - Raw machine capabilities remain available to agents and diagnostics.
-- Contract generation fails CI if backend schema changes drift from TypeScript
-  or Swift DTOs.
+- Web type checking consumes the generated OpenAPI machine schema; iOS decode
+  tests pin its intentionally hand-owned DTO.
 
 ## Test Strategy
 
@@ -418,8 +412,8 @@ both UI rewrites, and machine-management mutations in one change.
   defaults, last selection, execution-lifetime gating.
 - iOS: DTO decoding, grouped previews, selection reset, offline explanation,
   backend defaults, one-shot/live-control payloads.
-- Automation: successful, failed, and interrupted ephemeral-token workflows all
-  attempt revocation and verify absence from the directory.
+- Automation: retain the focused benchmark cleanup regression from
+  `38f05cdc2`; broader producer coverage is deferred.
 - Visual QA: compact and long-name machine lists in light/dark mode and normal
   accessibility text sizes.
 
