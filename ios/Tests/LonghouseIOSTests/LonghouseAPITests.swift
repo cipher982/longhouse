@@ -279,7 +279,13 @@ struct LonghouseAPITests {
               "can_launch_codex": true,
               "launch_blocked_by": null,
               "last_seen_at": "2026-05-24T00:00:00Z",
-              "engine_build": "dev"
+              "engine_build": "dev",
+              "launch": {
+                "blocked_by": null,
+                "providers": [{"provider": "codex", "execution_lifetimes": ["live_control"]}],
+                "default_provider": "codex",
+                "default_execution_lifetime": "live_control"
+              }
             },
             {
               "device_id": "offline",
@@ -290,7 +296,13 @@ struct LonghouseAPITests {
               "can_launch_codex": false,
               "launch_blocked_by": "control_down",
               "last_seen_at": null,
-              "engine_build": null
+              "engine_build": null,
+              "launch": {
+                "blocked_by": "control_down",
+                "providers": [],
+                "default_provider": null,
+                "default_execution_lifetime": null
+              }
             }
           ]
         }
@@ -379,7 +391,17 @@ struct LonghouseAPITests {
           "launchable_providers": ["claude", "codex", "opencode"],
           "launch_blocked_by": null,
           "last_seen_at": null,
-          "engine_build": "dev"
+          "engine_build": "dev",
+          "launch": {
+            "blocked_by": null,
+            "providers": [
+              {"provider": "claude", "execution_lifetimes": ["live_control"]},
+              {"provider": "codex", "execution_lifetimes": ["one_shot", "live_control"]},
+              {"provider": "opencode", "execution_lifetimes": ["live_control"]}
+            ],
+            "default_provider": "codex",
+            "default_execution_lifetime": "one_shot"
+          }
         }
         """
         let entry = try JSONDecoder.snakeCase.decode(MachineDirectoryEntry.self, from: Data(json.utf8))
@@ -407,7 +429,13 @@ struct LonghouseAPITests {
           "launchable_providers": [],
           "launch_blocked_by": null,
           "last_seen_at": null,
-          "engine_build": "dev"
+          "engine_build": "dev",
+          "launch": {
+            "blocked_by": null,
+            "providers": [{"provider": "codex", "execution_lifetimes": ["one_shot"]}],
+            "default_provider": "codex",
+            "default_execution_lifetime": "one_shot"
+          }
         }
         """
         let entry = try JSONDecoder.snakeCase.decode(MachineDirectoryEntry.self, from: Data(json.utf8))

@@ -54,6 +54,14 @@ struct LaunchSessionSheet: View {
         machines.first { $0.deviceId == selectedDeviceId }
     }
 
+    private var launchableMachines: [MachineDirectoryEntry] {
+        machines.filter(Self.canStartInteractiveSession)
+    }
+
+    private var unavailableMachines: [MachineDirectoryEntry] {
+        machines.filter { !Self.canStartInteractiveSession($0) }
+    }
+
     private var normalizedCwd: String {
         cwd.trimmingCharacters(in: .whitespacesAndNewlines)
     }
@@ -105,7 +113,7 @@ struct LaunchSessionSheet: View {
                     ProgressView("Loading machines...")
                 } else if let loadError {
                     errorView(loadError)
-                } else if machines.isEmpty {
+                } else if launchableMachines.isEmpty {
                     emptyView
                 } else {
                     formView
@@ -128,27 +136,38 @@ struct LaunchSessionSheet: View {
     private var formView: some View {
         Form {
             Section("Machine") {
-                Picker("Target", selection: $selectedDeviceId) {
-                    ForEach(machines, id: \.deviceId) { machine in
-                        Label {
-                            Text(machineLabel(machine))
-                        } icon: {
-                            let available = Self.canStartInteractiveSession(machine)
-                            Image(systemName: available ? "circle.fill" : "xmark.circle.fill")
-                                .foregroundStyle(available ? .green : .red)
+                Menu {
+                    Section("Available") {
+                        ForEach(launchableMachines, id: \.deviceId) { machine in
+                            Button {
+                                selectMachine(machine)
+                            } label: {
+                                Label(machine.machineName, systemImage: machine.deviceId == selectedDeviceId ? "checkmark" : "circle.fill")
+                            }
                         }
-                        .tag(machine.deviceId)
                     }
-                }
-                .onChange(of: selectedDeviceId) { _, _ in
-                    cwd = ""
-                    workspaceSearch = ""
-                    workspaceError = nil
-                    submitError = nil
-                    showManualPath = false
-                    let nextMachine = selectedMachine
-                    let nextProvider = Self.canStartInteractiveSession(nextMachine) ? Self.defaultLiveControlProvider(for: nextMachine) : ""
-                    selectedProvider = nextProvider
+
+                    if !unavailableMachines.isEmpty {
+                        Section("Unavailable") {
+                            ForEach(unavailableMachines, id: \.deviceId) { machine in
+                                Label("\(machine.machineName) — \(launchBlockedLabel(machine))", systemImage: "circle")
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        Circle()
+                            .fill(Color.green)
+                            .frame(width: 10, height: 10)
+                        Text(selectedMachine?.machineName ?? "Choose a machine")
+                        Spacer()
+                        Text("Ready")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
 
@@ -330,6 +349,16 @@ struct LaunchSessionSheet: View {
         loading = false
     }
 
+    private func selectMachine(_ machine: MachineDirectoryEntry) {
+        selectedDeviceId = machine.deviceId
+        selectedProvider = Self.defaultLiveControlProvider(for: machine)
+        cwd = ""
+        workspaceSearch = ""
+        workspaceError = nil
+        submitError = nil
+        showManualPath = false
+    }
+
     private func loadWorkspaceSuggestions(for deviceId: String) async {
         guard !usesPreviewData, !deviceId.isEmpty, let api = LonghouseAPI(host: appState.serverURL) else {
             return
@@ -411,24 +440,8 @@ struct LaunchSessionSheet: View {
         return !defaultLiveControlProvider(for: machine).isEmpty
     }
 
-    private func machineLabel(_ machine: MachineDirectoryEntry) -> String {
-        let suffix: String
-        if Self.canStartInteractiveSession(machine) {
-            suffix = ""
-        } else if machine.launchBlockedBy == "control_down" || !machine.online {
-            suffix = " - offline"
-        } else {
-            suffix = " - unavailable"
-        }
-
-        if let engineBuild = machine.engineBuild, !engineBuild.isEmpty {
-            return "\(machine.machineName) (\(engineBuild))\(suffix)"
-        }
-        return "\(machine.machineName)\(suffix)"
-    }
-
     private func launchBlockedLabel(_ machine: MachineDirectoryEntry) -> String {
-        switch machine.launchBlockedBy {
+        switch machine.launch.blockedBy {
         case "control_down":
             return "control channel disconnected"
         case "no_codex_support":
@@ -577,7 +590,12 @@ private func previewMachine(
     providers: [String] = ["claude", "codex", "opencode"],
     launchBlockedBy: String? = nil
 ) -> MachineDirectoryEntry {
-    MachineDirectoryEntry(
+    let launchProviders = online
+        ? providers.map { provider in
+            MachineLaunchProviderOption(provider: provider, executionLifetimes: [.liveControl])
+        }
+        : []
+    return MachineDirectoryEntry(
         deviceId: "cinder",
         machineName: "cinder",
         online: online,
@@ -588,7 +606,13 @@ private func previewMachine(
         launchableProviders: providers,
         launchBlockedBy: launchBlockedBy,
         lastSeenAt: "2026-05-24T00:00:00Z",
-        engineBuild: "dev"
+        engineBuild: "dev",
+        launch: MachineLaunchProjection(
+            blockedBy: online ? nil : (launchBlockedBy ?? "control_down"),
+            providers: launchProviders,
+            defaultProvider: online ? (providers.contains("codex") ? "codex" : providers.first) : nil,
+            defaultExecutionLifetime: online ? .liveControl : nil
+        )
     )
 }
 

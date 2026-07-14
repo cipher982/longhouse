@@ -808,6 +808,18 @@ struct LonghouseAPI: Sendable {
 
 // MARK: - Remote session launch
 
+public struct MachineLaunchProviderOption: Decodable, Sendable, Hashable {
+    public let provider: String
+    public let executionLifetimes: [RemoteExecutionLifetime]
+}
+
+public struct MachineLaunchProjection: Decodable, Sendable, Hashable {
+    public let blockedBy: String?
+    public let providers: [MachineLaunchProviderOption]
+    public let defaultProvider: String?
+    public let defaultExecutionLifetime: RemoteExecutionLifetime?
+}
+
 public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
     public let deviceId: String
     public let machineName: String
@@ -820,6 +832,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
     public let launchBlockedBy: String?
     public let lastSeenAt: String?
     public let engineBuild: String?
+    public let launch: MachineLaunchProjection
 
     public init(
         deviceId: String,
@@ -832,7 +845,8 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         launchableProviders: [String] = [],
         launchBlockedBy: String?,
         lastSeenAt: String?,
-        engineBuild: String?
+        engineBuild: String?,
+        launch: MachineLaunchProjection
     ) {
         self.deviceId = deviceId
         self.machineName = machineName
@@ -845,11 +859,12 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         self.launchBlockedBy = launchBlockedBy
         self.lastSeenAt = lastSeenAt
         self.engineBuild = engineBuild
+        self.launch = launch
     }
 
     private enum CodingKeys: String, CodingKey {
         case deviceId, machineName, online, controlChannelStatus, supports
-        case controlOperationsByProvider, canLaunchCodex, launchableProviders, launchBlockedBy, lastSeenAt, engineBuild
+        case controlOperationsByProvider, canLaunchCodex, launchableProviders, launchBlockedBy, lastSeenAt, engineBuild, launch
     }
 
     public init(from decoder: Decoder) throws {
@@ -865,40 +880,29 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         launchBlockedBy = try c.decodeIfPresent(String.self, forKey: .launchBlockedBy)
         lastSeenAt = try c.decodeIfPresent(String.self, forKey: .lastSeenAt)
         engineBuild = try c.decodeIfPresent(String.self, forKey: .engineBuild)
+        launch = try c.decode(MachineLaunchProjection.self, forKey: .launch)
     }
 
     public var supportsCodexLaunch: Bool { canLaunchCodex ?? supports.contains("codex.launch") }
     public var remoteLaunchProviders: [String] {
-        var providers = Set(launchableProviders)
-        for (provider, operations) in controlOperationsByProvider {
-            if operations.contains("launch") || operations.contains("run_once") {
-                providers.insert(provider)
-            }
-        }
-        return providers.sorted()
+        launch.providers.map(\.provider)
     }
 
     public var isLaunchable: Bool {
-        let controlConnected = controlChannelStatus.map { $0 == "connected" } ?? online
-        if !remoteLaunchProviders.isEmpty {
-            return controlConnected
-        }
-        return controlConnected && supportsCodexLaunch
+        !launch.providers.isEmpty
     }
 
     /// Provider to default to (codex for continuity, else the first advertised).
     public var defaultProvider: String? {
-        let providers = remoteLaunchProviders
-        if providers.contains("codex") { return "codex" }
-        return providers.first ?? (supportsCodexLaunch ? "codex" : nil)
+        launch.defaultProvider
     }
 
     public func supportsRunOnce(provider: String) -> Bool {
-        controlOperationsByProvider[provider]?.contains("run_once") == true || supports.contains("\(provider).run_once")
+        launch.providers.first(where: { $0.provider == provider })?.executionLifetimes.contains(.oneShot) == true
     }
 
     public func supportsLiveControlLaunch(provider: String) -> Bool {
-        controlOperationsByProvider[provider]?.contains("launch") == true || launchableProviders.contains(provider)
+        launch.providers.first(where: { $0.provider == provider })?.executionLifetimes.contains(.liveControl) == true
     }
 }
 
