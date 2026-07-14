@@ -141,10 +141,9 @@ describe("LaunchSessionModal", () => {
     });
     renderModal();
     expect(await screen.findByTestId("launch-no-launchable")).toBeInTheDocument();
-    expect(
-      screen.getByText(/4 enrolled machines have no active control channel: cinder, old-ci-1, old-ci-2, plus 1 more\./),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/This sheet refreshes automatically\./)).toBeInTheDocument();
+    expect(screen.getByText("No machines ready to launch")).toBeInTheDocument();
+    expect(screen.getByText("old-ci-3")).toBeInTheDocument();
+    expect(screen.getAllByText("Offline")).toHaveLength(4);
     expect(screen.queryByText(/does not advertise codex\.launch/)).not.toBeInTheDocument();
   });
 
@@ -164,7 +163,7 @@ describe("LaunchSessionModal", () => {
     renderModal();
     expect(await screen.findByTestId("launch-no-launchable")).toBeInTheDocument();
     expect(screen.getByText(/old-engine/)).toBeInTheDocument();
-    expect(screen.getByText(/connected, but this engine does not advertise Codex launch/)).toBeInTheDocument();
+    expect(screen.getByText("Console launch unavailable")).toBeInTheDocument();
   });
 
   it("shows connected machines with unproven provider operations as not launchable", async () => {
@@ -185,7 +184,7 @@ describe("LaunchSessionModal", () => {
     renderModal();
     expect(await screen.findByTestId("launch-no-launchable")).toBeInTheDocument();
     expect(screen.getByText(/antigravity-host/)).toBeInTheDocument();
-    expect(screen.getByText(/connected, but this engine cannot remote-launch provider sessions/)).toBeInTheDocument();
+    expect(screen.getByText("Console launch unavailable")).toBeInTheDocument();
   });
 
   it("dismisses on Escape", async () => {
@@ -229,8 +228,26 @@ describe("LaunchSessionModal", () => {
     expect(picker).toHaveTextContent("Ready");
     expect(picker).toHaveTextContent("Unavailable");
     expect(picker).toHaveTextContent("cube");
-    expect(picker).toHaveTextContent("control channel disconnected");
+    expect(picker).toHaveTextContent("Offline");
     expect(picker).not.toHaveTextContent("abc123");
+  });
+
+  it("preserves the authored task when the target machine changes", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({ device_id: "cinder", machine_name: "cinder" }),
+        machine({ device_id: "cube", machine_name: "cube" }),
+      ],
+    });
+    const user = userEvent.setup();
+    renderModal();
+
+    const prompt = await screen.findByTestId("launch-initial-prompt");
+    await user.type(prompt, "Keep this task");
+    await user.click(screen.getByRole("button", { name: /cube Ready/ }));
+
+    expect(prompt).toHaveValue("Keep this task");
+    expect(screen.getByRole("button", { name: /cube Ready/ })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("submits a launch and invokes onLaunched with the session id", async () => {
@@ -306,8 +323,8 @@ describe("LaunchSessionModal", () => {
 
     await user.type(await screen.findByTestId("launch-cwd-input"), "/Users/me/repo");
     expect(screen.queryByTestId("launch-initial-prompt")).not.toBeInTheDocument();
-    await user.click(screen.getByText("Advanced"));
-    expect(screen.getByRole("button", { name: "Keep runtime open" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByText("Advanced options"));
+    expect(screen.getByRole("button", { name: "Keep session open" })).toHaveAttribute("aria-pressed", "true");
     await user.click(screen.getByTestId("launch-submit"));
 
     await waitFor(() => expect(apiMocks.launchRemoteSession).toHaveBeenCalled());
@@ -349,8 +366,8 @@ describe("LaunchSessionModal", () => {
     renderModal();
 
     await user.type(await screen.findByTestId("launch-cwd-input"), "/Users/me/repo");
-    await user.click(screen.getByText("Advanced"));
-    await user.click(screen.getByRole("button", { name: "Keep runtime open" }));
+    await user.click(screen.getByText("Advanced options"));
+    await user.click(screen.getByRole("button", { name: "Keep session open" }));
     expect(screen.queryByTestId("launch-initial-prompt")).not.toBeInTheDocument();
     await user.click(screen.getByTestId("launch-submit"));
 
@@ -399,7 +416,7 @@ describe("LaunchSessionModal", () => {
     const cwdInput = await screen.findByTestId("launch-cwd-input");
     await waitFor(() => expect(cwdInput).toHaveValue("/Users/example/git/zerg"));
 
-    await user.click(screen.getByRole("button", { name: "~" }));
+    await user.click(screen.getByRole("button", { name: /^~ / }));
     expect(cwdInput).toHaveValue("/Users/example");
   });
 

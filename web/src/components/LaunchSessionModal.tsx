@@ -67,7 +67,9 @@ export default function LaunchSessionModal({
     refetchInterval: isOpen ? 5000 : false,
   });
 
-  const cwdInputRef = useRef<HTMLInputElement | null>(null);
+  const machinePickerRef = useRef<HTMLDetailsElement | null>(null);
+  const providerPickerRef = useRef<HTMLDetailsElement | null>(null);
+  const workspacePickerRef = useRef<HTMLDetailsElement | null>(null);
   const [deviceId, setDeviceId] = useState<string>("");
   const [provider, setProvider] = useState<string>("");
   const [cwd, setCwd] = useState<string>("");
@@ -179,12 +181,6 @@ export default function LaunchSessionModal({
     return () => document.removeEventListener("keydown", handler);
   }, [isOpen, onClose]);
 
-  // Focus the cwd input once we have a launchable machine selected.
-  useEffect(() => {
-    if (!isOpen || !deviceId) return;
-    cwdInputRef.current?.focus();
-  }, [isOpen, deviceId]);
-
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
     setSubmitting(true);
@@ -256,9 +252,15 @@ export default function LaunchSessionModal({
                 void handleSubmit();
               }}
             >
-              <div className="form-field">
-                <span>Machine</span>
-                <div className="launch-machine-picker" data-testid="launch-machine-select">
+              <span className="launch-section-label">Machine</span>
+              <details ref={machinePickerRef} className="launch-choice" data-testid="launch-machine-select">
+                <summary>
+                  <span className="launch-choice-copy">
+                    <strong>{selectedMachine?.machine_name ?? "Choose a machine"}</strong>
+                    <small><span className="launch-machine-status is-ready" aria-hidden="true" />Ready</small>
+                  </span>
+                </summary>
+                <div className="launch-choice-panel">
                   <span className="launch-machine-group-label">Available</span>
                   {launchable.map((machine) => (
                     <button
@@ -267,107 +269,88 @@ export default function LaunchSessionModal({
                       className={`launch-machine-row${machine.device_id === deviceId ? " is-selected" : ""}`}
                       aria-pressed={machine.device_id === deviceId}
                       onClick={() => {
+                        const nextProvider = defaultProvider(machine);
                         setDeviceId(machine.device_id);
-                        setProvider("");
-                        setExecutionLifetime(machine.launch.default_execution_lifetime ?? "live_control");
-                        setInitialPrompt("");
+                        setProvider(nextProvider);
+                        setExecutionLifetime(defaultExecutionLifetime(machine, nextProvider));
                         setCwd("");
                         setWorkspaceSearch("");
                         setError(null);
+                        if (machinePickerRef.current) machinePickerRef.current.open = false;
                       }}
                     >
                       <span className="launch-machine-status is-ready" aria-hidden="true" />
-                      <strong>{machine.machine_name}</strong>
-                      <span>Ready</span>
+                      <span className="launch-machine-copy"><strong>{machine.machine_name}</strong><small>Ready</small></span>
+                      <span>{machine.device_id === deviceId ? "✓" : ""}</span>
                     </button>
                   ))}
                   {unavailable.length > 0 && (
                     <>
                       <span className="launch-machine-group-label">Unavailable</span>
                       {unavailable.map((machine) => (
-                        <div key={machine.device_id} className="launch-machine-row is-unavailable">
-                          <span
-                            className={`launch-machine-status${machine.launch.blocked_by === "control_down" ? "" : " is-warning"}`}
-                            aria-hidden="true"
-                          />
-                          <strong>{machine.machine_name}</strong>
-                          <span>{launchBlockedLabel(machine)}</span>
+                        <div
+                          key={machine.device_id}
+                          className="launch-machine-row is-unavailable"
+                          aria-label={`${machine.machine_name}, ${launchBlockedLabel(machine)}, Not available`}
+                        >
+                          <span className={`launch-machine-status ${machineStatusClass(machine)}`} aria-hidden="true" />
+                          <span className="launch-machine-copy"><strong>{machine.machine_name}</strong><small>{launchBlockedLabel(machine)}</small></span>
+                          <span />
                         </div>
                       ))}
                     </>
                   )}
                 </div>
-              </div>
+              </details>
 
-              {selectedMachine && launchProvidersForMachine(selectedMachine).length > 1 && (
-                <label className="form-field">
-                  <span>Coding agent</span>
-                  <select
-                    value={provider}
-                    onChange={(e) => {
-                      setProvider(e.target.value);
-                      setError(null);
-                    }}
-                    data-testid="launch-provider-select"
-                  >
-                    {launchProvidersForMachine(selectedMachine).map((p) => (
-                      <option key={p} value={p}>
-                        {getProviderLabel(p)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-
-              <label className="form-field">
-                <span>Working directory on {selectedMachine?.machine_name ?? deviceId}</span>
-                <input
-                  ref={cwdInputRef}
-                  type="text"
-                  value={cwd}
-                  onChange={(e) => setCwd(e.target.value)}
-                  placeholder="/Users/example/git/zerg/longhouse"
-                  autoComplete="off"
-                  spellCheck={false}
-                  data-testid="launch-cwd-input"
-                />
-                {workspaces.length > 0 && (
-                  <input
-                    type="text"
-                    value={workspaceSearch}
-                    onChange={(e) => setWorkspaceSearch(e.target.value)}
-                    placeholder="Filter recent workspaces…"
-                    autoComplete="off"
-                    spellCheck={false}
-                    className="launch-workspace-search"
-                    data-testid="launch-workspace-search"
-                  />
-                )}
-                {filteredWorkspaces.length > 0 && (
-                  <div className="launch-path-suggestions" data-testid="launch-path-suggestions">
-                    {filteredWorkspaces.map((w) => (
-                      <button
-                        key={w.path}
-                        type="button"
-                        className={`launch-path-chip${w.path === cwd ? " is-selected" : ""}`}
-                        title={w.path}
-                        onClick={() => {
-                          setCwd(w.path);
+              <span className="launch-section-label">Session</span>
+              <div className="launch-session-card">
+                {selectedMachine && launchProvidersForMachine(selectedMachine).length > 1 ? (
+                  <details ref={providerPickerRef} className="launch-choice launch-choice--nested" data-testid="launch-provider-select">
+                    <summary><span className="launch-choice-copy"><strong>{getProviderLabel(provider)}</strong><small>Agent · {executionLifetimeLabel(executionLifetime)}</small></span></summary>
+                    <div className="launch-choice-panel">
+                      {launchProvidersForMachine(selectedMachine).map((p) => (
+                        <button key={p} type="button" className="launch-option-row" onClick={() => {
+                          setProvider(p);
+                          setExecutionLifetime(defaultExecutionLifetime(selectedMachine, p));
                           setError(null);
-                          cwdInputRef.current?.focus();
-                        }}
-                      >
-                        {w.label}
+                          if (providerPickerRef.current) providerPickerRef.current.open = false;
+                        }}>
+                          <span>{getProviderLabel(p)}</span><span>{p === provider ? "✓" : ""}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </details>
+                ) : (
+                  <div className="launch-static-choice"><strong>{getProviderLabel(provider)}</strong><small>Agent · {executionLifetimeLabel(executionLifetime)}</small></div>
+                )}
+
+                <details ref={workspacePickerRef} className="launch-choice launch-choice--nested">
+                  <summary><span className="launch-choice-copy"><strong>{workspaceTitle(cwd, workspaces)}</strong><small>Workspace · {cwd ? compactPath(cwd) : "Choose a workspace"}</small></span></summary>
+                  <div className="launch-choice-panel launch-workspace-panel">
+                    {workspaces.length > 0 && (
+                      <input type="search" value={workspaceSearch} onChange={(e) => setWorkspaceSearch(e.target.value)} placeholder="Filter workspaces…" data-testid="launch-workspace-search" />
+                    )}
+                    {filteredWorkspaces.map((w) => (
+                      <button key={w.path} type="button" className="launch-option-row launch-workspace-row" onClick={() => {
+                        setCwd(w.path);
+                        setError(null);
+                        if (workspacePickerRef.current) workspacePickerRef.current.open = false;
+                      }}>
+                        <span><strong>{w.label}</strong><small>{compactPath(w.path)}</small></span><span>{w.path === cwd ? "✓" : ""}</span>
                       </button>
                     ))}
+                    <label className="launch-manual-path">
+                      <span>Other path</span>
+                      <input type="text" value={cwd} onChange={(e) => setCwd(e.target.value)} placeholder="/Users/example/git/zerg/longhouse" autoComplete="off" spellCheck={false} data-testid="launch-cwd-input" />
+                    </label>
                   </div>
-                )}
-                <small>Must be an existing absolute directory on the target machine.</small>
-              </label>
+                </details>
+              </div>
 
               {executionLifetime === "one_shot" && (
                 <label className="form-field">
-                  <span>First message</span>
+                  <span className="launch-section-label">Task</span>
                   <textarea
                     value={initialPrompt}
                     onChange={(e) => {
@@ -381,19 +364,8 @@ export default function LaunchSessionModal({
                 </label>
               )}
 
-              <label className="form-field">
-                <span>Display name (optional)</span>
-                <input
-                  type="text"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder="e.g. zerg — refactor launch"
-                  data-testid="launch-display-name"
-                />
-              </label>
-
               <details className="launch-advanced" data-testid="launch-advanced-runtime">
-                <summary>Advanced</summary>
+                <summary>Advanced options</summary>
                 <div className="form-field">
                   <span>Runtime</span>
                   <div className="launch-mode-segment" role="radiogroup" aria-label="Runtime">
@@ -407,7 +379,7 @@ export default function LaunchSessionModal({
                         setError(null);
                       }}
                     >
-                      Default
+                      Run once
                     </button>
                     <button
                       type="button"
@@ -419,10 +391,14 @@ export default function LaunchSessionModal({
                         setError(null);
                       }}
                     >
-                      Keep runtime open
+                      Keep session open
                     </button>
                   </div>
                 </div>
+                <label className="form-field">
+                  <span>Session name (optional)</span>
+                  <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="e.g. zerg — refactor launch" data-testid="launch-display-name" />
+                </label>
               </details>
 
               {error && (
@@ -464,31 +440,20 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
       </div>
     );
   }
-  const blocked = machines.filter((m) => m.launch.providers.length === 0);
-  const offline = blocked.filter((m) => m.launch.blocked_by === "control_down");
-  const visibleBlocked = blocked.filter((m) => m.launch.blocked_by !== "control_down").slice(0, 5);
-  const hiddenBlockedCount = Math.max(
-    blocked.filter((m) => m.launch.blocked_by !== "control_down").length - visibleBlocked.length,
-    0,
-  );
-
   return (
     <div className="modal-empty-state" data-testid="launch-no-launchable">
-      <p>No machine can start a session right now.</p>
-      {visibleBlocked.length > 0 && (
-        <ul>
-          {visibleBlocked.map((m) => (
-            <li key={m.device_id}>
-              <strong>{m.machine_name}</strong> — {launchBlockedLabel(m)}
-            </li>
-          ))}
-          {hiddenBlockedCount > 0 && <li>{hiddenBlockedCount} more connected machines are blocked.</li>}
-        </ul>
-      )}
-      {offline.length > 0 && (
-        <p>{machineSummary(offline, "have no active control channel")}</p>
-      )}
-      <p>Restart or upgrade the Machine Agent on the target machine. This sheet refreshes automatically.</p>
+      <p><strong>No machines ready to launch</strong></p>
+      <p>Your machines remain listed and will become available when their Console connection returns.</p>
+      <div className="launch-choice-panel is-static">
+        <span className="launch-machine-group-label">Unavailable</span>
+        {machines.map((machine) => (
+          <div key={machine.device_id} className="launch-machine-row is-unavailable" aria-label={`${machine.machine_name}, ${launchBlockedLabel(machine)}, Not available`}>
+            <span className={`launch-machine-status ${machineStatusClass(machine)}`} aria-hidden="true" />
+            <span className="launch-machine-copy"><strong>{machine.machine_name}</strong><small>{launchBlockedLabel(machine)}</small></span>
+            <span />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -496,28 +461,48 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
 function launchBlockedLabel(machine: MachineDirectoryEntry): string {
   switch (machine.launch.blocked_by) {
     case "control_down":
-      return "control channel disconnected";
+      return lastSeenLabel(machine);
     case "no_codex_support":
-      return "connected, but this engine does not advertise Codex launch";
+      return "Console launch unavailable";
     case "no_launch_support":
-      return "connected, but this engine cannot remote-launch provider sessions";
+      return "Console launch unavailable";
     case "engine_too_old":
-      return "engine too old for Codex launch";
+      return "Update required";
     case "auth_failed":
-      return "control channel auth failed";
+      return "Needs repair";
     case "runtime_unreachable":
-      return "runtime host unreachable";
+      return "Needs repair";
     default:
-      return machine.online ? "launch unavailable" : "control channel disconnected";
+      return machine.online ? "Console launch unavailable" : lastSeenLabel(machine);
   }
 }
 
-function machineSummary(machines: MachineDirectoryEntry[], reason: string): string {
-  const preview = machines.slice(0, 3);
-  const hidden = Math.max(machines.length - preview.length, 0);
-  const names = preview.map((m) => m.machine_name).join(", ");
-  const prefix = machines.length === 1 ? "1 enrolled machine" : `${machines.length} enrolled machines`;
-  return `${prefix} ${reason}${names ? `: ${names}` : ""}${hidden > 0 ? `, plus ${hidden} more` : ""}.`;
+function lastSeenLabel(machine: MachineDirectoryEntry): string {
+  if (!machine.last_seen_at) return "Offline";
+  const seen = new Date(machine.last_seen_at);
+  if (Number.isNaN(seen.getTime())) return "Offline";
+  const days = Math.max(0, Math.round((Date.now() - seen.getTime()) / 86_400_000));
+  if (days === 0) return "Offline · Last seen today";
+  return `Offline · Last seen ${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+function machineStatusClass(machine: MachineDirectoryEntry): string {
+  if (machine.launch.blocked_by === "control_down") return "is-offline";
+  if (machine.launch.blocked_by === "auth_failed" || machine.launch.blocked_by === "runtime_unreachable") return "is-repair";
+  return "is-warning";
+}
+
+function executionLifetimeLabel(lifetime: ExecutionLifetime): string {
+  return lifetime === "one_shot" ? "Run once" : "Keep session open";
+}
+
+function compactPath(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~");
+}
+
+function workspaceTitle(cwd: string, workspaces: Array<{ path: string; label: string }>): string {
+  if (!cwd) return "Choose a workspace";
+  return workspaces.find((workspace) => workspace.path === cwd)?.label ?? cwd.split("/").filter(Boolean).at(-1) ?? cwd;
 }
 
 function formatLaunchFailure(result: {
