@@ -51,6 +51,28 @@ def test_launch_panel_non_steerable_softens_to_watch(capsys):
     assert "Steer from anywhere" not in out
 
 
+def test_launch_panel_local_only_copy(capsys):
+    launch_ui.launch_panel(
+        provider_label="Cursor",
+        base_url="https://david010.longhouse.ai",
+        machine_name="cinder",
+        session_id=_SESSION_ID,
+        verbose=False,
+        capability="local_only",
+    )
+    out = capsys.readouterr().out
+    assert "Local Helm" in out
+    assert "Steer from anywhere" not in out
+    assert "Watch on your timeline" not in out
+
+
+def test_exit_bookend_non_durable_clean_exit(capsys):
+    launch_ui.exit_bookend(exit_code=0, machine_name="cinder", durable=False)
+    out = capsys.readouterr().out
+    assert "not synced to Longhouse" in out
+    assert "thread saved" not in out
+
+
 def test_launch_panel_verbose_appends_full_detail(capsys):
     launch_ui.launch_panel(
         provider_label="Claude",
