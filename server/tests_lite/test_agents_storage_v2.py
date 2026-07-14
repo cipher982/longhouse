@@ -20,6 +20,7 @@ from zerg.config import get_settings
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.raw_object_workers import RawObjectWorkerPool
+from zerg.services.raw_object_workers import RawObjectWorkerBusy
 from zerg.storage_v2.contracts import EnvelopeIdentity
 from zerg.storage_v2.contracts import RenderDetailCursor
 from zerg.storage_v2.contracts import envelope_id
@@ -37,6 +38,13 @@ class _AdmissionOnlyPool:
 
     async def seal(self, *_args, **_kwargs):
         raise AssertionError("rejected request reached storage worker")
+
+
+class _BusyPool:
+    @asynccontextmanager
+    async def admission(self, lane):
+        raise RawObjectWorkerBusy(f"{lane} full")
+        yield
 
 
 class _InlineRenderPool:
@@ -434,6 +442,32 @@ async def test_storage_v2_rejects_identity_mismatch_before_catalog_work(monkeypa
         )
     assert response.status_code == 403
     assert response.json()["detail"]["code"] == "identity_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_busy_lane_returns_typed_backpressure(monkeypatch):
+    monkeypatch.setattr(storage_router, "get_raw_object_worker_pool", _BusyPool)
+    monkeypatch.setattr(storage_router, "get_render_object_worker_pool", _AdmissionOnlyPool)
+    app = FastAPI()
+    app.include_router(storage_router.router)
+    app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="cinder", owner_id=1)
+    app.dependency_overrides[require_single_tenant] = lambda: None
+    payload = _payload(
+        tenant_id=get_settings().archive_primary_tenant_id,
+        machine_id="cinder",
+        epoch=UUID("018f0c3a-7b2d-7f10-8a11-323456789abc"),
+    )
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/agents/storage/v2/envelopes",
+            json=payload,
+            headers={"X-Longhouse-Storage-Lane": "repair"},
+        )
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "storage_lane_busy"
+    assert response.headers["x-longhouse-storage-backpressure"] == "storage_lane_busy"
+    assert response.headers["x-longhouse-storage-lane"] == "repair"
+    assert response.headers["retry-after"] == "5"
 
 
 @pytest.mark.asyncio

@@ -110,6 +110,8 @@ pub struct ArchiveBacklogSnapshot {
     pub next_retry_at_min: Option<String>,
     pub next_retry_at_max: Option<String>,
     pub next_deferred_retry_at: Option<String>,
+    pub max_retry_count: u32,
+    pub latest_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pause_actor: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -140,6 +142,8 @@ impl Default for ArchiveBacklogSnapshot {
             next_retry_at_min: None,
             next_retry_at_max: None,
             next_deferred_retry_at: None,
+            max_retry_count: 0,
+            latest_error: None,
             pause_actor: None,
             pause_reason: None,
             pause_updated_at: None,
@@ -899,7 +903,9 @@ impl<'a> Spool<'a> {
                          )
                         THEN next_retry_at
                     END
-                )
+                ),
+                COALESCE(MAX(CASE WHEN status = 'pending' THEN retry_count ELSE 0 END), 0),
+                MAX(CASE WHEN status = 'pending' THEN last_error END)
              FROM spool_queue",
             rusqlite::params![HUGE_RANGE_BYTES as i64, Utc::now().to_rfc3339()],
             |row| {
@@ -919,6 +925,8 @@ impl<'a> Spool<'a> {
                     row.get::<_, Option<String>>(12)?,
                     row.get::<_, Option<String>>(13)?,
                     row.get::<_, Option<String>>(14)?,
+                    row.get::<_, i64>(15)?.max(0) as u32,
+                    row.get::<_, Option<String>>(16)?,
                 ))
             },
         )?;
@@ -938,6 +946,8 @@ impl<'a> Spool<'a> {
             next_retry_at_min,
             next_retry_at_max,
             next_deferred_retry_at,
+            max_retry_count,
+            latest_error,
         ) = aggregate;
 
         let state = if dead_ranges > 0 {
@@ -972,6 +982,8 @@ impl<'a> Spool<'a> {
             next_retry_at_min,
             next_retry_at_max,
             next_deferred_retry_at,
+            max_retry_count,
+            latest_error,
             pause_actor: None,
             pause_reason: None,
             pause_updated_at: None,

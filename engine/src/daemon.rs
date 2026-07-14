@@ -3002,6 +3002,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         if result.failed_spool > 0 {
             result.local_retry_after = spool_retry_delay_for_path(&conn, &result.job.path);
             result.local_retry_priority = Some(WorkPriority::Retry);
+            return finish_path_task(result, task_started);
         } else if ready_spool_remaining {
             result.rerun_priority = Some(WorkPriority::Retry);
         }
@@ -3127,18 +3128,29 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 }
             }
             Err(error) => {
+                let backpressure = error
+                    .downcast_ref::<crate::shipping::client::StorageV2Backpressure>();
                 task_context.ship_stats.record_with_lane_detail_and_stages(
                     stats_lane,
                     ShipAttemptOutcome::RetryableClientError,
                     ship_started.elapsed().as_millis() as u64,
-                    None,
-                    Some("storage_v2_ship_failed"),
+                    backpressure.map(|_| 503),
+                    Some(if backpressure.is_some() {
+                        "storage_lane_busy"
+                    } else {
+                        "storage_v2_ship_failed"
+                    }),
                     Some(&error.to_string()),
                     0,
                     0,
-                    false,
+                    backpressure.is_some(),
                     None,
                 );
+                if let Some(backpressure) = backpressure {
+                    task_context
+                        .limiter
+                        .observe_backpressure(Some(backpressure.retry_after));
+                }
                 if task_context.tracker.record_error() {
                     tracing::warn!(
                         path = %result.job.path.display(),
@@ -3148,7 +3160,11 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                         "Storage-v2 ship failed; durable cursor remains unchanged"
                     );
                 }
-                result.local_retry_after = Some(local_retry_delay(result.job.priority));
+                result.local_retry_after = Some(
+                    backpressure
+                        .map(|value| value.retry_after)
+                        .unwrap_or_else(|| local_retry_delay(result.job.priority)),
+                );
             }
         }
         return finish_path_task(result, task_started);
@@ -3330,9 +3346,16 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         Ok(None) => {}
         Err(e) => {
             if task_context.tracker.record_error() {
-                tracing::warn!("Error preparing {}: {}", result.job.path.display(), e);
+                tracing::warn!(
+                    path = %result.job.path.display(),
+                    error = %e,
+                    "Source preparation failed; waiting for new filesystem evidence"
+                );
             }
-            result.local_retry_after = Some(local_retry_delay(result.job.priority));
+            // Preparation errors are deterministic for the current source
+            // bytes. A timer retry only burns CPU and transport capacity. The
+            // watcher will enqueue immediately when the source changes; the
+            // slow fallback scan remains the crash/restart safety net.
         }
     }
 

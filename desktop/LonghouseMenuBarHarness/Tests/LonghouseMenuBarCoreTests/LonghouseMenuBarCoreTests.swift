@@ -1174,7 +1174,7 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func attentionSummaryExplainsArchiveBacklogAsDrainWork() {
+    func attentionSummaryNamesBlockedArchiveRetryAndError() {
         let snapshot = HealthSnapshot(
             schemaVersion: 1,
             collectedAt: "2026-04-08T01:52:00Z",
@@ -1207,7 +1207,9 @@ struct LonghouseMenuBarCoreTests {
                         pendingSessions: 6306,
                         pendingBytes: 16_699_227_012,
                         deadRanges: 0,
-                        deadBytes: 0
+                        deadBytes: 0,
+                        maxRetryCount: 3,
+                        latestError: "storage lane busy"
                     ),
                     parseErrorCount1H: 0,
                     consecutiveShipFailures: 0,
@@ -1223,8 +1225,8 @@ struct LonghouseMenuBarCoreTests {
             launchReadiness: nil
         )
 
-        #expect(snapshot.attentionSummaryLabel.contains("6375 transcript ranges are waiting"))
-        #expect(snapshot.attentionSummaryLabel.contains("upload them automatically"))
+        #expect(snapshot.attentionSummaryLabel.contains("6375 transcript ranges blocked after 3 failed attempts"))
+        #expect(snapshot.attentionSummaryLabel.contains("Last error: storage lane busy"))
     }
 
     @Test

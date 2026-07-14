@@ -125,10 +125,18 @@ _MAX_MEDIA_REFS = 1_000
 _MAX_MEDIA_CLAIMS = 512
 
 
-def _http_error(status_code: int, code: str, message: str, *, details: dict[str, Any] | None = None) -> HTTPException:
+def _http_error(
+    status_code: int,
+    code: str,
+    message: str,
+    *,
+    details: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> HTTPException:
     return HTTPException(
         status_code=status_code,
         detail={"code": code, "message": message, "details": details or {}},
+        headers=headers,
     )
 
 
@@ -1342,6 +1350,11 @@ async def commit_storage_v2_envelope(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "storage_lane_busy",
             "Storage-v2 worker lane is full; retry the same envelope.",
+            headers={
+                "X-Longhouse-Storage-Backpressure": "storage_lane_busy",
+                "X-Longhouse-Storage-Lane": lane,
+                "Retry-After": "5",
+            },
         ) from exc
 
 

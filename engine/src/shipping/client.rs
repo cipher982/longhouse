@@ -23,6 +23,7 @@ const INGEST_LANE_HEADER: &str = "X-Ingest-Lane";
 const WRITE_BACKPRESSURE_HEADER: &str = "X-Longhouse-Write-Backpressure";
 const WRITE_ERROR_KIND_HEADER: &str = "X-Longhouse-Write-Error-Kind";
 const WRITE_LANE_HEADER: &str = "X-Longhouse-Write-Lane";
+const STORAGE_BACKPRESSURE_HEADER: &str = "X-Longhouse-Storage-Backpressure";
 const ARCHIVE_INGEST_BACKPRESSURE_KIND: &str = "archive_ingest_backpressure";
 const LIVE_INGEST_BACKPRESSURE_KIND: &str = "live_ingest_backpressure";
 const HOT_WRITE_BACKPRESSURE_KIND: &str = "hot_write_backpressure";
@@ -43,6 +44,25 @@ pub struct ServerBackpressureDetail {
     pub lane: Option<String>,
     pub retry_after_seconds: Option<f64>,
 }
+
+#[derive(Debug, Clone)]
+pub struct StorageV2Backpressure {
+    pub lane: String,
+    pub retry_after: Duration,
+}
+
+impl std::fmt::Display for StorageV2Backpressure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "storage-v2 {} lane busy; retry after {}ms",
+            self.lane,
+            self.retry_after.as_millis()
+        )
+    }
+}
+
+impl std::error::Error for StorageV2Backpressure {}
 
 /// Server-side ingest timing parsed from response headers.
 ///
@@ -431,7 +451,16 @@ impl ShipperClient {
             .context("storage-v2 envelope POST failed")?;
         let status = response.status();
         if !status.is_success() {
+            let headers = response.headers().clone();
             let body = response.text().await.unwrap_or_default();
+            if let Some(backpressure) = parse_storage_v2_backpressure(
+                status.as_u16(),
+                &headers,
+                &body,
+                lane,
+            ) {
+                return Err(backpressure.into());
+            }
             anyhow::bail!("storage-v2 envelope POST returned {status}: {body}");
         }
         let receipt = response
@@ -455,6 +484,25 @@ impl ShipperClient {
             Err(_) => Ok(false),
         }
     }
+}
+
+fn parse_storage_v2_backpressure(
+    status_code: u16,
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+    lane: &str,
+) -> Option<StorageV2Backpressure> {
+    let typed_busy = parse_header_string(headers, STORAGE_BACKPRESSURE_HEADER)
+        .is_some_and(|kind| kind == "storage_lane_busy");
+    if status_code != 503 || (!typed_busy && !body.contains("storage_lane_busy")) {
+        return None;
+    }
+    Some(StorageV2Backpressure {
+        lane: lane.to_string(),
+        retry_after: parse_retry_after_seconds(headers)
+            .map(Duration::from_secs_f64)
+            .unwrap_or(Duration::from_secs(5)),
+    })
 }
 
 fn parse_server_timing(headers: &reqwest::header::HeaderMap) -> ServerIngestTiming {
@@ -644,12 +692,15 @@ fn classify_connect_error_kind(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use rand::Rng;
 
     use reqwest::header::{HeaderMap, HeaderValue};
 
     use super::{
         classify_connect_error_kind, parse_server_backpressure, parse_server_timing,
+        parse_storage_v2_backpressure,
         parse_server_write_backpressure, rate_limit_retry_wait_seconds, ShipResult,
     };
 
@@ -691,6 +742,21 @@ mod tests {
         assert_eq!(rate_limit_retry_wait_seconds(Some(120.0), 1.0, 0.0), 120.0);
         assert_eq!(rate_limit_retry_wait_seconds(Some(120.0), 1.0, 1.0), 125.0);
         assert_eq!(rate_limit_retry_wait_seconds(Some(2.0), 1.0, 0.5), 2.1);
+    }
+
+    #[test]
+    fn storage_v2_busy_lane_is_typed_backpressure_with_retry_floor() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Longhouse-Storage-Backpressure",
+            HeaderValue::from_static("storage_lane_busy"),
+        );
+        headers.insert("Retry-After", HeaderValue::from_static("7"));
+        let detail = parse_storage_v2_backpressure(503, &headers, "{}", "repair")
+            .expect("typed storage saturation should be backpressure");
+        assert_eq!(detail.lane, "repair");
+        assert_eq!(detail.retry_after, Duration::from_secs(7));
+        assert!(parse_storage_v2_backpressure(500, &headers, "{}", "repair").is_none());
     }
 
     #[test]

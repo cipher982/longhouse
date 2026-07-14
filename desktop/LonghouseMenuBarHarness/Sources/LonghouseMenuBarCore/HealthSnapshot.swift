@@ -430,6 +430,16 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
         if archivePending > 0 || reasons.contains("archive_backlog_pending") || reasons.contains("archive_repair_draining") {
             let backlog = archivePending > 0 ? archivePending : pending
+            let retryCount = engineStatus?.payload?.archiveBacklog?.maxRetryCount ?? 0
+            if retryCount > 0 {
+                let noun = backlog == 1 ? "range" : "ranges"
+                let error = engineStatus?.payload?.archiveBacklog?.latestError?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let detail = error.flatMap { $0.isEmpty ? nil : String($0.prefix(140)) }
+                return "\(backlog) transcript \(noun) blocked after \(retryCount) failed attempt\(retryCount == 1 ? "" : "s")."
+                    + (detail.map { " Last error: \($0)" }
+                        ?? " Longhouse will retry when the source or Runtime Host can make progress.")
+            }
             var parts = ["\(backlog) transcript range\(backlog == 1 ? "" : "s")"]
             if outboxFiles > 0 {
                 parts.append("\(outboxFiles) local hook event\(outboxFiles == 1 ? "" : "s")")
@@ -1351,6 +1361,25 @@ public struct ArchiveBacklogStatus: Codable, Equatable, Sendable {
     public let pendingBytes: Int?
     public let deadRanges: Int?
     public let deadBytes: Int?
+    public let maxRetryCount: Int?
+    public let latestError: String?
+
+    public init(
+        state: String?, mode: String?, pendingRanges: Int?, pendingPaths: Int?,
+        pendingSessions: Int?, pendingBytes: Int?, deadRanges: Int?, deadBytes: Int?,
+        maxRetryCount: Int? = nil, latestError: String? = nil
+    ) {
+        self.state = state
+        self.mode = mode
+        self.pendingRanges = pendingRanges
+        self.pendingPaths = pendingPaths
+        self.pendingSessions = pendingSessions
+        self.pendingBytes = pendingBytes
+        self.deadRanges = deadRanges
+        self.deadBytes = deadBytes
+        self.maxRetryCount = maxRetryCount
+        self.latestError = latestError
+    }
 }
 
 public struct DeadLetterSnapshot: Codable, Equatable, Sendable {
