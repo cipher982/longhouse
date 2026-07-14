@@ -23,7 +23,9 @@ public struct HarnessRootView: View {
 
     public var body: some View {
         Group {
-            if store.isBooting && (store.snapshot?.parsedSeverity ?? .gray) != .green {
+            if store.isRecovering {
+                MenuBarSettlingView()
+            } else if store.isBooting && (store.snapshot?.parsedSeverity ?? .gray) != .green {
                 MenuBarBootingView()
             } else if let snapshot = store.snapshot {
                 MenuBarPanelView(

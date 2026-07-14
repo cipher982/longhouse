@@ -8,6 +8,7 @@ public protocol HealthSnapshotSource: Sendable {
 public enum SnapshotSourceError: Error, LocalizedError {
     case invalidArguments(String)
     case commandFailed(String)
+    case timedOut(seconds: TimeInterval)
 
     public var errorDescription: String? {
         switch self {
@@ -15,7 +16,14 @@ public enum SnapshotSourceError: Error, LocalizedError {
             return message
         case let .commandFailed(message):
             return message
+        case let .timedOut(seconds):
+            return "Longhouse status snapshot timed out after \(Int(seconds))s"
         }
+    }
+
+    var isTransient: Bool {
+        if case .timedOut = self { return true }
+        return false
     }
 }
 
@@ -32,7 +40,7 @@ public struct FixtureHealthSnapshotSource: HealthSnapshotSource {
 }
 
 public struct CLIHealthSnapshotSource: HealthSnapshotSource {
-    public static let defaultCommandTimeoutSeconds: TimeInterval = 20
+    public static let defaultCommandTimeoutSeconds: TimeInterval = 3
 
     public let launchPath: String
     public let arguments: [String]
@@ -100,7 +108,7 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
             _ = didExit.wait(timeout: .now() + 2)
             try? stdout.close()
             try? stderr.close()
-            throw SnapshotSourceError.commandFailed("Longhouse status snapshot timed out after \(Int(commandTimeoutSeconds))s")
+            throw SnapshotSourceError.timedOut(seconds: commandTimeoutSeconds)
         }
 
         try? stdout.close()

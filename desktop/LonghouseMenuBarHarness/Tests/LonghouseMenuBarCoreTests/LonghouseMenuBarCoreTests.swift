@@ -674,6 +674,44 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    @MainActor
+    func snapshotStoreRetriesWakeTimeoutAsRecovery() async throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let marker = tempDir.appendingPathComponent("attempted")
+        let payload = tempDir.appendingPathComponent("health.json")
+        try #"{"health_state":"healthy","severity":"green","headline":"Recovered","reasons":[],"suggested_actions":[]}"#
+            .write(to: payload, atomically: true, encoding: .utf8)
+        let command = """
+        if [[ ! -e \(marker.path) ]]; then
+          touch \(marker.path)
+          sleep 1
+        else
+          cat \(payload.path)
+        fi
+        """
+        let source = CLIHealthSnapshotSource(
+            launchPath: "/bin/zsh",
+            arguments: ["-lc", command],
+            commandTimeoutSeconds: 0.05
+        )
+        let store = SnapshotStore(
+            source: source,
+            cacheURL: tempDir.appendingPathComponent("last-good.json"),
+            transientRetryDelay: 0.02
+        )
+
+        for _ in 0..<200 where store.snapshot == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+        #expect(store.snapshot?.headline == "Recovered")
+        #expect(!store.isRecovering)
+        #expect(store.loadError == nil)
+    }
+
+    @Test
     func cliSourceReturnsInstallLocationBlockedSnapshotWhenBundlePathIsUnsupported() throws {
         let source = CLIHealthSnapshotSource(
             launchPath: "/bin/zsh",
@@ -769,152 +807,6 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(store.snapshot?.headline == "Cached Longhouse status")
         #expect(store.loadError == "boom")
-    }
-
-    @Test
-    @MainActor
-    func snapshotStoreTreatsOldCachedSnapshotWithRefreshFailureAsStale() throws {
-        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let cacheURL = tempDir.appendingPathComponent("last-good.json")
-        let snapshot = HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: "2026-05-05T12:00:00Z",
-            healthState: "healthy",
-            severity: "green",
-            headline: "Cached Longhouse status",
-            reasons: [],
-            suggestedActions: [],
-            service: nil,
-            engineStatus: nil,
-            outbox: nil,
-            activitySummary: nil,
-            launchReadiness: nil
-        )
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        try encoder.encode(snapshot).write(to: cacheURL)
-
-        let store = SnapshotStore(source: ThrowingHealthSnapshotSource(), cacheURL: cacheURL)
-        let referenceDate = try #require(HealthSnapshot.parseISO8601("2026-05-05T12:03:00Z"))
-
-        let message = try #require(store.staleCachedSnapshotFailureMessage(relativeTo: referenceDate))
-        #expect(message.contains("Longhouse status is stale"))
-        #expect(message.contains("3m ago"))
-        #expect(message.contains("boom"))
-    }
-
-    @Test
-    @MainActor
-    func snapshotStoreAllowsRecentCachedSnapshotToBridgeRefreshFailure() throws {
-        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let cacheURL = tempDir.appendingPathComponent("last-good.json")
-        let snapshot = HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: "2026-05-05T12:00:00Z",
-            healthState: "healthy",
-            severity: "green",
-            headline: "Cached Longhouse status",
-            reasons: [],
-            suggestedActions: [],
-            service: nil,
-            engineStatus: nil,
-            outbox: nil,
-            activitySummary: nil,
-            launchReadiness: nil
-        )
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        try encoder.encode(snapshot).write(to: cacheURL)
-
-        let store = SnapshotStore(source: ThrowingHealthSnapshotSource(), cacheURL: cacheURL)
-        let referenceDate = try #require(HealthSnapshot.parseISO8601("2026-05-05T12:01:00Z"))
-
-        #expect(store.staleCachedSnapshotFailureMessage(relativeTo: referenceDate) == nil)
-        #expect(store.snapshot?.headline == "Cached Longhouse status")
-        #expect(store.loadError == "boom")
-    }
-
-    @Test
-    @MainActor
-    func snapshotStoreTreatsOldSnapshotWithoutRefreshFailureAsStale() throws {
-        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let cacheURL = tempDir.appendingPathComponent("last-good.json")
-        let snapshot = HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: "2026-05-05T12:00:00Z",
-            healthState: "healthy",
-            severity: "green",
-            headline: "Old Longhouse status",
-            reasons: [],
-            suggestedActions: [],
-            service: nil,
-            engineStatus: nil,
-            outbox: nil,
-            activitySummary: nil,
-            launchReadiness: nil
-        )
-
-        let store = SnapshotStore(source: StaticHealthSnapshotSource(snapshot: snapshot), cacheURL: cacheURL)
-        let referenceDate = try #require(HealthSnapshot.parseISO8601("2026-05-05T12:03:00Z"))
-
-        let message = try #require(store.staleCachedSnapshotFailureMessage(relativeTo: referenceDate))
-        #expect(message.contains("Longhouse status is stale"))
-        #expect(message.contains("3m ago"))
-        #expect(message.contains("Refresh has not produced a fresh snapshot"))
-        #expect(store.loadError == nil)
-    }
-
-    @Test
-    @MainActor
-    func snapshotStoreDoesNotReportStaleCacheAfterSuccessfulRefresh() throws {
-        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let cacheURL = tempDir.appendingPathComponent("last-good.json")
-        let oldSnapshot = HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: "2026-05-05T12:00:00Z",
-            healthState: "healthy",
-            severity: "green",
-            headline: "Old cached Longhouse status",
-            reasons: [],
-            suggestedActions: [],
-            service: nil,
-            engineStatus: nil,
-            outbox: nil,
-            activitySummary: nil,
-            launchReadiness: nil
-        )
-        let freshSnapshot = HealthSnapshot(
-            schemaVersion: 1,
-            collectedAt: "2026-05-05T12:03:00Z",
-            healthState: "healthy",
-            severity: "green",
-            headline: "Fresh Longhouse status",
-            reasons: [],
-            suggestedActions: [],
-            service: nil,
-            engineStatus: nil,
-            outbox: nil,
-            activitySummary: nil,
-            launchReadiness: nil
-        )
-        let encoder = JSONEncoder()
-        encoder.keyEncodingStrategy = .convertToSnakeCase
-        try encoder.encode(oldSnapshot).write(to: cacheURL)
-
-        let store = SnapshotStore(source: StaticHealthSnapshotSource(snapshot: freshSnapshot), cacheURL: cacheURL)
-        let referenceDate = try #require(HealthSnapshot.parseISO8601("2026-05-05T12:03:30Z"))
-
-        #expect(store.staleCachedSnapshotFailureMessage(relativeTo: referenceDate) == nil)
-        #expect(store.snapshot?.headline == "Fresh Longhouse status")
-        #expect(store.loadError == nil)
     }
 
     @Test
@@ -1264,6 +1156,31 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(snapshot.attentionSummaryLabel.contains("6375 transcript ranges blocked after 3 failed attempts"))
         #expect(snapshot.attentionSummaryLabel.contains("Last error: storage lane busy"))
+
+        let drained = snapshot.applyingLocalProjection(
+            LocalStatusMonitor.Projection(
+                sessions: [],
+                engine: EngineStatusPayload(
+                    version: "0.1.16",
+                    daemonPid: 123,
+                    lastShipAt: "2026-04-08T01:52:01Z",
+                    spoolPendingCount: 0,
+                    spoolDeadCount: 0,
+                    archiveBacklog: ArchiveBacklogStatus(
+                        state: "idle", mode: "drain", pendingRanges: 0, pendingPaths: 0,
+                        pendingSessions: 0, pendingBytes: 0, deadRanges: 0, deadBytes: 0,
+                        maxRetryCount: 0, latestError: nil
+                    ),
+                    parseErrorCount1H: 0,
+                    consecutiveShipFailures: 0,
+                    diskFreeBytes: nil,
+                    isOffline: false,
+                    recentDeadLetters: nil,
+                    lastUpdated: "2026-04-08T01:52:01Z"
+                )
+            )
+        )
+        #expect(!drained.attentionSummaryLabel.contains("transcript range"))
     }
 
     @Test

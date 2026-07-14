@@ -94,10 +94,11 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func observeStore() {
-        Publishers.Merge3(
+        Publishers.Merge4(
             store.$snapshot.map { _ in () },
             store.$isInitialLoading.map { _ in () },
-            store.$loadError.map { _ in () }
+            store.$loadError.map { _ in () },
+            store.$isRecovering.map { _ in () }
         )
             .sink { [weak self] _ in
                 DispatchQueue.main.async {
@@ -143,7 +144,7 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func statusItemAttentionColor() -> NSColor? {
-        if store.loadError != nil && store.snapshot == nil {
+        if store.loadError != nil && store.snapshot == nil && !store.isRecovering {
             return .systemRed
         }
         guard let snapshot = store.snapshot else {
@@ -173,8 +174,11 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func statusItemAttentionLabel() -> String? {
-        if store.loadError != nil && store.snapshot == nil {
+        if store.loadError != nil && store.snapshot == nil && !store.isRecovering {
             return "Longhouse needs attention"
+        }
+        if store.isRecovering {
+            return "Longhouse is catching up"
         }
         guard let snapshot = store.snapshot, snapshot.needsMenuBarAttention else {
             return nil

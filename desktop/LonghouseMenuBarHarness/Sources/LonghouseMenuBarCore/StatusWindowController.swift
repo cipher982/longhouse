@@ -62,10 +62,11 @@ public final class StatusWindowController: NSWindowController {
     }
 
     private func observe(store: SnapshotStore) {
-        Publishers.Merge3(
+        Publishers.Merge4(
             store.$snapshot.map { _ in () },
             store.$isInitialLoading.map { _ in () },
-            store.$loadError.map { _ in () }
+            store.$loadError.map { _ in () },
+            store.$isRecovering.map { _ in () }
         )
         .sink { [weak self] _ in
             DispatchQueue.main.async {

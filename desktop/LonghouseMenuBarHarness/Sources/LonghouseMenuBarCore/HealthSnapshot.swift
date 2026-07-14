@@ -444,7 +444,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return "\(dead) dead queued shipping item\(dead == 1 ? "" : "s") need manual attention before Longhouse can drain the backlog."
         }
 
-        if archivePending > 0 || reasons.contains("archive_backlog_pending") || reasons.contains("archive_repair_draining") {
+        if archivePending > 0 {
             let backlog = archivePending > 0 ? archivePending : pending
             let retryCount = engineStatus?.payload?.archiveBacklog?.maxRetryCount ?? 0
             if retryCount > 0 {

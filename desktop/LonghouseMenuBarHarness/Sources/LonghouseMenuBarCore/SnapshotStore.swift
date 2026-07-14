@@ -11,7 +11,6 @@ public enum SnapshotRefreshReason: Sendable {
 public final class SnapshotStore: ObservableObject {
     public static let historyRetentionMinutes = 30
     public static let bootGraceSeconds: TimeInterval = 10
-    public static let staleCacheFailureSeconds: TimeInterval = 120
     public static let presentationRefreshFreshnessSeconds: TimeInterval = 10
 
     @Published public private(set) var snapshot: HealthSnapshot?
@@ -20,6 +19,7 @@ public final class SnapshotStore: ObservableObject {
     @Published public private(set) var isInitialLoading: Bool
     @Published public private(set) var isManualRefreshActive: Bool
     @Published public private(set) var isBooting: Bool
+    @Published public private(set) var isRecovering: Bool
     @Published public private(set) var presentationDate: Date
     @Published public private(set) var feedback: HealthActionFeedback?
 
@@ -27,6 +27,7 @@ public final class SnapshotStore: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var bootGraceTask: Task<Void, Never>?
     private var realtimeTask: Task<Void, Never>?
+    private var transientRetryTask: Task<Void, Never>?
     private var realtimeConnection: RealtimeConnectionSnapshot?
     private var localStatusMonitor: LocalStatusMonitor?
     private var localStatusPath: String?
@@ -35,16 +36,23 @@ public final class SnapshotStore: ObservableObject {
     private var presentationTimer: Timer?
     private var presentationConsumerCount = 0
     private let cacheURL: URL?
+    private let transientRetryDelay: TimeInterval
     private static let historyRetentionSeconds: TimeInterval = Double(historyRetentionMinutes * 60)
     private static let maxHistorySamples = 180
 
-    public init(source: any HealthSnapshotSource, cacheURL: URL? = nil) {
+    public init(
+        source: any HealthSnapshotSource,
+        cacheURL: URL? = nil,
+        transientRetryDelay: TimeInterval = 2
+    ) {
         self.source = source
         self.cacheURL = cacheURL ?? Self.defaultCacheURL(for: source)
+        self.transientRetryDelay = transientRetryDelay
         self.history = []
         self.isInitialLoading = false
         self.isManualRefreshActive = false
         self.isBooting = false
+        self.isRecovering = false
         self.presentationDate = Date()
         self.feedback = nil
         if let cachedSnapshot = Self.loadCachedSnapshot(from: self.cacheURL) {
@@ -73,6 +81,7 @@ public final class SnapshotStore: ObservableObject {
         refreshTask?.cancel()
         bootGraceTask?.cancel()
         realtimeTask?.cancel()
+        transientRetryTask?.cancel()
         localStatusMonitor?.stop()
     }
 
@@ -167,27 +176,6 @@ public final class SnapshotStore: ObservableObject {
         feedback = nil
     }
 
-    public func staleCachedSnapshotFailureMessage(relativeTo referenceDate: Date) -> String? {
-        guard let snapshot else {
-            return nil
-        }
-        guard let collectedAt = snapshot.collectedAtDate else {
-            if let loadError {
-                return "Longhouse status is stale. Refresh failed: \(loadError)"
-            }
-            return "Longhouse status is stale. The latest snapshot is missing a timestamp."
-        }
-        let snapshotAgeSeconds = referenceDate.timeIntervalSince(collectedAt)
-        guard snapshotAgeSeconds > Self.staleCacheFailureSeconds else {
-            return nil
-        }
-        let age = snapshot.snapshotAgeCompactLabel(relativeTo: referenceDate)
-        if let loadError {
-            return "Longhouse status is stale. Last successful update was \(age) ago. Refresh failed: \(loadError)"
-        }
-        return "Longhouse status is stale. Last successful update was \(age) ago. Refresh has not produced a fresh snapshot."
-    }
-
     private func startRefresh(reason: SnapshotRefreshReason) {
         activeRefreshReason = reason
         if snapshot == nil {
@@ -206,6 +194,9 @@ public final class SnapshotStore: ObservableObject {
 
             switch result {
             case let .success(loadedSnapshot):
+                self.transientRetryTask?.cancel()
+                self.transientRetryTask = nil
+                self.isRecovering = false
                 let snapshot = loadedSnapshot.preservingSessionTitles(from: self.snapshot)
                 self.snapshot = snapshot
                 self.connectRealtimeIfNeeded(snapshot.realtime)
@@ -214,11 +205,26 @@ public final class SnapshotStore: ObservableObject {
                 self.persistCachedSnapshot(snapshot)
                 self.loadError = nil
                 self.exitBootingIfReady(for: snapshot)
-            case let .failure(message):
+            case let .failure(message, transient):
+                self.isRecovering = transient && self.snapshot == nil
                 self.loadError = message
+                if transient {
+                    self.scheduleTransientRetry()
+                }
             }
 
             self.completeRefresh(reason: reason)
+        }
+    }
+
+    private func scheduleTransientRetry() {
+        guard transientRetryTask == nil else { return }
+        transientRetryTask = Task { [weak self] in
+            guard let self else { return }
+            try? await Task.sleep(for: .seconds(self.transientRetryDelay))
+            guard !Task.isCancelled else { return }
+            self.transientRetryTask = nil
+            self.refresh(reason: .background)
         }
     }
 
@@ -231,13 +237,8 @@ public final class SnapshotStore: ObservableObject {
         let monitor = LocalStatusMonitor(statusPath: path) { [weak self] projection in
             Task { @MainActor [weak self] in
                 guard let self, let snapshot = self.snapshot else { return }
-                let currentIds = Set((snapshot.managedSessions ?? []).compactMap(\.sessionId))
-                let nextIds = Set(projection.sessions.map(\.sessionId))
-                if currentIds != nextIds {
-                    self.refresh(reason: .background)
-                } else {
-                    self.snapshot = snapshot.applyingLocalProjection(projection)
-                }
+                self.snapshot = snapshot.applyingLocalProjection(projection)
+                self.refresh(reason: .background)
             }
         }
         localStatusMonitor = monitor
@@ -291,7 +292,8 @@ public final class SnapshotStore: ObservableObject {
             do {
                 return .success(try source.load())
             } catch {
-                return .failure(error.localizedDescription)
+                let transient = (error as? SnapshotSourceError)?.isTransient ?? false
+                return .failure(error.localizedDescription, transient: transient)
             }
         }.value
     }
@@ -367,7 +369,7 @@ public final class SnapshotStore: ObservableObject {
 
 private enum SnapshotLoadResult: Sendable {
     case success(HealthSnapshot)
-    case failure(String)
+    case failure(String, transient: Bool)
 }
 
 public struct SnapshotHistorySample: Equatable, Sendable {
