@@ -9,6 +9,14 @@ Related:
 - `docs/specs/machine-control-truth.md`
 - `docs/specs/human-launch-provenance.md`
 - `docs/specs/renderable-session-launch-pipeline.md`
+- `docs/specs/turn-scoped-console-execution.md`
+
+> **Execution-model correction (2026-07-14):**
+> `turn-scoped-console-execution.md` supersedes this document's first-message,
+> `one_shot`/`live_control`, and **Keep session open** decisions. This document
+> remains canonical for the machine directory, naming, ordering, availability,
+> and visual picker contract. Console now creates an empty thread; the normal
+> composer starts turn-scoped provider invocations.
 
 ## Outcome
 
@@ -19,7 +27,7 @@ A user opening **New Session** should immediately understand:
 
 - which real machines belong to them;
 - which machines can accept a Console launch now;
-- which provider and execution modes are available on each machine;
+- which providers can start and resume Console turns on each machine;
 - why a machine is unavailable without it disappearing;
 - where to inspect the machine when repair is needed.
 
@@ -79,11 +87,10 @@ states part of acceptance.
 
 ### Provider Scope
 
-Cursor is a supported Console target through `cursor.run_once` backed by
-`cursor-agent acp`. It must appear in both launchers even though it does not
-advertise the long-lived remote `cursor.launch` operation; consequently it
-offers one-shot only and no **Keep session open** choice. Cursor Helm remains
-the separate terminal-owned `longhouse cursor` path.
+Cursor is a supported Console target through the turn-scoped
+`cursor-agent acp` adapter. It must appear in both launchers because ACP proves
+fresh `session/new` and resumed `session/load` turns. Cursor Helm remains the
+separate terminal-owned `longhouse cursor` path.
 
 Antigravity is not a launch target yet. Its proven Machine Agent surface is
 `antigravity.send`; it has neither remote launch nor run-once evidence. Adding
@@ -153,29 +160,23 @@ is gray, not a red failure. Text accompanies every color.
 `engine_build` is operator detail and does not appear in the compact launch
 picker. It remains available in machine details, health, and diagnostics.
 
-### 4. Console Prefers One-Shot by Default
+### 4. Console Uses Turn-Scoped Execution
 
-Web/iOS launches are **Console** launches. The default execution lifetime is
-`one_shot` when the target advertises it, matching the canonical Console
-definition: the provider runs one turn under the Machine Agent and the
-Longhouse UI is the user interface. A machine with no one-shot-capable provider
-falls back honestly to an advertised `live_control` option rather than becoming
-artificially unavailable.
+Web/iOS launches are **Console** launches. They create an empty durable thread
+without starting a provider process. The normal session composer starts the
+first and later turns. Each turn acquires a provider invocation and releases it
+after the provider's terminal turn outcome.
 
-When a provider also supports `live_control`, both clients may offer the same
-advanced **Keep session open** choice. That option is explicit and must not be
-silently selected because a client lacks a first-message field.
-
-iOS provides a first-message field and the same execution-lifetime choice as
-web, so both surfaces can apply the canonical backend default directly.
+Neither client asks for a first message in the launcher or exposes
+`one_shot`, `live_control`, **Run once**, or **Keep session open**. Those names
+describe current implementation paths, not product choices.
 
 ### 5. Provider Defaults Are Product Policy
 
-The Runtime Host returns the default provider and execution lifetime. Policy
-selects a mode first: prefer `one_shot` when any provider supports it, otherwise
-fall back to `live_control`. Within providers supporting that selected mode,
-prefer Codex, otherwise use stable provider order. This cannot return a default
-provider/mode pair the machine does not advertise.
+The Runtime Host returns the default provider. Prefer Codex when it can start a
+turn on the selected machine; otherwise use stable provider order. The backend
+must not return a provider that cannot create and later resume a turn-scoped
+Console invocation.
 
 Clients render the returned choice and may preserve an explicit user selection
 while it remains valid.
@@ -209,25 +210,16 @@ defaults:
   "control_channel_status": "connected",
   "last_seen_at": "2026-07-14T17:41:07Z",
   "engine_build": "30381fc7",
-  "supports": ["codex.launch", "codex.run_once", "claude.launch"],
+  "supports": ["codex.run_once", "codex.resume_run_once"],
   "control_operations_by_provider": {
-    "claude": ["launch"],
-    "codex": ["launch", "run_once"]
+    "codex": ["run_once", "resume_run_once"]
   },
   "launch": {
     "blocked_by": null,
     "providers": [
-      {
-        "provider": "claude",
-        "execution_lifetimes": ["live_control"]
-      },
-      {
-        "provider": "codex",
-        "execution_lifetimes": ["one_shot", "live_control"]
-      }
+      {"provider": "codex"}
     ],
-    "default_provider": "codex",
-    "default_execution_lifetime": "one_shot"
+    "default_provider": "codex"
   }
 }
 ```
@@ -245,26 +237,23 @@ An offline enrollment remains present:
   "launch": {
     "blocked_by": "control_down",
     "providers": [],
-    "default_provider": null,
-    "default_execution_lifetime": null
+    "default_provider": null
   }
 }
 ```
 
 ### Contract Rules
 
-- A machine is ready iff `launch.providers` contains at least one provider with
-  at least one supported execution lifetime now.
+- A machine is ready iff `launch.providers` contains at least one provider that
+  can create a fresh Console turn and later resume the same thread.
 - `launch.blocked_by` is null when providers are present and required when they
   are empty. A redundant launch-status enum is intentionally omitted.
 - `launch.providers` is derived once from
   `control_operations_by_provider`; clients do not merge raw `supports` or
   legacy convenience fields.
-- `launchable_providers` means providers supporting live-control `launch`; it
-  does not include run-once-only providers.
+- Legacy `launchable_providers` is diagnostic compatibility data and does not
+  define Console eligibility.
 - `default_provider` must name an entry in `launch.providers`.
-- `default_execution_lifetime` must be present in that provider's
-  `execution_lifetimes`.
 - Offline entries do not claim last-known provider support. Current capability
   remains live truth.
 - `supports` and `control_operations_by_provider` remain raw/mechanical
@@ -290,28 +279,25 @@ real Control Plane entitlement input.
 | `web/src/services/api/launch.ts` | hand-maintained DTOs | generated machine DTO consumption |
 | `web/src/components/LaunchSessionModal.tsx` | capability merging, defaults, hidden offline machines | native web rendering of backend launch semantics |
 | `ios/Sources/Shared/LonghouseAPI.swift` | hand-maintained DTO plus capability inference | hand-owned nested DTO plus transport only |
-| `ios/Sources/LonghouseApp/LaunchSessionSheet.swift` | capability/default inference and live-control-only form | native grouped UI plus canonical mode parity |
+| `ios/Sources/LonghouseApp/LaunchSessionSheet.swift` | capability/default inference and process-lifetime form | native grouped UI plus turn-scoped Console creation |
 | `scripts/ops/remote-launch-smoke.py` | Codex compatibility fallback | canonical launch-option assertion |
 | `server/zerg/cli/local_health.py` and dogfood scripts | operator diagnostics over raw truth | continue using raw operations, not human projection copy |
 | `web/src/pages/DevicesPage.tsx` | credential-centric management | deferred machine-management epic |
 
 ## Human Launch Experience
 
-The launch form is a short composition screen, not a directory and not a
-diagnostics dashboard. It has four primary inputs:
+The launch form is a short session-configuration screen, not a directory, a
+prompt composer, or a diagnostics dashboard. It has three primary inputs:
 
 1. where the work runs: machine and workspace;
 2. which coding agent runs it;
-3. what the agent should do;
-4. optional execution settings.
+3. optional provider settings.
 
 Machine is a compact summary row under **Machine**. Agent and workspace are
 compact summary rows under **Session**; they are configuration, not additional
-places where the work runs. The task prompt is the only large editor. **Start
-session** is the single primary action. Execution lifetime and optional session
-name live under **Advanced options**. The one-shot label is **Run once**, never
-**Default**; the alternate label is **Keep session open**. The agent row may
-summarize the selected mode, but Advanced is its only edit surface.
+places where the work runs. **Create session** is the single primary action.
+It creates an empty thread and opens the normal conversation, whose composer
+owns the first and later messages. No process-lifetime setting appears.
 
 ```text
 New Session
@@ -322,16 +308,13 @@ MACHINE
 
 SESSION
   Codex                          >
-  Agent · Run once
+  Coding agent
   zerg                           >
   Workspace · ~/git/zerg
 
-TASK
-  What should the agent do?
-
 Advanced options                >
 
-[ Start session ]
+[ Create session ]
 ```
 
 ### iOS Selection Pattern
@@ -415,8 +398,7 @@ than three rows, and only when real list size justifies building that behavior.
 
 - Ready rows select the launch target.
 - Selecting another ready machine clears machine-scoped workspace, provider,
-  execution lifetime, and error state, then applies backend defaults. The task
-  prompt is user work and remains intact across target changes.
+  and error state, then applies backend defaults.
 - Workspace suggestions are fetched only for the selected ready machine.
 - When no machine is ready, show the directory destination with all enrolled
   machines and lead with **No machines ready to launch**. Do not render an empty
@@ -428,9 +410,7 @@ than three rows, and only when real list size justifies building that behavior.
 - The primary action remains reachable without scrolling through a recent
   workspace list. On iOS it should sit after the compact form or in a safe-area
   action inset; it must not be buried beneath optional metadata.
-- Execution lifetime is edited only in Advanced. Changing the agent resets it
-  to the backend default valid for that agent; changing the machine resets both
-  agent and lifetime to that machine's backend defaults.
+- Changing the machine resets the agent to that machine's backend default.
 
 ## Deferred Follow-Ons
 
@@ -463,7 +443,7 @@ observed or in a dedicated automation-hygiene sweep.
 - Add typed `MachineLaunchProjection` and `MachineLaunchProviderOption` schemas.
 - Derive them in `services/machines_directory.py` from the existing managed
   provider contract projection.
-- Move default provider/lifetime policy into that projection.
+- Move default-provider policy into that projection.
 - Change canonical sorting to state group, display name, `device_id`.
 - Keep `/api/agents/machines` and `/api/timeline/machines` byte-shape aligned.
 - Add `GET /api/agents/machines` to the machine-surface canon.
@@ -484,7 +464,8 @@ observed or in a dedicated automation-hygiene sweep.
 - Consume only `machine.launch` for eligibility, provider options, and defaults.
 - Preserve offline rows and render typed reasons.
 - Remove build hashes from labels.
-- Retain one-shot first-message and advanced live-control behavior.
+- Remove the launch-form prompt and all process-lifetime controls after the
+  empty-thread plus composer-first-turn vertical slice works end to end.
 - Persist last selected ready machine per Runtime Host identity.
 
 ### D. iOS Launch Surface
@@ -493,8 +474,8 @@ observed or in a dedicated automation-hygiene sweep.
   destination.
 - Consume only `machine.launch` for eligibility, provider options, and defaults.
 - Use gray offline status and reserve red for repairable faults.
-- Add first message plus the same runtime choice as web.
-- Move iOS to canonical one-shot Console default after that form exists.
+- Remove the launch-form prompt and all process-lifetime controls after the
+  empty-thread plus composer-first-turn vertical slice works end to end.
 - Move agent and workspace selection out of the long inline `Form` and into
   compact summary rows/destinations.
 - Persist last selected ready machine per Runtime Host identity.
@@ -525,18 +506,23 @@ observed or in a dedicated automation-hygiene sweep.
 
 The launch projection, DTO migration, grouped web picker, and first iOS form
 slice have landed. The screenshots that triggered this revision invalidate the
-iOS interaction, not the backend launch projection.
+iOS interaction. The turn-scoped correction also invalidates execution
+lifetimes in the backend projection.
 
 Before more implementation, approve the closed-form and open-chooser visual
 contract in this document. Then deliver narrow slices:
 
-1. Durable machine display names, including the canonical `cube` dogfood label.
-2. iOS compact form and machine chooser with open-state preview coverage.
-3. iOS agent/workspace destinations and advanced-options cleanup.
-4. Web compact summary card and accessible machine listbox/popover.
-5. Cross-surface state, accessibility, and visual matrix verification.
-6. Remove remaining client compatibility inference and helpers.
-7. Stop. Machine credential management, producer-wide cleanup, generator
+1. Ship empty-thread creation, `can_start_turn`, and composer first-turn
+   dispatch as one vertical slice.
+2. Remove execution lifetime and first-message fields from the backend launch
+   projection and both clients.
+3. Durable machine display names, including the canonical `cube` dogfood label.
+4. iOS compact form and machine chooser with open-state preview coverage.
+5. iOS agent/workspace destinations and advanced-options cleanup.
+6. Web compact summary card and accessible machine listbox/popover.
+7. Cross-surface state, accessibility, and visual matrix verification.
+8. Remove remaining client compatibility inference and helpers.
+9. Stop. Machine credential management, producer-wide cleanup, generator
    expansion, and legacy field deletion remain separate follow-ons.
 
 Each slice should be independently shippable. Do not combine API migration,
@@ -564,9 +550,8 @@ both UI rewrites, and machine-management mutations in one change.
   states; platform accent tint does not recolor entire row labels.
 - Name, status, and remediation are separate semantic fields and accessibility
   elements, never one concatenated wrapping string.
-- Console one-shot is the default on web and iOS whenever the selected machine
-  advertises it; live-control is the explicit option or the honest fallback
-  when no one-shot provider exists.
+- Console creation starts no provider process. The conversation composer starts
+  fresh and resumed turn-scoped invocations through the same backend contract.
 - `/api/agents/machines` and `/api/timeline/machines` remain response-shape
   equivalent.
 - Raw machine capabilities remain available to agents and diagnostics.
@@ -575,13 +560,14 @@ both UI rewrites, and machine-management mutations in one change.
 
 ## Test Strategy
 
-- Backend matrix: offline, connected/no-launch, live-control-only,
-  run-once-only, dual-mode, multi-provider, duplicate credential, stable sort.
+- Backend matrix: offline, connected/no-turn-adapter, fresh-only,
+  fresh-plus-resume, multi-provider, duplicate credential, stable sort.
 - Route parity: agent-auth and browser-auth machine responses share one model.
 - Web: grouped rendering, status copy, unavailable interaction, backend
-  defaults, last selection, execution-lifetime gating.
+  defaults, last selection, empty-thread navigation, composer first turn.
 - iOS: DTO decoding, closed-form preview, pushed chooser previews, selection
-  reset, offline explanation, backend defaults, one-shot/live-control payloads.
+  reset, offline explanation, backend defaults, empty-thread navigation,
+  composer first turn.
 - Automation: retain the focused benchmark cleanup regression from
   `38f05cdc2`; broader producer coverage is deferred.
 - Visual QA matrix: closed form, chooser open, one/many/no ready machines,

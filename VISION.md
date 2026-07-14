@@ -33,8 +33,10 @@ Use Longhouse in product copy. Keep Zerg internal.
 2. **The wedge is remote control over real sessions running on user-owned machines.**
    The product becomes compelling when the user can steer work after launch, not just read a transcript.
 
-3. **Longhouse is strongest when it has both the transcript and a control path.**
-   Imported history is valuable. A session launched through Longhouse is better because it stays addressable later.
+3. **Longhouse is strongest when it has both the transcript and a reacquirable control path.**
+   Imported history is valuable. A thread launched through Longhouse is better
+   because Longhouse can control its active turn and resume a later turn on the
+   recorded machine. An idle thread does not require an idle provider process.
 
 4. **Hosted is a convenience path, not the core truth.**
    If a user wants durability, they should be able to run on a VPS, Mac mini, homelab box, or other always-on machine they control.
@@ -100,6 +102,14 @@ The product should never make users understand shell bootstrap, launchd, or help
 
 10. **Separate realtime truth from durable archive.**
     Managed sessions have two lanes. The live lane answers "what is happening right now" and must feel terminal-class: first visible output should arrive in the browser over WebSocket/SSE in tens to hundreds of milliseconds under nominal network. The durable lane answers "what provably happened" and must be correct, ordered, replayable, and retryable; it can trail the live lane by a small bounded window. Do not weaken archive correctness to chase the live-lane SLA.
+
+11. **Persist threads, not idle provider processes.**
+    A Console provider invocation is scoped to one nonterminal turn. Tool waits
+    keep that turn active; `end_turn` starts a bounded output drain and then
+    releases the invocation. A later message resumes the durable provider
+    thread in a new invocation. Helm may keep a
+    process while the user's interactive TUI remains open, but process lifetime
+    is never session identity.
 
 ## What Longhouse Is
 

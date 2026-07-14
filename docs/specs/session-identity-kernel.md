@@ -5,6 +5,7 @@ Owner: Longhouse session core
 Created: 2026-05-21
 Related:
 - `VISION.md`
+- `docs/specs/turn-scoped-console-execution.md`
 - the realtime truth plane design (internal spec)
 - the durable transcript live overlay design (internal spec)
 - the managed Codex liveness design (internal spec)
@@ -73,21 +74,30 @@ identity.
 
 ## Capability projection
 
+The projection has two independent axes: durable thread execution and
+active-invocation control. A connection only controls the second axis. It is
+not the gate for sending to an idle Console thread.
+
 One server-side view, derived from `(thread, latest run, best connection,
 latest run-keyed runtime_state)`:
 
 ```text
 session_capabilities(session_id) -> {
-  control_label,            # "live", "reattach", "search-only", "imported"
+  control_label,            # "idle", "live", "reattach", "search-only", "imported"
+  turn_state,               # idle | queued | dispatching | active | terminal_draining
+  can_start_turn,
+  can_queue_next_turn,
+  can_resume_thread,
+  start_turn_blocked_by,
   live_control_available,
   host_reattach_available,
   observe_only,
   search_only,
-  can_send_input,
-  can_interrupt,
-  can_terminate,
+  can_steer_active_turn,
+  can_interrupt_active_turn,
+  can_answer_pause,
+  can_terminate_invocation,
   can_tail_output,
-  can_resume,
   staleness_reason,
 }
 ```
@@ -110,9 +120,8 @@ write-path artifacts from projecting as live:
 - **`live`** requires: thread exists, latest run is open (`ended_at IS NULL`),
   best connection is `attached` or `degraded`, AND the connection's
   `acquisition_kind` is `spawned_control` or `adopted_control`. An
-  `observe_only` connection (e.g. `log_tail`) carrying a stale
-  `can_send_input=1` must not project live — the kind is the gate, not the
-  bit.
+  `observe_only` connection (e.g. `log_tail`) carrying a stale active-control
+  capability must not project live — the kind is the gate, not the bit.
 - **`reattach`** requires: same as live but state is `detached` or
   `released`. The connection bits surface as capability gates only when the
   bucket grants control; an `observe_only` connection cannot reach this
@@ -120,10 +129,11 @@ write-path artifacts from projecting as live:
 - **`search-only`** is the only bucket where capability bits surface
   partially: `can_tail_output` may be true; send/interrupt/terminate must be
   false even if the row carries stale ones.
-- **Closed run wins.** If `latest_run.ended_at IS NOT NULL`, the bucket is
-  `imported` (`process_ended`) regardless of what the connection says.
-  Bridge rows lingering "attached" briefly after the provider exits would
-  otherwise mis-project live.
+- **Closed invocation down-gates active control.** If
+  `latest_run.ended_at IS NOT NULL`, no lingering connection may project live.
+  A Longhouse-owned Console thread with valid placement and provider resume
+  evidence projects `idle`, because a closed run is normal successful history.
+  An unmanaged thread without reacquirable control remains `imported`.
 - **Empty/whitespace state** projects `imported`/`process_ended`, not
   `search-only` — empty state is no truth, not observe-only.
 
@@ -134,15 +144,16 @@ old `managed_transport` enum:
 
 - `live_control_available` = `control_label == "live"`.
 - `host_reattach_available` = `control_label == "reattach"`.
-- `reply_to_live_session_available` = `live_control_available AND
-  can_send_input`. A live attached connection without the send capability
-  does not show a reply affordance.
-- `can_queue_next_input` = same as `reply_to_live_session_available`.
-- `can_steer_active_turn` = `live_control_available AND can_send_input AND
-  best_connection.control_plane is in the managed-provider contract registry's
-  steerable control planes`. Today that includes Codex `codex_bridge` and
-  Claude `claude_channel_bridge`; it intentionally excludes OpenCode and
-  Antigravity until their active-turn injection semantics are proven.
+- `can_start_turn` derives from recorded placement, current machine
+  reachability, workspace validity, and adapter support for fresh start or
+  resume. It does not require an open run.
+- `can_queue_next_turn` means the Runtime Host can durably accept a FIFO turn;
+  it does not claim immediate provider delivery.
+- `can_steer_active_turn` requires a live connection whose specific invocation
+  adapter supports steering. Provider-wide support is insufficient:
+  `codex_exec` is not steerable merely because `codex_bridge` is.
+- `can_interrupt_active_turn`, `can_answer_pause`, and
+  `can_terminate_invocation` are likewise adapter/connection capabilities.
 
 ### Runtime overlay rule: down-gate only
 
@@ -161,8 +172,8 @@ implementer's head:
 
 1. State priority: `attached` > `degraded` > `detached` > `released` > `ended`.
 2. Capability priority within tied state: highest count of granted capability
-   flags wins (`can_send_input`, `can_interrupt`, `can_terminate`,
-   `can_tail_output`).
+   flags wins (`can_steer_active_turn`, `can_interrupt_active_turn`,
+   `can_answer_pause`, `can_terminate_invocation`, `can_tail_output`).
 3. Recency tiebreak: greater `last_health_at` wins.
 4. Final tiebreak: greater `connections.id` wins (creation order).
 
@@ -186,6 +197,9 @@ session_threads(
   id,
   session_id,
   provider,
+  device_id,                -- nullable for imports; required for Console
+  cwd,                      -- nullable for imports; required for Console
+  provider_config_json,     -- non-secret invocation settings; never credentials
   parent_thread_id,         -- null for root; set for subagents/branches; self-FK
   parent_event_id,          -- nullable; replaces AgentSession.branched_from_event_id
   branch_kind,              -- root | subagent | continuation | fork
@@ -197,6 +211,9 @@ session_threads(
 --   ux_threads_one_primary_per_session ON (session_id) WHERE is_primary = 1
 -- ``is_primary`` defaults to 0 so subagent/continuation threads created without
 -- an explicit override never silently become a second primary.
+-- Console writes device_id/cwd/provider_config_json when it creates the empty
+-- thread, before any run exists. SessionRun copies the effective placement for
+-- historical evidence; it is not the source for routing the next turn.
 
 session_thread_aliases(
   id,
@@ -218,7 +235,7 @@ session_runs(
   id,
   thread_id,
   provider,
-  host_id,                  -- runner/machine identity; routes commands
+  host_id,                  -- effective machine for this historical invocation
   boot_id,                  -- nullable; cheap insurance against pid reuse
   pid,
   process_start_time,
@@ -238,11 +255,11 @@ session_connections(
   state,                    -- attached | detached | degraded | released | ended
   external_name,            -- nullable; replaces AgentSession.managed_session_name where attach/debug paths still need it
   -- typed capability gates instead of JSON: small, enumerated, queryable
-  can_send_input,
-  can_interrupt,
-  can_terminate,
+  can_steer_active_turn,
+  can_interrupt_active_turn,
+  can_answer_pause,
+  can_terminate_invocation,
   can_tail_output,
-  can_resume,
   capabilities_extra_json,  -- nullable; provider-specific diagnostics only
   acquired_at,
   released_at,
@@ -460,9 +477,12 @@ in any other order leaves a parallel-truth window.
 
 1. **Define the API capability response shape from the projection.**
    `SessionCapabilitiesResponse` exposes the kernel fields directly:
-   `control_label`, `live_control_available`, `host_reattach_available`,
-   `observe_only`, `search_only`, `can_send_input`, `can_interrupt`,
-   `can_terminate`, `can_tail_output`, `can_resume`, `staleness_reason`.
+   `control_label`, `turn_state`, `can_start_turn`, `can_queue_next_turn`,
+   `can_resume_thread`, `start_turn_blocked_by`,
+   `live_control_available`, `host_reattach_available`, `observe_only`,
+   `search_only`, `can_steer_active_turn`, `can_interrupt_active_turn`,
+   `can_answer_pause`, `can_terminate_invocation`, `can_tail_output`, and
+   `staleness_reason`.
    Keep the small set of presentation helpers (`display_label`,
    `display_detail`, `display_tone`, `input_mode`, `composer_*`) as
    server-derived from the kernel projection — not as another truth source.
