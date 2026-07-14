@@ -78,7 +78,12 @@ async def build_storage_v2_workspace(
     cursor: str | None = None,
     anchor: str = "tail",
 ) -> dict[str, object] | None:
-    """Return a storage-v2 workspace, or ``None`` for a legacy-only session."""
+    """Return a storage-v2 workspace, including live control-only sessions.
+
+    A managed control lease is useful only if the session remains openable.  A
+    provider may not yet have a transcript source, however, so its first
+    workspace is allowed to be an empty, explicitly control-only projection.
+    """
 
     if branch_mode not in {"head", "all"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="branch_mode must be one of: head, all")
@@ -94,7 +99,53 @@ async def build_storage_v2_workspace(
     except (CatalogRemoteError, CatalogUnavailable) as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
     if storage.get("found") is not True:
-        return None
+        session, _provider_alias, session_commit_seq = await asyncio.to_thread(read_live_catalog_session, session_id)
+        if session is None or not session.capabilities.live_control_available:
+            return None
+        session_json = session.model_dump(mode="json")
+        fingerprint_payload = {
+            "session_commit_seq": session_commit_seq,
+            "storage_commit_seq": None,
+            "control_only": True,
+        }
+        fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        projection = {
+            "root_session_id": str(session_id),
+            "focus_session_id": str(session_id),
+            "head_session_id": str(session_id),
+            "path_session_ids": [str(session_id)],
+            "items": [],
+            "total": 0,
+            "page_offset": 0,
+            "branch_mode": branch_mode,
+            "abandoned_events": 0,
+            "generation_id": None,
+            "next_cursor": None,
+            "has_more": False,
+        }
+        return {
+            "session": session_json,
+            "thread": {
+                "root_session_id": str(session_id),
+                "head_session_id": str(session_id),
+                "sessions": [session_json],
+            },
+            "projection": projection,
+            "workspace_revision": {
+                "latest_event_id": None,
+                "latest_session_updated_at": None,
+                "latest_runtime_signal_at": None,
+                "runtime_version_sum": 0,
+                "pause_request_count": 0,
+                "pause_request_fingerprint": None,
+                "managed_control_count": 1,
+                "managed_control_fingerprint": None,
+                "live_preview_updated_at": None,
+                "thread_session_count": 1,
+                "fingerprint": fingerprint,
+            },
+            "control_only": True,
+        }
     storage_session = storage.get("session")
     if not isinstance(storage_session, dict) or str(storage_session.get("owner_id")) != str(owner_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
@@ -168,6 +219,7 @@ async def build_storage_v2_workspace(
             "thread_session_count": 1,
             "fingerprint": fingerprint,
         },
+        "control_only": False,
     }
 
 

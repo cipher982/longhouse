@@ -1397,6 +1397,10 @@ class SessionWorkspaceResponse(BaseModel):
     thread: SessionThreadResponse = Field(..., description="Logical thread continuations for the focused session")
     projection: SessionProjectionResponse = Field(..., description="First page of the stitched lineage projection")
     workspace_revision: SessionWorkspaceRevisionResponse = Field(..., description="Durable viewport freshness revision")
+    control_only: bool = Field(
+        False,
+        description="True when the session has a live managed control path but no transcript source yet.",
+    )
 
 
 class SessionMobileTailResponse(BaseModel):

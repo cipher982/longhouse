@@ -599,6 +599,7 @@ export function useSessionWorkspace(
     abandonedEvents,
     eventsLoading: projectionLoading,
     eventsError: projectionError,
+    controlOnly: workspaceData?.control_only ?? false,
     fetchPreviousPage,
     hasPreviousPage,
     isFetchingPreviousPage,

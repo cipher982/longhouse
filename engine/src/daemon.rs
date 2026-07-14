@@ -348,7 +348,7 @@ impl ArchiveRepairControl {
 
     fn normalized_mode(&self, default_mode: ArchiveRepairMode) -> ArchiveRepairMode {
         if !self.active_override() {
-            return ArchiveRepairMode::Paused;
+            return default_mode;
         }
         match self
             .mode
@@ -4761,7 +4761,7 @@ mod tests {
         );
         assert_eq!(
             unset.normalized_mode(ArchiveRepairMode::Drain),
-            ArchiveRepairMode::Paused
+            ArchiveRepairMode::Drain
         );
 
         let operator_control = ArchiveRepairControl {
@@ -4806,7 +4806,7 @@ mod tests {
         };
         assert_eq!(
             legacy_drain.normalized_mode(ArchiveRepairMode::Drain),
-            ArchiveRepairMode::Paused
+            ArchiveRepairMode::Drain
         );
     }
 

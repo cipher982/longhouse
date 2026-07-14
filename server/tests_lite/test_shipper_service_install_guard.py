@@ -46,7 +46,7 @@ def test_install_service_allows_first_install_without_existing_shipper_db(tmp_pa
     assert log_dir.exists()
 
 
-def test_install_service_defaults_hosted_runtime_to_paused_archive_repair(tmp_path, monkeypatch):
+def test_install_service_defaults_hosted_runtime_to_continuous_trickle_archive_repair(tmp_path, monkeypatch):
     claude_dir = tmp_path / ".claude"
     log_dir = tmp_path / ".longhouse" / "agent" / "logs"
     launchd_path = tmp_path / "LaunchAgents" / "com.longhouse.shipper.plist"
@@ -73,7 +73,7 @@ def test_install_service_defaults_hosted_runtime_to_paused_archive_repair(tmp_pa
         claude_dir=str(claude_dir),
     )
 
-    assert modes == ["paused"]
+    assert modes == ["trickle"]
 
 
 def test_install_service_defaults_custom_runtime_to_drain_archive_repair(tmp_path, monkeypatch):

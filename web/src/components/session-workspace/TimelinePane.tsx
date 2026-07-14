@@ -60,6 +60,7 @@ interface TimelinePaneProps {
   onFetchPreviousPage: () => void;
   loading?: boolean;
   error?: unknown;
+  controlOnly?: boolean;
   selectedKey: string | null;
   onSelectKey: (key: string) => void;
   /** Called when local filtering hides/reveals the parent-selected key. */
@@ -828,6 +829,7 @@ export function TimelinePane({
   onFetchPreviousPage,
   loading = false,
   error = null,
+  controlOnly = false,
   selectedKey,
   onSelectKey,
   onVisibleSelectionChange,
@@ -1158,7 +1160,9 @@ export function TimelinePane({
                 ? `No messages match "${debouncedSearch}".`
                 : eventFilter !== "all"
                   ? "No messages match the selected filter."
-                  : "This session has no recorded messages."
+                  : controlOnly
+                    ? "This live session is connected for control, but its provider does not expose transcript history yet."
+                    : "This session has no recorded messages."
             }
           />
         ) : (

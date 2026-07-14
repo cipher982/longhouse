@@ -354,6 +354,8 @@ export interface AgentSessionWorkspaceResponse {
   thread: AgentSessionThreadResponse;
   projection: AgentSessionProjectionResponse;
   workspace_revision: AgentSessionWorkspaceRevision;
+  /** The provider has live managed control but does not expose transcript data yet. */
+  control_only?: boolean;
 }
 
 export type AgentSessionTurnState =

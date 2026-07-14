@@ -103,6 +103,7 @@ function SessionDetailWorkspaceRoute({
     items,
     eventsLoading,
     eventsError,
+    controlOnly,
     fetchPreviousPage,
     hasPreviousPage,
     isFetchingPreviousPage,
@@ -540,6 +541,7 @@ function SessionDetailWorkspaceRoute({
           onFetchPreviousPage={() => void fetchPreviousPage()}
           loading={eventsLoading}
           error={eventsError}
+          controlOnly={controlOnly}
           selectedKey={selectedKey}
           onSelectKey={selectKey}
           onVisibleSelectionChange={handleVisibleSelectionChange}

@@ -97,14 +97,14 @@ def _common_service_path() -> str:
 
 
 def _default_archive_repair_mode_for_url(url: str) -> str:
-    """Hosted Runtime Hosts keep archive repair operator-controlled by default."""
+    """Hosted Runtime Hosts continuously reconcile at the safe background rate."""
     try:
         hostname = urlparse(url).hostname or ""
     except Exception:
         hostname = ""
     hostname = hostname.lower().rstrip(".")
     if hostname == "longhouse.ai" or hostname.endswith(".longhouse.ai"):
-        return "paused"
+        return "trickle"
     return "drain"
 
 
@@ -468,8 +468,9 @@ def install_service(
         claude_dir: Claude config directory override
         fallback_scan_secs: Seconds between reconciliation directory scans
         spool_replay_secs: Seconds between spool replay attempts
-        archive_repair_mode: Archive repair posture. Defaults to paused for
-            hosted longhouse.ai Runtime Hosts and drain for custom/self-host URLs.
+        archive_repair_mode: Archive repair posture. Defaults to persistent
+            trickle for hosted longhouse.ai Runtime Hosts and drain for
+            custom/self-host URLs.
         log_dir: Override for engine log directory
 
     Returns:
