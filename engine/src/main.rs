@@ -16,6 +16,7 @@ mod control_channel;
 mod cursor_acp;
 mod cursor_helm_control;
 mod cursor_store;
+mod cursor_launch_binding;
 mod daemon;
 mod device;
 mod discovery;

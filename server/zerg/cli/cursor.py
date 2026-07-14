@@ -15,6 +15,7 @@ See ``docs/specs/cursor-transcript-format.md``.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import typer
@@ -26,6 +27,25 @@ app = typer.Typer(
     invoke_without_command=True,
     no_args_is_help=False,
 )
+
+
+@app.command(name="binding-probe")
+def binding_probe(
+    session_id: str = typer.Option(..., "--session-id", help="Longhouse Cursor Helm session UUID."),
+    phase: str = typer.Option(..., "--phase", help="before_launch, after_prompt, after_tool_turn, or at_exit."),
+    store_db: Path | None = typer.Option(None, "--store-db", help="Controlled launch's Cursor store.db (required after launch)."),
+) -> None:
+    """Record one interactive, read-only Cursor Helm binding-probe observation."""
+    from zerg.services.cursor_binding_probe import record_probe_observation
+
+    try:
+        artifact = record_probe_observation(session_id, phase, store_db)
+    except (OSError, ValueError) as exc:
+        typer.secho(f"Cursor Helm binding probe failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps({"status": artifact["status"], "artifact": artifact["artifact_path"]}, sort_keys=True))
+    if artifact["status"] != "passed":
+        raise typer.Exit(code=1)
 
 
 @app.callback(invoke_without_command=True)

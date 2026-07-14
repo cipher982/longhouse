@@ -417,6 +417,9 @@ pub(crate) fn prepare_next_cursor_envelope(
     db_path: &Path,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
     let snapshot = cursor_store::cursor_store_raw_snapshot(db_path)?;
+    let claimed_session_id = crate::cursor_launch_binding::managed_session_id_for_conversation(
+        &snapshot.conversation_uuid,
+    )?;
     let opaque_source_id = cursor_store::cursor_opaque_source_id(&snapshot.conversation_uuid);
     let root_relation = cursor_store_root::observe_cursor_root(
         conn,
@@ -442,7 +445,7 @@ pub(crate) fn prepare_next_cursor_envelope(
         source_len_before_capture,
         SourceLane::Durable,
         0,
-        None,
+        claimed_session_id.as_deref(),
         None,
         root_relation.source_change_hint(),
     )?;
@@ -499,7 +502,13 @@ pub(crate) fn prepare_next_cursor_envelope(
             &selected.iter().map(|record| record.bytes.clone()).collect::<Vec<_>>(),
         ),
     };
-    let session_id = cursor_store::longhouse_session_id_for_cursor(&snapshot.conversation_uuid);
+    // A normal Cursor store is durable but not watchable as a managed Helm
+    // session.  A verified probe binding is persisted by source_epoch so that
+    // expiry cannot split an already-bound conversation mid-archive.
+    let managed_session_id = resolution.bound_session_id.clone();
+    let session_id = managed_session_id
+        .clone()
+        .unwrap_or_else(|| cursor_store::longhouse_session_id_for_cursor(&snapshot.conversation_uuid));
     let started_at = snapshot
         .created_at_ms
         .and_then(DateTime::from_timestamp_millis)
@@ -537,7 +546,7 @@ pub(crate) fn prepare_next_cursor_envelope(
                 last_activity_at: observed_at.max(started_at).to_rfc3339(),
                 ended_at: None,
                 origin_kind: Some("cursor_store".to_string()),
-                hidden_from_default_timeline: false,
+                hidden_from_default_timeline: managed_session_id.is_none(),
                 launch_actor: None,
                 launch_surface: None,
             },
