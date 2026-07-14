@@ -2,12 +2,15 @@
 // Run: python3 scripts/generate/tool_tiers.py
 
 export type ToolTier = "noise" | "context" | "action";
+export type ToolAggregate = "search" | "read" | "list";
 export type ToolColorToken =
   | "brand" | "cyan" | "success" | "warning" | "secondary"
   | "tertiary" | "accent" | "muted";
 
 export interface ToolTierMeta {
   tier: ToolTier;
+  /** When set, completed calls may join consecutive exploration runs. */
+  aggregate: ToolAggregate | null;
   icon: string;
   label: string;
   color: ToolColorToken;
@@ -20,38 +23,40 @@ export interface McpNamespaceMeta {
 
 export const DEFAULT_TOOL_TIER: ToolTier = "action";
 export const MCP_DEFAULT_TIER: ToolTier = "noise";
+export const DEFAULT_TOOL_AGGREGATE: ToolAggregate | null = null;
+export const MCP_DEFAULT_AGGREGATE: ToolAggregate | null = null;
 
 export const TOOL_TIERS: Record<string, ToolTierMeta> = {
-  "Read": { tier: "context", icon: "R", label: "Read", color: "cyan" },
-  "Edit": { tier: "action", icon: "E", label: "Edit", color: "brand" },
-  "Write": { tier: "action", icon: "W", label: "Write", color: "success" },
-  "NotebookEdit": { tier: "action", icon: "N", label: "Notebook", color: "brand" },
-  "Bash": { tier: "action", icon: "$", label: "Bash", color: "warning" },
-  "Task": { tier: "action", icon: "T", label: "Task", color: "secondary" },
-  "Agent": { tier: "action", icon: "A", label: "Agent", color: "tertiary" },
-  "Grep": { tier: "noise", icon: "~", label: "Grep", color: "muted" },
-  "Glob": { tier: "noise", icon: "*", label: "Glob", color: "muted" },
-  "LS": { tier: "noise", icon: "/", label: "List", color: "muted" },
-  "ToolSearch": { tier: "noise", icon: "?", label: "ToolSearch", color: "muted" },
-  "TodoRead": { tier: "noise", icon: "=", label: "TodoRead", color: "muted" },
-  "TodoWrite": { tier: "action", icon: "+", label: "TodoWrite", color: "accent" },
-  "WebFetch": { tier: "context", icon: "W", label: "Fetch", color: "cyan" },
-  "WebSearch": { tier: "context", icon: "S", label: "Search", color: "secondary" },
-  "read_file": { tier: "context", icon: "R", label: "read_file", color: "cyan" },
-  "grep": { tier: "noise", icon: "~", label: "grep", color: "muted" },
-  "list_files": { tier: "noise", icon: "/", label: "list", color: "muted" },
-  "find": { tier: "noise", icon: "?", label: "find", color: "muted" },
-  "codebase_search": { tier: "noise", icon: "?", label: "search", color: "muted" },
-  "web_search": { tier: "context", icon: "S", label: "web_search", color: "secondary" },
-  "shell": { tier: "action", icon: "$", label: "shell", color: "warning" },
-  "shell_command": { tier: "action", icon: "$", label: "shell", color: "warning" },
-  "exec_command": { tier: "action", icon: "$", label: "exec", color: "warning" },
-  "run_shell_command": { tier: "action", icon: "$", label: "shell", color: "warning" },
-  "write_stdin": { tier: "action", icon: "$", label: "stdin", color: "warning" },
-  "apply_patch": { tier: "action", icon: "E", label: "patch", color: "brand" },
-  "create_file": { tier: "action", icon: "W", label: "create", color: "success" },
-  "str_replace_editor": { tier: "action", icon: "E", label: "edit", color: "brand" },
-  "update_plan": { tier: "action", icon: "+", label: "plan", color: "accent" },
+  "Read": { tier: "context", aggregate: "read", icon: "R", label: "Read", color: "cyan" },
+  "Edit": { tier: "action", aggregate: null, icon: "E", label: "Edit", color: "brand" },
+  "Write": { tier: "action", aggregate: null, icon: "W", label: "Write", color: "success" },
+  "NotebookEdit": { tier: "action", aggregate: null, icon: "N", label: "Notebook", color: "brand" },
+  "Bash": { tier: "action", aggregate: null, icon: "$", label: "Bash", color: "warning" },
+  "Task": { tier: "action", aggregate: null, icon: "T", label: "Task", color: "secondary" },
+  "Agent": { tier: "action", aggregate: null, icon: "A", label: "Agent", color: "tertiary" },
+  "Grep": { tier: "noise", aggregate: "search", icon: "~", label: "Grep", color: "muted" },
+  "Glob": { tier: "noise", aggregate: "list", icon: "*", label: "Glob", color: "muted" },
+  "LS": { tier: "noise", aggregate: "list", icon: "/", label: "List", color: "muted" },
+  "ToolSearch": { tier: "noise", aggregate: "search", icon: "?", label: "ToolSearch", color: "muted" },
+  "TodoRead": { tier: "noise", aggregate: null, icon: "=", label: "TodoRead", color: "muted" },
+  "TodoWrite": { tier: "action", aggregate: null, icon: "+", label: "TodoWrite", color: "accent" },
+  "WebFetch": { tier: "context", aggregate: null, icon: "W", label: "Fetch", color: "cyan" },
+  "WebSearch": { tier: "context", aggregate: null, icon: "S", label: "Search", color: "secondary" },
+  "read_file": { tier: "context", aggregate: "read", icon: "R", label: "read_file", color: "cyan" },
+  "grep": { tier: "noise", aggregate: "search", icon: "~", label: "grep", color: "muted" },
+  "list_files": { tier: "noise", aggregate: "list", icon: "/", label: "list", color: "muted" },
+  "find": { tier: "noise", aggregate: "search", icon: "?", label: "find", color: "muted" },
+  "codebase_search": { tier: "noise", aggregate: "search", icon: "?", label: "search", color: "muted" },
+  "web_search": { tier: "context", aggregate: null, icon: "S", label: "web_search", color: "secondary" },
+  "shell": { tier: "action", aggregate: null, icon: "$", label: "shell", color: "warning" },
+  "shell_command": { tier: "action", aggregate: null, icon: "$", label: "shell", color: "warning" },
+  "exec_command": { tier: "action", aggregate: null, icon: "$", label: "exec", color: "warning" },
+  "run_shell_command": { tier: "action", aggregate: null, icon: "$", label: "shell", color: "warning" },
+  "write_stdin": { tier: "action", aggregate: null, icon: "$", label: "stdin", color: "warning" },
+  "apply_patch": { tier: "action", aggregate: null, icon: "E", label: "patch", color: "brand" },
+  "create_file": { tier: "action", aggregate: null, icon: "W", label: "create", color: "success" },
+  "str_replace_editor": { tier: "action", aggregate: null, icon: "E", label: "edit", color: "brand" },
+  "update_plan": { tier: "action", aggregate: null, icon: "+", label: "plan", color: "accent" },
 };
 
 export const MCP_NAMESPACES: Record<string, McpNamespaceMeta> = {
@@ -88,6 +93,7 @@ function parseMcp(name: string): { namespace: string; method: string } | null {
 
 export interface ResolvedToolInfo {
   tier: ToolTier;
+  aggregate: ToolAggregate | null;
   icon: string;
   label: string;
   color: ToolColorToken;
@@ -105,6 +111,7 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {
       if (ns === prefix || nsParts.includes(prefix) || ns.startsWith(prefix + "-") || ns.startsWith(prefix + "_")) {
         return {
           tier: MCP_DEFAULT_TIER,
+          aggregate: MCP_DEFAULT_AGGREGATE,
           icon: meta.icon,
           label: mcp.method,
           color: meta.color,
@@ -114,6 +121,7 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {
     }
     return {
       tier: MCP_DEFAULT_TIER,
+      aggregate: MCP_DEFAULT_AGGREGATE,
       icon: "M",
       label: mcp.method,
       color: "muted",
@@ -131,6 +139,7 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {
 
   return {
     tier: DEFAULT_TOOL_TIER,
+    aggregate: DEFAULT_TOOL_AGGREGATE,
     icon: (toolName[0] || " ").toUpperCase(),
     label: toolName,
     color: "muted",
@@ -139,4 +148,8 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {
 
 export function toolTier(toolName: string): ToolTier {
   return resolveToolInfo(toolName).tier;
+}
+
+export function toolAggregate(toolName: string): ToolAggregate | null {
+  return resolveToolInfo(toolName).aggregate;
 }
