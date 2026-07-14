@@ -75,10 +75,11 @@ conversation_uuid
 store_incarnation
 meta_key             # for meta
 meta_value_bytes_b64 # exact SQLite value bytes, for meta
+meta_value_storage_class # text | blob, for meta
 blob_id              # content-addressed id, for blob/root_observation
 blob_bytes_b64       # exact SQLite blob bytes, for blob/root_observation
+blob_storage_class   # text | blob, for blob/root_observation
 root_blob_id         # current root, when observed
-observed_at
 ```
 
 The adapter captures every observed row in `meta` and `blobs`, not just blob
@@ -88,7 +89,9 @@ blob; the observation ties a provider-visible transcript ordering snapshot to
 the raw blobs without inventing semantics for fields such as `3` or `8`.
 
 The byte payload is a deterministic versioned wrapper around exact database
-bytes.  The wrapper is provenance; `*_bytes_b64` is the evidence.  A future
+bytes. `observed_at` belongs in local source state, not the content-addressed
+raw record: rereading unchanged evidence must produce the same bytes. The
+wrapper is provenance; `*_bytes_b64` is the evidence. A future
 decoder can therefore reconstruct raw rows and re-render from the archive
 without rereading the user machine.  The adapter deduplicates only exact
 `(kind, meta_key/blob_id, content hash)` records within an epoch.  It must not

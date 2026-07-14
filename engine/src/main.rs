@@ -15,6 +15,7 @@ mod console_prompt;
 mod control_channel;
 mod cursor_acp;
 mod cursor_helm_control;
+mod cursor_store;
 mod daemon;
 mod device;
 mod discovery;
