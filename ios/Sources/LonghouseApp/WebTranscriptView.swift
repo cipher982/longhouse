@@ -461,17 +461,12 @@ struct WebTranscriptView: UIViewRepresentable {
         calls: [PassiveCall],
         serverURL: String?
     ) -> WebTranscriptPayloadItem {
-        var counts: [(String, Int)] = []
-        for passive in calls {
-            let name = passive.call.toolName ?? "Tool"
-            if let index = counts.firstIndex(where: { $0.0 == name }) {
-                counts[index].1 += 1
-            } else {
-                counts.append((name, 1))
-            }
-        }
+        let summary = TimelineBuilder.explorationSummary(for: calls)
+        let overflow = TimelineBuilder.splitExplorationOverflow(calls)
+        let visibleCalls = overflow.earlier.isEmpty ? calls : overflow.latest
+        let earlierCount = overflow.earlier.count
 
-        let childCalls = calls.map { passive in
+        let childCalls = visibleCalls.map { passive in
             let status: String = {
                 switch passive.call.toolCallState {
                 case .running: return "running"
@@ -490,12 +485,25 @@ struct WebTranscriptView: UIViewRepresentable {
             )
         }
 
+        let earlierPrefix: [WebTranscriptToolCall] = earlierCount > 0
+            ? [
+                WebTranscriptToolCall(
+                    title: "Show \(earlierCount) earlier",
+                    subtitle: "",
+                    status: "earlier",
+                    input: nil,
+                    output: nil,
+                    media: nil
+                )
+              ]
+            : []
+
         return WebTranscriptPayloadItem(
             id: id,
             kind: "passiveGroup",
             role: nil,
-            title: "Explored",
-            subtitle: counts.map { "\($0.0) × \($0.1)" }.joined(separator: ", "),
+            title: summary.isEmpty ? "Explored" : summary,
+            subtitle: "\(calls.count)",
             body: nil,
             fullBody: nil,
             collapsed: false,
@@ -503,7 +511,7 @@ struct WebTranscriptView: UIViewRepresentable {
             duration: nil,
             input: nil,
             output: nil,
-            calls: childCalls,
+            calls: earlierPrefix + childCalls,
             origin: nil,
             media: nil
         )
@@ -1842,6 +1850,9 @@ private extension WebTranscriptView {
 
     function passiveGroup(item) {
       const calls = (item.calls || []).map(call => {
+        if (call.status === 'earlier') {
+          return `<div class="passive-earlier">${escapeHtml(call.title || 'Show earlier')}</div>`;
+        }
         const input = call.input ? '<div class="section-label">Input</div><pre><code>' + escapeHtml(call.input) + '</code></pre>' : '';
         const output = call.output ? '<div class="section-label">Output</div><pre><code>' + escapeHtml(call.output) + '</code></pre>' : '';
         const media = mediaStrip(call.media || []);
