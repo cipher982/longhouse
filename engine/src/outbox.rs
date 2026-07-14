@@ -11,6 +11,8 @@
 //! Files older than `STALE_SECS` are deleted without posting (presence is ephemeral).
 
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -93,6 +95,26 @@ pub struct PendingPresencePost {
 pub struct PendingRuntimeEventPost {
     path: PathBuf,
     event: Value,
+}
+
+/// Durably enqueue one runtime event for the daemon's shared retrying outbox.
+/// Writers never POST directly: an atomic rename makes an event visible to the
+/// drain loop only after its complete JSON payload reaches disk.
+pub fn enqueue_runtime_event(dir: &Path, event: &Value) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let bytes = serde_json::to_vec(event)?;
+    let nonce = uuid::Uuid::new_v4();
+    let temporary = dir.join(format!(".{nonce}.tmp"));
+    let ready = dir.join(format!("{nonce}.json"));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&temporary, &ready)?;
+    Ok(())
 }
 
 /// Drain all ready presence events from the outbox directory.
@@ -528,6 +550,23 @@ mod tests {
 
     fn make_outbox() -> TempDir {
         tempfile::tempdir().expect("tempdir")
+    }
+
+    #[test]
+    fn enqueue_runtime_event_is_atomically_visible_to_the_shared_drain() {
+        let dir = make_outbox();
+        let event = serde_json::json!({"session_id":"cursor-session","kind":"progress_signal"});
+
+        enqueue_runtime_event(dir.path(), &event).unwrap();
+
+        let posts = collect_runtime_event_outbox(dir.path());
+        assert_eq!(posts.len(), 1);
+        assert_eq!(posts[0].event, event);
+        assert!(
+            fs::read_dir(dir.path())
+                .unwrap()
+                .all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with('.'))
+        );
     }
 
     fn write_presence(dir: &Path, name: &str, session_id: &str, state: &str) -> PathBuf {

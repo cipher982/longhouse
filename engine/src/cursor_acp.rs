@@ -14,34 +14,28 @@
 //!      → streams `session/update` notifications until the prompt response
 //!        ({stopReason: "end_turn" | ...}) arrives.
 //!
-//! `session/update` notifications are translated to `EventIngest` rows and
-//! posted to `/api/agents/ingest`; phase/progress/terminal signals go to
-//! `/api/agents/runtime/events/batch` for the live overlay.
-//!
-//! Timestamp fidelity: ACP notifications do not carry per-event timestamps
-//! (verified by live probe), so every event uses a monotonic receipt clock.
-//! Do not fabricate per-event timestamps beyond receipt time.
+//! Every ACP notification is appended unchanged to a local, run-scoped source
+//! file before a provisional phase/progress/terminal signal is put in the
+//! shared runtime outbox. There is deliberately no direct ingest request and
+//! no fabricated event timestamp. The source becomes durable only once the
+//! storage-v2 adapter seals it with a receipt.
 //!
 //! Interrupt/terminate: cursor-agent returns "Method not found" for
 //! `session/cancel`, so there is no graceful ACP interrupt. Terminate is
 //! cleanup-on-drop (kill_on_drop) plus SIGINT/SIGKILL on the pid if a
 //! pid-registry terminate command is wired later.
 //!
-//! Tool-variant mapping is provisional: `agent_message_chunk` is mapped
-//! fully; other `sessionUpdate` variants (tool calls, thoughts, file changes)
-//! emit progress signals and a best-effort tool EventIngest when a tool
-//! identifier is present. Promote the tool mapping once a tool-using live
-//! canary captures the exact Cursor ACP variant names.
 
 use std::collections::VecDeque;
 use std::ffi::OsString;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -49,7 +43,6 @@ use tokio::process::Command;
 
 const CURSOR_ACP_RUNTIME_SOURCE: &str = "cursor_acp";
 const STDERR_TAIL_LINES: usize = 40;
-const INGEST_BATCH_FLUSH_THRESHOLD: usize = 5;
 const ACP_PROTOCOL_VERSION: i64 = 1;
 
 #[derive(Clone, Debug)]
@@ -82,23 +75,18 @@ pub struct CursorAcpRunSummary {
 struct CursorAcpSink {
     session_id: String,
     run_id: String,
-    api_url: String,
-    api_token: String,
     machine_name: String,
     cwd: String,
-    launch_actor: Option<String>,
-    launch_surface: Option<String>,
     local_db_path: Option<PathBuf>,
-    http: reqwest::Client,
+    runtime_events_outbox_dir: PathBuf,
+    source_dir: PathBuf,
 }
 
 pub fn cursor_acp_args() -> Vec<OsString> {
     vec![OsString::from("acp")]
 }
 
-pub async fn start_cursor_acp_once(
-    config: CursorAcpRunConfig,
-) -> Result<CursorAcpRunSummary> {
+pub async fn start_cursor_acp_once(config: CursorAcpRunConfig) -> Result<CursorAcpRunSummary> {
     let args = cursor_acp_args();
     let argv = std::iter::once(OsString::from(config.cursor_bin.clone()))
         .chain(args.iter().cloned())
@@ -145,17 +133,16 @@ pub async fn start_cursor_acp_once(
     let summary_run_id = config.run_id.clone();
     let summary_argv = argv.clone();
 
+    let runtime_events_outbox_dir = crate::config::get_agent_runtime_events_outbox_dir()?;
+    let source_dir = crate::config::get_agent_dir()?.join("cursor-acp-source");
     let sink = CursorAcpSink {
         session_id: config.session_id.clone(),
         run_id: config.run_id.clone(),
-        api_url: config.api_url.clone(),
-        api_token: config.api_token.clone(),
         machine_name: config.machine_name.clone(),
         cwd: config.cwd.to_string_lossy().to_string(),
-        launch_actor: config.launch_actor.clone(),
-        launch_surface: config.launch_surface.clone(),
         local_db_path: config.local_db_path.clone(),
-        http: reqwest::Client::new(),
+        runtime_events_outbox_dir,
+        source_dir,
     };
 
     let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
@@ -194,11 +181,7 @@ pub async fn start_cursor_acp_once(
             }
             Err(err) => {
                 monitor_sink
-                    .post_terminal(
-                        "run_failed",
-                        None,
-                        Some(format!("acp turn failed: {err}")),
-                    )
+                    .post_terminal("run_failed", None, Some(format!("acp turn failed: {err}")))
                     .await;
             }
         }
@@ -225,8 +208,6 @@ async fn run_acp_turn(
 ) -> Result<Option<String>> {
     let mut lines = BufReader::new(stdout).lines();
     let mut next_id = 1i64;
-    let mut ingest_buffer: Vec<Value> = Vec::new();
-    let mut last_ts: Option<DateTime<Utc>> = None;
     let mut acp_session_id: Option<String> = None;
 
     // 1. initialize
@@ -243,7 +224,8 @@ async fn run_acp_turn(
         }),
     )
     .await?;
-    let init_resp = read_response(&mut lines, init_id, sink, &mut ingest_buffer, &mut last_ts).await?;
+    let init_resp =
+        read_response(&mut lines, init_id, sink).await?;
     if let Some(err) = init_resp.get("error") {
         anyhow::bail!("initialize error: {err}");
     }
@@ -251,7 +233,8 @@ async fn run_acp_turn(
     // 2. session/new or session/load
     let session_id_req = next_id;
     next_id += 1;
-    let (session_method, session_params) = match normalized_optional(&config.resume_acp_session_id) {
+    let (session_method, session_params) = match normalized_optional(&config.resume_acp_session_id)
+    {
         Some(acp_id) => (
             "session/load",
             json!({"sessionId": acp_id, "cwd": config.cwd.to_string_lossy().to_string(), "mcpServers": []}),
@@ -262,8 +245,12 @@ async fn run_acp_turn(
         ),
     };
     write_request(&mut stdin, session_id_req, session_method, session_params).await?;
-    let session_resp =
-        read_response(&mut lines, session_id_req, sink, &mut ingest_buffer, &mut last_ts).await?;
+    let session_resp = read_response(
+        &mut lines,
+        session_id_req,
+        sink,
+    )
+    .await?;
     if let Some(err) = session_resp.get("error") {
         anyhow::bail!("{session_method} error: {err}");
     }
@@ -291,19 +278,14 @@ async fn run_acp_turn(
     .await?;
 
     // Stream notifications until the prompt response arrives.
-    let prompt_resp =
-        read_response(&mut lines, prompt_id, sink, &mut ingest_buffer, &mut last_ts).await?;
+    let prompt_resp = read_response(
+        &mut lines,
+        prompt_id,
+        sink,
+    )
+    .await?;
     if let Some(err) = prompt_resp.get("error") {
         anyhow::bail!("session/prompt error: {err}");
-    }
-
-    // Flush any remaining buffered transcript events.
-    if !ingest_buffer.is_empty() {
-        sink.post_session_ingest(
-            Some(&acp_session_id),
-            ingest_buffer,
-        )
-        .await;
     }
 
     let stop_reason = prompt_resp
@@ -336,14 +318,14 @@ async fn write_request(
 }
 
 /// Read stdout lines until the response with `expected_id` arrives.
-/// `session/update` (and other) notifications arriving before the response
-/// are translated to EventIngest rows + progress signals.
+/// Every notification is first retained as exact local source evidence, then
+/// mirrored as a provisional runtime progress signal through the shared
+/// daemon outbox. Console remains unavailable until this source is sealed by
+/// the storage-v2 adapter.
 async fn read_response(
     lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
     expected_id: i64,
     sink: &CursorAcpSink,
-    ingest_buffer: &mut Vec<Value>,
-    last_ts: &mut Option<DateTime<Utc>>,
 ) -> Result<Value> {
     let mut seq = 0u64;
     loop {
@@ -366,119 +348,14 @@ async fn read_response(
                     continue;
                 }
 
-                // Notification: translate session/update into transcript
-                // events + a live progress signal.
-                if let Some(event) = build_event_from_notification(&value, last_ts) {
-                    ingest_buffer.push(event);
-                    if ingest_buffer.len() >= INGEST_BATCH_FLUSH_THRESHOLD {
-                        let batch = std::mem::take(ingest_buffer);
-                        sink.post_session_ingest(None, batch).await;
-                    }
-                }
+                sink.persist_raw_notification(line.as_bytes())?;
                 sink.post_progress(seq, value).await;
             }
-            None => anyhow::bail!("cursor-agent acp stdout closed before response id={expected_id}"),
-        }
-    }
-}
-
-fn build_event_from_notification(
-    value: &Value,
-    last_ts: &mut Option<DateTime<Utc>>,
-) -> Option<Value> {
-    let method = value.get("method").and_then(Value::as_str)?;
-    if method != "session/update" {
-        return None;
-    }
-    let update = value.pointer("/params/update")?;
-    let session_update = update.get("sessionUpdate").and_then(Value::as_str)?;
-    let ts = monotonic_timestamp(last_ts).to_rfc3339();
-
-    match session_update {
-        "agent_message_chunk" => {
-            let text = value
-                .pointer("/params/update/content/text")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if text.is_empty() {
-                return None;
-            }
-            Some(json!({
-                "role": "assistant",
-                "content_text": text,
-                "timestamp": ts,
-            }))
-        }
-        "agent_thought_chunk" => {
-            let text = value
-                .pointer("/params/update/content/text")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if text.is_empty() {
-                return None;
-            }
-            Some(json!({
-                "role": "assistant",
-                "content_text": text,
-                "kind": "reasoning",
-                "timestamp": ts,
-            }))
-        }
-        // Tool-call variants. Cursor's exact variant names are not yet
-        // captured by a live tool-using canary; map the common ACP shapes
-        // best-effort and fall through to None (progress-only) otherwise.
-        variant if variant.starts_with("tool_call") => {
-            let tool_name = value
-                .pointer("/params/update/toolCall/name")
-                .and_then(Value::as_str)
-                .or_else(|| value.pointer("/params/update/name").and_then(Value::as_str))
-                .unwrap_or("tool");
-            let tool_call_id = value
-                .pointer("/params/update/toolCall/id")
-                .and_then(Value::as_str)
-                .or_else(|| value.pointer("/params/update/id").and_then(Value::as_str))
-                .unwrap_or("");
-            if variant.contains("result") || variant.contains("complete") || variant.contains("end")
-            {
-                let output = value
-                    .pointer("/params/update/toolCall/result")
-                    .map(|r| serde_json::to_string(r).unwrap_or_default())
-                    .or_else(|| value.pointer("/params/update/result").map(|r| serde_json::to_string(r).unwrap_or_default()))
-                    .unwrap_or_default();
-                Some(json!({
-                    "role": "tool",
-                    "tool_name": tool_name,
-                    "tool_call_id": tool_call_id,
-                    "tool_output_text": output,
-                    "timestamp": ts,
-                }))
-            } else {
-                let input = value
-                    .pointer("/params/update/toolCall/arguments")
-                    .cloned()
-                    .or_else(|| value.pointer("/params/update/arguments").cloned())
-                    .unwrap_or(Value::Null);
-                Some(json!({
-                    "role": "assistant",
-                    "tool_name": tool_name,
-                    "tool_input_json": input,
-                    "tool_call_id": tool_call_id,
-                    "timestamp": ts,
-                }))
+            None => {
+                anyhow::bail!("cursor-agent acp stdout closed before response id={expected_id}")
             }
         }
-        _ => None, // available_commands_update, file_change, etc. → progress only
     }
-}
-
-fn monotonic_timestamp(last_ts: &mut Option<DateTime<Utc>>) -> DateTime<Utc> {
-    let now = Utc::now();
-    let ts = match last_ts {
-        Some(last) if *last >= now => *last + chrono::Duration::milliseconds(1),
-        _ => now,
-    };
-    *last_ts = Some(ts);
-    ts
 }
 
 async fn read_stderr_tail(stream: tokio::process::ChildStderr, tail: Arc<Mutex<VecDeque<String>>>) {
@@ -595,60 +472,15 @@ impl CursorAcpSink {
         .await;
     }
 
-    async fn post_session_ingest(&self, provider_session_id: Option<&str>, events: Vec<Value>) {
-        if events.is_empty() {
-            return;
-        }
-        let started = Utc::now();
-        let payload = json!({
-            "id": self.session_id,
-            "provider": "cursor",
-            "environment": "development",
-            "device_id": self.machine_name,
-            "device_name": self.machine_name,
-            "cwd": self.cwd,
-            "started_at": started.to_rfc3339(),
-            "provider_session_id": provider_session_id,
-            "execution_home": "managed_local",
-            "launch_actor": self.launch_actor.as_deref(),
-            "launch_surface": self.launch_surface.as_deref(),
-            "events": events,
-        });
-        let url = format!("{}/api/agents/ingest", self.api_url.trim_end_matches('/'));
-        for attempt in 0..3 {
-            let response = match self
-                .http
-                .post(&url)
-                .header("X-Agents-Token", &self.api_token)
-                .header("Content-Type", "application/json")
-                .timeout(Duration::from_secs(10))
-                .json(&payload)
-                .send()
-                .await
-            {
-                Ok(response) => response,
-                Err(err) => {
-                    if attempt < 2 {
-                        tokio::time::sleep(Duration::from_millis(150 * (attempt + 1) as u64)).await;
-                        continue;
-                    }
-                    eprintln!("[cursor-acp] ingest network error: {err}");
-                    return;
-                }
-            };
-            if response.status().is_success() {
-                return;
-            }
-            let status = response.status();
-            let retryable = status.is_server_error() || status.as_u16() == 429;
-            let body = response.text().await.unwrap_or_default();
-            if retryable && attempt < 2 {
-                tokio::time::sleep(Duration::from_millis(150 * (attempt + 1) as u64)).await;
-                continue;
-            }
-            eprintln!("[cursor-acp] ingest failed: {status} {body}");
-            return;
-        }
+    fn persist_raw_notification(&self, bytes: &[u8]) -> Result<()> {
+        let session_dir = self.source_dir.join(&self.session_id);
+        std::fs::create_dir_all(&session_dir)?;
+        let path = session_dir.join(format!("{}.jsonl", self.run_id));
+        let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+        file.write_all(bytes)?;
+        file.write_all(b"\n")?;
+        file.sync_data()?;
+        Ok(())
     }
 
     fn persist_local_phase(
@@ -702,42 +534,13 @@ impl CursorAcpSink {
     }
 
     async fn post_events(&self, events: Vec<Value>) {
-        let url = format!(
-            "{}/api/agents/runtime/events/batch",
-            self.api_url.trim_end_matches('/')
-        );
-        for attempt in 0..3 {
-            let response = match self
-                .http
-                .post(&url)
-                .header("X-Agents-Token", &self.api_token)
-                .timeout(Duration::from_secs(5))
-                .json(&json!({ "events": events.clone() }))
-                .send()
-                .await
-            {
-                Ok(response) => response,
-                Err(err) => {
-                    if attempt < 2 {
-                        tokio::time::sleep(Duration::from_millis(100 * (attempt + 1) as u64)).await;
-                        continue;
-                    }
-                    eprintln!("[cursor-acp] runtime ingest network error: {}", err);
-                    return;
-                }
-            };
-            if response.status().is_success() {
-                return;
+        for event in events {
+            if let Err(error) = crate::outbox::enqueue_runtime_event(
+                &self.runtime_events_outbox_dir,
+                &event,
+            ) {
+                eprintln!("[cursor-acp] runtime outbox write failed: {error}");
             }
-            let status = response.status();
-            let retryable = status.is_server_error() || status.as_u16() == 429;
-            let body = response.text().await.unwrap_or_default();
-            if retryable && attempt < 2 {
-                tokio::time::sleep(Duration::from_millis(100 * (attempt + 1) as u64)).await;
-                continue;
-            }
-            eprintln!("[cursor-acp] runtime ingest failed: {} {}", status, body);
-            return;
         }
     }
 }
@@ -768,68 +571,6 @@ mod tests {
         let args = cursor_acp_args();
         let strings: Vec<&str> = args.iter().map(|s| s.to_str().unwrap()).collect();
         assert_eq!(strings, vec!["acp"]);
-    }
-
-    #[test]
-    fn build_event_maps_agent_message_chunk_to_assistant_text() {
-        let notif = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"c1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"READY"}}}}"#,
-        ).unwrap();
-        let mut last = None;
-        let event = build_event_from_notification(&notif, &mut last).unwrap();
-        assert_eq!(event["role"], "assistant");
-        assert_eq!(event["content_text"], "READY");
-        assert!(event["timestamp"].as_str().unwrap().contains("T"));
-    }
-
-    #[test]
-    fn build_event_skips_non_session_update_notifications() {
-        let other = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/request_permission","params":{}}"#,
-        ).unwrap();
-        let mut last = None;
-        assert!(build_event_from_notification(&other, &mut last).is_none());
-    }
-
-    #[test]
-    fn build_event_skips_available_commands_update() {
-        let notif = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"available_commands_update","availableCommands":[]}}}"#,
-        ).unwrap();
-        let mut last = None;
-        assert!(build_event_from_notification(&notif, &mut last).is_none());
-    }
-
-    #[test]
-    fn build_event_maps_tool_call_result_variant_to_tool_role() {
-        let notif = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_result","toolCall":{"id":"tc1","name":"read_file","result":"hello"}}}}"#,
-        ).unwrap();
-        let mut last = None;
-        let event = build_event_from_notification(&notif, &mut last).unwrap();
-        assert_eq!(event["role"], "tool");
-        assert_eq!(event["tool_name"], "read_file");
-        assert_eq!(event["tool_call_id"], "tc1");
-    }
-
-    #[test]
-    fn build_event_maps_tool_call_start_variant_to_assistant_tool_call() {
-        let notif = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"tool_call_start","toolCall":{"id":"tc2","name":"edit_file","arguments":{"path":"/a"}}}}}"#,
-        ).unwrap();
-        let mut last = None;
-        let event = build_event_from_notification(&notif, &mut last).unwrap();
-        assert_eq!(event["role"], "assistant");
-        assert_eq!(event["tool_name"], "edit_file");
-        assert_eq!(event["tool_input_json"]["path"], "/a");
-    }
-
-    #[test]
-    fn monotonic_timestamp_is_non_decreasing() {
-        let mut last = None;
-        let t1 = monotonic_timestamp(&mut last);
-        let t2 = monotonic_timestamp(&mut last);
-        assert!(t2 >= t1);
     }
 
     #[test]
