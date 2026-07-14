@@ -17,6 +17,8 @@ struct LaunchSessionSheet: View {
 
     @State private var selectedDeviceId: String = ""
     @State private var selectedProvider: String = ""
+    @State private var executionLifetime: RemoteExecutionLifetime = .liveControl
+    @State private var initialPrompt: String = ""
     @State private var workspaces: [WorkspaceSuggestion]
     @State private var workspaceSearch: String = ""
     @State private var loadingWorkspaces = false
@@ -36,9 +38,10 @@ struct LaunchSessionSheet: View {
         _machines = State(initialValue: previewMachines ?? [])
         _workspaces = State(initialValue: previewWorkspaces ?? [])
         if let first = previewMachines?.first(where: { Self.canStartInteractiveSession($0) }) {
-            let provider = Self.defaultLiveControlProvider(for: first)
+            let provider = first.defaultProvider ?? ""
             _selectedDeviceId = State(initialValue: first.deviceId)
             _selectedProvider = State(initialValue: provider)
+            _executionLifetime = State(initialValue: first.launch.defaultExecutionLifetime ?? .liveControl)
         } else if let first = previewMachines?.first {
             _selectedDeviceId = State(initialValue: first.deviceId)
         }
@@ -66,13 +69,16 @@ struct LaunchSessionSheet: View {
         cwd.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var selectedCanLiveControl: Bool {
-        selectedMachine?.supportsLiveControlLaunch(provider: selectedProvider) ?? false
+    private var selectedProviderOption: MachineLaunchProviderOption? {
+        selectedMachine?.launch.providers.first { $0.provider == selectedProvider }
     }
 
-    private var liveControlProviders: [String] {
-        guard let selectedMachine else { return [] }
-        return selectedMachine.remoteLaunchProviders.filter { selectedMachine.supportsLiveControlLaunch(provider: $0) }
+    private var availableProviders: [String] {
+        selectedMachine?.remoteLaunchProviders ?? []
+    }
+
+    private var supportedExecutionLifetimes: [RemoteExecutionLifetime] {
+        selectedProviderOption?.executionLifetimes ?? []
     }
 
     private var canSubmit: Bool {
@@ -80,7 +86,8 @@ struct LaunchSessionSheet: View {
             && (selectedMachine?.isLaunchable ?? false)
             && !selectedProvider.isEmpty
             && normalizedCwd.starts(with: "/")
-            && selectedCanLiveControl
+            && supportedExecutionLifetimes.contains(executionLifetime)
+            && (executionLifetime != .oneShot || !initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     private var filteredWorkspaces: [WorkspaceSuggestion] {
@@ -178,14 +185,15 @@ struct LaunchSessionSheet: View {
                 }
             } else {
                 Section("Coding agent") {
-                    if liveControlProviders.count > 1 {
+                    if availableProviders.count > 1 {
                         Picker("Provider", selection: $selectedProvider) {
-                            ForEach(liveControlProviders, id: \.self) { provider in
+                            ForEach(availableProviders, id: \.self) { provider in
                                 Text(provider).tag(provider)
                             }
                         }
                         .onChange(of: selectedProvider) { _, _ in
                             submitError = nil
+                            applyDefaultLifetimeForSelectedProvider()
                         }
                     } else {
                         HStack(spacing: 10) {
@@ -193,6 +201,25 @@ struct LaunchSessionSheet: View {
                                 .foregroundStyle(.secondary)
                             Text(selectedProvider.isEmpty ? "codex" : selectedProvider)
                         }
+                    }
+                }
+
+                if executionLifetime == .oneShot {
+                    Section("First message") {
+                        TextField("What should the agent do?", text: $initialPrompt, axis: .vertical)
+                            .lineLimit(3 ... 8)
+                            .onChange(of: initialPrompt) { _, _ in submitError = nil }
+                    }
+                }
+
+                if supportedExecutionLifetimes.count > 1 {
+                    Section("Advanced") {
+                        Picker("Runtime", selection: $executionLifetime) {
+                            Text("Default").tag(RemoteExecutionLifetime.oneShot)
+                            Text("Keep runtime open").tag(RemoteExecutionLifetime.liveControl)
+                        }
+                        .pickerStyle(.segmented)
+                        .onChange(of: executionLifetime) { _, _ in submitError = nil }
                     }
                 }
 
@@ -340,8 +367,8 @@ struct LaunchSessionSheet: View {
             if (selectedDeviceId.isEmpty || !selectedStillExists),
                let first = result.first(where: { Self.canStartInteractiveSession($0) }) ?? result.first {
                 selectedDeviceId = first.deviceId
-                let nextProvider = Self.canStartInteractiveSession(first) ? Self.defaultLiveControlProvider(for: first) : ""
-                selectedProvider = nextProvider
+                selectedProvider = first.defaultProvider ?? ""
+                executionLifetime = first.launch.defaultExecutionLifetime ?? .liveControl
             }
         } catch {
             loadError = (error as? LocalizedError)?.errorDescription ?? "Could not load machines."
@@ -351,12 +378,27 @@ struct LaunchSessionSheet: View {
 
     private func selectMachine(_ machine: MachineDirectoryEntry) {
         selectedDeviceId = machine.deviceId
-        selectedProvider = Self.defaultLiveControlProvider(for: machine)
+        selectedProvider = machine.defaultProvider ?? ""
+        executionLifetime = machine.launch.defaultExecutionLifetime ?? .liveControl
+        initialPrompt = ""
         cwd = ""
         workspaceSearch = ""
         workspaceError = nil
         submitError = nil
         showManualPath = false
+    }
+
+    private func applyDefaultLifetimeForSelectedProvider() {
+        guard let option = selectedProviderOption else { return }
+        if let preferred = selectedMachine?.launch.defaultExecutionLifetime,
+           option.executionLifetimes.contains(preferred) {
+            executionLifetime = preferred
+        } else if option.executionLifetimes.contains(.oneShot) {
+            executionLifetime = .oneShot
+        } else {
+            executionLifetime = .liveControl
+        }
+        initialPrompt = ""
     }
 
     private func loadWorkspaceSuggestions(for deviceId: String) async {
@@ -411,8 +453,10 @@ struct LaunchSessionSheet: View {
                 deviceId: selectedDeviceId,
                 provider: selectedProvider,
                 cwd: normalizedCwd,
-                initialPrompt: nil,
-                executionLifetime: .liveControl,
+                initialPrompt: executionLifetime == .oneShot
+                    ? initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+                    : nil,
+                executionLifetime: executionLifetime,
                 displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName,
                 clientRequestId: "launch-\(UUID().uuidString)"
             )
@@ -428,16 +472,8 @@ struct LaunchSessionSheet: View {
         }
     }
 
-    private static func defaultLiveControlProvider(for machine: MachineDirectoryEntry?) -> String {
-        guard let machine else { return "" }
-        let providers = machine.remoteLaunchProviders.filter { machine.supportsLiveControlLaunch(provider: $0) }
-        if providers.contains("codex") { return "codex" }
-        return providers.first ?? ""
-    }
-
     private static func canStartInteractiveSession(_ machine: MachineDirectoryEntry?) -> Bool {
-        guard let machine, machine.isLaunchable else { return false }
-        return !defaultLiveControlProvider(for: machine).isEmpty
+        machine?.isLaunchable ?? false
     }
 
     private func launchBlockedLabel(_ machine: MachineDirectoryEntry) -> String {
@@ -592,7 +628,10 @@ private func previewMachine(
 ) -> MachineDirectoryEntry {
     let launchProviders = online
         ? providers.map { provider in
-            MachineLaunchProviderOption(provider: provider, executionLifetimes: [.liveControl])
+            MachineLaunchProviderOption(
+                provider: provider,
+                executionLifetimes: provider == "codex" ? [.oneShot, .liveControl] : [.liveControl]
+            )
         }
         : []
     return MachineDirectoryEntry(
@@ -611,7 +650,7 @@ private func previewMachine(
             blockedBy: online ? nil : (launchBlockedBy ?? "control_down"),
             providers: launchProviders,
             defaultProvider: online ? (providers.contains("codex") ? "codex" : providers.first) : nil,
-            defaultExecutionLifetime: online ? .liveControl : nil
+            defaultExecutionLifetime: online ? (providers.contains("codex") ? .oneShot : .liveControl) : nil
         )
     )
 }
