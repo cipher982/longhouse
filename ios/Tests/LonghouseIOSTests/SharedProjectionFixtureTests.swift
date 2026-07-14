@@ -54,7 +54,12 @@ final class SharedProjectionFixtureTests: XCTestCase {
     }
 
     func testSharedProjectionFixtures() throws {
-        for fixtureName in ["tool-pairing-fifo.json", "context-boundary-noise-collapse.json", "session-action-interrupt.json"] {
+        for fixtureName in [
+            "tool-pairing-fifo.json",
+            "context-boundary-noise-collapse.json",
+            "session-action-interrupt.json",
+            "exploration-run-web-breaks.json",
+        ] {
             let fixture = try loadFixture(fixtureName)
             let items = TimelineBuilder.build(items: fixture.projection.items)
 

@@ -29,6 +29,8 @@ export {
 
 export {
   buildTimelineModel,
+  EXPLORATION_OVERFLOW_VISIBLE,
+  formatExplorationSummary,
   getPreferredSelectionKey,
   getToolDisplayInfo,
   getToolDuration,
@@ -36,12 +38,14 @@ export {
   getToolSummary,
   getToolTier,
   isAgentToolInteraction,
+  isExplorationEligible,
   isOutsideActiveContext,
   isToolInteractionDropped,
   isToolInteractionRunning,
   parseLonghouseOutput,
   projectionItemsWithTranscriptPreview,
   shouldRenderTranscriptPreview,
+  splitExplorationOverflow,
   timelineItemContainsSelection,
 } from "./timelineModel";
 

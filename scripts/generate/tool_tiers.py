@@ -21,20 +21,31 @@ def load() -> dict:
     return json.loads(CONFIG.read_text())
 
 
+def _aggregate_literal(value: object) -> str:
+    if value is None:
+        return "null"
+    if value not in {"search", "read", "list"}:
+        raise ValueError(f"unsupported aggregate category: {value!r}")
+    return json.dumps(value)
+
+
 def render_ts(data: dict) -> str:
     tools = data["tools"]
     mcp_ns = data["mcp_namespaces"]
     default_tier = data["default_tier"]
     mcp_default_tier = data["mcp_default_tier"]
+    default_aggregate = data.get("default_aggregate", None)
+    mcp_default_aggregate = data.get("mcp_default_aggregate", None)
 
     def quote(v: str) -> str:
         return json.dumps(v)
 
     entries = []
     for name, meta in tools.items():
+        aggregate = meta.get("aggregate", default_aggregate)
         entries.append(
-            f'  {quote(name)}: {{ tier: {quote(meta["tier"])}, icon: {quote(meta["icon"])}, '
-            f'label: {quote(meta["label"])}, color: {quote(meta["color"])} }},'
+            f'  {quote(name)}: {{ tier: {quote(meta["tier"])}, aggregate: {_aggregate_literal(aggregate)}, '
+            f'icon: {quote(meta["icon"])}, label: {quote(meta["label"])}, color: {quote(meta["color"])} }},'
         )
 
     mcp_entries = []
@@ -47,12 +58,15 @@ def render_ts(data: dict) -> str:
 // Run: python3 scripts/generate/tool_tiers.py
 
 export type ToolTier = "noise" | "context" | "action";
+export type ToolAggregate = "search" | "read" | "list";
 export type ToolColorToken =
   | "brand" | "cyan" | "success" | "warning" | "secondary"
   | "tertiary" | "accent" | "muted";
 
 export interface ToolTierMeta {{
   tier: ToolTier;
+  /** When set, completed calls may join consecutive exploration runs. */
+  aggregate: ToolAggregate | null;
   icon: string;
   label: string;
   color: ToolColorToken;
@@ -65,6 +79,8 @@ export interface McpNamespaceMeta {{
 
 export const DEFAULT_TOOL_TIER: ToolTier = {quote(default_tier)};
 export const MCP_DEFAULT_TIER: ToolTier = {quote(mcp_default_tier)};
+export const DEFAULT_TOOL_AGGREGATE: ToolAggregate | null = {_aggregate_literal(default_aggregate)};
+export const MCP_DEFAULT_AGGREGATE: ToolAggregate | null = {_aggregate_literal(mcp_default_aggregate)};
 
 export const TOOL_TIERS: Record<string, ToolTierMeta> = {{
 {chr(10).join(entries)}
@@ -99,6 +115,7 @@ function parseMcp(name: string): {{ namespace: string; method: string }} | null 
 
 export interface ResolvedToolInfo {{
   tier: ToolTier;
+  aggregate: ToolAggregate | null;
   icon: string;
   label: string;
   color: ToolColorToken;
@@ -116,6 +133,7 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {{
       if (ns === prefix || nsParts.includes(prefix) || ns.startsWith(prefix + "-") || ns.startsWith(prefix + "_")) {{
         return {{
           tier: MCP_DEFAULT_TIER,
+          aggregate: MCP_DEFAULT_AGGREGATE,
           icon: meta.icon,
           label: mcp.method,
           color: meta.color,
@@ -125,6 +143,7 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {{
     }}
     return {{
       tier: MCP_DEFAULT_TIER,
+      aggregate: MCP_DEFAULT_AGGREGATE,
       icon: "M",
       label: mcp.method,
       color: "muted",
@@ -142,6 +161,7 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {{
 
   return {{
     tier: DEFAULT_TOOL_TIER,
+    aggregate: DEFAULT_TOOL_AGGREGATE,
     icon: (toolName[0] || " ").toUpperCase(),
     label: toolName,
     color: "muted",
@@ -151,17 +171,30 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {{
 export function toolTier(toolName: string): ToolTier {{
   return resolveToolInfo(toolName).tier;
 }}
+
+export function toolAggregate(toolName: string): ToolAggregate | null {{
+  return resolveToolInfo(toolName).aggregate;
+}}
 """
 
 
 def render_swift(data: dict) -> str:
     tools = data["tools"]
     mcp_ns = data["mcp_namespaces"]
+    default_aggregate = data.get("default_aggregate", None)
+    mcp_default_aggregate = data.get("mcp_default_aggregate", None)
+
+    def swift_aggregate(value: object) -> str:
+        if value is None:
+            return "nil"
+        return f".{value}"
 
     tool_entries = []
     for name, meta in tools.items():
+        aggregate = meta.get("aggregate", default_aggregate)
         tool_entries.append(
             f'        "{name}": ToolTierMeta(tier: .{meta["tier"]}, '
+            f'aggregate: {swift_aggregate(aggregate)}, '
             f'icon: "{meta["icon"]}", label: "{meta["label"]}", color: .{meta["color"]}),'
         )
 
@@ -182,12 +215,19 @@ public enum ToolTier: String, Sendable {{
     case action
 }}
 
+public enum ToolAggregate: String, Sendable {{
+    case search
+    case read
+    case list
+}}
+
 public enum ToolColorToken: String, Sendable {{
     case brand, cyan, success, warning, secondary, tertiary, accent, muted
 }}
 
 public struct ToolTierMeta: Sendable {{
     public let tier: ToolTier
+    public let aggregate: ToolAggregate?
     public let icon: String
     public let label: String
     public let color: ToolColorToken
@@ -201,6 +241,8 @@ public struct McpNamespaceMeta: Sendable {{
 public enum ToolTiers {{
     public static let defaultTier: ToolTier = .{data["default_tier"]}
     public static let mcpDefaultTier: ToolTier = .{data["mcp_default_tier"]}
+    public static let defaultAggregate: ToolAggregate? = {swift_aggregate(default_aggregate)}
+    public static let mcpDefaultAggregate: ToolAggregate? = {swift_aggregate(mcp_default_aggregate)}
 
     public static let tools: [String: ToolTierMeta] = [
 {chr(10).join(tool_entries)}
@@ -212,6 +254,7 @@ public enum ToolTiers {{
 
     public struct Resolved: Sendable {{
         public let tier: ToolTier
+        public let aggregate: ToolAggregate?
         public let icon: String
         public let label: String
         public let color: ToolColorToken
@@ -225,31 +268,35 @@ public enum ToolTiers {{
             for (prefix, meta) in mcpNamespaces {{
                 if ns == prefix || parts.contains(prefix) ||
                    ns.hasPrefix(prefix + "-") || ns.hasPrefix(prefix + "_") {{
-                    return Resolved(tier: mcpDefaultTier, icon: meta.icon,
-                                    label: mcp.method, color: meta.color,
+                    return Resolved(tier: mcpDefaultTier, aggregate: mcpDefaultAggregate,
+                                    icon: meta.icon, label: mcp.method, color: meta.color,
                                     mcpNamespace: mcp.namespace)
                 }}
             }}
-            return Resolved(tier: mcpDefaultTier, icon: "M",
+            return Resolved(tier: mcpDefaultTier, aggregate: mcpDefaultAggregate, icon: "M",
                             label: mcp.method, color: .muted,
                             mcpNamespace: mcp.namespace)
         }}
         if let exact = tools[name] {{
-            return Resolved(tier: exact.tier, icon: exact.icon, label: exact.label,
-                            color: exact.color, mcpNamespace: nil)
+            return Resolved(tier: exact.tier, aggregate: exact.aggregate, icon: exact.icon,
+                            label: exact.label, color: exact.color, mcpNamespace: nil)
         }}
         let lower = name.lowercased()
         for (key, meta) in tools where key.lowercased() == lower {{
-            return Resolved(tier: meta.tier, icon: meta.icon, label: meta.label,
-                            color: meta.color, mcpNamespace: nil)
+            return Resolved(tier: meta.tier, aggregate: meta.aggregate, icon: meta.icon,
+                            label: meta.label, color: meta.color, mcpNamespace: nil)
         }}
         let fallbackIcon = String(name.first.map {{ String($0).uppercased() }} ?? " ")
-        return Resolved(tier: defaultTier, icon: fallbackIcon, label: name,
-                        color: .muted, mcpNamespace: nil)
+        return Resolved(tier: defaultTier, aggregate: defaultAggregate, icon: fallbackIcon,
+                        label: name, color: .muted, mcpNamespace: nil)
     }}
 
     public static func tier(_ name: String) -> ToolTier {{
         resolve(name).tier
+    }}
+
+    public static func aggregate(_ name: String) -> ToolAggregate? {{
+        resolve(name).aggregate
     }}
 
     private static func parseMcp(_ name: String) -> (namespace: String, method: String)? {{

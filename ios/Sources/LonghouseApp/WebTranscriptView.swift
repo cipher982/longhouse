@@ -461,16 +461,10 @@ struct WebTranscriptView: UIViewRepresentable {
         calls: [PassiveCall],
         serverURL: String?
     ) -> WebTranscriptPayloadItem {
-        var counts: [(String, Int)] = []
-        for passive in calls {
-            let name = passive.call.toolName ?? "Tool"
-            if let index = counts.firstIndex(where: { $0.0 == name }) {
-                counts[index].1 += 1
-            } else {
-                counts.append((name, 1))
-            }
-        }
+        let summary = TimelineBuilder.explorationSummary(for: calls)
 
+        // Pass every call; WebKit renderer collapses to latest-N with an
+        // interactive "Show N earlier" control (never permanent hide).
         let childCalls = calls.map { passive in
             let status: String = {
                 switch passive.call.toolCallState {
@@ -494,8 +488,8 @@ struct WebTranscriptView: UIViewRepresentable {
             id: id,
             kind: "passiveGroup",
             role: nil,
-            title: "Explored",
-            subtitle: counts.map { "\($0.0) × \($0.1)" }.joined(separator: ", "),
+            title: summary.isEmpty ? "Explored" : summary,
+            subtitle: "\(calls.count)",
             body: nil,
             fullBody: nil,
             collapsed: false,
@@ -1841,7 +1835,10 @@ private extension WebTranscriptView {
     }
 
     function passiveGroup(item) {
-      const calls = (item.calls || []).map(call => {
+      const all = item.calls || [];
+      const visibleLimit = 8;
+      const earlierCount = Math.max(0, all.length - visibleLimit);
+      const renderCall = (call) => {
         const input = call.input ? '<div class="section-label">Input</div><pre><code>' + escapeHtml(call.input) + '</code></pre>' : '';
         const output = call.output ? '<div class="section-label">Output</div><pre><code>' + escapeHtml(call.output) + '</code></pre>' : '';
         const media = mediaStrip(call.media || []);
@@ -1852,14 +1849,21 @@ private extension WebTranscriptView {
             ${input}${output}${media}
           </div>
         `;
-      }).join('');
+      };
+      const earlierHtml = earlierCount > 0
+        ? all.slice(0, earlierCount).map(renderCall).join('')
+        : '';
+      const latestHtml = all.slice(earlierCount).map(renderCall).join('');
+      const earlierControl = earlierCount > 0
+        ? `<button type="button" class="passive-earlier-btn" onclick="this.nextElementSibling.hidden=false;this.remove();">Show ${earlierCount} earlier</button><div class="passive-earlier" hidden>${earlierHtml}</div>`
+        : '';
       return `
         <details class="passive row">
           <summary>
             <span class="tool-title">${escapeHtml(item.title || 'Explored')}</span>
             <span class="tool-subtitle">${escapeHtml(item.subtitle || '')}</span>
           </summary>
-          <div class="details-body">${calls}</div>
+          <div class="details-body">${earlierControl}${latestHtml}</div>
         </details>
       `;
     }

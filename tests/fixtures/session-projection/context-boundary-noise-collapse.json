@@ -1,6 +1,6 @@
 {
   "name": "context-boundary-noise-collapse",
-  "description": "Context-tier tools stay individual while consecutive noise-tier tools collapse into one group.",
+  "description": "Completed Read/Grep/Glob calls join one exploration run; display tier no longer blocks Reads from aggregating.",
   "projection": {
     "root_session_id": "fixture-context-boundary",
     "focus_session_id": "fixture-context-boundary",
@@ -135,13 +135,12 @@
   "expectations": {
     "rows": [
       {"kind": "message", "role": "user", "event_id": 1},
-      {"kind": "tool", "tool_name": "Read", "call_event_id": 2, "result_event_id": 3, "pairing": "id"},
       {
         "kind": "noise_group",
-        "tool_names": ["Grep", "Glob"],
-        "call_event_ids": [4, 6],
-        "result_event_ids": [5, 7],
-        "pairings": ["id", "id"]
+        "tool_names": ["Read", "Grep", "Glob"],
+        "call_event_ids": [2, 4, 6],
+        "result_event_ids": [3, 5, 7],
+        "pairings": ["id", "id", "id"]
       }
     ],
     "tool_count": 3,

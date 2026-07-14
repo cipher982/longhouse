@@ -74,15 +74,51 @@ enum LonghouseDateParser {
 }
 
 enum TimelineBuilder {
-    /// A tool is "passive" if its tier is `.noise` in config/tool-tiers.json —
-    /// a low-signal read/search safe to collapse into a single "Explored" row.
-    /// Context- and action-tier tools always render individually.
-    /// NOTE: iOS historically collapsed `.context` (Read, WebFetch) as well as
-    /// `.noise`, but the shared tier contract keeps context tools as individual
-    /// one-liners.
+    /// Exploration-eligible tools may join consecutive `.passiveGroup` rows.
+    /// Eligibility comes from `ToolTiers.aggregate`, not display tier — so
+    /// completed Reads can join Greps while singleton Reads stay individual.
+    static func isExplorationEligible(call: SessionEvent, result: SessionEvent?, pairing: ToolPairing) -> Bool {
+        guard let toolName = call.toolName, !toolName.isEmpty else { return false }
+        guard ToolTiers.aggregate(toolName) != nil else { return false }
+        guard pairing == .id || pairing == .fifo else { return false }
+        guard result != nil else { return false }
+        if call.toolCallState == .dropped || call.toolCallState == .running {
+            return false
+        }
+        return true
+    }
+
+    /// Semantic exploration header: `Searched 5 · Read 14 · Listed 1`.
+    static func explorationSummary(for calls: [PassiveCall]) -> String {
+        var searched = 0
+        var read = 0
+        var listed = 0
+        for call in calls {
+            switch ToolTiers.aggregate(call.call.toolName ?? "") {
+            case .search: searched += 1
+            case .read: read += 1
+            case .list: listed += 1
+            case .none: break
+            }
+        }
+        var parts: [String] = []
+        if searched > 0 { parts.append("Searched \(searched)") }
+        if read > 0 { parts.append("Read \(read)") }
+        if listed > 0 { parts.append("Listed \(listed)") }
+        return parts.joined(separator: " · ")
+    }
+
+    static let explorationOverflowVisible = 8
+
+    static func splitExplorationOverflow<T>(_ items: [T], visible: Int = explorationOverflowVisible) -> (earlier: [T], latest: [T]) {
+        guard items.count > visible else { return ([], items) }
+        let idx = items.count - visible
+        return (Array(items.prefix(idx)), Array(items.suffix(visible)))
+    }
+
+    /// Legacy name — true when the tool has an aggregate category.
     static func isPassive(_ toolName: String) -> Bool {
-        let tier = ToolTiers.tier(toolName)
-        return tier == .noise
+        ToolTiers.aggregate(toolName) != nil
     }
 
     /// Build a paired, renderable timeline from raw events.
@@ -168,6 +204,13 @@ enum TimelineBuilder {
         }
 
         for item in projectionItems {
+            if item.kind == "seam" {
+                // Seams are presentation boundaries even when this builder does
+                // not render a dedicated seam row — flush so exploration runs
+                // cannot span across them (parity with web).
+                flushEvents()
+                continue
+            }
             if item.kind == "action", let action = item.action {
                 flushEvents()
                 out.append(.action(action, timestamp: item.timestamp))
@@ -182,10 +225,9 @@ enum TimelineBuilder {
         return out
     }
 
-    /// Collapse runs of 2+ consecutive passive tool calls into `.passiveGroup`
-    /// rows. A single passive call stays as `.tool` — one row already, no
-    /// need to add an expander. Non-passive items (user, assistant, active
-    /// tool calls, orphans) flush the buffer.
+    /// Collapse runs of 2+ consecutive exploration-eligible tool calls into
+    /// `.passiveGroup` rows. A single eligible call stays as `.tool`. Breakers
+    /// (user/assistant prose, ineligible tools, orphans, actions) flush.
     static func collapsePassive(_ items: [TimelineItem]) -> [TimelineItem] {
         var out: [TimelineItem] = []
         var buffer: [PassiveCall] = []
@@ -204,7 +246,7 @@ enum TimelineBuilder {
         for item in items {
             switch item {
             case .tool(let call, let result, let pairing)
-                where Self.isPassive(call.toolName ?? ""):
+                where Self.isExplorationEligible(call: call, result: result, pairing: pairing):
                 buffer.append(PassiveCall(call: call, result: result, pairing: pairing))
             default:
                 flush()
