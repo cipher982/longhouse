@@ -13,10 +13,22 @@ import { truncatePath } from "./formatters";
 import {
   colorTokenToCss,
   resolveToolInfo,
+  toolAggregate,
   toolTier,
   type ResolvedToolInfo,
+  type ToolAggregate,
   type ToolTier,
 } from "./toolTiers.generated";
+
+/** Latest completed exploration calls shown when a run is expanded. */
+export const EXPLORATION_OVERFLOW_VISIBLE = 8;
+
+const AGGREGATE_SUMMARY_ORDER: ToolAggregate[] = ["search", "read", "list"];
+const AGGREGATE_SUMMARY_LABEL: Record<ToolAggregate, string> = {
+  search: "Searched",
+  read: "Read",
+  list: "Listed",
+};
 
 export function isOutsideActiveContext(event: AgentEvent | null | undefined): boolean {
   return event?.in_active_context === false;
@@ -28,6 +40,40 @@ export function isAgentToolInteraction(interaction: ToolInteraction): boolean {
 
 export function getToolTier(interaction: ToolInteraction): ToolTier {
   return toolTier(interaction.toolName);
+}
+
+/** Completed calls with an explicit aggregate category may join exploration runs. */
+export function isExplorationEligible(interaction: ToolInteraction): boolean {
+  if (toolAggregate(interaction.toolName) == null) return false;
+  if (interaction.pairing === "orphan" || interaction.pairing === "pending") return false;
+  if (!interaction.resultEvent) return false;
+  if (isToolInteractionDropped(interaction) || isToolInteractionRunning(interaction)) return false;
+  return true;
+}
+
+/** Header copy: `Searched 5 · Read 14 · Listed 1` (omit zero categories). */
+export function formatExplorationSummary(interactions: ToolInteraction[]): string {
+  const counts: Record<ToolAggregate, number> = { search: 0, read: 0, list: 0 };
+  for (const interaction of interactions) {
+    const category = toolAggregate(interaction.toolName);
+    if (category) counts[category] += 1;
+  }
+  return AGGREGATE_SUMMARY_ORDER.filter((category) => counts[category] > 0)
+    .map((category) => `${AGGREGATE_SUMMARY_LABEL[category]} ${counts[category]}`)
+    .join(" · ");
+}
+
+export function splitExplorationOverflow<T>(
+  interactions: T[],
+  visible = EXPLORATION_OVERFLOW_VISIBLE,
+): { earlier: T[]; latest: T[] } {
+  if (interactions.length <= visible) {
+    return { earlier: [], latest: interactions };
+  }
+  return {
+    earlier: interactions.slice(0, interactions.length - visible),
+    latest: interactions.slice(interactions.length - visible),
+  };
 }
 
 /** Back-compat display info with CSS color strings for inline styles. */
@@ -369,10 +415,11 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
     items.push({ kind: "message", event });
   }
 
-  // Pass 3: collapse runs of 2+ consecutive noise-tier tools into a single
-  // `noise_group` row. Context and action tools are boundaries (they keep
-  // their own row). A single noise call also stays as a tool row — one row
-  // is already compact enough; no point hiding it behind a chip.
+  // Pass 3: collapse runs of 2+ consecutive exploration-eligible tools into a
+  // single `noise_group` row (exploration run). Eligibility comes from
+  // tool-tiers `aggregate`, not display tier — so Reads may join Greps while
+  // singleton Reads stay as context one-liners. Action/web/prose/user/seam
+  // boundaries flush the buffer.
   const groupedItems: TimelineItem[] = [];
   const noiseGroups: NoiseGroup[] = [];
   const groupByInteractionKey = new Map<string, NoiseGroup>();
@@ -400,7 +447,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
   };
 
   for (const item of items) {
-    if (item.kind === "tool" && getToolTier(item.interaction) === "noise") {
+    if (item.kind === "tool" && isExplorationEligible(item.interaction)) {
       buffer.push(item.interaction);
       continue;
     }
