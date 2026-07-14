@@ -15,19 +15,13 @@ pub fn observe_parse_result(
     session_id: &str,
     parse_result: &ParseResult,
 ) -> Result<()> {
-    let Some(first_user_message) = parse_result.events.iter().find_map(|event| {
+    let Some((first_user_message, title)) = parse_result.events.iter().find_map(|event| {
         if !matches!(event.role, Role::User) {
             return None;
         }
-        event
-            .content_text
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
+        let message = event.content_text.as_deref()?.trim();
+        prompt_title(message).map(|title| (message, title))
     }) else {
-        return Ok(());
-    };
-    let Some(title) = prompt_title(first_user_message) else {
         return Ok(());
     };
     conn.execute(
@@ -70,6 +64,7 @@ fn prompt_title(text: &str) -> Option<String> {
             .replace("'''", "");
         if candidate.is_empty()
             || candidate.starts_with("[Image ")
+            || candidate.starts_with("LONGHOUSE_")
             || !candidate.chars().any(char::is_alphanumeric)
         {
             None
@@ -147,5 +142,20 @@ mod tests {
         let row = get(&conn, "session-1").unwrap().unwrap();
         assert_eq!(row.title, "why is opencode stuck on naming session today");
         assert!(row.first_user_message.starts_with("[Image #1]"));
+    }
+
+    #[test]
+    fn skips_internal_control_messages_before_the_real_prompt() {
+        let conn = crate::state::db::open_db(Some(std::path::Path::new(":memory:"))).unwrap();
+        let mut parsed = parse_result("LONGHOUSE_OPENCODE_NOREPLY_internal");
+        let mut user = parsed.events[0].clone();
+        user.uuid = "event-2".to_string();
+        user.content_text = Some("fix the archive title path".to_string());
+        parsed.events.push(user);
+
+        observe_parse_result(&conn, "session-2", &parsed).unwrap();
+
+        let row = get(&conn, "session-2").unwrap().unwrap();
+        assert_eq!(row.title, "fix the archive title path");
     }
 }
