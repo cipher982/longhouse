@@ -375,17 +375,33 @@ def _registration_worker(
 
 def _post_terminal_event(url: str, token: str, session_id: str, reason: str) -> None:
     """Best-effort: tell the Runtime Host the Helm session ended."""
-    endpoint = f"{url.rstrip('/')}/api/agents/runtime/event"
-    payload = {
+    occurred_at = _now_iso()
+    device_id = get_machine_name_label()
+    event = {
+        "runtime_key": f"{_PROVIDER}:{session_id}",
         "session_id": session_id,
         "provider": _PROVIDER,
-        "kind": "terminal",
-        "reason": reason,
-        "timestamp": _now_iso(),
+        "device_id": device_id,
+        "source": "cursor_helm",
+        "kind": "terminal_signal",
+        "phase": "finished",
+        "occurred_at": occurred_at,
+        "dedupe_key": f"cursor-helm-terminal:{session_id}:{reason}:{occurred_at}",
+        "payload": {
+            "terminal_state": "session_ended",
+            "terminal_reason": reason,
+            "terminal_source": "cursor_helm",
+            "exit_code": 0,
+        },
     }
+    endpoint = f"{url.rstrip('/')}/api/agents/runtime/events/batch"
     try:
         with httpx.Client(timeout=_TERMINAL_POST_TIMEOUT) as client:
-            client.post(endpoint, headers={"X-Agents-Token": token}, json=payload)
+            client.post(
+                endpoint,
+                headers={"X-Agents-Token": token},
+                json={"events": [event]},
+            )
     except httpx.HTTPError:
         pass
 

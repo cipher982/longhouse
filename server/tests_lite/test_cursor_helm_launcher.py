@@ -225,6 +225,43 @@ def test_register_session_soft_fails_on_401(monkeypatch, tmp_path):
     assert "authentication failed" in (outcome.error or "")
 
 
+def test_post_terminal_event_uses_runtime_events_batch(monkeypatch):
+    captured: dict = {}
+
+    class CaptureClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def post(self, endpoint, headers=None, json=None):
+            captured["endpoint"] = endpoint
+            captured["headers"] = headers
+            captured["json"] = json
+            return cursor_helm.httpx.Response(200, request=cursor_helm.httpx.Request("POST", endpoint))
+
+    monkeypatch.setattr(cursor_helm.httpx, "Client", CaptureClient)
+    monkeypatch.setattr(cursor_helm, "get_machine_name_label", lambda: "cinder")
+    cursor_helm._post_terminal_event(
+        "https://david010.longhouse.ai",
+        "tok",
+        "55555555-5555-4555-8555-555555555555",
+        "helm_exit",
+    )
+    assert captured["endpoint"] == "https://david010.longhouse.ai/api/agents/runtime/events/batch"
+    assert captured["headers"]["X-Agents-Token"] == "tok"
+    event = captured["json"]["events"][0]
+    assert event["kind"] == "terminal_signal"
+    assert event["provider"] == "cursor"
+    assert event["source"] == "cursor_helm"
+    assert event["payload"]["terminal_state"] == "session_ended"
+    assert event["payload"]["terminal_reason"] == "helm_exit"
+
+
 def test_handle_command_send_writes_text_escape_enter_sequence():
     read_fd, write_fd = os.pipe()
     lock = threading.Lock()
