@@ -654,6 +654,84 @@ def test_this_device_launch_surfaces_catalog_rejection_without_retry_theater(mon
     assert exc_info.value.status_code == 500
     assert "attach_command" in exc_info.value.detail
     assert "retry shortly" not in exc_info.value.detail.lower()
+    assert "unavailable" not in exc_info.value.detail.lower()
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_status", "detail_must_include", "detail_must_exclude"),
+    [
+        ("unavailable", 503, ("unavailable",), ("attach_command",)),
+        ("invalid_request", 500, ("attach_command",), ("retry shortly", "unavailable")),
+        ("conflict", 409, ("conflict",), ("retry shortly",)),
+    ],
+)
+def test_managed_local_catalog_error_class_matrix(
+    monkeypatch,
+    case,
+    expected_status,
+    detail_must_include,
+    detail_must_exclude,
+):
+    """Phase A guard: do not remap contract bugs into fake catalogd-unavailable 503s."""
+    import zerg.database as database_module
+    from zerg.catalogd.client import CatalogRemoteError
+    from zerg.catalogd.client import CatalogUnavailable
+    from zerg.catalogd.protocol import CatalogRpcError
+    from zerg.routers import session_chat
+    from zerg.services.managed_local_launcher import ManagedLocalLaunchError
+
+    if case == "unavailable":
+        raised: Exception = CatalogUnavailable("catalogd socket missing")
+    elif case == "invalid_request":
+        raised = CatalogRemoteError(
+            CatalogRpcError(
+                code="invalid_request",
+                message="local launch.plan.attach_command must be a string of at most 4096 characters",
+                retryable=False,
+                retry_after_ms=None,
+                details={},
+            )
+        )
+    else:
+        raised = CatalogRemoteError(
+            CatalogRpcError(
+                code="conflict",
+                message="managed-local launch identity conflict",
+                retryable=False,
+                retry_after_ms=None,
+                details={},
+            )
+        )
+
+    class BoomCatalog:
+        async def call(self, method, params, **_kwargs):
+            raise raised
+
+    monkeypatch.setattr(database_module, "live_store_configured", lambda: True)
+    monkeypatch.setattr(database_module, "live_catalog_enabled", lambda: True)
+    monkeypatch.setattr("zerg.services.catalogd_supervisor.get_catalogd_client", lambda: BoomCatalog())
+
+    with pytest.raises(ManagedLocalLaunchError) as exc_info:
+        asyncio.run(
+            session_chat._launch_managed_local_session_serialized(
+                SimpleNamespace(),
+                ManagedLocalLaunchParams(
+                    owner_id=42,
+                    runner_target="cinder",
+                    cwd="/tmp/demo",
+                    provider="cursor",
+                    project="demo",
+                    machine_name="cinder",
+                ),
+            )
+        )
+
+    assert exc_info.value.status_code == expected_status
+    detail = exc_info.value.detail.lower()
+    for needle in detail_must_include:
+        assert needle in detail
+    for needle in detail_must_exclude:
+        assert needle not in detail
 
 
 def test_this_device_launch_skips_runtime_pubsub_for_hot_readiness(monkeypatch, tmp_path):

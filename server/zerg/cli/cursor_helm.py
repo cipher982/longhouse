@@ -110,6 +110,18 @@ class _RegistrationOutcome:
     error: str | None = None
 
 
+def _panel_capability_for_registration(outcome: _RegistrationOutcome | None) -> str:
+    """Map registration outcome to honest launch-panel capability.
+
+    Soft-fail must never advertise steerable remote control.
+    """
+    if outcome is None:
+        return "registering"
+    if outcome.registered:
+        return "steerable"
+    return "local_only"
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -692,11 +704,10 @@ def run_helm(
     registration_thread.join(timeout=0.3)
     with registration_lock:
         early = registration_box[0] if registration_box else None
+    panel_capability = _panel_capability_for_registration(early)
     if early is not None and early.registered:
-        panel_capability = "steerable"
         attach_command = early.attach_command or None
     elif early is not None and not early.registered:
-        panel_capability = "local_only"
         attach_command = None
         typer.secho(
             f"Warning: Longhouse registration failed ({early.error}). "
@@ -704,7 +715,6 @@ def run_helm(
             fg=typer.colors.YELLOW,
         )
     else:
-        panel_capability = "registering"
         attach_command = None
 
     if verbose:

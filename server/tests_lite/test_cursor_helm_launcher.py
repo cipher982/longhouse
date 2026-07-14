@@ -23,6 +23,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from zerg.cli import cursor_helm
 
 
@@ -89,6 +91,36 @@ def test_register_session_soft_fails_on_connect_error(monkeypatch, tmp_path):
     assert outcome.registered is False
     assert outcome.session_id.endswith("1111")
     assert "connect failed" in (outcome.error or "")
+    assert cursor_helm._panel_capability_for_registration(outcome) == "local_only"
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        (None, "registering"),
+        (
+            cursor_helm._RegistrationOutcome(
+                session_id="11111111-1111-4111-8111-111111111111",
+                registered=True,
+                attach_command="",
+            ),
+            "steerable",
+        ),
+        (
+            cursor_helm._RegistrationOutcome(
+                session_id="11111111-1111-4111-8111-111111111111",
+                registered=False,
+                error="connect failed",
+            ),
+            "local_only",
+        ),
+    ],
+)
+def test_panel_capability_for_registration_honesty_matrix(outcome, expected):
+    """Soft-fail registration must never map to steerable."""
+    assert cursor_helm._panel_capability_for_registration(outcome) == expected
+    if expected != "steerable":
+        assert expected in {"registering", "local_only"}
 
 
 def test_registration_worker_terminalizes_when_exit_races_success(monkeypatch, tmp_path):

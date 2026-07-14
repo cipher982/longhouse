@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+import pytest
 from cryptography.fernet import Fernet
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -13,6 +14,11 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg.cli import _launch_ui as launch_ui
 
 _SESSION_ID = "111a5a5d-a4b5-49eb-95f7-863a69669959"
+
+# Strings that claim remote durability / steer. Soft-fail paths must not print these.
+_STEER_CLAIMS = ("Steer from anywhere",)
+_DURABLE_EXIT_CLAIMS = ("thread saved", "hearth banked")
+_WATCH_ONLY_CLAIMS = ("Watch on your timeline",)
 
 
 def test_display_host_strips_scheme_and_trailing_slash():
@@ -64,6 +70,64 @@ def test_launch_panel_local_only_copy(capsys):
     assert "Local Helm" in out
     assert "Steer from anywhere" not in out
     assert "Watch on your timeline" not in out
+
+
+@pytest.mark.parametrize(
+    ("capability", "must_include", "must_exclude"),
+    [
+        (
+            "steerable",
+            _STEER_CLAIMS,
+            _WATCH_ONLY_CLAIMS + ("Local Helm", "Registering with Longhouse"),
+        ),
+        (
+            "registering",
+            ("Registering with Longhouse", "local Helm is up"),
+            _STEER_CLAIMS + _WATCH_ONLY_CLAIMS,
+        ),
+        (
+            "local_only",
+            ("Local Helm", "remote steer unavailable"),
+            _STEER_CLAIMS + _WATCH_ONLY_CLAIMS,
+        ),
+        (
+            "watch",
+            _WATCH_ONLY_CLAIMS,
+            _STEER_CLAIMS + ("Local Helm", "Registering with Longhouse"),
+        ),
+    ],
+)
+def test_degraded_helm_launch_panel_honesty_matrix(capsys, capability, must_include, must_exclude):
+    """Guard: soft-fail / pending paths must not advertise remote steer."""
+    launch_ui.launch_panel(
+        provider_label="Cursor",
+        base_url="https://david010.longhouse.ai",
+        machine_name="cinder",
+        session_id=_SESSION_ID,
+        verbose=False,
+        capability=capability,
+    )
+    out = capsys.readouterr().out
+    for needle in must_include:
+        assert needle in out, f"capability={capability} missing {needle!r}"
+    for needle in must_exclude:
+        assert needle not in out, f"capability={capability} must not claim {needle!r}"
+
+
+@pytest.mark.parametrize(
+    ("durable", "must_include", "must_exclude"),
+    [
+        (True, ("hearth banked",), ("not synced to Longhouse",)),
+        (False, ("not synced to Longhouse",), _DURABLE_EXIT_CLAIMS),
+    ],
+)
+def test_degraded_helm_exit_bookend_honesty_matrix(capsys, durable, must_include, must_exclude):
+    launch_ui.exit_bookend(exit_code=0, machine_name="cinder", durable=durable)
+    out = capsys.readouterr().out
+    for needle in must_include:
+        assert needle in out
+    for needle in must_exclude:
+        assert needle not in out
 
 
 def test_exit_bookend_non_durable_clean_exit(capsys):
