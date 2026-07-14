@@ -21,6 +21,7 @@ from fastapi import Response
 from fastapi import status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from sse_starlette.sse import EventSourceResponse
 
 import zerg.database as database_module
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
@@ -30,6 +31,7 @@ from zerg.config import get_settings
 from zerg.database import catalog_db_dependency
 from zerg.database import get_db
 from zerg.database import get_live_session_factory
+from zerg.database import get_session_factory
 from zerg.database import live_store_configured
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -45,6 +47,7 @@ from zerg.services.catalog_read_gateway import timeline_snapshot
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
+from zerg.services.live_catalog_timeline import stream_live_catalog_timeline
 from zerg.services.live_session_state import list_active_live_session_ids
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
@@ -129,6 +132,8 @@ from zerg.services.startup_context import load_startup_context_items
 from zerg.services.startup_context import render_startup_context
 from zerg.services.storage_v2_export import build_storage_v2_raw_export
 from zerg.services.storage_v2_workspace import build_storage_v2_workspace
+from zerg.services.timeline_session_listing import TimelineSessionListParams
+from zerg.services.timeline_session_stream import stream_timeline_sessions_for_browser
 from zerg.services.worklog_day_export import WorklogDayExportResponse
 from zerg.services.worklog_day_export import WorklogV2Error
 from zerg.services.worklog_day_export import build_worklog_day_export
@@ -198,6 +203,58 @@ def _owner_id_from_agents_auth(db: Session, auth: object) -> int | None:
     if not isinstance(auth, DeviceToken):
         return None
     return _resolve_agents_owner_id(db, auth)
+
+
+@router.get("/sessions/stream")
+async def stream_agent_sessions(
+    request: Request,
+    device_id: str | None = Query(None, description="Filter by device ID"),
+    days_back: int = Query(14, ge=1, le=90),
+    limit: int = Query(40, ge=1, le=100),
+    skip_initial_replay: bool = Query(False),
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> EventSourceResponse:
+    """Stream the canonical session projection to machine clients.
+
+    The initial replay is the cold-start snapshot. After that, commit-driven
+    upsert/remove events are the hot path; reconnecting performs a new replay.
+    """
+
+    params = TimelineSessionListParams(
+        project=None,
+        provider=None,
+        environment=None,
+        device_id=device_id,
+        days_back=days_back,
+        query=None,
+        limit=limit,
+        offset=0,
+        sort=None,
+        mode="lexical",
+        hide_autonomous=True,
+        include_test=False,
+        include_automation=False,
+        context_mode="forensic",
+    )
+    if database_module.live_catalog_enabled():
+        stream = stream_live_catalog_timeline(
+            request,
+            params=params,
+            skip_initial_replay=skip_initial_replay,
+        )
+    else:
+        owner_id = getattr(_auth, "owner_id", None)
+        stream = stream_timeline_sessions_for_browser(
+            request,
+            session_factory=get_session_factory(),
+            params=params,
+            skip_initial_replay=skip_initial_replay,
+            owner_id=owner_id if isinstance(owner_id, int) else None,
+        )
+    response = EventSourceResponse(stream)
+    response.headers["X-Limit-Cap"] = "100"
+    return response
 
 
 @router.get("/worklog/day", response_model=WorklogDayExportResponse)

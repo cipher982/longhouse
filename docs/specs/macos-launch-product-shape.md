@@ -91,6 +91,24 @@ Important rule:
 
 - launchd remains an implementation detail, not part of the public product story
 
+### Realtime status contract
+
+The menu bar is a live projection of Longhouse, not a periodically refreshed
+diagnostic command.
+
+- cold start reads one complete snapshot
+- Runtime Host commits arrive over the canonical `/api/agents/sessions/stream`
+- Machine Agent state changes arrive through a local event channel
+- one reducer merges durable remote facts with local process/control facts by
+  session id and retains their provenance
+- timers may update presentation clocks and detect dead connections; they must
+  not be the normal data-delivery path
+- `longhouse local-health` remains the diagnostic/repair snapshot and cold-start
+  fallback, not the product transport
+
+Nominal targets: local fact to render under 50 ms; committed Runtime Host fact
+to render under 250 ms; reconnect to a correct snapshot under one second.
+
 ## Later Architecture
 
 Once the launch path is stable, move helper lifecycle into Apple-native app ownership:

@@ -30,6 +30,9 @@ This is the surface agents, CLIs, scripts, CI jobs, and background automations s
 Shipper and presence hook tokens are intentionally narrow and are only valid for:
 
 - `GET /api/agents/sessions`
+- `GET /api/agents/sessions/stream` — SSE cold snapshot followed by
+  commit-driven session upserts/removals; machine clients reconnect and replay
+  instead of polling
 - `POST /api/agents/ingest`
 - `POST /api/agents/presence`
 
@@ -166,6 +169,8 @@ Examples:
 
 - `/api/timeline/sessions` is a browser archive feed
 - `/api/agents/sessions` is the canonical machine session listing/search surface
+- `/api/agents/sessions/stream` is the canonical machine realtime projection;
+  `/api/timeline/sessions/stream` is its browser/user-auth veneer
 - `/api/timeline/sessions/{session_id}/turns` is a browser inspection route
 - `/api/agents/sessions/{session_id}/turns` is the canonical machine-facing turn surface
 
