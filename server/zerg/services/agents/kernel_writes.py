@@ -14,8 +14,10 @@ See docs/specs/session-identity-kernel.md.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from datetime import timezone
+from typing import Mapping
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -172,6 +174,27 @@ def record_run(
     db.add(run)
     db.flush()
     return run
+
+
+def set_thread_execution_target(
+    thread: SessionThread,
+    *,
+    device_id: str,
+    cwd: str,
+    provider_config: Mapping[str, object] | None = None,
+) -> None:
+    """Persist the machine/workspace used to start future Console turns."""
+
+    normalized_device_id = str(device_id or "").strip()
+    normalized_cwd = str(cwd or "").strip()
+    if not normalized_device_id:
+        raise ValueError("device_id is required")
+    if not normalized_cwd or not os.path.isabs(normalized_cwd):
+        raise ValueError("cwd must be absolute")
+
+    thread.device_id = normalized_device_id
+    thread.cwd = normalized_cwd
+    thread.provider_config_json = dict(provider_config or {})
 
 
 def ensure_open_run_for_session(

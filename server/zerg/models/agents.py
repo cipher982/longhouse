@@ -1102,6 +1102,12 @@ class SessionThread(AgentsBase):
     )
     provider = Column(String(64), nullable=False, index=True)
 
+    # Durable Console execution target. These remain null for imported threads
+    # until the user explicitly configures where future turns should run.
+    device_id = Column(String(255), nullable=True, index=True)
+    cwd = Column(Text, nullable=True)
+    provider_config_json = Column(JSON(), nullable=True)
+
     # Lineage — null for root threads; set for subagents and continuations.
     _parent_thread_fk = "session_threads.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_threads.id"
     parent_thread_id = Column(

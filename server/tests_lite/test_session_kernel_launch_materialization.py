@@ -28,6 +28,7 @@ from zerg.services.agents.kernel_writes import record_connection
 from zerg.services.agents.kernel_writes import record_launch_attempt
 from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.kernel_writes import record_thread_alias
+from zerg.services.agents.kernel_writes import set_thread_execution_target
 from zerg.services.agents.kernel_writes import update_launch_attempt
 from zerg.services.agents.session_graph_writes import ensure_primary_thread as graph_ensure_primary_thread
 from zerg.services.agents.session_graph_writes import record_thread_alias as graph_record_thread_alias
@@ -66,6 +67,44 @@ def _make_session_row(db, *, provider="codex"):
 def test_kernel_writes_keeps_graph_write_compat_exports():
     assert ensure_primary_thread is graph_ensure_primary_thread
     assert record_thread_alias is graph_record_thread_alias
+
+
+def test_thread_execution_target_is_explicit_and_durable(tmp_path):
+    db = _session(tmp_path)
+    session = _make_session_row(db)
+    thread = ensure_primary_thread(db, session)
+
+    assert thread.device_id is None
+    assert thread.cwd is None
+    assert thread.provider_config_json is None
+
+    set_thread_execution_target(
+        thread,
+        device_id=" cube ",
+        cwd="/srv/longhouse",
+        provider_config={"permission_mode": "bypass"},
+    )
+    db.commit()
+    db.refresh(thread)
+
+    assert thread.device_id == "cube"
+    assert thread.cwd == "/srv/longhouse"
+    assert thread.provider_config_json == {"permission_mode": "bypass"}
+
+
+@pytest.mark.parametrize(
+    ("device_id", "cwd", "message"),
+    [
+        ("", "/srv/longhouse", "device_id is required"),
+        ("cube", "relative/path", "cwd must be absolute"),
+    ],
+)
+def test_thread_execution_target_rejects_invalid_placement(tmp_path, device_id, cwd, message):
+    db = _session(tmp_path)
+    thread = ensure_primary_thread(db, _make_session_row(db))
+
+    with pytest.raises(ValueError, match=message):
+        set_thread_execution_target(thread, device_id=device_id, cwd=cwd)
 
 
 def test_launch_attempt_idempotent_on_client_request_id(tmp_path):
