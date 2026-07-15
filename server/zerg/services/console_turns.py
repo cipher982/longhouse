@@ -35,6 +35,8 @@ from zerg.services.session_turns import SESSION_TURN_STATE_QUEUED
 from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
 from zerg.services.session_turns import create_session_turn
 
+CONSOLE_TURN_START_COMMAND = "session.turn.start"
+
 CONSOLE_EXECUTION_OWNER_STATES = frozenset(
     {
         SESSION_TURN_STATE_STARTING,
@@ -75,6 +77,14 @@ class ClaimedConsoleTurn:
     message: str
     provider_config: dict[str, object]
     resume_provider_thread_id: str | None
+
+
+@dataclass(frozen=True)
+class ConsoleTurnDispatch:
+    turn_id: int | None
+    run_id: UUID | None
+    state: str
+    error: str | None = None
 
 
 def enqueue_console_turn(
@@ -269,6 +279,97 @@ def settle_console_turn(
     if outcome != SESSION_TURN_STATE_COMPLETED:
         input_row.status = INPUT_STATUS_FAILED
         input_row.last_error = outcome
+    db.commit()
+
+
+async def dispatch_next_console_turn(
+    db: Session,
+    *,
+    owner_id: int,
+    thread_id: UUID,
+    registry=None,
+) -> ConsoleTurnDispatch:
+    """Start the oldest queued turn through the selected machine adapter."""
+
+    from zerg.services.machine_control_channel import get_machine_control_channel_registry
+
+    claimed = claim_next_console_turn(db, thread_id=thread_id)
+    if claimed is None:
+        return ConsoleTurnDispatch(turn_id=None, run_id=None, state="idle")
+
+    control = registry or get_machine_control_channel_registry()
+    capability = f"{claimed.provider}.turn_start"
+    if not control.supports(
+        owner_id=owner_id,
+        device_id=claimed.device_id,
+        capability=capability,
+    ):
+        _fail_starting_console_turn(
+            db,
+            turn_id=claimed.turn_id,
+            error=f"Machine Agent does not advertise {capability}",
+        )
+        return ConsoleTurnDispatch(
+            turn_id=claimed.turn_id,
+            run_id=claimed.run_id,
+            state=SESSION_TURN_STATE_FAILED,
+            error=f"Machine Agent does not advertise {capability}",
+        )
+
+    payload: dict[str, object] = {
+        "run_id": str(claimed.run_id),
+        "thread_id": str(claimed.thread_id),
+        "provider": claimed.provider,
+        "cwd": claimed.cwd,
+        "message": claimed.message,
+        "launch_actor": "user",
+        "launch_surface": "console",
+        **claimed.provider_config,
+    }
+    if claimed.resume_provider_thread_id:
+        payload["resume_provider_thread_id"] = claimed.resume_provider_thread_id
+
+    response = await control.send_command(
+        owner_id=owner_id,
+        device_id=claimed.device_id,
+        session_id=str(claimed.session_id),
+        command_type=CONSOLE_TURN_START_COMMAND,
+        payload=payload,
+        command_id=str(claimed.run_id),
+        timeout_secs=15,
+    )
+    message = dict(response.message or {})
+    if not response.transport_ok or message.get("ok") is not True:
+        detail = message.get("error") if isinstance(message.get("error"), dict) else {}
+        error = str(detail.get("message") or response.error or "Console turn dispatch failed")
+        _fail_starting_console_turn(db, turn_id=claimed.turn_id, error=error)
+        return ConsoleTurnDispatch(
+            turn_id=claimed.turn_id,
+            run_id=claimed.run_id,
+            state=SESSION_TURN_STATE_FAILED,
+            error=error,
+        )
+
+    mark_console_turn_active(db, turn_id=claimed.turn_id)
+    return ConsoleTurnDispatch(
+        turn_id=claimed.turn_id,
+        run_id=claimed.run_id,
+        state=SESSION_TURN_STATE_ACTIVE,
+    )
+
+
+def _fail_starting_console_turn(db: Session, *, turn_id: int, error: str) -> None:
+    turn, input_row, run = _load_turn_lifecycle(db, turn_id)
+    if turn.state != SESSION_TURN_STATE_STARTING:
+        raise ConsoleTurnConflict(f"turn {turn_id} cannot fail from {turn.state}")
+    now = datetime.now(timezone.utc)
+    turn.state = SESSION_TURN_STATE_FAILED
+    turn.terminal_at = now
+    turn.durable_at = now
+    input_row.status = INPUT_STATUS_FAILED
+    input_row.last_error = error[:1000]
+    run.ended_at = now
+    run.exit_status = "dispatch_failed"
     db.commit()
 
 

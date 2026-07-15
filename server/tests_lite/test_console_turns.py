@@ -1,5 +1,6 @@
 from datetime import datetime
 from datetime import timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -19,6 +20,7 @@ from zerg.services.console_turns import claim_next_console_turn
 from zerg.services.console_turns import ConsoleTurnConflict
 from zerg.services.console_turns import ConsoleTurnUnavailable
 from zerg.services.console_turns import enqueue_console_turn
+from zerg.services.console_turns import dispatch_next_console_turn
 from zerg.services.console_turns import mark_console_turn_active
 from zerg.services.console_turns import settle_console_turn
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
@@ -26,6 +28,7 @@ from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_COMPLETED
 from zerg.services.session_turns import SESSION_TURN_STATE_DRAINING
+from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_QUEUED
 from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
 
@@ -212,3 +215,66 @@ def test_console_turn_claim_and_settle_serializes_fifo_execution(tmp_path):
     next_claim = claim_next_console_turn(db, thread_id=thread.id)
     assert next_claim is not None
     assert next_claim.turn_id == second.turn_id
+
+
+@pytest.mark.asyncio
+async def test_dispatch_next_console_turn_uses_run_id_as_durable_command_id(tmp_path):
+    db = _db(tmp_path)
+    session = _session(db)
+    thread = ensure_primary_thread(db, session)
+    set_thread_execution_target(thread, device_id="cinder", cwd="/tmp/longhouse")
+    db.commit()
+    queued = enqueue_console_turn(
+        db,
+        session=session,
+        owner_id=1,
+        message="Continue exactly once",
+        client_request_id="request-dispatch",
+    )
+
+    class Registry:
+        command = None
+
+        def supports(self, **kwargs):
+            return kwargs["capability"] == "codex.turn_start"
+
+        async def send_command(self, **kwargs):
+            self.command = kwargs
+            return SimpleNamespace(transport_ok=True, message={"ok": True}, error=None)
+
+    registry = Registry()
+    result = await dispatch_next_console_turn(db, owner_id=1, thread_id=thread.id, registry=registry)
+
+    assert result.turn_id == queued.turn_id
+    assert result.state == SESSION_TURN_STATE_ACTIVE
+    assert registry.command["command_type"] == "session.turn.start"
+    assert registry.command["command_id"] == str(result.run_id)
+    assert registry.command["payload"]["run_id"] == str(result.run_id)
+    assert registry.command["payload"]["message"] == "Continue exactly once"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_next_console_turn_fails_typed_when_adapter_is_missing(tmp_path):
+    db = _db(tmp_path)
+    session = _session(db)
+    thread = ensure_primary_thread(db, session)
+    set_thread_execution_target(thread, device_id="cinder", cwd="/tmp/longhouse")
+    db.commit()
+    queued = enqueue_console_turn(
+        db,
+        session=session,
+        owner_id=1,
+        message="Do not fake support",
+        client_request_id="request-unsupported",
+    )
+
+    class Registry:
+        def supports(self, **_kwargs):
+            return False
+
+    result = await dispatch_next_console_turn(db, owner_id=1, thread_id=thread.id, registry=Registry())
+
+    assert result.state == SESSION_TURN_STATE_FAILED
+    assert "does not advertise" in result.error
+    assert db.get(SessionTurn, queued.turn_id).state == SESSION_TURN_STATE_FAILED
+    assert db.get(SessionRun, result.run_id).ended_at is not None
