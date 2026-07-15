@@ -322,6 +322,7 @@ struct APITimelineCardPresentationResponse: Codable, Hashable, Sendable {
 
 struct APISessionResponse: Codable, Hashable, Sendable {
     let id: String
+    let originKind: String?
     let provider: String
     let project: String?
     let deviceId: String?

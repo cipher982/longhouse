@@ -169,6 +169,7 @@ def _pending_response_from_catalog(
     return response.model_copy(
         update={
             "provider": session.provider,
+            "origin_kind": session.origin_kind,
             "project": session.project,
             "device_id": session.device_id,
             "environment": session.environment,
@@ -299,6 +300,7 @@ def _response_from_catalog(
     title = _title(session, card)
     return SessionResponse(
         id=str(session.session_id),
+        origin_kind=session.origin_kind,
         provider=session.provider,
         project=session.project,
         device_id=session.device_id,
@@ -443,7 +445,7 @@ def project_catalog_sessions_snapshot(snapshot: dict[str, Any]) -> SessionsListR
     )
 
 
-def read_live_catalog_session(session_id: UUID) -> tuple[SessionResponse | None, str | None, str]:
+def read_live_catalog_session(session_id: UUID, *, owner_id: int | None = None) -> tuple[SessionResponse | None, str | None, str]:
     """Read one session shell and its provider alias from one catalog snapshot."""
 
     snapshot = session_snapshot(str(session_id))
@@ -454,6 +456,9 @@ def read_live_catalog_session(session_id: UUID) -> tuple[SessionResponse | None,
     facts = snapshot.get("facts")
     if not isinstance(observed_at, datetime) or not isinstance(facts, dict):
         raise ValueError("catalog session snapshot is incomplete")
+    catalog = facts.get("catalog")
+    if owner_id is not None and (not isinstance(catalog, dict) or str(catalog.get("owner_id")) != str(owner_id)):
+        return None, None, commit_seq
     projected = project_catalog_session_facts(facts, observed_at=observed_at)
     provider_alias = facts.get("provider_alias")
     return projected, str(provider_alias) if provider_alias else None, commit_seq

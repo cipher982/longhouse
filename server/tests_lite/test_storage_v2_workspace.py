@@ -66,7 +66,7 @@ async def test_storage_v2_workspace_composes_catalog_shell_and_tail(monkeypatch)
         }
 
     monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: _Catalog())
-    monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda _session_id: (session, None, "7"))
+    monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda _session_id, **_kwargs: (session, None, "7"))
     monkeypatch.setattr(workspace_module, "read_storage_v2_session_events_page", read_page)
 
     result = await workspace_module.build_storage_v2_workspace(
@@ -90,7 +90,7 @@ async def test_storage_v2_workspace_returns_none_for_legacy_session(monkeypatch)
             return {"found": False, "deleted": False}
 
     monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: MissingCatalog())
-    monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda _session_id: (None, None, "0"))
+    monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda _session_id, **_kwargs: (None, None, "0"))
     assert (
         await workspace_module.build_storage_v2_workspace(
             session_id=uuid4(),
@@ -115,7 +115,7 @@ async def test_storage_v2_workspace_keeps_live_control_only_session_openable(mon
         model_dump=lambda **_kwargs: {"id": str(session_id), "capabilities": {"live_control_available": True}},
     )
     monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: MissingCatalog())
-    monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda _session_id: (session, None, "11"))
+    monkeypatch.setattr(workspace_module, "read_live_catalog_session", lambda _session_id, **_kwargs: (session, None, "11"))
 
     result = await workspace_module.build_storage_v2_workspace(
         session_id=session_id,
@@ -127,5 +127,47 @@ async def test_storage_v2_workspace_keeps_live_control_only_session_openable(mon
     assert result is not None
     assert result["control_only"] is True
     assert result["session"]["id"] == str(session_id)
+    assert result["projection"]["items"] == []
+    assert result["projection"]["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_console_session_is_openable_before_archive_outbox_drains(monkeypatch):
+    session_id = uuid4()
+
+    class ArchiveNotMaterialized:
+        async def call(self, method, params):
+            assert method == "storage.session.read.v2"
+            assert params == {"session_id": str(session_id)}
+            return {"found": False, "deleted": False}
+
+    session = SimpleNamespace(
+        origin_kind="console",
+        capabilities=SimpleNamespace(live_control_available=False),
+        model_dump=lambda **_kwargs: {
+            "id": str(session_id),
+            "origin_kind": "console",
+            "capabilities": {"live_control_available": False},
+        },
+    )
+    monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: ArchiveNotMaterialized())
+
+    def read_live(candidate, *, owner_id):
+        assert candidate == session_id
+        assert owner_id == 42
+        return session, None, "12"
+
+    monkeypatch.setattr(workspace_module, "read_live_catalog_session", read_live)
+
+    result = await workspace_module.build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=42,
+        branch_mode="head",
+        limit=50,
+    )
+
+    assert result is not None
+    assert result["control_only"] is True
+    assert result["session"]["origin_kind"] == "console"
     assert result["projection"]["items"] == []
     assert result["projection"]["total"] == 0

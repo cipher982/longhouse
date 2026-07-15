@@ -883,6 +883,7 @@ class SessionResponse(UTCBaseModel):
     """Response for a single session."""
 
     id: str = Field(..., description="Session UUID")
+    origin_kind: Optional[str] = Field(None, description="Canonical session origin: console or imported provider transcript.")
     provider: str = Field(..., description="AI provider")
     project: Optional[str] = Field(None, description="Project name")
     device_id: Optional[str] = Field(None, description="Device ID")

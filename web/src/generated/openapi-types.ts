@@ -3576,6 +3576,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/storage/v2/source-epochs/{source_epoch}/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Storage V2 Source Epoch Manifest
+         * @description Return bounded per-range proof for one authenticated machine source.
+         */
+        get: operations["storage_v2_source_epoch_manifest_agents_storage_v2_source_epochs__source_epoch__manifest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/storage/v2/sessions": {
         parameters: {
             query?: never;
@@ -5329,6 +5349,10 @@ export interface components {
             spool_dead_count: number;
             /** Archive Backlog */
             archive_backlog?: {
+                [key: string]: unknown;
+            };
+            /** Storage V2 Outbox */
+            storage_v2_outbox?: {
                 [key: string]: unknown;
             };
             /**
@@ -8800,6 +8824,11 @@ export interface components {
              * @description Session UUID
              */
             id: string;
+            /**
+             * Origin Kind
+             * @description Canonical session origin: console or imported provider transcript.
+             */
+            origin_kind?: string | null;
             /**
              * Provider
              * @description AI provider
@@ -17206,6 +17235,42 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    storage_v2_source_epoch_manifest_agents_storage_v2_source_epochs__source_epoch__manifest_get: {
+        parameters: {
+            query?: {
+                after_position?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                source_epoch: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
