@@ -215,6 +215,18 @@ async def test_storage_v2_envelope_is_sealed_committed_and_replayed(monkeypatch)
             assert replay.status_code == 200
             assert replay.json() == receipt
 
+            epoch_manifest = await client.get(
+                f"/agents/storage/v2/source-epochs/{payload['source_epoch']}/manifest"
+            )
+            assert epoch_manifest.status_code == 200, epoch_manifest.text
+            manifest_payload = epoch_manifest.json()
+            assert manifest_payload["v"] == 2
+            assert manifest_payload["source_epoch"]["machine_id"] == "cinder"
+            assert manifest_payload["source_epoch"]["accepted_through"] == str(len(b"hello\n"))
+            assert [item["envelope_id"] for item in manifest_payload["objects"]] == [
+                payload["expected_envelope_id"]
+            ]
+
             timeline = await client.get("/agents/storage/v2/sessions")
             assert timeline.status_code == 200, timeline.text
             assert [row["session_id"] for row in timeline.json()["sessions"]] == [payload["session_id"]]

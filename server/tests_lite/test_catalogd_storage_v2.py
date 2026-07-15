@@ -903,7 +903,26 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
             records=(b"z",),
             sealed_at=now,
         )
-        assert (await client.call("storage.raw_object.commit.v2", high_raw))["receipt"]["commit_seq"] == "4"
+        with pytest.raises(CatalogRemoteError) as gap_error:
+            await client.call("storage.raw_object.commit.v2", high_raw)
+        assert gap_error.value.code == "source_epoch_conflict"
+        assert gap_error.value.details == {
+            "reason": "range_gap",
+            "accepted_through": "0",
+            "requested_range_start": str(high_start),
+            "requested_range_end": str(high_start + 1),
+            "overlapping_envelope_ids": [],
+        }
+        contiguous = _raw_params(
+            epoch=next_epoch,
+            predecessor=epoch,
+            session_id=session_id,
+            start=0,
+            end=1,
+            records=(b"z",),
+            sealed_at=now,
+        )
+        assert (await client.call("storage.raw_object.commit.v2", contiguous))["receipt"]["commit_seq"] == "4"
         out_of_order = _raw_params(
             epoch=next_epoch,
             session_id=session_id,
@@ -923,10 +942,10 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
         client = CatalogClient(socket_path)
         high_manifest = await client.call(
             "storage.source_epoch.manifest.v2",
-            {"source_epoch": str(next_epoch), "after_position": high_start, "limit": 100},
+            {"source_epoch": str(next_epoch), "after_position": 0, "limit": 100},
         )
-        assert high_manifest["objects"][0]["range_start"] == str(high_start)
-        assert high_manifest["source_epoch"]["accepted_through"] == str(high_start + 1)
+        assert high_manifest["objects"][0]["range_start"] == "0"
+        assert high_manifest["source_epoch"]["accepted_through"] == "1"
         assert (await client.call("ping.v2"))["commit_seq"] == "4"
     finally:
         await client.close()

@@ -4361,9 +4361,29 @@ class CatalogStore:
                 )
             ).first()
             if same_range is not None:
-                return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
-            if range_start_key < accepted_through:
-                return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                return {
+                    "source_epoch_conflict": True,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                    "conflict_details": {
+                        "reason": "same_range_different_identity",
+                        "accepted_through": str(int(accepted_through)),
+                        "requested_range_start": str(range_start),
+                        "requested_range_end": str(range_end),
+                        "overlapping_envelope_ids": [str(same_range[0])],
+                    },
+                }
+            if range_start_key != accepted_through:
+                return {
+                    "source_epoch_conflict": True,
+                    "commit_seq": str(_current_commit_seq(connection)),
+                    "conflict_details": {
+                        "reason": "range_overlap" if range_start_key < accepted_through else "range_gap",
+                        "accepted_through": str(int(accepted_through)),
+                        "requested_range_start": str(range_start),
+                        "requested_range_end": str(range_end),
+                        "overlapping_envelope_ids": [],
+                    },
+                }
             if range_start < range_end:
                 overlap = connection.execute(
                     select(raw.c.envelope_id)
@@ -4375,7 +4395,17 @@ class CatalogStore:
                     .limit(1)
                 ).first()
                 if overlap is not None:
-                    return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
+                    return {
+                        "source_epoch_conflict": True,
+                        "commit_seq": str(_current_commit_seq(connection)),
+                        "conflict_details": {
+                            "reason": "range_overlap",
+                            "accepted_through": str(int(accepted_through)),
+                            "requested_range_start": str(range_start),
+                            "requested_range_end": str(range_end),
+                            "overlapping_envelope_ids": [str(overlap[0])],
+                        },
+                    }
 
             commit_time = datetime.now(UTC)
             commit_seq = _advance_commit_seq(connection, commit_time)

@@ -717,6 +717,65 @@ async def storage_v2_capabilities(
     }
 
 
+@router.get("/source-epochs/{source_epoch}/manifest")
+async def storage_v2_source_epoch_manifest(
+    source_epoch: UUID,
+    after_position: int | None = Query(None, ge=0),
+    limit: int = Query(1000, ge=1, le=1000),
+    auth_token: DeviceToken | object | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict[str, object]:
+    """Return bounded per-range proof for one authenticated machine source."""
+
+    machine_id = _authenticated_machine_id(auth_token, {})
+    catalogd = get_catalogd_client()
+    if catalogd is None:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_unavailable",
+            "Storage-v2 catalog is temporarily unavailable.",
+        )
+    try:
+        result = await catalogd.call(
+            "storage.source_epoch.manifest.v2",
+            {
+                "source_epoch": str(source_epoch),
+                "after_position": after_position,
+                "limit": limit,
+            },
+        )
+    except CatalogRemoteError as exc:
+        _raise_catalog_error(exc)
+    except CatalogUnavailable as exc:
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_unavailable",
+            "Storage-v2 catalog is temporarily unavailable.",
+        ) from exc
+    epoch = result.get("source_epoch")
+    objects = result.get("objects")
+    if result.get("found") is not True or not isinstance(epoch, dict):
+        raise _http_error(status.HTTP_404_NOT_FOUND, "source_epoch_not_found", "Source epoch was not found.")
+    if epoch.get("machine_id") != machine_id:
+        raise _http_error(status.HTTP_404_NOT_FOUND, "source_epoch_not_found", "Source epoch was not found.")
+    if not isinstance(objects, list) or any(
+        not isinstance(item, dict) or item.get("machine_id") != machine_id or item.get("source_epoch") != str(source_epoch)
+        for item in objects
+    ):
+        raise _http_error(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "catalog_unavailable",
+            "Source epoch manifest is invalid.",
+        )
+    return {
+        "v": 2,
+        "source_epoch": epoch,
+        "objects": objects,
+        "commit_seq": result.get("commit_seq"),
+        "observed_at": result.get("observed_at"),
+    }
+
+
 async def _commit_admitted_envelope(
     request: Request,
     auth_token: DeviceToken | object | None,

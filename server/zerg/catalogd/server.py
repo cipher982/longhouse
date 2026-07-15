@@ -1918,6 +1918,7 @@ class CatalogDaemon:
                 request,
                 "source_epoch_conflict",
                 "source range overlaps or conflicts with the registered epoch",
+                details=result.get("conflict_details") or {},
             )
         if result.get("media_unavailable") is True:
             return self._error(
