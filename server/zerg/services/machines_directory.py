@@ -26,13 +26,11 @@ CONTROL_CONNECTED = "connected"
 CONTROL_DISCONNECTED = "disconnected"
 LAUNCH_BLOCKED_CONTROL_DOWN = "control_down"
 LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT = "no_launch_support"
-ONE_SHOT = "one_shot"
 
 
 @dataclass(frozen=True)
 class MachineLaunchProviderOption:
     provider: str
-    execution_lifetimes: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -40,16 +38,12 @@ class MachineLaunchProjection:
     blocked_by: str | None
     providers: tuple[MachineLaunchProviderOption, ...]
     default_provider: str | None
-    default_execution_lifetime: str | None
 
     def to_response(self) -> dict[str, object]:
         return {
             "blocked_by": self.blocked_by,
-            "providers": [
-                {"provider": option.provider, "execution_lifetimes": list(option.execution_lifetimes)} for option in self.providers
-            ],
+            "providers": [{"provider": option.provider} for option in self.providers],
             "default_provider": self.default_provider,
-            "default_execution_lifetime": self.default_execution_lifetime,
         }
 
 
@@ -94,28 +88,22 @@ def _launch_projection(
 ) -> MachineLaunchProjection:
     options: list[MachineLaunchProviderOption] = []
     for provider, operations in sorted(operations_by_provider.items()):
-        lifetimes: list[str] = []
         if "turn_start" in operations:
-            lifetimes.append(ONE_SHOT)
-        if lifetimes:
-            options.append(MachineLaunchProviderOption(provider=provider, execution_lifetimes=tuple(lifetimes)))
+            options.append(MachineLaunchProviderOption(provider=provider))
 
     if not options:
         return MachineLaunchProjection(
             blocked_by=LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT if connected else LAUNCH_BLOCKED_CONTROL_DOWN,
             providers=(),
             default_provider=None,
-            default_execution_lifetime=None,
         )
 
-    default_lifetime = ONE_SHOT
-    candidates = [option.provider for option in options if default_lifetime in option.execution_lifetimes]
+    candidates = [option.provider for option in options]
     default_provider = "codex" if "codex" in candidates else candidates[0]
     return MachineLaunchProjection(
         blocked_by=None,
         providers=tuple(options),
         default_provider=default_provider,
-        default_execution_lifetime=default_lifetime,
     )
 
 

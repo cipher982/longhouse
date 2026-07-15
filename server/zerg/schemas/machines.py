@@ -14,7 +14,6 @@ from zerg.utils.time import UTCBaseModel
 ProviderLiveProofProvider = Literal["claude", "opencode", "antigravity"]
 ArchiveBacklogControlMode = Literal["paused", "trickle", "drain"]
 MachineControlOperationStatus = Literal["queued", "running", "succeeded", "failed", "timed_out"]
-RemoteExecutionLifetime = Literal["one_shot", "live_control"]
 
 ControlChannelStatus = Literal["connected", "disconnected"]
 LaunchBlockedBy = Literal[
@@ -71,10 +70,6 @@ class MachineDirectoryEntry(UTCBaseModel):
 
 class MachineLaunchProviderOption(UTCBaseModel):
     provider: str = Field(..., description="Provider identifier.")
-    execution_lifetimes: list[RemoteExecutionLifetime] = Field(
-        ...,
-        description="Execution modes this machine can launch for the provider now.",
-    )
 
 
 class MachineLaunchProjection(UTCBaseModel):
@@ -84,7 +79,6 @@ class MachineLaunchProjection(UTCBaseModel):
     )
     providers: list[MachineLaunchProviderOption] = Field(...)
     default_provider: str | None = None
-    default_execution_lifetime: RemoteExecutionLifetime | None = None
 
 
 class MachineDirectoryResponse(UTCBaseModel):

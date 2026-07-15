@@ -810,14 +810,12 @@ struct LonghouseAPI: Sendable {
 
 public struct MachineLaunchProviderOption: Decodable, Sendable, Hashable {
     public let provider: String
-    public let executionLifetimes: [RemoteExecutionLifetime]
 }
 
 public struct MachineLaunchProjection: Decodable, Sendable, Hashable {
     public let blockedBy: String?
     public let providers: [MachineLaunchProviderOption]
     public let defaultProvider: String?
-    public let defaultExecutionLifetime: RemoteExecutionLifetime?
 }
 
 public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
@@ -897,13 +895,6 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         launch.defaultProvider
     }
 
-    public func supportsRunOnce(provider: String) -> Bool {
-        launch.providers.first(where: { $0.provider == provider })?.executionLifetimes.contains(.oneShot) == true
-    }
-
-    public func supportsLiveControlLaunch(provider: String) -> Bool {
-        launch.providers.first(where: { $0.provider == provider })?.executionLifetimes.contains(.liveControl) == true
-    }
 }
 
 public struct MachineDirectoryResponse: Decodable, Sendable {

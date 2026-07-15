@@ -775,12 +775,7 @@ private func previewMachine(
     lastSeenAt: String? = nil
 ) -> MachineDirectoryEntry {
     let launchProviders = online
-        ? providers.map { provider in
-            MachineLaunchProviderOption(
-                provider: provider,
-                executionLifetimes: provider == "codex" ? [.oneShot, .liveControl] : [.liveControl]
-            )
-        }
+        ? providers.map { MachineLaunchProviderOption(provider: $0) }
         : []
     return MachineDirectoryEntry(
         deviceId: deviceId,
@@ -797,8 +792,7 @@ private func previewMachine(
         launch: MachineLaunchProjection(
             blockedBy: launchProviders.isEmpty ? (launchBlockedBy ?? (online ? "no_launch_support" : "control_down")) : nil,
             providers: launchProviders,
-            defaultProvider: launchProviders.isEmpty ? nil : (providers.contains("codex") ? "codex" : providers.first),
-            defaultExecutionLifetime: launchProviders.isEmpty ? nil : (providers.contains("codex") ? .oneShot : .liveControl)
+            defaultProvider: launchProviders.isEmpty ? nil : (providers.contains("codex") ? "codex" : providers.first)
         )
     )
 }

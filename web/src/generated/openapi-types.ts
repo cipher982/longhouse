@@ -5807,8 +5807,6 @@ export interface components {
             providers: components["schemas"]["MachineLaunchProviderOption"][];
             /** Default Provider */
             default_provider?: string | null;
-            /** Default Execution Lifetime */
-            default_execution_lifetime?: ("one_shot" | "live_control") | null;
         };
         /** MachineLaunchProviderOption */
         MachineLaunchProviderOption: {
@@ -5817,11 +5815,6 @@ export interface components {
              * @description Provider identifier.
              */
             provider: string;
-            /**
-             * Execution Lifetimes
-             * @description Execution modes this machine can launch for the provider now.
-             */
-            execution_lifetimes: ("one_shot" | "live_control")[];
         };
         /** MachinePresenceIn */
         MachinePresenceIn: {

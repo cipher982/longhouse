@@ -42,30 +42,16 @@ function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirecto
   const controlChannelStatus: MachineDirectoryEntry["control_channel_status"] = online ? "connected" : "disconnected";
   const launchBlockedBy: MachineDirectoryEntry["launch_blocked_by"] =
     overrides.launch_blocked_by ?? (canLaunch ? null : online ? "no_codex_support" : "control_down");
-  const operations = overrides.control_operations_by_provider ?? (canLaunch ? { codex: ["launch", "run_once"] } : {});
+  const operations = overrides.control_operations_by_provider ?? (canLaunch ? { codex: ["turn_start"] } : {});
   const providerOptions = Object.entries(operations)
-    .map(([provider, providerOperations]) => ({
-      provider,
-      execution_lifetimes: [
-        ...(providerOperations.includes("run_once") ? (["one_shot"] as const) : []),
-        ...(providerOperations.includes("launch") ? (["live_control"] as const) : []),
-      ],
-    }))
-    .filter((option) => option.execution_lifetimes.length > 0);
-  const defaultExecutionLifetime = providerOptions.some((option) => option.execution_lifetimes.includes("one_shot"))
-    ? "one_shot"
-    : providerOptions.length > 0
-      ? "live_control"
-      : null;
-  const defaultCandidates = providerOptions.filter((option) =>
-    defaultExecutionLifetime ? option.execution_lifetimes.includes(defaultExecutionLifetime) : false,
-  );
+    .filter(([, providerOperations]) => providerOperations.includes("turn_start"))
+    .map(([provider]) => ({ provider }));
   return {
     device_id: "cinder",
     machine_name: "cinder",
     online,
     control_channel_status: controlChannelStatus,
-    supports: canLaunch ? ["codex.launch", "codex.run_once"] : [],
+    supports: canLaunch ? ["codex.turn_start"] : [],
     control_operations_by_provider: operations,
     can_launch_codex: canLaunch,
     launchable_providers: canLaunch ? ["codex"] : [],
@@ -76,10 +62,9 @@ function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirecto
       blocked_by: providerOptions.length > 0 ? null : launchBlockedBy,
       providers: providerOptions,
       default_provider:
-        defaultCandidates.find((option) => option.provider === "codex")?.provider ??
-        defaultCandidates[0]?.provider ??
+        providerOptions.find((option) => option.provider === "codex")?.provider ??
+        providerOptions[0]?.provider ??
         null,
-      default_execution_lifetime: defaultExecutionLifetime,
     },
     ...overrides,
   };
@@ -282,7 +267,7 @@ describe("LaunchSessionModal", () => {
           online: true,
           control_channel_status: "connected",
           supports: ["codex.launch", "codex.run_once"],
-          control_operations_by_provider: { codex: ["launch", "run_once"] },
+          control_operations_by_provider: { codex: ["turn_start"] },
           can_launch_codex: true,
           launch_blocked_by: null,
           last_seen_at: "2026-05-12T13:00:00Z",

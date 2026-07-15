@@ -409,12 +409,10 @@ struct LonghouseAPITests {
         #expect(entry.controlOperationsByProvider["codex"] == ["launch", "run_once"])
         #expect(entry.defaultProvider == "codex")
         #expect(entry.isLaunchable)
-        #expect(entry.supportsRunOnce(provider: "codex"))
-        #expect(entry.supportsLiveControlLaunch(provider: "codex"))
     }
 
     @Test
-    func machineDirectoryEntryTreatsRunOnceAsRemoteLaunchable() throws {
+    func machineDirectoryEntryTreatsConsoleAdapterAsLaunchable() throws {
         let json = """
         {
           "device_id": "cinder",
@@ -442,8 +440,6 @@ struct LonghouseAPITests {
         #expect(entry.remoteLaunchProviders == ["codex"])
         #expect(entry.defaultProvider == "codex")
         #expect(entry.isLaunchable)
-        #expect(entry.supportsRunOnce(provider: "codex"))
-        #expect(!entry.supportsLiveControlLaunch(provider: "codex"))
     }
 
     @Test

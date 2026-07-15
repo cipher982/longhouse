@@ -174,11 +174,8 @@ def test_directory_returns_online_machine_with_supports(tmp_path):
     assert entry.launch_blocked_by is None
     assert entry.engine_build == "test-build"
     assert entry.launch.blocked_by is None
-    assert [(option.provider, option.execution_lifetimes) for option in entry.launch.providers] == [
-        ("codex", ("one_shot",)),
-    ]
+    assert [option.provider for option in entry.launch.providers] == ["codex"]
     assert entry.launch.default_provider == "codex"
-    assert entry.launch.default_execution_lifetime == "one_shot"
 
 
 def test_directory_surfaces_offline_enrolled_machine_with_empty_supports(tmp_path):
@@ -301,12 +298,9 @@ def test_directory_projects_turn_start_machine_as_console_ready(tmp_path):
 
     assert entry.launchable_providers == ("cursor",)
     assert entry.launch_blocked_by is None
-    assert [(option.provider, option.execution_lifetimes) for option in entry.launch.providers] == [
-        ("cursor", ("one_shot",)),
-    ]
+    assert [option.provider for option in entry.launch.providers] == ["cursor"]
     assert entry.launch.blocked_by is None
     assert entry.launch.default_provider == "cursor"
-    assert entry.launch.default_execution_lifetime == "one_shot"
 
 
 def test_directory_prefers_codex_console_adapter_when_available(tmp_path):
@@ -327,7 +321,6 @@ def test_directory_prefers_codex_console_adapter_when_available(tmp_path):
     )[0]
 
     assert entry.launch.default_provider == "codex"
-    assert entry.launch.default_execution_lifetime == "one_shot"
 
 
 def test_directory_sorts_ready_then_connected_blocked_then_offline_by_name(tmp_path):
@@ -491,9 +484,8 @@ def test_agents_machines_route_matches_timeline_route(tmp_path):
     assert body["machines"][0]["launch_blocked_by"] is None
     assert body["machines"][0]["launch"] == {
         "blocked_by": None,
-        "providers": [{"provider": "codex", "execution_lifetimes": ["one_shot"]}],
+        "providers": [{"provider": "codex"}],
         "default_provider": "codex",
-        "default_execution_lifetime": "one_shot",
     }
     assert body["machines"][1]["online"] is False
     assert body["machines"][1]["supports"] == []
@@ -506,7 +498,6 @@ def test_agents_machines_route_matches_timeline_route(tmp_path):
         "blocked_by": "control_down",
         "providers": [],
         "default_provider": None,
-        "default_execution_lifetime": None,
     }
 
 
