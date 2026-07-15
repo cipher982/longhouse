@@ -21,6 +21,7 @@ from zerg.services.console_turns import ConsoleTurnConflict
 from zerg.services.console_turns import ConsoleTurnUnavailable
 from zerg.services.console_turns import enqueue_console_turn
 from zerg.services.console_turns import dispatch_next_console_turn
+from zerg.services.console_turns import dispatch_catalog_claimed_turn
 from zerg.services.console_turns import mark_console_turn_active
 from zerg.services.console_turns import settle_console_turn
 from zerg.services.console_sessions import create_empty_console_session
@@ -346,3 +347,50 @@ def test_run_terminal_event_settles_console_turn_after_output_drain(tmp_path):
     assert turn.terminal_phase == "run_completed"
     assert turn.durable_at is not None
     assert db.get(SessionRun, claimed.run_id).exit_status == "exit_0"
+
+
+@pytest.mark.asyncio
+async def test_catalog_dispatch_failure_releases_and_attempts_next_claimed_turn():
+    first_run = uuid4()
+    second_run = uuid4()
+    first_turn = uuid4()
+    second_turn = uuid4()
+    session_id = uuid4()
+    thread_id = uuid4()
+
+    def payload(turn_id, run_id, message):
+        return {
+            "turn_id": str(turn_id),
+            "run_id": str(run_id),
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "provider": "codex",
+            "device_id": "offline",
+            "cwd": "/tmp/longhouse",
+            "message": message,
+            "provider_config": {},
+        }
+
+    class Registry:
+        def supports(self, **_kwargs):
+            return False
+
+    class Catalog:
+        calls = []
+
+        async def call(self, _method, params):
+            self.calls.append(params["turn"])
+            if len(self.calls) == 1:
+                return {"next_turn": payload(second_turn, second_run, "second")}
+            return {"next_turn": None}
+
+    catalog = Catalog()
+    result = await dispatch_catalog_claimed_turn(
+        owner_id=1,
+        turn=payload(first_turn, first_run, "first"),
+        client=catalog,
+        registry=Registry(),
+    )
+
+    assert result.state == SESSION_TURN_STATE_FAILED
+    assert [call["run_id"] for call in catalog.calls] == [str(first_run), str(second_run)]

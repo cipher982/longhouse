@@ -443,7 +443,7 @@ async def enqueue_catalog_console_turn(
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
 
     state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
-    await client.call(
+    update_result = await client.call(
         "session.console.turn.update.v2",
         {
             "turn": {
@@ -455,6 +455,14 @@ async def enqueue_catalog_console_turn(
             }
         },
     )
+    next_turn = update_result.get("next_turn")
+    if isinstance(next_turn, dict):
+        await dispatch_catalog_claimed_turn(
+            owner_id=owner_id,
+            turn=next_turn,
+            client=client,
+            registry=control,
+        )
     return CatalogConsoleTurn(
         turn_id=turn_id,
         run_id=run_id,
@@ -516,7 +524,7 @@ async def dispatch_catalog_claimed_turn(
             detail = message.get("error") if isinstance(message.get("error"), dict) else {}
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
     state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
-    await catalog.call(
+    update_result = await catalog.call(
         "session.console.turn.update.v2",
         {
             "turn": {
@@ -528,6 +536,14 @@ async def dispatch_catalog_claimed_turn(
             }
         },
     )
+    next_turn = update_result.get("next_turn")
+    if isinstance(next_turn, dict):
+        await dispatch_catalog_claimed_turn(
+            owner_id=owner_id,
+            turn=next_turn,
+            client=catalog,
+            registry=control,
+        )
     return CatalogConsoleTurn(turn_id=turn_id, run_id=run_id, state=state, created=True, error=error)
 
 
