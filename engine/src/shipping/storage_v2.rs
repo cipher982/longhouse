@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 pub const STORAGE_V2_CAPABILITIES_PATH: &str = "/api/agents/storage/v2/capabilities";
 pub const STORAGE_V2_ENVELOPES_PATH: &str = "/api/agents/storage/v2/envelopes";
+pub const STORAGE_V2_SOURCE_EPOCHS_PATH: &str = "/api/agents/storage/v2/source-epochs";
 pub const STORAGE_V2_LANE_HEADER: &str = "X-Longhouse-Storage-Lane";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -145,6 +146,41 @@ pub struct StorageV2Receipt {
     pub render_state: String,
     pub media_state: String,
     pub missing_media_hashes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct StorageV2SourceManifest {
+    pub v: u8,
+    pub source_epoch: StorageV2SourceEpoch,
+    pub objects: Vec<StorageV2SourceObject>,
+    pub commit_seq: String,
+    pub observed_at: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct StorageV2SourceEpoch {
+    pub source_epoch: String,
+    pub tenant_id: String,
+    pub machine_id: String,
+    pub provider: String,
+    pub opaque_source_id: String,
+    pub range_kind: String,
+    pub state: String,
+    pub accepted_through: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct StorageV2SourceObject {
+    pub envelope_id: String,
+    pub tenant_id: String,
+    pub machine_id: String,
+    pub provider: String,
+    pub opaque_source_id: String,
+    pub source_epoch: String,
+    pub range_kind: String,
+    pub range_start: String,
+    pub range_end: String,
+    pub retired_at: Option<String>,
 }
 
 impl StorageV2Receipt {

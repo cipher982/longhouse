@@ -314,6 +314,98 @@ pub fn acknowledge_and_delete(
     Ok(())
 }
 
+/// Replace a conflicting envelope with its unaccepted suffix after every
+/// hosted prefix range has been proven from the persisted raw records.
+pub fn reconcile_proven_prefix(
+    conn: &mut Connection,
+    source_epoch: Uuid,
+    expected_envelope_id: &str,
+    expected_start: u64,
+    proven_through: u64,
+    replacement: Option<&PendingSourceEnvelope>,
+) -> Result<()> {
+    if proven_through <= expected_start {
+        bail!("source reconciliation must advance the cursor");
+    }
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let old_end: i64 = tx
+        .query_row(
+            "SELECT range_end FROM pending_source_envelope
+             WHERE source_epoch = ?1 AND envelope_id = ?2
+               AND range_start = ?3 AND blocked_at IS NULL",
+            params![
+                source_epoch.to_string(),
+                expected_envelope_id,
+                to_sql_u64(expected_start)?,
+            ],
+            |row| row.get(0),
+        )
+        .context("reconciliation no longer matches the pending envelope")?;
+    let old_end = u64::try_from(old_end).context("pending range end is negative")?;
+    if proven_through > old_end {
+        bail!("source reconciliation exceeds the pending envelope");
+    }
+    match replacement {
+        Some(replacement)
+            if replacement.source_epoch == source_epoch
+                && replacement.range_start == proven_through
+                && replacement.range_end == old_end => {}
+        Some(_) => bail!("reconciled suffix does not exactly cover the pending remainder"),
+        None if proven_through == old_end => {}
+        None => bail!("reconciliation would discard an unaccepted suffix"),
+    }
+    let advanced = tx.execute(
+        "UPDATE source_epoch_lane_state
+         SET last_position = ?1, updated_at = ?2
+         WHERE source_epoch = ?3 AND lane = 'durable' AND last_position = ?4",
+        params![
+            to_sql_u64(proven_through)?,
+            Utc::now().to_rfc3339(),
+            source_epoch.to_string(),
+            to_sql_u64(expected_start)?,
+        ],
+    )?;
+    if advanced != 1 {
+        bail!("source epoch lane cursor changed before reconciliation");
+    }
+    let deleted = tx.execute(
+        "DELETE FROM pending_source_envelope
+         WHERE source_epoch = ?1 AND envelope_id = ?2",
+        params![source_epoch.to_string(), expected_envelope_id],
+    )?;
+    if deleted != 1 {
+        bail!("pending envelope disappeared during reconciliation");
+    }
+    if let Some(replacement) = replacement {
+        tx.execute(
+            "INSERT INTO pending_source_envelope (
+                source_epoch, source_path, range_start, range_end, envelope_id,
+                request_body_zstd, media_objects_zstd, raw_bytes, event_count,
+                has_reply_evidence, has_more, created_at, attempt_count,
+                last_attempt_at, blocked_at, block_kind, block_detail
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                       0, NULL, NULL, NULL, NULL)",
+            params![
+                replacement.source_epoch.to_string(),
+                replacement.source_path,
+                to_sql_u64(replacement.range_start)?,
+                to_sql_u64(replacement.range_end)?,
+                replacement.envelope_id,
+                replacement.request_body_zstd,
+                replacement.media_objects_zstd,
+                to_sql_u64(replacement.raw_bytes)?,
+                i64::try_from(replacement.event_count)
+                    .context("event count exceeds SQLite INTEGER")?,
+                replacement.has_reply_evidence,
+                replacement.has_more,
+                replacement.created_at,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 #[cfg(test)]
 pub fn count(conn: &Connection) -> Result<u64> {
     let value: i64 = conn.query_row("SELECT COUNT(*) FROM pending_source_envelope", [], |row| {

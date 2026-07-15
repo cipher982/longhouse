@@ -25,6 +25,7 @@ use crate::raw_records::{
 use crate::shipping::client::ShipperClient;
 use crate::shipping::storage_v2::{
     StorageV2Capabilities, StorageV2Envelope, StorageV2MediaRef, StorageV2Record,
+    StorageV2SourceManifest,
 };
 use crate::shipping::storage_v2::{StorageV2Render, StorageV2RenderRecord, StorageV2SessionFacts};
 use crate::state::cursor_store_records;
@@ -342,6 +343,17 @@ pub(crate) async fn ship_prepared_envelope(
             if let Some(conflict) =
                 error.downcast_ref::<crate::shipping::client::StorageV2Conflict>()
             {
+                if let Some(outcome) = reconcile_storage_v2_conflict(
+                    conn,
+                    client,
+                    &pending,
+                    &prepared,
+                    request_timeout,
+                )
+                .await?
+                {
+                    return Ok(outcome);
+                }
                 return block_source(
                     conn,
                     prepared.source_epoch,
@@ -364,6 +376,262 @@ pub(crate) async fn ship_prepared_envelope(
         events_shipped: prepared.event_count,
         has_more: prepared.has_more || was_retry,
     })
+}
+
+async fn reconcile_storage_v2_conflict(
+    conn: &mut Connection,
+    client: &ShipperClient,
+    pending: &PendingSourceEnvelope,
+    prepared: &PreparedStorageV2Envelope,
+    request_timeout: Duration,
+) -> Result<Option<StorageV2ShipOutcome>> {
+    let manifest = client
+        .storage_v2_source_manifest(
+            &prepared.source_epoch.to_string(),
+            prepared.range_start,
+            Some(request_timeout),
+        )
+        .await?;
+    let Some(proven_through) = proven_manifest_prefix(prepared, &manifest)? else {
+        return Ok(None);
+    };
+    let prefix_events = prepared
+        .envelope
+        .render
+        .as_ref()
+        .map(|render| {
+            render
+                .records
+                .iter()
+                .filter(|record| record.source_position < proven_through)
+                .count()
+        })
+        .unwrap_or(0);
+    let replacement_prepared = if proven_through < prepared.range_end {
+        Some(split_prepared_suffix(prepared, proven_through)?)
+    } else {
+        None
+    };
+    let replacement = replacement_prepared
+        .as_ref()
+        .map(|suffix| pending_candidate(&pending.source_path, suffix))
+        .transpose()?;
+    pending_source_envelope::reconcile_proven_prefix(
+        conn,
+        prepared.source_epoch,
+        &pending.envelope_id,
+        prepared.range_start,
+        proven_through,
+        replacement.as_ref(),
+    )?;
+    Ok(Some(StorageV2ShipOutcome {
+        bytes_shipped: proven_through - prepared.range_start,
+        events_shipped: prefix_events,
+        has_more: replacement.is_some() || prepared.has_more,
+    }))
+}
+
+fn proven_manifest_prefix(
+    prepared: &PreparedStorageV2Envelope,
+    manifest: &StorageV2SourceManifest,
+) -> Result<Option<u64>> {
+    let envelope = &prepared.envelope;
+    let epoch = &manifest.source_epoch;
+    if manifest.v != 2
+        || manifest.commit_seq.parse::<u64>().is_err()
+        || epoch.source_epoch != envelope.source_epoch
+        || epoch.tenant_id != envelope.tenant_id
+        || epoch.machine_id != envelope.machine_id
+        || epoch.provider != envelope.provider
+        || epoch.opaque_source_id != envelope.opaque_source_id
+        || epoch.range_kind != envelope.range_kind
+    {
+        return Ok(None);
+    }
+    let mut proven_through = prepared.range_start;
+    for object in &manifest.objects {
+        if object.source_epoch != envelope.source_epoch
+            || object.tenant_id != envelope.tenant_id
+            || object.machine_id != envelope.machine_id
+            || object.provider != envelope.provider
+            || object.opaque_source_id != envelope.opaque_source_id
+            || object.range_kind != envelope.range_kind
+            || object.retired_at.is_some()
+        {
+            return Ok(None);
+        }
+        let Ok(range_start) = object.range_start.parse::<u64>() else {
+            return Ok(None);
+        };
+        let Ok(range_end) = object.range_end.parse::<u64>() else {
+            return Ok(None);
+        };
+        if range_start != proven_through
+            || range_end <= range_start
+            || range_end > prepared.range_end
+        {
+            break;
+        }
+        let Ok(computed_envelope_id) = envelope_id_for_subrange(envelope, range_start, range_end)
+        else {
+            return Ok(None);
+        };
+        if computed_envelope_id != object.envelope_id {
+            return Ok(None);
+        }
+        proven_through = range_end;
+        if proven_through == prepared.range_end {
+            break;
+        }
+    }
+    Ok((proven_through > prepared.range_start).then_some(proven_through))
+}
+
+fn split_prepared_suffix(
+    prepared: &PreparedStorageV2Envelope,
+    range_start: u64,
+) -> Result<PreparedStorageV2Envelope> {
+    if range_start <= prepared.range_start || range_start >= prepared.range_end {
+        anyhow::bail!("storage-v2 suffix split is outside the pending range");
+    }
+    let removed_records = prepared
+        .envelope
+        .records
+        .iter()
+        .filter(|record| record.source_position < range_start)
+        .count();
+    let mut envelope = prepared.envelope.clone();
+    envelope.range_start = range_start;
+    envelope
+        .records
+        .retain(|record| record.source_position >= range_start);
+    if envelope.records.is_empty() {
+        anyhow::bail!("storage-v2 reconciled suffix has no raw records");
+    }
+    if let Some(render) = envelope.render.as_mut() {
+        render
+            .records
+            .retain(|record| record.source_position >= range_start);
+        for record in &mut render.records {
+            record.raw_record_ordinal = record
+                .raw_record_ordinal
+                .checked_sub(removed_records)
+                .context("storage-v2 render ordinal precedes reconciled suffix")?;
+        }
+    }
+    envelope
+        .media
+        .retain(|media| media.source_position >= range_start);
+    envelope.expected_envelope_id =
+        envelope_id_for_subrange(&envelope, range_start, prepared.range_end)?;
+    let decoded_bytes = decode_envelope_record_bytes(&envelope.records)?;
+    let raw_bytes = if envelope.range_kind == "byte_offset" {
+        prepared.range_end - range_start
+    } else {
+        decoded_bytes.iter().try_fold(0u64, |total, bytes| {
+            total
+                .checked_add(u64::try_from(bytes.len()).context("raw record exceeds u64")?)
+                .context("storage-v2 suffix raw byte count overflow")
+        })?
+    };
+    let event_count = envelope
+        .render
+        .as_ref()
+        .map(|render| render.records.len())
+        .unwrap_or(0);
+    let has_reply_evidence = envelope.render.as_ref().is_some_and(|render| {
+        render
+            .records
+            .iter()
+            .any(|record| matches!(record.role.as_str(), "assistant" | "tool"))
+    });
+    Ok(PreparedStorageV2Envelope {
+        envelope,
+        source_epoch: prepared.source_epoch,
+        range_start,
+        range_end: prepared.range_end,
+        event_count,
+        has_reply_evidence,
+        raw_bytes,
+        has_more: prepared.has_more,
+        media_objects: prepared
+            .media_objects
+            .iter()
+            .filter(|media| media.source_offset >= range_start)
+            .cloned()
+            .collect(),
+    })
+}
+
+fn envelope_id_for_subrange(
+    envelope: &StorageV2Envelope,
+    range_start: u64,
+    range_end: u64,
+) -> Result<String> {
+    let records = envelope
+        .records
+        .iter()
+        .filter(|record| {
+            record.source_position >= range_start && record.source_position < range_end
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let raw_bytes = decode_envelope_record_bytes(&records)?;
+    match envelope.range_kind.as_str() {
+        "byte_offset" => {
+            let mut expected = range_start;
+            for (record, bytes) in records.iter().zip(&raw_bytes) {
+                if record.source_position != expected {
+                    anyhow::bail!("storage-v2 byte range is not contiguous");
+                }
+                expected = expected
+                    .checked_add(u64::try_from(bytes.len()).context("raw record exceeds u64")?)
+                    .context("storage-v2 byte range overflow")?;
+            }
+            if expected != range_end {
+                anyhow::bail!("storage-v2 byte range does not end at manifest boundary");
+            }
+        }
+        "record_ordinal" => {
+            if records.len() != usize::try_from(range_end - range_start)?
+                || records
+                    .iter()
+                    .enumerate()
+                    .any(|(index, record)| record.source_position != range_start + index as u64)
+            {
+                anyhow::bail!("storage-v2 ordinal range is not contiguous");
+            }
+        }
+        _ => anyhow::bail!("storage-v2 pending envelope has an unknown range kind"),
+    }
+    let identity = EnvelopeIdentity {
+        tenant_id: envelope.tenant_id.clone(),
+        machine_id: envelope.machine_id.clone(),
+        provider: envelope.provider.clone(),
+        opaque_source_id: envelope.opaque_source_id.clone(),
+        source_epoch: Uuid::parse_str(&envelope.source_epoch)
+            .context("storage-v2 pending source epoch is invalid")?,
+        range_kind: if envelope.range_kind == "byte_offset" {
+            RangeKind::ByteOffset
+        } else {
+            RangeKind::RecordOrdinal
+        },
+        range_start,
+        range_end,
+        record_hashes: storage_v2_contract::hash_records(&raw_bytes),
+    };
+    Ok(hex_hash(storage_v2_contract::envelope_id(&identity)?))
+}
+
+fn decode_envelope_record_bytes(records: &[StorageV2Record]) -> Result<Vec<Vec<u8>>> {
+    records
+        .iter()
+        .map(|record| {
+            BASE64_STANDARD
+                .decode(&record.data_b64)
+                .context("decoding persisted storage-v2 raw record")
+        })
+        .collect()
 }
 
 fn block_source<T>(conn: &Connection, source_epoch: Uuid, kind: &str, detail: &str) -> Result<T> {
@@ -837,6 +1105,15 @@ fn persist_prepared(
     source_path: &str,
     prepared: PreparedStorageV2Envelope,
 ) -> Result<PreparedStorageV2Envelope> {
+    let candidate = pending_candidate(source_path, &prepared)?;
+    let persisted = pending_source_envelope::persist_or_load(conn, &candidate)?;
+    pending_to_prepared(persisted)
+}
+
+fn pending_candidate(
+    source_path: &str,
+    prepared: &PreparedStorageV2Envelope,
+) -> Result<PendingSourceEnvelope> {
     let request_body = serde_json::to_vec(&prepared.envelope)
         .context("serializing storage-v2 envelope before durable prepare")?;
     let media_objects = prepared
@@ -846,7 +1123,7 @@ fn persist_prepared(
         .collect::<Vec<_>>();
     let media_json = serde_json::to_vec(&media_objects)
         .context("serializing storage-v2 media before durable prepare")?;
-    let candidate = PendingSourceEnvelope::new(
+    Ok(PendingSourceEnvelope::new(
         prepared.source_epoch,
         source_path.to_string(),
         prepared.range_start,
@@ -858,9 +1135,7 @@ fn persist_prepared(
         prepared.event_count,
         prepared.has_reply_evidence,
         prepared.has_more,
-    );
-    let persisted = pending_source_envelope::persist_or_load(conn, &candidate)?;
-    pending_to_prepared(persisted)
+    ))
 }
 
 fn load_pending_for_path(
@@ -1430,7 +1705,7 @@ mod tests {
         .unwrap();
     }
 
-    async fn read_http_body(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+    async fn read_http_request(socket: &mut tokio::net::TcpStream) -> (String, Vec<u8>) {
         let mut bytes = Vec::new();
         let mut buffer = [0_u8; 4096];
         let header_end = loop {
@@ -1441,7 +1716,7 @@ mod tests {
                 break offset + 4;
             }
         };
-        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+        let headers = String::from_utf8_lossy(&bytes[..header_end]).into_owned();
         let content_length = headers
             .lines()
             .find_map(|line| {
@@ -1449,13 +1724,20 @@ mod tests {
                 name.eq_ignore_ascii_case("content-length")
                     .then(|| value.trim().parse::<usize>().unwrap())
             })
-            .unwrap();
+            .unwrap_or(0);
         while bytes.len() - header_end < content_length {
             let read = socket.read(&mut buffer).await.unwrap();
             assert!(read > 0, "request closed before body completed");
             bytes.extend_from_slice(&buffer[..read]);
         }
-        bytes[header_end..header_end + content_length].to_vec()
+        (
+            headers.lines().next().unwrap_or_default().to_string(),
+            bytes[header_end..header_end + content_length].to_vec(),
+        )
+    }
+
+    async fn read_http_body(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+        read_http_request(socket).await.1
     }
 
     fn cursor_root(ids: &[u8]) -> Vec<u8> {
@@ -1920,15 +2202,45 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let _body = read_http_body(&mut socket).await;
-            let response_body = r#"{"detail":{"code":"source_epoch_conflict","message":"range overlap","details":{}}}"#;
-            let response = format!(
-                "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                response_body.len(),
-                response_body
-            );
-            socket.write_all(response.as_bytes()).await.unwrap();
+            let mut envelope = None;
+            for request_index in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let (_request_line, body) = read_http_request(&mut socket).await;
+                let response_body = if request_index == 0 {
+                    envelope = Some(serde_json::from_slice::<StorageV2Envelope>(&body).unwrap());
+                    r#"{"detail":{"code":"source_epoch_conflict","message":"range overlap","details":{}}}"#.to_string()
+                } else {
+                    let envelope = envelope.as_ref().unwrap();
+                    serde_json::json!({
+                        "v": 2,
+                        "source_epoch": {
+                            "source_epoch": envelope.source_epoch,
+                            "tenant_id": envelope.tenant_id,
+                            "machine_id": envelope.machine_id,
+                            "provider": envelope.provider,
+                            "opaque_source_id": envelope.opaque_source_id,
+                            "range_kind": envelope.range_kind,
+                            "state": "open",
+                            "accepted_through": "0",
+                        },
+                        "objects": [],
+                        "commit_seq": "1",
+                        "observed_at": "2026-07-15T00:00:00Z",
+                    })
+                    .to_string()
+                };
+                let status = if request_index == 0 {
+                    "409 Conflict"
+                } else {
+                    "200 OK"
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
         });
 
         let dir = tempfile::tempdir().unwrap();
@@ -1997,6 +2309,153 @@ mod tests {
             1,
             "quarantined work must not attempt the network again"
         );
+    }
+
+    #[tokio::test]
+    async fn legacy_conflict_proves_hosted_prefix_and_ships_only_the_suffix() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let first_line = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n".to_vec();
+        let second_line = b"{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{\"content\":\"world\"}}\n".to_vec();
+        let prefix_end = first_line.len() as u64;
+        let server = tokio::spawn(async move {
+            let mut original: Option<StorageV2Envelope> = None;
+            for request_index in 0..3 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let (request_line, body) = read_http_request(&mut socket).await;
+                if request_index == 0 {
+                    assert!(request_line.starts_with("POST /api/agents/storage/v2/envelopes "));
+                    let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(envelope.range_start, 0);
+                    assert!(envelope.range_end > prefix_end);
+                    original = Some(envelope);
+                    let response_body = r#"{"detail":{"code":"source_epoch_conflict","message":"range overlap","details":{"reason":"range_overlap"}}}"#;
+                    let response = format!(
+                        "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response_body.len(),
+                        response_body
+                    );
+                    socket.write_all(response.as_bytes()).await.unwrap();
+                } else if request_index == 1 {
+                    assert!(request_line.starts_with("GET /api/agents/storage/v2/source-epochs/"));
+                    let envelope = original.as_ref().unwrap();
+                    let prefix_id = envelope_id_for_subrange(envelope, 0, prefix_end).unwrap();
+                    let response_body = serde_json::json!({
+                        "v": 2,
+                        "source_epoch": {
+                            "source_epoch": envelope.source_epoch,
+                            "tenant_id": envelope.tenant_id,
+                            "machine_id": envelope.machine_id,
+                            "provider": envelope.provider,
+                            "opaque_source_id": envelope.opaque_source_id,
+                            "range_kind": envelope.range_kind,
+                            "state": "open",
+                            "accepted_through": prefix_end.to_string(),
+                        },
+                        "objects": [{
+                            "envelope_id": prefix_id,
+                            "tenant_id": envelope.tenant_id,
+                            "machine_id": envelope.machine_id,
+                            "provider": envelope.provider,
+                            "opaque_source_id": envelope.opaque_source_id,
+                            "source_epoch": envelope.source_epoch,
+                            "range_kind": envelope.range_kind,
+                            "range_start": "0",
+                            "range_end": prefix_end.to_string(),
+                            "retired_at": null,
+                        }],
+                        "commit_seq": "41",
+                        "observed_at": "2026-07-15T00:00:00Z",
+                    })
+                    .to_string();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response_body.len(),
+                        response_body
+                    );
+                    socket.write_all(response.as_bytes()).await.unwrap();
+                } else {
+                    assert!(request_line.starts_with("POST /api/agents/storage/v2/envelopes "));
+                    let suffix: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                    assert_eq!(suffix.range_start, prefix_end);
+                    assert_eq!(suffix.records.len(), 1);
+                    let response_body = serde_json::json!({
+                        "v": 2,
+                        "envelope_id": suffix.expected_envelope_id,
+                        "object_hash": "b".repeat(64),
+                        "commit_seq": "42",
+                        "raw_state": "durable",
+                        "render_state": "ready",
+                        "media_state": "complete",
+                        "missing_media_hashes": [],
+                    })
+                    .to_string();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        response_body.len(),
+                        response_body
+                    );
+                    socket.write_all(response.as_bytes()).await.unwrap();
+                }
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        fs::write(
+            &path,
+            [first_line.as_slice(), second_line.as_slice()].concat(),
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let config = ShipperConfig {
+            api_url: format!("http://{address}"),
+            timeout_seconds: 5,
+            ..ShipperConfig::default()
+        };
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+
+        let reconciled = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "live",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(reconciled.bytes_shipped, prefix_end);
+        assert!(reconciled.has_more);
+        let pending = pending_source_envelope::load_for_path(
+            &conn,
+            &stable_source_path(&path).to_string_lossy(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(pending.range_start, prefix_end);
+
+        let suffix = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "live",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(!suffix.has_more);
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+        server.await.unwrap();
     }
 
     #[test]

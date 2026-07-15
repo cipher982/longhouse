@@ -14,8 +14,12 @@ use serde::Deserialize;
 
 use crate::config::ShipperConfig;
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
-use crate::shipping::storage_v2::{StorageV2Capabilities, StorageV2Envelope, StorageV2Receipt};
-use crate::shipping::storage_v2::{STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER};
+use crate::shipping::storage_v2::{
+    StorageV2Capabilities, StorageV2Envelope, StorageV2Receipt, StorageV2SourceManifest,
+};
+use crate::shipping::storage_v2::{
+    STORAGE_V2_CAPABILITIES_PATH, STORAGE_V2_LANE_HEADER, STORAGE_V2_SOURCE_EPOCHS_PATH,
+};
 
 const SHIP_TRACE_HEADER: &str = "X-Longhouse-Ship-Trace";
 const INGEST_BACKPRESSURE_HEADER: &str = "X-Ingest-Backpressure";
@@ -521,6 +525,20 @@ impl ShipperClient {
             .context("storage-v2 envelope receipt is invalid JSON")?;
         receipt.validate(expected_envelope_id)?;
         Ok(receipt)
+    }
+
+    pub async fn storage_v2_source_manifest(
+        &self,
+        source_epoch: &str,
+        after_position: u64,
+        request_timeout: Option<Duration>,
+    ) -> Result<StorageV2SourceManifest> {
+        let path = format!(
+            "{STORAGE_V2_SOURCE_EPOCHS_PATH}/{source_epoch}/manifest?after_position={after_position}&limit=1000"
+        );
+        self.get_json_with_timeout(&path, request_timeout)
+            .await
+            .context("reading storage-v2 source manifest")
     }
 
     /// Get the ingest URL (for logging).
