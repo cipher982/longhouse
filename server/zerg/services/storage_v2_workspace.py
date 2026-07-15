@@ -99,7 +99,11 @@ async def build_storage_v2_workspace(
     except (CatalogRemoteError, CatalogUnavailable) as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
     if storage.get("found") is not True:
-        session, _provider_alias, session_commit_seq = await asyncio.to_thread(read_live_catalog_session, session_id)
+        session, _provider_alias, session_commit_seq = await asyncio.to_thread(
+            read_live_catalog_session,
+            session_id,
+            owner_id=owner_id,
+        )
         if session is None or not (getattr(session, "origin_kind", None) == "console" or session.capabilities.live_control_available):
             return None
         session_json = session.model_dump(mode="json")
@@ -150,7 +154,11 @@ async def build_storage_v2_workspace(
     if not isinstance(storage_session, dict) or str(storage_session.get("owner_id")) != str(owner_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
 
-    session, _provider_alias, session_commit_seq = await asyncio.to_thread(read_live_catalog_session, session_id)
+    session, _provider_alias, session_commit_seq = await asyncio.to_thread(
+        read_live_catalog_session,
+        session_id,
+        owner_id=owner_id,
+    )
     if session is None:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session projection is unavailable.")
     page = await read_storage_v2_session_events_page(

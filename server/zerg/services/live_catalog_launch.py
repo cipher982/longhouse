@@ -12,6 +12,7 @@ from uuid import uuid4
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
+from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
 from zerg.models.live_store import LiveSessionLaunchAttempt
@@ -63,6 +64,21 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
             updated_at=started_at,
         )
         db.add(session)
+    live_session = db.get(LiveSession, session_id)
+    if live_session is None:
+        db.add(
+            LiveSession(
+                session_id=session_id,
+                owner_id=str(data["owner_id"]),
+                provider=provider,
+                device_id=device_id,
+                machine_id=device_id,
+                state="idle",
+                started_at=started_at,
+                last_seen_at=started_at,
+                updated_at=started_at,
+            )
+        )
     thread = db.get(LiveSessionThread, thread_id)
     if thread is None:
         db.add(

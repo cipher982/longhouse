@@ -3478,9 +3478,20 @@ class CatalogStore:
                 "has_real_sessions": has_real_sessions,
             }
 
-    def read_session(self, *, session_id: str) -> dict[str, Any]:
+    def read_session(self, *, session_id: str, owner_id: int | None = None) -> dict[str, Any]:
         observed_at = datetime.now(UTC)
         with _read_snapshot(self.engine) as connection:
+            if owner_id is not None and not self._session_belongs_to_owner(
+                connection,
+                session_id=session_id,
+                owner_id=owner_id,
+            ):
+                return {
+                    "commit_seq": str(_current_commit_seq(connection)),
+                    "observed_at": observed_at.isoformat(),
+                    "found": False,
+                    "facts": None,
+                }
             facts = _assemble_session_facts(
                 connection,
                 session_ids=[session_id],

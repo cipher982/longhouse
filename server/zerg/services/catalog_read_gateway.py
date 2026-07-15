@@ -30,8 +30,11 @@ def timeline_snapshot(params: dict[str, Any]) -> dict[str, Any]:
     return _call("session.timeline.list.v2", params)
 
 
-def session_snapshot(session_id: str) -> dict[str, Any]:
-    return _call("session.read.v2", {"session_id": session_id})
+def session_snapshot(session_id: str, *, owner_id: int | None = None) -> dict[str, Any]:
+    params: dict[str, Any] = {"session_id": session_id}
+    if owner_id is not None:
+        params["owner_id"] = owner_id
+    return _call("session.read.v2", params)
 
 
 def session_batch_snapshot(session_ids: list[str]) -> dict[str, Any]:

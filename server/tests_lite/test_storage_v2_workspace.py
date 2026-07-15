@@ -3,11 +3,13 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.orm import Session
 
 import zerg.services.session_workspace as session_workspace_module
 import zerg.services.storage_v2_workspace as workspace_module
 from zerg.catalogd.schema import create_catalog_engine, initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
+from zerg.models.live_store import LiveUser
 
 
 class _Catalog:
@@ -141,6 +143,14 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
     engine = create_catalog_engine(tmp_path / "empty-console-read-after-write.db")
     initialize_catalog_schema(engine)
     store = CatalogStore(engine)
+    with Session(engine) as db:
+        db.add_all(
+            [
+                LiveUser(id=1, email="owner@example.com", is_active=True),
+                LiveUser(id=42, email="other@example.com", is_active=True),
+            ]
+        )
+        db.commit()
     store.create_console_session(
         data={
             "session_id": str(session_id),
@@ -162,11 +172,14 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
             return {"found": False, "deleted": False}
 
     monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: ArchiveNotMaterialized())
-    monkeypatch.setattr("zerg.services.live_catalog_timeline.session_snapshot", lambda candidate: store.read_session(session_id=candidate))
+    monkeypatch.setattr(
+        "zerg.services.live_catalog_timeline.session_snapshot",
+        lambda candidate, *, owner_id=None: store.read_session(session_id=candidate, owner_id=owner_id),
+    )
 
     result = await workspace_module.build_storage_v2_workspace(
         session_id=session_id,
-        owner_id=42,
+        owner_id=1,
         branch_mode="head",
         limit=50,
     )
@@ -176,3 +189,13 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
     assert result["session"]["origin_kind"] == "console"
     assert result["projection"]["items"] == []
     assert result["projection"]["total"] == 0
+
+    assert (
+        await workspace_module.build_storage_v2_workspace(
+            session_id=session_id,
+            owner_id=42,
+            branch_mode="head",
+            limit=50,
+        )
+        is None
+    )

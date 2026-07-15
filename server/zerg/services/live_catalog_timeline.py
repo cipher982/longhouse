@@ -445,10 +445,10 @@ def project_catalog_sessions_snapshot(snapshot: dict[str, Any]) -> SessionsListR
     )
 
 
-def read_live_catalog_session(session_id: UUID) -> tuple[SessionResponse | None, str | None, str]:
+def read_live_catalog_session(session_id: UUID, *, owner_id: int | None = None) -> tuple[SessionResponse | None, str | None, str]:
     """Read one session shell and its provider alias from one catalog snapshot."""
 
-    snapshot = session_snapshot(str(session_id))
+    snapshot = session_snapshot(str(session_id), owner_id=owner_id) if owner_id is not None else session_snapshot(str(session_id))
     commit_seq = str(snapshot.get("commit_seq") or "0")
     if snapshot.get("found") is not True:
         return None, None, commit_seq

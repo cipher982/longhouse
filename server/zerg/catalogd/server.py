@@ -1683,8 +1683,8 @@ class CatalogDaemon:
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
-        if set(request.params) != {"session_id"}:
-            return self._error(request, "invalid_request", "session.read.v2 requires session_id")
+        if set(request.params) not in ({"session_id"}, {"session_id", "owner_id"}):
+            return self._error(request, "invalid_request", "session.read.v2 requires session_id and optional owner_id")
         session_id = request.params["session_id"]
         try:
             parsed = uuid.UUID(session_id) if isinstance(session_id, str) else None
@@ -1693,7 +1693,10 @@ class CatalogDaemon:
         if parsed is None or str(parsed) != session_id:
             return self._error(request, "invalid_request", "session_id must be a canonical UUID")
         assert self._store is not None
-        result = await self._run_store(self._store.read_session, session_id=session_id)
+        owner_id = request.params.get("owner_id")
+        if owner_id is not None and (type(owner_id) is not int or owner_id <= 0):
+            return self._error(request, "invalid_request", "owner_id must be a positive integer")
+        result = await self._run_store(self._store.read_session, session_id=session_id, owner_id=owner_id)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _read_sessions(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
