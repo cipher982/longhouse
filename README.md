@@ -8,7 +8,7 @@ Loca rust daemon monitors and parses all the coding agent transcript and session
 
 ## Why
 
-If you run coding agents often it gets messy quick across the terminal tabs and transcripts. Today that history is scattered across `~/.claude`, terminal scrollback, and one local log dir per tool.
+If you run coding agents often it gets messy quick across the terminal tabs and transcripts. Today that history is scattered across `~/.claude`, terminal scrollback, or one local log dir per tool.
 
 Longhouse fixes that:
 
