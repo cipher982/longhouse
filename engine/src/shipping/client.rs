@@ -423,6 +423,7 @@ impl ShipperClient {
         Ok(Some(capabilities))
     }
 
+    #[allow(dead_code)] // Kept as the typed convenience boundary for callers/tests.
     pub async fn ship_storage_v2_envelope(
         &self,
         ingest_path: &str,
@@ -430,11 +431,31 @@ impl ShipperClient {
         envelope: &StorageV2Envelope,
         request_timeout: Option<Duration>,
     ) -> Result<StorageV2Receipt> {
+        let body = serde_json::to_vec(envelope).context("serializing storage-v2 envelope")?;
+        self.ship_storage_v2_body(
+            ingest_path,
+            lane,
+            body,
+            &envelope.expected_envelope_id,
+            request_timeout,
+        )
+        .await
+    }
+
+    /// Ship a previously persisted storage-v2 request body without
+    /// reserializing it. Ambiguous outcomes must retry these exact bytes.
+    pub async fn ship_storage_v2_body(
+        &self,
+        ingest_path: &str,
+        lane: &str,
+        body: Vec<u8>,
+        expected_envelope_id: &str,
+        request_timeout: Option<Duration>,
+    ) -> Result<StorageV2Receipt> {
         if lane != "live" && lane != "repair" {
             anyhow::bail!("storage-v2 lane must be live or repair");
         }
         let url = self.ingest_url.replace("/api/agents/ingest", ingest_path);
-        let body = serde_json::to_vec(envelope).context("serializing storage-v2 envelope")?;
         let mut request = self
             .client
             .post(&url)
@@ -464,7 +485,7 @@ impl ShipperClient {
             .json::<StorageV2Receipt>()
             .await
             .context("storage-v2 envelope receipt is invalid JSON")?;
-        receipt.validate(&envelope.expected_envelope_id)?;
+        receipt.validate(expected_envelope_id)?;
         Ok(receipt)
     }
 

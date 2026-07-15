@@ -172,6 +172,24 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
         );
 
+        CREATE TABLE IF NOT EXISTS pending_source_envelope (
+            source_epoch TEXT PRIMARY KEY,
+            source_path TEXT NOT NULL,
+            range_start INTEGER NOT NULL,
+            range_end INTEGER NOT NULL,
+            envelope_id TEXT NOT NULL,
+            request_body_zstd BLOB NOT NULL,
+            media_objects_zstd BLOB NOT NULL,
+            raw_bytes INTEGER NOT NULL,
+            event_count INTEGER NOT NULL,
+            has_reply_evidence INTEGER NOT NULL,
+            has_more INTEGER NOT NULL,
+            created_at TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            last_attempt_at TEXT,
+            FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
+        );
+
         CREATE TABLE IF NOT EXISTS cursor_store_root_state (
             conversation_uuid TEXT PRIMARY KEY,
             root_blob_id TEXT NOT NULL,
@@ -268,7 +286,10 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
          WHERE ended_at IS NULL;
 
          CREATE INDEX IF NOT EXISTS idx_source_epoch_incarnation
-         ON source_epoch_registry(provider, opaque_source_id, file_incarnation, created_at DESC);",
+         ON source_epoch_registry(provider, opaque_source_id, file_incarnation, created_at DESC);
+
+         CREATE INDEX IF NOT EXISTS idx_pending_source_envelope_path
+         ON pending_source_envelope(source_path, created_at);",
     )?;
 
     tracing::debug!("Opened shipper DB: {}", path.display());

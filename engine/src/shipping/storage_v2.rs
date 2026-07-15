@@ -59,13 +59,13 @@ impl StorageV2Capabilities {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StorageV2Record {
     pub source_position: u64,
     pub data_b64: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StorageV2MediaRef {
     pub sha256: String,
     pub source_position: u64,
@@ -73,7 +73,7 @@ pub struct StorageV2MediaRef {
     pub availability: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StorageV2SessionFacts {
     pub environment: String,
     pub project: Option<String>,
@@ -89,7 +89,7 @@ pub struct StorageV2SessionFacts {
     pub launch_surface: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StorageV2RenderRecord {
     pub event_id: String,
     pub order_time_us: i64,
@@ -106,7 +106,7 @@ pub struct StorageV2RenderRecord {
     pub raw_record_ordinal: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StorageV2Render {
     pub generation_id: String,
     pub parser_revision: String,
@@ -114,7 +114,7 @@ pub struct StorageV2Render {
     pub records: Vec<StorageV2RenderRecord>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct StorageV2Envelope {
     pub protocol_version: u8,
     pub tenant_id: String,

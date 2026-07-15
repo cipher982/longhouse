@@ -1,6 +1,7 @@
 //! Parser-independent raw + parser-versioned render shipping for storage-v2.
 
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::path::Path;
 use std::time::Duration;
 
@@ -9,6 +10,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -29,6 +31,7 @@ use crate::state::cursor_store_records;
 use crate::state::cursor_store_root;
 use crate::state::file_identity::{cursor_fingerprint, identity_from_metadata};
 use crate::state::file_state::FileState;
+use crate::state::pending_source_envelope::{self, PendingSourceEnvelope};
 use crate::state::source_epoch::{self, SourceChangeHint, SourceEpochResolution, SourceLane};
 use crate::storage_v2_contract::{self, EnvelopeIdentity, RangeKind};
 
@@ -54,6 +57,17 @@ pub(crate) struct StorageV2ShipOutcome {
     pub has_more: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistedMediaObject {
+    source_offset: u64,
+    sha256: String,
+    mime_type: String,
+    byte_size: usize,
+    original_chars: usize,
+    original_line_sha256: String,
+    data_b64: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 #[error("storage-v2 source preparation failed: {source:#}")]
 pub(crate) struct StorageV2PreparationError {
@@ -74,6 +88,9 @@ pub(crate) fn prepare_next_envelope(
 ) -> Result<Option<PreparedStorageV2Envelope>> {
     let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let path_text = canonical_path.to_string_lossy();
+    if let Some(pending) = load_pending_for_path(conn, &path_text)? {
+        return Ok(Some(pending));
+    }
     let durable_session_id = match session_id_override {
         Some(value) => Some(value.to_string()),
         None => crate::state::session_binding::SessionBinding::new(conn).get(&path_text)?,
@@ -175,7 +192,7 @@ pub(crate) fn prepare_next_envelope(
         })
         .cloned()
         .collect::<Vec<_>>();
-    Ok(Some(PreparedStorageV2Envelope {
+    let prepared = PreparedStorageV2Envelope {
         envelope: StorageV2Envelope {
             protocol_version: 2,
             tenant_id: capabilities.tenant_id.clone(),
@@ -225,7 +242,8 @@ pub(crate) fn prepare_next_envelope(
         raw_bytes: raw_batch.range_end - raw_batch.range_start,
         has_more: raw_batch.range_end < source_len,
         media_objects,
-    }))
+    };
+    persist_prepared(conn, &path_text, prepared).map(Some)
 }
 
 pub(crate) async fn ship_next_envelope(
@@ -261,6 +279,18 @@ pub(crate) async fn ship_prepared_envelope(
     lane: &str,
     request_timeout: Duration,
 ) -> Result<StorageV2ShipOutcome> {
+    let pending = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
+        .context("prepared storage-v2 envelope is not durable")?;
+    validate_pending_matches_prepared(&pending, &prepared)?;
+    if prepared.envelope.tenant_id != capabilities.tenant_id
+        || prepared.envelope.machine_id != capabilities.machine_id
+    {
+        anyhow::bail!(
+            "durable storage-v2 envelope target does not match current Runtime Host capabilities"
+        );
+    }
+    let was_retry = pending.attempt_count > 0;
+    pending_source_envelope::mark_attempt(conn, prepared.source_epoch)?;
     crate::media_upload::ensure_storage_v2_media_uploaded(
         client,
         capabilities,
@@ -269,25 +299,26 @@ pub(crate) async fn ship_prepared_envelope(
         Some(request_timeout),
     )
     .await?;
-    client
-        .ship_storage_v2_envelope(
+    let receipt = client
+        .ship_storage_v2_body(
             &capabilities.ingest_path,
             lane,
-            &prepared.envelope,
+            decode_zstd(&pending.request_body_zstd, "storage-v2 request body")?,
+            &pending.envelope_id,
             Some(request_timeout),
         )
         .await?;
-    source_epoch::acknowledge_position(
+    pending_source_envelope::acknowledge_and_delete(
         conn,
         prepared.source_epoch,
-        SourceLane::Durable,
+        &receipt.envelope_id,
         prepared.range_start,
         prepared.range_end,
     )?;
     Ok(StorageV2ShipOutcome {
         bytes_shipped: prepared.raw_bytes,
         events_shipped: prepared.event_count,
-        has_more: prepared.has_more,
+        has_more: prepared.has_more || was_retry,
     })
 }
 
@@ -298,6 +329,9 @@ pub(crate) fn prepare_next_opencode_envelope(
 ) -> Result<Option<PreparedStorageV2Envelope>> {
     let canonical_path = std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf());
     let path_text = canonical_path.to_string_lossy();
+    if let Some(pending) = load_pending_for_path(conn, &path_text)? {
+        return Ok(Some(pending));
+    }
     let mut page_offset = 0usize;
     loop {
         let candidates = opencode_db::list_opencode_sessions_page(
@@ -384,7 +418,7 @@ pub(crate) fn prepare_next_opencode_envelope(
                 range_start,
                 range_end,
             )?;
-            return Ok(Some(PreparedStorageV2Envelope {
+            let prepared = PreparedStorageV2Envelope {
                 envelope: StorageV2Envelope {
                     protocol_version: 2,
                     tenant_id: capabilities.tenant_id.clone(),
@@ -431,7 +465,8 @@ pub(crate) fn prepare_next_opencode_envelope(
                     || candidate_index + 1 < candidates.len()
                     || candidates.len() == OPENCODE_SESSION_PAGE_SIZE,
                 media_objects,
-            }));
+            };
+            return persist_prepared(conn, &path_text, prepared).map(Some);
         }
         page_offset = page_offset.saturating_add(candidates.len());
     }
@@ -442,6 +477,11 @@ pub(crate) fn prepare_next_cursor_envelope(
     capabilities: &StorageV2Capabilities,
     db_path: &Path,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
+    let canonical_path = std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf());
+    let path_text = canonical_path.to_string_lossy();
+    if let Some(pending) = load_pending_for_path(conn, &path_text)? {
+        return Ok(Some(pending));
+    }
     let snapshot = cursor_store::cursor_store_raw_snapshot(db_path)?;
     let claimed_session_id = crate::cursor_launch_binding::managed_session_id_for_conversation(
         &snapshot.conversation_uuid,
@@ -563,7 +603,7 @@ pub(crate) fn prepare_next_cursor_envelope(
     let observed_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
         .expect("source epoch opened_at is generated internally")
         .with_timezone(&Utc);
-    Ok(Some(PreparedStorageV2Envelope {
+    let prepared = PreparedStorageV2Envelope {
         envelope: StorageV2Envelope {
             protocol_version: 2,
             tenant_id: capabilities.tenant_id.clone(),
@@ -610,7 +650,8 @@ pub(crate) fn prepare_next_cursor_envelope(
         raw_bytes,
         has_more: range_end < logical_len,
         media_objects: Vec::new(),
-    }))
+    };
+    persist_prepared(conn, &path_text, prepared).map(Some)
 }
 
 pub(crate) fn prepare_next_cursor_acp_envelope(
@@ -618,6 +659,11 @@ pub(crate) fn prepare_next_cursor_acp_envelope(
     capabilities: &StorageV2Capabilities,
     path: &Path,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
+    let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let path_text = canonical_path.to_string_lossy();
+    if let Some(pending) = load_pending_for_path(conn, &path_text)? {
+        return Ok(Some(pending));
+    }
     let session_id = path
         .parent()
         .and_then(Path::file_name)
@@ -676,7 +722,7 @@ pub(crate) fn prepare_next_cursor_acp_envelope(
     let observed_at = DateTime::parse_from_rfc3339(&resolution.opened_at)
         .expect("source epoch opened_at is generated internally")
         .with_timezone(&Utc);
-    Ok(Some(PreparedStorageV2Envelope {
+    let prepared = PreparedStorageV2Envelope {
         envelope: StorageV2Envelope {
             protocol_version: 2,
             tenant_id: capabilities.tenant_id.clone(),
@@ -724,7 +770,136 @@ pub(crate) fn prepare_next_cursor_acp_envelope(
         raw_bytes: batch.range_end - batch.range_start,
         has_more: batch.range_end < source_len,
         media_objects: Vec::new(),
-    }))
+    };
+    persist_prepared(conn, &path_text, prepared).map(Some)
+}
+
+fn persist_prepared(
+    conn: &mut Connection,
+    source_path: &str,
+    prepared: PreparedStorageV2Envelope,
+) -> Result<PreparedStorageV2Envelope> {
+    let request_body = serde_json::to_vec(&prepared.envelope)
+        .context("serializing storage-v2 envelope before durable prepare")?;
+    let media_objects = prepared
+        .media_objects
+        .iter()
+        .map(PersistedMediaObject::from)
+        .collect::<Vec<_>>();
+    let media_json = serde_json::to_vec(&media_objects)
+        .context("serializing storage-v2 media before durable prepare")?;
+    let candidate = PendingSourceEnvelope::new(
+        prepared.source_epoch,
+        source_path.to_string(),
+        prepared.range_start,
+        prepared.range_end,
+        prepared.envelope.expected_envelope_id.clone(),
+        encode_zstd(&request_body, "storage-v2 request body")?,
+        encode_zstd(&media_json, "storage-v2 media")?,
+        prepared.raw_bytes,
+        prepared.event_count,
+        prepared.has_reply_evidence,
+        prepared.has_more,
+    );
+    let persisted = pending_source_envelope::persist_or_load(conn, &candidate)?;
+    pending_to_prepared(persisted)
+}
+
+fn load_pending_for_path(
+    conn: &Connection,
+    source_path: &str,
+) -> Result<Option<PreparedStorageV2Envelope>> {
+    pending_source_envelope::load_for_path(conn, source_path)?
+        .map(pending_to_prepared)
+        .transpose()
+}
+
+fn pending_to_prepared(pending: PendingSourceEnvelope) -> Result<PreparedStorageV2Envelope> {
+    let request_body = decode_zstd(&pending.request_body_zstd, "storage-v2 request body")?;
+    let envelope: StorageV2Envelope = serde_json::from_slice(&request_body)
+        .context("decoding durable storage-v2 request body")?;
+    let media_json = decode_zstd(&pending.media_objects_zstd, "storage-v2 media")?;
+    let media_objects = serde_json::from_slice::<Vec<PersistedMediaObject>>(&media_json)
+        .context("decoding durable storage-v2 media")?
+        .into_iter()
+        .map(ParsedMediaObject::try_from)
+        .collect::<Result<Vec<_>>>()?;
+    let prepared = PreparedStorageV2Envelope {
+        envelope,
+        source_epoch: pending.source_epoch,
+        range_start: pending.range_start,
+        range_end: pending.range_end,
+        event_count: pending.event_count,
+        has_reply_evidence: pending.has_reply_evidence,
+        raw_bytes: pending.raw_bytes,
+        has_more: pending.has_more,
+        media_objects,
+    };
+    validate_pending_matches_prepared(&pending, &prepared)?;
+    Ok(prepared)
+}
+
+fn validate_pending_matches_prepared(
+    pending: &PendingSourceEnvelope,
+    prepared: &PreparedStorageV2Envelope,
+) -> Result<()> {
+    if prepared.source_epoch != pending.source_epoch
+        || prepared.envelope.source_epoch != pending.source_epoch.to_string()
+        || prepared.range_start != pending.range_start
+        || prepared.range_end != pending.range_end
+        || prepared.envelope.range_start != pending.range_start
+        || prepared.envelope.range_end != pending.range_end
+        || prepared.envelope.expected_envelope_id != pending.envelope_id
+    {
+        anyhow::bail!("durable storage-v2 envelope metadata does not match its request body");
+    }
+    Ok(())
+}
+
+fn encode_zstd(bytes: &[u8], label: &str) -> Result<Vec<u8>> {
+    zstd::stream::encode_all(Cursor::new(bytes), 1)
+        .with_context(|| format!("compressing durable {label}"))
+}
+
+fn decode_zstd(bytes: &[u8], label: &str) -> Result<Vec<u8>> {
+    zstd::stream::decode_all(Cursor::new(bytes))
+        .with_context(|| format!("decompressing durable {label}"))
+}
+
+impl From<&ParsedMediaObject> for PersistedMediaObject {
+    fn from(media: &ParsedMediaObject) -> Self {
+        Self {
+            source_offset: media.source_offset,
+            sha256: media.sha256.clone(),
+            mime_type: media.mime_type.clone(),
+            byte_size: media.byte_size,
+            original_chars: media.original_chars,
+            original_line_sha256: media.original_line_sha256.clone(),
+            data_b64: BASE64_STANDARD.encode(&media.bytes),
+        }
+    }
+}
+
+impl TryFrom<PersistedMediaObject> for ParsedMediaObject {
+    type Error = anyhow::Error;
+
+    fn try_from(media: PersistedMediaObject) -> Result<Self> {
+        let bytes = BASE64_STANDARD
+            .decode(&media.data_b64)
+            .context("decoding durable storage-v2 media bytes")?;
+        if bytes.len() != media.byte_size {
+            anyhow::bail!("durable storage-v2 media byte size changed");
+        }
+        Ok(Self {
+            source_offset: media.source_offset,
+            sha256: media.sha256,
+            mime_type: media.mime_type,
+            byte_size: media.byte_size,
+            original_chars: media.original_chars,
+            original_line_sha256: media.original_line_sha256,
+            bytes,
+        })
+    }
 }
 
 fn validated_legacy_offset(conn: &Connection, path_text: &str, path: &Path) -> Result<u64> {
@@ -770,34 +945,9 @@ pub(crate) async fn ship_next_opencode_envelope(
     else {
         return Ok(None);
     };
-    crate::media_upload::ensure_storage_v2_media_uploaded(
-        client,
-        capabilities,
-        &prepared.media_objects,
-        lane,
-        Some(request_timeout),
-    )
-    .await?;
-    client
-        .ship_storage_v2_envelope(
-            &capabilities.ingest_path,
-            lane,
-            &prepared.envelope,
-            Some(request_timeout),
-        )
-        .await?;
-    source_epoch::acknowledge_position(
-        conn,
-        prepared.source_epoch,
-        SourceLane::Durable,
-        prepared.range_start,
-        prepared.range_end,
-    )?;
-    Ok(Some(StorageV2ShipOutcome {
-        bytes_shipped: prepared.raw_bytes,
-        events_shipped: prepared.event_count,
-        has_more: prepared.has_more,
-    }))
+    ship_prepared_envelope(conn, client, capabilities, prepared, lane, request_timeout)
+        .await
+        .map(Some)
 }
 
 pub(crate) async fn ship_next_cursor_envelope(
@@ -1178,6 +1328,45 @@ mod tests {
         }
     }
 
+    fn acknowledge_prepared(conn: &mut Connection, prepared: &PreparedStorageV2Envelope) {
+        pending_source_envelope::acknowledge_and_delete(
+            conn,
+            prepared.source_epoch,
+            &prepared.envelope.expected_envelope_id,
+            prepared.range_start,
+            prepared.range_end,
+        )
+        .unwrap();
+    }
+
+    async fn read_http_body(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let header_end = loop {
+            let read = socket.read(&mut buffer).await.unwrap();
+            assert!(read > 0, "request closed before headers completed");
+            bytes.extend_from_slice(&buffer[..read]);
+            if let Some(offset) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                break offset + 4;
+            }
+        };
+        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap();
+        while bytes.len() - header_end < content_length {
+            let read = socket.read(&mut buffer).await.unwrap();
+            assert!(read > 0, "request closed before body completed");
+            bytes.extend_from_slice(&buffer[..read]);
+        }
+        bytes[header_end..header_end + content_length].to_vec()
+    }
+
     fn cursor_root(ids: &[u8]) -> Vec<u8> {
         let mut root = Vec::new();
         for id in ids.chunks_exact(32) {
@@ -1266,14 +1455,7 @@ mod tests {
             source_epoch::lane_position(&conn, first.source_epoch, SourceLane::Durable).unwrap(),
             0,
         );
-        source_epoch::acknowledge_position(
-            &mut conn,
-            first.source_epoch,
-            SourceLane::Durable,
-            first.range_start,
-            first.range_end,
-        )
-        .unwrap();
+        acknowledge_prepared(&mut conn, &first);
         assert!(
             prepare_next_cursor_acp_envelope(&mut conn, &capabilities(), &path)
                 .unwrap()
@@ -1302,14 +1484,7 @@ mod tests {
             let raw: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
             raw["kind"] == "meta" && raw["meta_key"] == "unknown"
         }));
-        source_epoch::acknowledge_position(
-            &mut conn,
-            first.source_epoch,
-            SourceLane::Durable,
-            first.range_start,
-            first.range_end,
-        )
-        .unwrap();
+        acknowledge_prepared(&mut conn, &first);
 
         let mut extended_root = vec![0xbb; 32];
         extended_root.extend_from_slice(&[0xdd; 32]);
@@ -1324,14 +1499,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(extension.source_epoch, first.source_epoch);
-        source_epoch::acknowledge_position(
-            &mut conn,
-            extension.source_epoch,
-            SourceLane::Durable,
-            extension.range_start,
-            extension.range_end,
-        )
-        .unwrap();
+        acknowledge_prepared(&mut conn, &extension);
 
         set_cursor_root(&store, CURSOR_ROOT_C, &[0xff; 32]);
         store
@@ -1402,6 +1570,215 @@ mod tests {
             source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn durable_prepare_survives_source_growth_restart_and_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let db_path = dir.path().join("state.db");
+        let first_line = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+        let second_line = b"{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":\"2026-07-12T12:01:00Z\",\"message\":{\"content\":\"later\"}}\n";
+        fs::write(&path, first_line).unwrap();
+        let mut conn = open_db(Some(&db_path)).unwrap();
+
+        let first = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        let persisted_first = pending_source_envelope::load_for_epoch(&conn, first.source_epoch)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 1);
+
+        fs::write(
+            &path,
+            [first_line.as_slice(), second_line.as_slice()].concat(),
+        )
+        .unwrap();
+        drop(conn);
+        let mut conn = open_db(Some(&db_path)).unwrap();
+        let after_growth = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        let persisted_after_growth =
+            pending_source_envelope::load_for_epoch(&conn, first.source_epoch)
+                .unwrap()
+                .unwrap();
+        assert_eq!(after_growth.source_epoch, first.source_epoch);
+        assert_eq!(after_growth.range_end, first_line.len() as u64);
+        assert_eq!(
+            after_growth.envelope.expected_envelope_id,
+            first.envelope.expected_envelope_id
+        );
+        assert_eq!(
+            persisted_after_growth.request_body_zstd,
+            persisted_first.request_body_zstd
+        );
+
+        fs::remove_file(&path).unwrap();
+        drop(conn);
+        let mut conn = open_db(Some(&db_path)).unwrap();
+        let after_deletion =
+            prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            after_deletion.envelope.expected_envelope_id,
+            first.envelope.expected_envelope_id
+        );
+        assert_eq!(
+            serde_json::to_vec(&after_deletion.envelope.records).unwrap(),
+            serde_json::to_vec(&first.envelope.records).unwrap()
+        );
+    }
+
+    #[test]
+    fn receipt_acknowledgement_updates_cursor_and_deletes_intent_atomically() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n",
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+
+        let error = pending_source_envelope::acknowledge_and_delete(
+            &mut conn,
+            prepared.source_epoch,
+            &"f".repeat(64),
+            prepared.range_start,
+            prepared.range_end,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("does not match the durable pending envelope"));
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            0
+        );
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 1);
+
+        acknowledge_prepared(&mut conn, &prepared);
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            prepared.range_end
+        );
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn lost_receipt_retries_identical_body_after_source_growth() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let bodies = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+        let server_bodies = bodies.clone();
+        let server = tokio::spawn(async move {
+            for attempt in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let body = read_http_body(&mut socket).await;
+                server_bodies.lock().unwrap().push(body.clone());
+                if attempt == 0 {
+                    drop(socket);
+                    continue;
+                }
+                let envelope: StorageV2Envelope = serde_json::from_slice(&body).unwrap();
+                let response_body = serde_json::json!({
+                    "v": 2,
+                    "envelope_id": envelope.expected_envelope_id,
+                    "object_hash": "b".repeat(64),
+                    "commit_seq": "42",
+                    "raw_state": "durable",
+                    "render_state": "ready",
+                    "media_state": "complete",
+                    "missing_media_hashes": [],
+                })
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let first_line = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+        let second_line = b"{\"type\":\"user\",\"uuid\":\"u2\",\"timestamp\":\"2026-07-12T12:01:00Z\",\"message\":{\"content\":\"later\"}}\n";
+        fs::write(&path, first_line).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let config = ShipperConfig {
+            api_url: format!("http://{address}"),
+            timeout_seconds: 5,
+            ..ShipperConfig::default()
+        };
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+
+        let first = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "live",
+            Duration::from_secs(5),
+        )
+        .await;
+        assert!(first.is_err());
+        fs::write(
+            &path,
+            [first_line.as_slice(), second_line.as_slice()].concat(),
+        )
+        .unwrap();
+
+        let second = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "live",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(
+            second.has_more,
+            "a successful retry must rescan source growth"
+        );
+        server.await.unwrap();
+
+        let observed = bodies.lock().unwrap();
+        assert_eq!(observed.len(), 2);
+        assert_eq!(observed[0], observed[1]);
+        let envelope: StorageV2Envelope = serde_json::from_slice(&observed[1]).unwrap();
+        assert_eq!(envelope.range_start, 0);
+        assert_eq!(envelope.range_end, first_line.len() as u64);
+        assert_eq!(
+            source_epoch::lane_position(
+                &conn,
+                Uuid::parse_str(&envelope.source_epoch).unwrap(),
+                SourceLane::Durable,
+            )
+            .unwrap(),
+            first_line.len() as u64
+        );
+        assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
     }
 
     #[test]
@@ -1721,14 +2098,7 @@ mod tests {
             source_epoch::lane_position(&conn, first.source_epoch, SourceLane::Durable).unwrap(),
             0
         );
-        source_epoch::acknowledge_position(
-            &mut conn,
-            first.source_epoch,
-            SourceLane::Durable,
-            first.range_start,
-            first.range_end,
-        )
-        .unwrap();
+        acknowledge_prepared(&mut conn, &first);
 
         let provider = Connection::open(&db_path).unwrap();
         provider
@@ -1790,14 +2160,7 @@ mod tests {
             prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path).unwrap()
         {
             shipped_sources.insert(prepared.envelope.opaque_source_id.clone());
-            source_epoch::acknowledge_position(
-                &mut conn,
-                prepared.source_epoch,
-                SourceLane::Durable,
-                prepared.range_start,
-                prepared.range_end,
-            )
-            .unwrap();
+            acknowledge_prepared(&mut conn, &prepared);
         }
         assert_eq!(shipped_sources.len(), 65);
     }
