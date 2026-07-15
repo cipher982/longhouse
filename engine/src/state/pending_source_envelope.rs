@@ -80,6 +80,32 @@ pub fn load_for_path(
     .context("loading pending storage-v2 envelope by source path")
 }
 
+pub fn load_for_source(
+    conn: &Connection,
+    provider: &str,
+    opaque_source_id: &str,
+) -> Result<Option<PendingSourceEnvelope>> {
+    conn.query_row(
+        "SELECT pending.source_epoch, pending.source_path, pending.range_start,
+                pending.range_end, pending.envelope_id,
+                pending.request_body_zstd, pending.media_objects_zstd,
+                pending.raw_bytes, pending.event_count,
+                pending.has_reply_evidence, pending.has_more,
+                pending.created_at, pending.attempt_count,
+                pending.last_attempt_at
+         FROM pending_source_envelope AS pending
+         JOIN source_epoch_registry AS epoch
+           ON epoch.source_epoch = pending.source_epoch
+         WHERE epoch.provider = ?1 AND epoch.opaque_source_id = ?2
+         ORDER BY pending.created_at, pending.source_epoch
+         LIMIT 1",
+        params![provider, opaque_source_id],
+        row_to_pending,
+    )
+    .optional()
+    .context("loading pending storage-v2 envelope by source identity")
+}
+
 pub fn load_for_epoch(
     conn: &Connection,
     source_epoch: Uuid,
@@ -158,6 +184,21 @@ pub fn mark_attempt(conn: &Connection, source_epoch: Uuid) -> Result<()> {
     Ok(())
 }
 
+/// Remove an intent that was prepared for a product gate but never sent.
+/// Once an attempt starts, exact retry remains authoritative and cannot be
+/// discarded by a later caller.
+pub fn discard_unattempted(
+    conn: &Connection,
+    source_epoch: Uuid,
+    envelope_id: &str,
+) -> Result<bool> {
+    Ok(conn.execute(
+        "DELETE FROM pending_source_envelope
+         WHERE source_epoch = ?1 AND envelope_id = ?2 AND attempt_count = 0",
+        params![source_epoch.to_string(), envelope_id],
+    )? == 1)
+}
+
 /// Advance the durable cursor and forget the exact retry in one transaction.
 pub fn acknowledge_and_delete(
     conn: &mut Connection,
@@ -170,21 +211,36 @@ pub fn acknowledge_and_delete(
         bail!("source epoch acknowledgement cannot move backward");
     }
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let pending_matches: bool = tx.query_row(
-        "SELECT EXISTS(
-            SELECT 1 FROM pending_source_envelope
-            WHERE source_epoch = ?1 AND envelope_id = ?2
-              AND range_start = ?3 AND range_end = ?4
-         )",
-        params![
-            source_epoch.to_string(),
-            expected_envelope_id,
-            to_sql_u64(expected_start)?,
-            to_sql_u64(acknowledged_through)?,
-        ],
-        |row| row.get(0),
-    )?;
-    if !pending_matches {
+    let pending_matches = tx
+        .query_row(
+            "SELECT envelope_id = ?2 AND range_start = ?3 AND range_end = ?4
+             FROM pending_source_envelope
+             WHERE source_epoch = ?1",
+            params![
+                source_epoch.to_string(),
+                expected_envelope_id,
+                to_sql_u64(expected_start)?,
+                to_sql_u64(acknowledged_through)?,
+            ],
+            |row| row.get::<_, bool>(0),
+        )
+        .optional()?;
+    if pending_matches.is_none() {
+        let cursor: Option<i64> = tx
+            .query_row(
+                "SELECT last_position FROM source_epoch_lane_state
+                 WHERE source_epoch = ?1 AND lane = 'durable'",
+                [source_epoch.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if cursor == Some(to_sql_u64(acknowledged_through)?) {
+            tx.commit()?;
+            return Ok(());
+        }
+        bail!("storage-v2 receipt has no matching pending envelope or acknowledged cursor");
+    }
+    if pending_matches == Some(false) {
         bail!("storage-v2 receipt does not match the durable pending envelope");
     }
     let changed = tx.execute(

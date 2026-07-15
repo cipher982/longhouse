@@ -135,7 +135,16 @@ async fn ship_path_storage_v2(
             return Ok((events_shipped, false));
         };
         if require_reply_evidence && !prepared.has_reply_evidence {
-            return Ok((events_shipped, true));
+            let discarded = crate::state::pending_source_envelope::discard_unattempted(
+                conn,
+                prepared.source_epoch,
+                &prepared.envelope.expected_envelope_id,
+            )?;
+            if discarded {
+                return Ok((events_shipped, true));
+            }
+            // Another sender already attempted this durable intent. It is now
+            // the retry authority and cannot be discarded by a product gate.
         }
         let outcome = crate::storage_v2_shipper::ship_prepared_envelope(
             conn,

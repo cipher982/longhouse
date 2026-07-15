@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -86,9 +86,10 @@ pub(crate) fn prepare_next_envelope(
     provider: &str,
     session_id_override: Option<&str>,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
-    let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let canonical_path = stable_source_path(path);
     let path_text = canonical_path.to_string_lossy();
-    if let Some(pending) = load_pending_for_path(conn, &path_text)? {
+    let opaque_source_id = opaque_source_id(&path_text);
+    if let Some(pending) = load_pending_for_source(conn, provider, &opaque_source_id)? {
         return Ok(Some(pending));
     }
     let durable_session_id = match session_id_override {
@@ -96,7 +97,6 @@ pub(crate) fn prepare_next_envelope(
         None => crate::state::session_binding::SessionBinding::new(conn).get(&path_text)?,
     };
     let session_id_override = durable_session_id.as_deref();
-    let opaque_source_id = opaque_source_id(&path_text);
     let legacy_offset = validated_legacy_offset(conn, &path_text, &canonical_path)?;
     let source_revision = if provider.eq_ignore_ascii_case("antigravity") {
         Some(hash_file(path)?)
@@ -327,11 +327,8 @@ pub(crate) fn prepare_next_opencode_envelope(
     capabilities: &StorageV2Capabilities,
     db_path: &Path,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
-    let canonical_path = std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf());
+    let canonical_path = stable_source_path(db_path);
     let path_text = canonical_path.to_string_lossy();
-    if let Some(pending) = load_pending_for_path(conn, &path_text)? {
-        return Ok(Some(pending));
-    }
     let mut page_offset = 0usize;
     loop {
         let candidates = opencode_db::list_opencode_sessions_page(
@@ -343,14 +340,17 @@ pub(crate) fn prepare_next_opencode_envelope(
             return Ok(None);
         }
         for (candidate_index, candidate) in candidates.iter().enumerate() {
-            let snapshot =
-                opencode_db::opencode_raw_snapshot(db_path, &candidate.provider_session_id)?;
-            let logical_len = u64::try_from(snapshot.records.len())
-                .context("OpenCode snapshot has too many records")?;
             let opaque_source_id = opaque_source_id(&format!(
                 "{path_text}\0opencode-session\0{}",
                 candidate.provider_session_id
             ));
+            if let Some(pending) = load_pending_for_source(conn, "opencode", &opaque_source_id)? {
+                return Ok(Some(pending));
+            }
+            let snapshot =
+                opencode_db::opencode_raw_snapshot(db_path, &candidate.provider_session_id)?;
+            let logical_len = u64::try_from(snapshot.records.len())
+                .context("OpenCode snapshot has too many records")?;
             let resolution = source_epoch::observe_source(
                 conn,
                 "opencode",
@@ -477,7 +477,7 @@ pub(crate) fn prepare_next_cursor_envelope(
     capabilities: &StorageV2Capabilities,
     db_path: &Path,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
-    let canonical_path = std::fs::canonicalize(db_path).unwrap_or_else(|_| db_path.to_path_buf());
+    let canonical_path = stable_source_path(db_path);
     let path_text = canonical_path.to_string_lossy();
     if let Some(pending) = load_pending_for_path(conn, &path_text)? {
         return Ok(Some(pending));
@@ -659,11 +659,6 @@ pub(crate) fn prepare_next_cursor_acp_envelope(
     capabilities: &StorageV2Capabilities,
     path: &Path,
 ) -> Result<Option<PreparedStorageV2Envelope>> {
-    let canonical_path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    let path_text = canonical_path.to_string_lossy();
-    if let Some(pending) = load_pending_for_path(conn, &path_text)? {
-        return Ok(Some(pending));
-    }
     let session_id = path
         .parent()
         .and_then(Path::file_name)
@@ -675,6 +670,11 @@ pub(crate) fn prepare_next_cursor_acp_envelope(
         .and_then(|v| v.to_str())
         .context("Cursor ACP source path has no run id")?;
     let opaque_source_id = format!("cursor-acp-v1:{session_id}:{run_id}");
+    let canonical_path = stable_source_path(path);
+    let path_text = canonical_path.to_string_lossy();
+    if let Some(pending) = load_pending_for_source(conn, "cursor", &opaque_source_id)? {
+        return Ok(Some(pending));
+    }
     let resolution = source_epoch::observe_file(
         conn,
         "cursor",
@@ -812,6 +812,39 @@ fn load_pending_for_path(
     pending_source_envelope::load_for_path(conn, source_path)?
         .map(pending_to_prepared)
         .transpose()
+}
+
+fn load_pending_for_source(
+    conn: &Connection,
+    provider: &str,
+    opaque_source_id: &str,
+) -> Result<Option<PreparedStorageV2Envelope>> {
+    pending_source_envelope::load_for_source(conn, provider, opaque_source_id)?
+        .map(pending_to_prepared)
+        .transpose()
+}
+
+/// Keep a stable lookup key after the source itself is unlinked. On macOS,
+/// canonicalizing `/var/.../file` while it exists yields `/private/var/...`,
+/// so falling back to the original path after deletion would orphan pending
+/// work. The parent remains canonicalizable in that crash/retry window.
+fn stable_source_path(path: &Path) -> PathBuf {
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+    match (absolute.parent(), absolute.file_name()) {
+        (Some(parent), Some(file_name)) => std::fs::canonicalize(parent)
+            .map(|canonical_parent| canonical_parent.join(file_name))
+            .unwrap_or(absolute),
+        _ => absolute,
+    }
 }
 
 fn pending_to_prepared(pending: PendingSourceEnvelope) -> Result<PreparedStorageV2Envelope> {
@@ -1673,6 +1706,49 @@ mod tests {
             prepared.range_end
         );
         assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+        pending_source_envelope::acknowledge_and_delete(
+            &mut conn,
+            prepared.source_epoch,
+            &prepared.envelope.expected_envelope_id,
+            prepared.range_start,
+            prepared.range_end,
+        )
+        .unwrap();
+        assert_eq!(
+            source_epoch::lane_position(&conn, prepared.source_epoch, SourceLane::Durable).unwrap(),
+            prepared.range_end,
+            "a concurrent exact-replay receipt must be an idempotent local success"
+        );
+    }
+
+    #[test]
+    fn unsent_product_gate_can_discard_and_refreeze_after_reply_arrives() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        let user = b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n";
+        let assistant = b"{\"type\":\"assistant\",\"uuid\":\"a1\",\"timestamp\":\"2026-07-12T12:00:01Z\",\"message\":{\"content\":\"hi\"}}\n";
+        fs::write(&path, user).unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+
+        let user_only = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert!(!user_only.has_reply_evidence);
+        assert!(pending_source_envelope::discard_unattempted(
+            &conn,
+            user_only.source_epoch,
+            &user_only.envelope.expected_envelope_id,
+        )
+        .unwrap());
+
+        fs::write(&path, [user.as_slice(), assistant.as_slice()].concat()).unwrap();
+        let with_reply = prepare_next_envelope(&mut conn, &capabilities(), &path, "claude", None)
+            .unwrap()
+            .unwrap();
+        assert!(with_reply.has_reply_evidence);
+        assert_eq!(with_reply.range_end, (user.len() + assistant.len()) as u64);
     }
 
     #[tokio::test]
