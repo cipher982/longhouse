@@ -220,6 +220,7 @@ impl RuntimeSink {
         exit_code: Option<i32>,
         error: Option<String>,
     ) {
+        crate::turn_claims::mark_terminal(&self.run_id, terminal_state, error.clone());
         self.post(vec![json!({
             "runtime_key": format!("{}:{}", self.provider, self.session_id),
             "session_id": self.session_id, "run_id": self.run_id, "provider": self.provider,

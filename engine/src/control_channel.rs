@@ -1404,10 +1404,31 @@ async fn execute_turn_start(
         .claim(&run_id, session_id, &thread_id, &provider)
         .map_err(CommandError::command_failed)?
     {
-        ClaimOutcome::Existing(claim) if claim.state == "spawned" => {
+        ClaimOutcome::Existing(claim) if claim.state == "terminal" => {
             return claim.result.ok_or_else(|| CommandError {
                 code: "turn_claim_invalid".to_string(),
-                message: format!("spawned run {run_id} has no stored result"),
+                message: format!("terminal run {run_id} has no stored result"),
+            });
+        }
+        ClaimOutcome::Existing(claim) if claim.state == "spawned" => {
+            let process_is_same = claim
+                .pid
+                .zip(claim.process_start_time.as_deref())
+                .and_then(|(pid, started)| {
+                    crate::process_identity::collect_process_facts_by_pid()
+                        .get(&pid)
+                        .map(|fact| fact.lstart == started)
+                })
+                .unwrap_or(false);
+            if process_is_same {
+                return claim.result.ok_or_else(|| CommandError {
+                    code: "turn_claim_invalid".to_string(),
+                    message: format!("spawned run {run_id} has no stored result"),
+                });
+            }
+            return Err(CommandError {
+                code: "turn_start_ambiguous".to_string(),
+                message: format!("run {run_id} was spawned but its exact process is gone without a terminal claim"),
             });
         }
         ClaimOutcome::Existing(claim) if claim.state == "failed" => {

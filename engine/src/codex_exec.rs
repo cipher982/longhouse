@@ -322,6 +322,7 @@ impl CodexExecRuntimeSink {
         exit_code: Option<i32>,
         stderr_tail: Option<String>,
     ) {
+        crate::turn_claims::mark_terminal(&self.run_id, terminal_state, stderr_tail.clone());
         let observed_at = Utc::now();
         self.persist_local_phase("finished", None, observed_at);
         self.post_events(vec![json!({

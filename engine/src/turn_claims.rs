@@ -115,6 +115,26 @@ impl TurnClaimRegistry {
         Ok(claim)
     }
 
+    pub fn mark_terminal(
+        &self,
+        run_id: &str,
+        terminal_state: &str,
+        error: Option<String>,
+    ) -> Result<TurnClaim> {
+        let mut claim = self.read(run_id)?;
+        claim.state = "terminal".to_string();
+        claim.error = error;
+        claim.updated_at = Utc::now().to_rfc3339();
+        if let Some(result) = claim.result.as_mut().and_then(Value::as_object_mut) {
+            result.insert(
+                "terminal_state".to_string(),
+                Value::String(terminal_state.to_string()),
+            );
+        }
+        self.write(&claim)?;
+        Ok(claim)
+    }
+
     pub fn read(&self, run_id: &str) -> Result<TurnClaim> {
         validate_id(run_id, "run_id")?;
         let path = self.claim_path(run_id);
@@ -187,6 +207,12 @@ pub fn process_start_time_for_pid(pid: Option<u32>) -> Option<String> {
         .map(|fact| fact.lstart.clone())
 }
 
+pub fn mark_terminal(run_id: &str, terminal_state: &str, error: Option<String>) {
+    if let Ok(registry) = default_registry() {
+        let _ = registry.mark_terminal(run_id, terminal_state, error);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,5 +264,29 @@ mod tests {
         assert_eq!(claim.state, "spawned");
         assert_eq!(claim.pid, Some(42));
         assert_eq!(claim.result.unwrap()["transport"], "cursor_acp");
+    }
+
+    #[test]
+    fn terminal_result_survives_registry_recreation() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_id = id(21);
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        registry.claim(&run_id, &id(22), &id(23), "codex").unwrap();
+        registry
+            .mark_spawned(
+                &run_id,
+                Some(42),
+                Some("start".to_string()),
+                serde_json::json!({"pid": 42}),
+            )
+            .unwrap();
+        registry
+            .mark_terminal(&run_id, "run_completed", None)
+            .unwrap();
+
+        let reopened = TurnClaimRegistry::new(temp.path().to_path_buf());
+        let claim = reopened.read(&run_id).unwrap();
+        assert_eq!(claim.state, "terminal");
+        assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
     }
 }
