@@ -24,6 +24,9 @@ pub struct PendingSourceEnvelope {
     pub created_at: String,
     pub attempt_count: u64,
     pub last_attempt_at: Option<String>,
+    pub blocked_at: Option<String>,
+    pub block_kind: Option<String>,
+    pub block_detail: Option<String>,
 }
 
 impl PendingSourceEnvelope {
@@ -56,6 +59,9 @@ impl PendingSourceEnvelope {
             created_at: Utc::now().to_rfc3339(),
             attempt_count: 0,
             last_attempt_at: None,
+            blocked_at: None,
+            block_kind: None,
+            block_detail: None,
         }
     }
 }
@@ -68,7 +74,7 @@ pub fn load_for_path(
         "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
                 request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                 has_reply_evidence, has_more, created_at, attempt_count,
-                last_attempt_at
+                last_attempt_at, blocked_at, block_kind, block_detail
          FROM pending_source_envelope
          WHERE source_path = ?1
          ORDER BY created_at, source_epoch
@@ -92,7 +98,8 @@ pub fn load_for_source(
                 pending.raw_bytes, pending.event_count,
                 pending.has_reply_evidence, pending.has_more,
                 pending.created_at, pending.attempt_count,
-                pending.last_attempt_at
+                pending.last_attempt_at, pending.blocked_at,
+                pending.block_kind, pending.block_detail
          FROM pending_source_envelope AS pending
          JOIN source_epoch_registry AS epoch
            ON epoch.source_epoch = pending.source_epoch
@@ -114,7 +121,7 @@ pub fn load_for_epoch(
         "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
                 request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                 has_reply_evidence, has_more, created_at, attempt_count,
-                last_attempt_at
+                last_attempt_at, blocked_at, block_kind, block_detail
          FROM pending_source_envelope
          WHERE source_epoch = ?1",
         [source_epoch.to_string()],
@@ -160,7 +167,7 @@ pub fn persist_or_load(
             "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
                     request_body_zstd, media_objects_zstd, raw_bytes, event_count,
                     has_reply_evidence, has_more, created_at, attempt_count,
-                    last_attempt_at
+                    last_attempt_at, blocked_at, block_kind, block_detail
              FROM pending_source_envelope
              WHERE source_epoch = ?1",
             [candidate.source_epoch.to_string()],
@@ -175,13 +182,51 @@ pub fn mark_attempt(conn: &Connection, source_epoch: Uuid) -> Result<()> {
     let changed = conn.execute(
         "UPDATE pending_source_envelope
          SET attempt_count = attempt_count + 1, last_attempt_at = ?1
-         WHERE source_epoch = ?2",
+         WHERE source_epoch = ?2 AND blocked_at IS NULL",
         params![Utc::now().to_rfc3339(), source_epoch.to_string()],
     )?;
     if changed != 1 {
         bail!("pending storage-v2 envelope disappeared before send");
     }
     Ok(())
+}
+
+pub fn quarantine(conn: &Connection, source_epoch: Uuid, kind: &str, detail: &str) -> Result<bool> {
+    let changed = conn.execute(
+        "UPDATE pending_source_envelope
+         SET blocked_at = ?1, block_kind = ?2, block_detail = ?3
+         WHERE source_epoch = ?4 AND blocked_at IS NULL",
+        params![
+            Utc::now().to_rfc3339(),
+            kind,
+            detail,
+            source_epoch.to_string()
+        ],
+    )?;
+    if changed > 1 {
+        bail!("quarantining one source changed multiple pending envelopes");
+    }
+    Ok(changed == 1)
+}
+
+pub fn source_is_blocked(
+    conn: &Connection,
+    provider: &str,
+    opaque_source_id: &str,
+) -> Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(
+            SELECT 1
+            FROM pending_source_envelope AS pending
+            JOIN source_epoch_registry AS epoch
+              ON epoch.source_epoch = pending.source_epoch
+            WHERE epoch.provider = ?1 AND epoch.opaque_source_id = ?2
+              AND pending.blocked_at IS NOT NULL
+         )",
+        params![provider, opaque_source_id],
+        |row| row.get(0),
+    )
+    .context("checking blocked storage-v2 source")
 }
 
 /// Remove an intent that was prepared for a product gate but never sent.
@@ -311,6 +356,9 @@ fn row_to_pending(row: &rusqlite::Row<'_>) -> rusqlite::Result<PendingSourceEnve
         created_at: row.get(11)?,
         attempt_count: from_sql_u64(12, attempt_count)?,
         last_attempt_at: row.get(13)?,
+        blocked_at: row.get(14)?,
+        block_kind: row.get(15)?,
+        block_detail: row.get(16)?,
     })
 }
 

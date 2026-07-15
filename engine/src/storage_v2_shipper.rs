@@ -51,6 +51,7 @@ pub(crate) struct PreparedStorageV2Envelope {
     pub media_objects: Vec<ParsedMediaObject>,
 }
 
+#[derive(Debug)]
 pub(crate) struct StorageV2ShipOutcome {
     pub bytes_shipped: u64,
     pub events_shipped: usize,
@@ -73,6 +74,15 @@ struct PersistedMediaObject {
 pub(crate) struct StorageV2PreparationError {
     #[source]
     source: anyhow::Error,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("storage-v2 source {source_epoch} blocked ({kind}): {detail}")]
+pub(crate) struct StorageV2SourceBlocked {
+    pub source_epoch: Uuid,
+    pub kind: String,
+    pub detail: String,
+    pub newly_blocked: bool,
 }
 
 fn preparation_result<T>(result: Result<T>) -> Result<T> {
@@ -282,11 +292,29 @@ pub(crate) async fn ship_prepared_envelope(
     let pending = pending_source_envelope::load_for_epoch(conn, prepared.source_epoch)?
         .context("prepared storage-v2 envelope is not durable")?;
     validate_pending_matches_prepared(&pending, &prepared)?;
+    if let Some(blocked_at) = pending.blocked_at.as_deref() {
+        return Err(StorageV2SourceBlocked {
+            source_epoch: prepared.source_epoch,
+            kind: pending
+                .block_kind
+                .clone()
+                .unwrap_or_else(|| "source_blocked".to_string()),
+            detail: pending
+                .block_detail
+                .clone()
+                .unwrap_or_else(|| format!("blocked at {blocked_at}")),
+            newly_blocked: false,
+        }
+        .into());
+    }
     if prepared.envelope.tenant_id != capabilities.tenant_id
         || prepared.envelope.machine_id != capabilities.machine_id
     {
-        anyhow::bail!(
-            "durable storage-v2 envelope target does not match current Runtime Host capabilities"
+        return block_source(
+            conn,
+            prepared.source_epoch,
+            "storage_target_changed",
+            "durable envelope tenant or machine does not match current Runtime Host capabilities",
         );
     }
     let was_retry = pending.attempt_count > 0;
@@ -299,7 +327,7 @@ pub(crate) async fn ship_prepared_envelope(
         Some(request_timeout),
     )
     .await?;
-    let receipt = client
+    let receipt = match client
         .ship_storage_v2_body(
             &capabilities.ingest_path,
             lane,
@@ -307,7 +335,23 @@ pub(crate) async fn ship_prepared_envelope(
             &pending.envelope_id,
             Some(request_timeout),
         )
-        .await?;
+        .await
+    {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            if let Some(conflict) =
+                error.downcast_ref::<crate::shipping::client::StorageV2Conflict>()
+            {
+                return block_source(
+                    conn,
+                    prepared.source_epoch,
+                    &conflict.code,
+                    &conflict.response_body,
+                );
+            }
+            return Err(error);
+        }
+    };
     pending_source_envelope::acknowledge_and_delete(
         conn,
         prepared.source_epoch,
@@ -320,6 +364,17 @@ pub(crate) async fn ship_prepared_envelope(
         events_shipped: prepared.event_count,
         has_more: prepared.has_more || was_retry,
     })
+}
+
+fn block_source<T>(conn: &Connection, source_epoch: Uuid, kind: &str, detail: &str) -> Result<T> {
+    let newly_blocked = pending_source_envelope::quarantine(conn, source_epoch, kind, detail)?;
+    Err(StorageV2SourceBlocked {
+        source_epoch,
+        kind: kind.to_string(),
+        detail: detail.to_string(),
+        newly_blocked,
+    }
+    .into())
 }
 
 pub(crate) fn prepare_next_opencode_envelope(
@@ -344,6 +399,9 @@ pub(crate) fn prepare_next_opencode_envelope(
                 "{path_text}\0opencode-session\0{}",
                 candidate.provider_session_id
             ));
+            if pending_source_envelope::source_is_blocked(conn, "opencode", &opaque_source_id)? {
+                continue;
+            }
             if let Some(pending) = load_pending_for_source(conn, "opencode", &opaque_source_id)? {
                 return Ok(Some(pending));
             }
@@ -1855,6 +1913,90 @@ mod tests {
             first_line.len() as u64
         );
         assert_eq!(pending_source_envelope::count(&conn).unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn source_conflict_quarantines_exact_intent_after_one_request() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let _body = read_http_body(&mut socket).await;
+            let response_body = r#"{"detail":{"code":"source_epoch_conflict","message":"range overlap","details":{}}}"#;
+            let response = format!(
+                "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("018f0c3a-7b2d-7f10-8a11-123456789abc.jsonl");
+        fs::write(
+            &path,
+            b"{\"type\":\"user\",\"uuid\":\"u1\",\"timestamp\":\"2026-07-12T12:00:00Z\",\"message\":{\"content\":\"hello\"}}\n",
+        )
+        .unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let config = ShipperConfig {
+            api_url: format!("http://{address}"),
+            timeout_seconds: 5,
+            ..ShipperConfig::default()
+        };
+        let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
+
+        let first_error = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "live",
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err();
+        let first_block = first_error
+            .downcast_ref::<StorageV2SourceBlocked>()
+            .unwrap();
+        assert!(first_block.newly_blocked);
+        assert_eq!(first_block.kind, "source_epoch_conflict");
+        server.await.unwrap();
+
+        let pending = pending_source_envelope::load_for_epoch(&conn, first_block.source_epoch)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.attempt_count, 1);
+        assert!(pending.blocked_at.is_some());
+
+        let second_error = ship_next_envelope(
+            &mut conn,
+            &client,
+            &capabilities(),
+            &path,
+            "claude",
+            None,
+            "live",
+            Duration::from_millis(100),
+        )
+        .await
+        .unwrap_err();
+        let second_block = second_error
+            .downcast_ref::<StorageV2SourceBlocked>()
+            .unwrap();
+        assert!(!second_block.newly_blocked);
+        assert_eq!(
+            pending_source_envelope::load_for_epoch(&conn, first_block.source_epoch)
+                .unwrap()
+                .unwrap()
+                .attempt_count,
+            1,
+            "quarantined work must not attempt the network again"
+        );
     }
 
     #[test]

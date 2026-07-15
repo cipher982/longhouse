@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use rand::Rng;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE, USER_AGENT};
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 
 use crate::config::ShipperConfig;
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
@@ -63,6 +64,36 @@ impl std::fmt::Display for StorageV2Backpressure {
 }
 
 impl std::error::Error for StorageV2Backpressure {}
+
+#[derive(Debug, Clone)]
+pub struct StorageV2Conflict {
+    pub code: String,
+    pub message: String,
+    pub response_body: String,
+}
+
+impl std::fmt::Display for StorageV2Conflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "storage-v2 conflict {}: {}",
+            self.code, self.message
+        )
+    }
+}
+
+impl std::error::Error for StorageV2Conflict {}
+
+#[derive(Deserialize)]
+struct StorageV2ErrorResponse {
+    detail: StorageV2ErrorDetail,
+}
+
+#[derive(Deserialize)]
+struct StorageV2ErrorDetail {
+    code: String,
+    message: String,
+}
 
 /// Server-side ingest timing parsed from response headers.
 ///
@@ -479,6 +510,9 @@ impl ShipperClient {
             {
                 return Err(backpressure.into());
             }
+            if let Some(conflict) = parse_storage_v2_conflict(status.as_u16(), &body) {
+                return Err(conflict.into());
+            }
             anyhow::bail!("storage-v2 envelope POST returned {status}: {body}");
         }
         let receipt = response
@@ -502,6 +536,21 @@ impl ShipperClient {
             Err(_) => Ok(false),
         }
     }
+}
+
+fn parse_storage_v2_conflict(status: u16, body: &str) -> Option<StorageV2Conflict> {
+    if status != reqwest::StatusCode::CONFLICT.as_u16() {
+        return None;
+    }
+    let parsed = serde_json::from_str::<StorageV2ErrorResponse>(body).ok()?;
+    if parsed.detail.code != "source_epoch_conflict" {
+        return None;
+    }
+    Some(StorageV2Conflict {
+        code: parsed.detail.code,
+        message: parsed.detail.message,
+        response_body: body.to_string(),
+    })
 }
 
 fn parse_storage_v2_backpressure(
@@ -718,7 +767,7 @@ mod tests {
 
     use super::{
         classify_connect_error_kind, parse_server_backpressure, parse_server_timing,
-        parse_server_write_backpressure, parse_storage_v2_backpressure,
+        parse_server_write_backpressure, parse_storage_v2_backpressure, parse_storage_v2_conflict,
         rate_limit_retry_wait_seconds, ShipResult,
     };
 
@@ -775,6 +824,21 @@ mod tests {
         assert_eq!(detail.lane, "repair");
         assert_eq!(detail.retry_after, Duration::from_secs(7));
         assert!(parse_storage_v2_backpressure(500, &headers, "{}", "repair").is_none());
+    }
+
+    #[test]
+    fn storage_v2_source_conflict_is_not_transport_backpressure() {
+        let body =
+            r#"{"detail":{"code":"source_epoch_conflict","message":"overlap","details":{}}}"#;
+        let conflict = parse_storage_v2_conflict(409, body).unwrap();
+        assert_eq!(conflict.code, "source_epoch_conflict");
+        assert_eq!(conflict.message, "overlap");
+        assert_eq!(conflict.response_body, body);
+        assert!(parse_storage_v2_conflict(503, body).is_none());
+        assert!(
+            parse_storage_v2_conflict(409, r#"{"detail":{"code":"other","message":"no"}}"#)
+                .is_none()
+        );
     }
 
     #[test]

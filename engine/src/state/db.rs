@@ -187,6 +187,9 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             created_at TEXT NOT NULL,
             attempt_count INTEGER NOT NULL DEFAULT 0,
             last_attempt_at TEXT,
+            blocked_at TEXT,
+            block_kind TEXT,
+            block_detail TEXT,
             FOREIGN KEY (source_epoch) REFERENCES source_epoch_registry(source_epoch)
         );
 
@@ -248,6 +251,18 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
     }
     if !source_epoch_columns.contains("bound_session_id") {
         conn.execute_batch("ALTER TABLE source_epoch_registry ADD COLUMN bound_session_id TEXT;")?;
+    }
+
+    let pending_envelope_columns: std::collections::HashSet<String> = conn
+        .prepare("PRAGMA table_info(pending_source_envelope)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<_, _>>()?;
+    if !pending_envelope_columns.contains("blocked_at") {
+        conn.execute_batch(
+            "ALTER TABLE pending_source_envelope ADD COLUMN blocked_at TEXT;
+             ALTER TABLE pending_source_envelope ADD COLUMN block_kind TEXT;
+             ALTER TABLE pending_source_envelope ADD COLUMN block_detail TEXT;",
+        )?;
     }
 
     // Old builds could create duplicate pending pointers for the same file/range.

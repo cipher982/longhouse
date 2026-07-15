@@ -3189,6 +3189,33 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                 }
             }
             Err(error) => {
+                if let Some(blocked) = error.downcast_ref::<
+                    crate::storage_v2_shipper::StorageV2SourceBlocked,
+                >() {
+                    task_context.ship_stats.record_with_lane_detail_and_stages(
+                        stats_lane,
+                        ShipAttemptOutcome::PayloadRejected,
+                        ship_started.elapsed().as_millis() as u64,
+                        Some(409),
+                        Some("storage_v2_source_blocked"),
+                        Some(&blocked.to_string()),
+                        0,
+                        0,
+                        false,
+                        None,
+                    );
+                    if blocked.newly_blocked {
+                        tracing::warn!(
+                            path = %result.job.path.display(),
+                            provider = result.job.provider,
+                            source_epoch = %blocked.source_epoch,
+                            kind = blocked.kind,
+                            detail = blocked.detail,
+                            "Storage-v2 source quarantined; automatic retries stopped"
+                        );
+                    }
+                    return finish_path_task(result, task_started);
+                }
                 if error
                     .downcast_ref::<crate::storage_v2_shipper::StorageV2PreparationError>()
                     .is_some()
