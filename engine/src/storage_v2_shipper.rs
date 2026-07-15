@@ -385,13 +385,24 @@ async fn reconcile_storage_v2_conflict(
     prepared: &PreparedStorageV2Envelope,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let manifest = client
+    let manifest = match client
         .storage_v2_source_manifest(
             &prepared.source_epoch.to_string(),
             prepared.range_start,
             Some(request_timeout),
         )
-        .await?;
+        .await
+    {
+        Ok(manifest) => manifest,
+        Err(error)
+            if error
+                .downcast_ref::<crate::shipping::client::StorageV2ManifestRejected>()
+                .is_some() =>
+        {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
     let Some(proven_through) = proven_manifest_prefix(prepared, &manifest)? else {
         return Ok(None);
     };
@@ -458,12 +469,21 @@ fn proven_manifest_prefix(
             || object.range_kind != envelope.range_kind
             || object.retired_at.is_some()
         {
+            if proven_through > prepared.range_start {
+                break;
+            }
             return Ok(None);
         }
         let Ok(range_start) = object.range_start.parse::<u64>() else {
+            if proven_through > prepared.range_start {
+                break;
+            }
             return Ok(None);
         };
         let Ok(range_end) = object.range_end.parse::<u64>() else {
+            if proven_through > prepared.range_start {
+                break;
+            }
             return Ok(None);
         };
         if range_start != proven_through
@@ -474,9 +494,15 @@ fn proven_manifest_prefix(
         }
         let Ok(computed_envelope_id) = envelope_id_for_subrange(envelope, range_start, range_end)
         else {
+            if proven_through > prepared.range_start {
+                break;
+            }
             return Ok(None);
         };
         if computed_envelope_id != object.envelope_id {
+            if proven_through > prepared.range_start {
+                break;
+            }
             return Ok(None);
         }
         proven_through = range_end;
@@ -2210,29 +2236,13 @@ mod tests {
                     envelope = Some(serde_json::from_slice::<StorageV2Envelope>(&body).unwrap());
                     r#"{"detail":{"code":"source_epoch_conflict","message":"range overlap","details":{}}}"#.to_string()
                 } else {
-                    let envelope = envelope.as_ref().unwrap();
-                    serde_json::json!({
-                        "v": 2,
-                        "source_epoch": {
-                            "source_epoch": envelope.source_epoch,
-                            "tenant_id": envelope.tenant_id,
-                            "machine_id": envelope.machine_id,
-                            "provider": envelope.provider,
-                            "opaque_source_id": envelope.opaque_source_id,
-                            "range_kind": envelope.range_kind,
-                            "state": "open",
-                            "accepted_through": "0",
-                        },
-                        "objects": [],
-                        "commit_seq": "1",
-                        "observed_at": "2026-07-15T00:00:00Z",
-                    })
-                    .to_string()
+                    assert!(envelope.is_some());
+                    r#"{"detail":{"code":"source_epoch_not_found","message":"missing","details":{}}}"#.to_string()
                 };
                 let status = if request_index == 0 {
                     "409 Conflict"
                 } else {
-                    "200 OK"
+                    "404 Not Found"
                 };
                 let response = format!(
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
@@ -2753,6 +2763,62 @@ mod tests {
             "#,
         )
         .unwrap();
+    }
+
+    #[test]
+    fn record_ordinal_reconciliation_rebases_render_ordinals_without_source_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("opencode.db");
+        create_opencode_db(&db_path);
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let prepared = prepare_next_opencode_envelope(&mut conn, &capabilities(), &db_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!((prepared.range_start, prepared.range_end), (0, 3));
+        let prefix_end = 2;
+        let prefix_id = envelope_id_for_subrange(&prepared.envelope, 0, prefix_end).unwrap();
+        let manifest = StorageV2SourceManifest {
+            v: 2,
+            source_epoch: crate::shipping::storage_v2::StorageV2SourceEpoch {
+                source_epoch: prepared.envelope.source_epoch.clone(),
+                tenant_id: prepared.envelope.tenant_id.clone(),
+                machine_id: prepared.envelope.machine_id.clone(),
+                provider: prepared.envelope.provider.clone(),
+                opaque_source_id: prepared.envelope.opaque_source_id.clone(),
+                range_kind: prepared.envelope.range_kind.clone(),
+                state: "open".to_string(),
+                accepted_through: prefix_end.to_string(),
+            },
+            objects: vec![crate::shipping::storage_v2::StorageV2SourceObject {
+                envelope_id: prefix_id,
+                tenant_id: prepared.envelope.tenant_id.clone(),
+                machine_id: prepared.envelope.machine_id.clone(),
+                provider: prepared.envelope.provider.clone(),
+                opaque_source_id: prepared.envelope.opaque_source_id.clone(),
+                source_epoch: prepared.envelope.source_epoch.clone(),
+                range_kind: prepared.envelope.range_kind.clone(),
+                range_start: "0".to_string(),
+                range_end: prefix_end.to_string(),
+                retired_at: None,
+            }],
+            commit_seq: "7".to_string(),
+            observed_at: "2026-07-15T00:00:00Z".to_string(),
+        };
+
+        assert_eq!(
+            proven_manifest_prefix(&prepared, &manifest).unwrap(),
+            Some(prefix_end)
+        );
+        let suffix = split_prepared_suffix(&prepared, prefix_end).unwrap();
+        assert_eq!((suffix.range_start, suffix.range_end), (2, 3));
+        assert_eq!(suffix.envelope.records[0].source_position, 2);
+        let render = suffix.envelope.render.as_ref().unwrap();
+        assert_eq!(render.records[0].source_position, 2);
+        assert_eq!(render.records[0].raw_record_ordinal, 0);
+        assert_eq!(
+            suffix.envelope.expected_envelope_id,
+            envelope_id_for_subrange(&suffix.envelope, 2, 3).unwrap()
+        );
     }
 
     #[test]

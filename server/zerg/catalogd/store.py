@@ -4554,7 +4554,7 @@ class CatalogStore:
                     update(epoch)
                     .where(epoch.c.source_epoch == epoch_key)
                     .values(
-                        accepted_through=max(accepted_through, range_end_key),
+                        accepted_through=range_end_key,
                         object_count=int(epoch_row["object_count"] or 0) + 1,
                         updated_at=commit_time,
                     )

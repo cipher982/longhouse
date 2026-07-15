@@ -88,6 +88,31 @@ impl std::fmt::Display for StorageV2Conflict {
 
 impl std::error::Error for StorageV2Conflict {}
 
+#[derive(Debug, Clone)]
+pub struct StorageV2ManifestRejected {
+    pub status_code: Option<u16>,
+    pub message: String,
+}
+
+impl std::fmt::Display for StorageV2ManifestRejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.status_code {
+            Some(status) => write!(
+                formatter,
+                "storage-v2 manifest rejected ({status}): {}",
+                self.message
+            ),
+            None => write!(
+                formatter,
+                "storage-v2 manifest is invalid: {}",
+                self.message
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StorageV2ManifestRejected {}
+
 #[derive(Deserialize)]
 struct StorageV2ErrorResponse {
     detail: StorageV2ErrorDetail,
@@ -536,9 +561,40 @@ impl ShipperClient {
         let path = format!(
             "{STORAGE_V2_SOURCE_EPOCHS_PATH}/{source_epoch}/manifest?after_position={after_position}&limit=1000"
         );
-        self.get_json_with_timeout(&path, request_timeout)
+        let url = self.ingest_url.replace("/api/agents/ingest", &path);
+        let mut request = self.client.get(&url);
+        if let Some(request_timeout) = request_timeout {
+            request = request.timeout(request_timeout);
+        }
+        let response = request
+            .send()
             .await
-            .context("reading storage-v2 source manifest")
+            .context("storage-v2 manifest request failed")?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            if status.is_client_error()
+                && status != reqwest::StatusCode::REQUEST_TIMEOUT
+                && status != reqwest::StatusCode::TOO_MANY_REQUESTS
+            {
+                return Err(StorageV2ManifestRejected {
+                    status_code: Some(status.as_u16()),
+                    message: body,
+                }
+                .into());
+            }
+            anyhow::bail!("storage-v2 manifest returned {status}: {body}");
+        }
+        response
+            .json::<StorageV2SourceManifest>()
+            .await
+            .map_err(|error| {
+                StorageV2ManifestRejected {
+                    status_code: None,
+                    message: error.to_string(),
+                }
+                .into()
+            })
     }
 
     /// Get the ingest URL (for logging).
