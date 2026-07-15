@@ -168,17 +168,13 @@ def test_directory_returns_online_machine_with_supports(tmp_path):
     assert entry.online is True
     assert entry.control_channel_status == "connected"
     assert entry.supports == ("claude.turn_start", "codex.send", "codex.turn_start")  # sorted
-    assert entry.control_operations_by_provider == {
-        "codex": ("send", "turn_start"),
-        "claude": ("turn_start",),
-    }
+    assert entry.control_operations_by_provider == {"codex": ("send", "turn_start")}
     assert entry.can_launch_codex is True
-    assert entry.launchable_providers == ("claude", "codex")
+    assert entry.launchable_providers == ("codex",)
     assert entry.launch_blocked_by is None
     assert entry.engine_build == "test-build"
     assert entry.launch.blocked_by is None
     assert [(option.provider, option.execution_lifetimes) for option in entry.launch.providers] == [
-        ("claude", ("one_shot",)),
         ("codex", ("one_shot",)),
     ]
     assert entry.launch.default_provider == "codex"
@@ -247,7 +243,7 @@ def test_directory_surfaces_online_machine_without_codex_launch_as_blocked(tmp_p
     assert entries[0].launch_blocked_by == "no_launch_support"
 
 
-def test_directory_does_not_block_claude_only_launchable_machine(tmp_path):
+def test_directory_does_not_expose_unproven_claude_console_adapter(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
     registry = MachineControlChannelRegistry()
@@ -257,11 +253,11 @@ def test_directory_does_not_block_claude_only_launchable_machine(tmp_path):
 
     assert len(entries) == 1
     assert entries[0].can_launch_codex is False
-    assert entries[0].launchable_providers == ("claude",)
-    assert entries[0].launch_blocked_by is None
+    assert entries[0].launchable_providers == ()
+    assert entries[0].launch_blocked_by == "no_launch_support"
 
 
-def test_directory_does_not_block_opencode_only_launchable_machine(tmp_path):
+def test_directory_does_not_expose_unproven_opencode_console_adapter(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
     registry = MachineControlChannelRegistry()
@@ -271,8 +267,8 @@ def test_directory_does_not_block_opencode_only_launchable_machine(tmp_path):
 
     assert len(entries) == 1
     assert entries[0].can_launch_codex is False
-    assert entries[0].launchable_providers == ("opencode",)
-    assert entries[0].launch_blocked_by is None
+    assert entries[0].launchable_providers == ()
+    assert entries[0].launch_blocked_by == "no_launch_support"
 
 
 def test_directory_reports_antigravity_send_without_launchability(tmp_path):
@@ -353,9 +349,9 @@ def test_directory_sorts_ready_then_connected_blocked_then_offline_by_name(tmp_p
 
     assert [entry.device_id for entry in entries] == [
         "a-ready",
-        "z-ready",
         "a-blocked",
         "z-blocked",
+        "z-ready",
         "a-offline",
         "z-offline",
     ]

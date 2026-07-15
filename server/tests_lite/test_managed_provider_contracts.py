@@ -257,7 +257,6 @@ def test_claude_contract_is_first_class_channel_control_provider():
         "claude.answer_pause",
         "claude.launch",
         "claude.continue",
-        "claude.turn_start",
     )
 
 
@@ -280,7 +279,6 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
         "opencode.interrupt",
         "opencode.launch",
         "opencode.terminate",
-        "opencode.turn_start",
     )
     assert opencode.connection_capabilities == {
         "can_send_input": 1,

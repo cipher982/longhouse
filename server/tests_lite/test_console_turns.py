@@ -279,6 +279,32 @@ async def test_dispatch_next_console_turn_uses_run_id_as_durable_command_id(tmp_
 
 
 @pytest.mark.asyncio
+async def test_dispatch_timeout_keeps_durable_claim_starting_and_fifo_blocked(tmp_path):
+    db = _db(tmp_path)
+    session = _session(db)
+    thread = ensure_primary_thread(db, session)
+    set_thread_execution_target(thread, device_id="cinder", cwd="/tmp/longhouse")
+    db.commit()
+    first = enqueue_console_turn(db, session=session, owner_id=1, message="First", client_request_id="timeout-first")
+    second = enqueue_console_turn(db, session=session, owner_id=1, message="Second", client_request_id="timeout-second")
+
+    class Registry:
+        def supports(self, **_kwargs):
+            return True
+
+        async def send_command(self, **_kwargs):
+            return SimpleNamespace(transport_ok=False, message=None, error="reply timeout")
+
+    result = await dispatch_next_console_turn(db, owner_id=1, thread_id=thread.id, registry=Registry())
+
+    assert result.turn_id == first.turn_id
+    assert result.state == SESSION_TURN_STATE_STARTING
+    assert db.get(SessionTurn, first.turn_id).state == SESSION_TURN_STATE_STARTING
+    assert db.get(SessionTurn, second.turn_id).state == SESSION_TURN_STATE_QUEUED
+    assert claim_next_console_turn(db, thread_id=thread.id) is None
+
+
+@pytest.mark.asyncio
 async def test_dispatch_next_console_turn_fails_typed_when_adapter_is_missing(tmp_path):
     db = _db(tmp_path)
     session = _session(db)

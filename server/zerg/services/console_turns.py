@@ -348,7 +348,18 @@ async def dispatch_next_console_turn(
         timeout_secs=15,
     )
     message = dict(response.message or {})
-    if not response.transport_ok or message.get("ok") is not True:
+    if not response.transport_ok:
+        # A reply timeout does not prove the command failed. The Machine Agent
+        # may already own the durable run claim and have spawned the provider.
+        # Keep the FIFO blocked until runtime truth or an idempotent retry of
+        # this same run_id resolves the outcome.
+        return ConsoleTurnDispatch(
+            turn_id=claimed.turn_id,
+            run_id=claimed.run_id,
+            state=SESSION_TURN_STATE_STARTING,
+            error=str(response.error or "Console turn dispatch outcome is unknown"),
+        )
+    if message.get("ok") is not True:
         detail = message.get("error") if isinstance(message.get("error"), dict) else {}
         error = str(detail.get("message") or response.error or "Console turn dispatch failed")
         _fail_starting_console_turn(db, turn_id=claimed.turn_id, error=error)
@@ -438,7 +449,15 @@ async def enqueue_catalog_console_turn(
             timeout_secs=15,
         )
         response_message = dict(response.message or {})
-        if not response.transport_ok or response_message.get("ok") is not True:
+        if not response.transport_ok:
+            return CatalogConsoleTurn(
+                turn_id=turn_id,
+                run_id=run_id,
+                state=SESSION_TURN_STATE_STARTING,
+                created=bool(result.get("created")),
+                error=str(response.error or "Console turn dispatch outcome is unknown"),
+            )
+        if response_message.get("ok") is not True:
             detail = response_message.get("error") if isinstance(response_message.get("error"), dict) else {}
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
 
@@ -520,7 +539,15 @@ async def dispatch_catalog_claimed_turn(
             timeout_secs=15,
         )
         message = dict(response.message or {})
-        if not response.transport_ok or message.get("ok") is not True:
+        if not response.transport_ok:
+            return CatalogConsoleTurn(
+                turn_id=turn_id,
+                run_id=run_id,
+                state=SESSION_TURN_STATE_STARTING,
+                created=True,
+                error=str(response.error or "Console turn dispatch outcome is unknown"),
+            )
+        if message.get("ok") is not True:
             detail = message.get("error") if isinstance(message.get("error"), dict) else {}
             error = str(detail.get("message") or response.error or "Console turn dispatch failed")
     state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
