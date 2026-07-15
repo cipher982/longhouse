@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -21,6 +22,91 @@ from zerg.models.live_store import LiveTimelineCard
 from zerg.services.managed_provider_contracts import require_contract_for_provider
 
 LIVE_CATALOG_CARD_REVISION = "live-catalog-v1"
+
+
+def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> LiveSessionCatalog:
+    """Create an idle Console thread without a run or launch attempt."""
+
+    session_id = str(data["session_id"])
+    thread_id = str(data["thread_id"])
+    provider = str(data["provider"])
+    device_id = str(data["device_id"])
+    cwd = str(data["cwd"])
+    started_at = data["started_at"]
+    project = str(data.get("project") or "console")
+    display_name = str(data.get("display_name") or "").strip() or None
+    session = db.get(LiveSessionCatalog, session_id)
+    if session is None:
+        session = LiveSessionCatalog(
+            session_id=session_id,
+            provider=provider,
+            environment="development",
+            project=project,
+            device_id=device_id,
+            device_name=str(data.get("machine_name") or device_id),
+            cwd=cwd,
+            git_repo=data.get("git_repo"),
+            git_branch=data.get("git_branch"),
+            started_at=started_at,
+            last_activity_at=started_at,
+            user_messages=0,
+            assistant_messages=0,
+            tool_calls=0,
+            summary_title=display_name,
+            primary_thread_id=thread_id,
+            loop_mode="assist",
+            permission_mode="bypass",
+            launch_actor="user",
+            launch_surface=str(data.get("launch_surface") or "console"),
+            created_at=started_at,
+            updated_at=started_at,
+        )
+        db.add(session)
+    thread = db.get(LiveSessionThread, thread_id)
+    if thread is None:
+        db.add(
+            LiveSessionThread(
+                id=thread_id,
+                session_id=session_id,
+                provider=provider,
+                device_id=device_id,
+                cwd=cwd,
+                provider_config_json=json.dumps(data.get("provider_config") or {}, sort_keys=True),
+                branch_kind="root",
+                is_primary=1,
+                created_at=started_at,
+                updated_at=started_at,
+            )
+        )
+    card_values = {
+        "session_id": session_id,
+        "provider": provider,
+        "environment": "development",
+        "project": project,
+        "device_id": device_id,
+        "cwd": cwd,
+        "started_at": started_at,
+        "last_activity_at": started_at,
+        "summary_title": display_name,
+        "user_messages": 0,
+        "assistant_messages": 0,
+        "tool_calls": 0,
+        "transcript_revision": 0,
+        "archive_state": "pending",
+        "archive_lag_records": 0,
+        "origin_kind": None,
+        "hidden_from_default_timeline": 0,
+        "launch_actor": "user",
+        "launch_surface": str(data.get("launch_surface") or "console"),
+        "derived_state": "idle",
+        "derived_revision": "0",
+        "parser_revision": LIVE_CATALOG_CARD_REVISION,
+        "updated_at": started_at,
+    }
+    card_insert = sqlite_insert(LiveTimelineCard).values(**card_values)
+    db.execute(card_insert.on_conflict_do_nothing(index_elements=[LiveTimelineCard.session_id]))
+    db.flush()
+    return session
 
 
 def _upsert_live_thread_alias(

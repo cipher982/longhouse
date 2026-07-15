@@ -2378,6 +2378,51 @@ class CatalogStore:
                 "commit_seq": str(commit_seq),
             }
 
+    def create_console_session(self, *, data: dict[str, Any]) -> dict[str, Any]:
+        """Create durable idle Console identity without a run or launch attempt."""
+
+        from zerg.services.live_archive_outbox import enqueue_console_session_create_outbox
+        from zerg.services.live_catalog_launch import create_live_console_session_shell
+
+        observed_at = data["started_at"]
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                existing = orm.get(LiveSessionCatalog, str(data["session_id"]))
+                if existing is not None:
+                    exact = (
+                        str(existing.primary_thread_id or "") == str(data["thread_id"])
+                        and str(existing.provider) == str(data["provider"])
+                        and str(existing.device_id or "") == str(data["device_id"])
+                        and str(existing.cwd or "") == str(data["cwd"])
+                    )
+                    orm.rollback()
+                    return {
+                        "created": False,
+                        "exact_replay": exact,
+                        "idempotency_conflict": not exact,
+                        "session_id": str(data["session_id"]),
+                        "thread_id": str(data["thread_id"]),
+                        "commit_seq": str(_current_commit_seq(connection)),
+                    }
+                create_live_console_session_shell(orm, data=data)
+                enqueue_console_session_create_outbox(orm, session=data)
+                orm.commit()
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, observed_at)
+            return {
+                "created": True,
+                "exact_replay": False,
+                "idempotency_conflict": False,
+                "session_id": str(data["session_id"]),
+                "thread_id": str(data["thread_id"]),
+                "commit_seq": str(commit_seq),
+            }
+
     def create_local_launch(self, *, launch: dict[str, Any]) -> dict[str, Any]:
         """Atomically create a Helm launch shell, control attachment, and outbox row."""
 

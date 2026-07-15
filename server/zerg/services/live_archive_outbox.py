@@ -28,6 +28,7 @@ from zerg.models.live_store import LiveSessionLaunchAttempt
 from zerg.services.agents.kernel_writes import ensure_open_run_for_session
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
+from zerg.services.agents.kernel_writes import set_thread_execution_target
 from zerg.services.agents.kernel_writes import upsert_connection_for_run
 from zerg.services.live_catalog_launch import update_live_launch_catalog_outcome
 from zerg.services.live_launch_readiness import MANAGED_LOCAL_LAUNCH_OUTBOX_KIND
@@ -52,6 +53,7 @@ REMOTE_LAUNCH_KIND = REMOTE_LAUNCH_OUTBOX_KIND
 REMOTE_LAUNCH_OUTCOME_KIND = REMOTE_LAUNCH_OUTCOME_OUTBOX_KIND
 RUNTIME_EVENT_KIND = "runtime_event.v1"
 SESSION_INPUT_RECEIPT_KIND = "session_input_receipt.v1"
+CONSOLE_SESSION_CREATE_KIND = "console_session_create.v1"
 AUTO_RESUME_PHASES = {"thinking", "running"}
 ONE_SHOT_CONTROL_PLANE_BY_PROVIDER = {
     "codex": "codex_exec",
@@ -302,6 +304,17 @@ def _enqueue_json_outbox(
     return True
 
 
+def enqueue_console_session_create_outbox(db: Session, *, session: dict[str, Any]) -> bool:
+    session_id = str(session.get("session_id") or "").strip()
+    return _enqueue_json_outbox(
+        db,
+        idempotency_key=f"{CONSOLE_SESSION_CREATE_KIND}:{session_id}",
+        kind=CONSOLE_SESSION_CREATE_KIND,
+        payload={"session": _jsonable(session)},
+        completed=False,
+    )
+
+
 def session_input_receipt_idempotency_key(*, receipt_id: str) -> str:
     return f"{SESSION_INPUT_RECEIPT_KIND}:{str(receipt_id).strip()}"
 
@@ -456,6 +469,9 @@ def apply_live_archive_outbox_to_archive(row: LiveArchiveOutbox, archive_db: Ses
     if row.kind == REMOTE_LAUNCH_OUTCOME_KIND:
         _drain_remote_launch_outcome(row, archive_db)
         return {}
+    if row.kind == CONSOLE_SESSION_CREATE_KIND:
+        _drain_console_session_create(row, archive_db)
+        return {}
     if row.kind == SESSION_INPUT_RECEIPT_KIND:
         return _project_session_input_receipt(row, archive_db)
     raise ValueError(f"Unsupported live archive outbox kind: {row.kind}")
@@ -526,6 +542,62 @@ def _drain_remote_launch(row: LiveArchiveOutbox, archive_db: Session) -> None:
     payload = json.loads(row.payload_json or "{}")
     launch = _restore_jsonable(payload.get("launch") or {})
     _materialize_remote_launch(archive_db, launch, outcome=None)
+
+
+def _drain_console_session_create(row: LiveArchiveOutbox, archive_db: Session) -> None:
+    payload = json.loads(row.payload_json or "{}")
+    data = _restore_jsonable(payload.get("session") or {})
+    session_id = UUID(str(data["session_id"]))
+    thread_id = UUID(str(data["thread_id"]))
+    provider = str(data["provider"]).strip().lower()
+    device_id = str(data["device_id"]).strip()
+    cwd = str(data["cwd"]).strip()
+    started_at = normalize_utc(data.get("started_at")) or datetime.now(timezone.utc)
+    session = archive_db.get(AgentSession, session_id)
+    if session is None:
+        session = AgentSession(
+            id=session_id,
+            provider=provider,
+            environment="development",
+            project=str(data.get("project") or "").strip() or "console",
+            device_id=device_id,
+            device_name=str(data.get("machine_name") or "").strip() or device_id,
+            cwd=cwd,
+            git_repo=str(data.get("git_repo") or "").strip() or None,
+            git_branch=str(data.get("git_branch") or "").strip() or None,
+            started_at=started_at,
+            ended_at=None,
+            user_messages=0,
+            assistant_messages=0,
+            tool_calls=0,
+            loop_mode=SessionLoopMode.ASSIST.value,
+            launch_actor="user",
+            launch_surface=str(data.get("launch_surface") or "console"),
+        )
+        archive_db.add(session)
+        archive_db.flush()
+    thread = archive_db.get(SessionThread, thread_id)
+    if thread is None:
+        thread = SessionThread(
+            id=thread_id,
+            session_id=session.id,
+            provider=provider,
+            branch_kind="root",
+            is_primary=1,
+            created_at=started_at,
+            updated_at=started_at,
+        )
+        archive_db.add(thread)
+        archive_db.flush()
+    session.primary_thread_id = thread.id
+    session.device_id = device_id
+    session.cwd = cwd
+    set_thread_execution_target(
+        thread,
+        device_id=device_id,
+        cwd=cwd,
+        provider_config=dict(data.get("provider_config") or {}),
+    )
 
 
 def _drain_remote_launch_outcome(row: LiveArchiveOutbox, archive_db: Session) -> None:

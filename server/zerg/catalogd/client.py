@@ -50,6 +50,7 @@ _SAFE_RETRY_METHODS = {
     "schema.v2",
     "session.prefix.resolve.v2",
     "session.launch.idempotency.v2",
+    "session.console.create.v2",
     "session.launch.intent.create.v2",
     "session.launch.local.create.v2",
     "session.launch.outcome.apply.v2",

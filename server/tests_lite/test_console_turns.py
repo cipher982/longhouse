@@ -23,6 +23,7 @@ from zerg.services.console_turns import enqueue_console_turn
 from zerg.services.console_turns import dispatch_next_console_turn
 from zerg.services.console_turns import mark_console_turn_active
 from zerg.services.console_turns import settle_console_turn
+from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -55,6 +56,27 @@ def _session(db):
     db.add(session)
     db.flush()
     return session
+
+
+@pytest.mark.asyncio
+async def test_create_empty_console_session_has_target_but_no_run(tmp_path):
+    db = _db(tmp_path)
+
+    created = await create_empty_console_session(
+        db,
+        owner_id=1,
+        provider="codex",
+        device_id="cinder",
+        cwd="/tmp/longhouse",
+    )
+
+    session = db.get(AgentSession, created.session_id)
+    thread = ensure_primary_thread(db, session)
+    assert created.created is True
+    assert thread.id == created.thread_id
+    assert thread.device_id == "cinder"
+    assert thread.cwd == "/tmp/longhouse"
+    assert db.query(SessionRun).count() == 0
 
 
 def test_enqueue_console_turn_creates_linked_input_and_turn_atomically(tmp_path):

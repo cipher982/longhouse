@@ -277,6 +277,8 @@ class CatalogDaemon:
             return await self._finish_control_operation(request)
         if request.method == "session.launch.idempotency.v2":
             return await self._read_launch_idempotency(request)
+        if request.method == "session.console.create.v2":
+            return await self._create_console_session(request)
         if request.method == "session.launch.intent.create.v2":
             return await self._create_launch_intent(request)
         if request.method == "session.launch.local.create.v2":
@@ -1300,6 +1302,28 @@ class CatalogDaemon:
         result = await self._run_store(self._store.create_launch_intent, launch=launch)
         if result.get("idempotency_conflict") is True:
             return self._error(request, "conflict", "launch command identity was reused with different attributes")
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _create_console_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session"} or not isinstance(request.params["session"], dict):
+            return self._error(request, "invalid_request", "session.console.create.v2 requires session")
+        data = dict(request.params["session"])
+        required = {"session_id", "thread_id", "owner_id", "provider", "device_id", "cwd", "started_at"}
+        if not required.issubset(data):
+            return self._error(request, "invalid_request", "console session is missing required fields")
+        try:
+            uuid.UUID(str(data["session_id"]))
+            uuid.UUID(str(data["thread_id"]))
+            data["started_at"] = _parse_datetime(data["started_at"], "console session.started_at")
+        except ValueError:
+            return self._error(request, "invalid_request", "console session ids must be UUIDs")
+        if type(data["owner_id"]) is not int or data["owner_id"] <= 0:
+            return self._error(request, "invalid_request", "console session owner_id must be positive")
+        for field in ("provider", "device_id", "cwd"):
+            if not _is_string(data[field], maximum=1024):
+                return self._error(request, "invalid_request", f"console session {field} is invalid")
+        assert self._store is not None
+        result = await self._run_store(self._store.create_console_session, data=data)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _create_local_launch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
