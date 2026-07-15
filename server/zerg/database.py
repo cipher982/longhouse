@@ -1554,6 +1554,17 @@ def _migrate_agents_columns(engine: Engine) -> None:
                         """
                     )
                 )
+                conn.execute(
+                    text(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS ux_session_turns_one_console_owner
+                        ON session_turns(thread_id)
+                        WHERE thread_id IS NOT NULL
+                          AND source_kind = 'console'
+                          AND state IN ('starting', 'active', 'draining')
+                        """
+                    )
+                )
             conn.commit()
     except Exception:
         logger.debug("session_turns table migration skipped (table may not exist yet)", exc_info=True)

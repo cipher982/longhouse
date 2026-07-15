@@ -778,6 +778,13 @@ class SessionTurn(AgentsBase):
         ),
         Index("ix_session_turns_session_order", "session_id", "user_submitted_at", "created_at", "id"),
         Index("ix_session_turns_session_state_created", "session_id", "state", "created_at"),
+        Index(
+            "ux_session_turns_one_console_owner",
+            "thread_id",
+            unique=True,
+            postgresql_where=text("thread_id IS NOT NULL AND source_kind = 'console' AND state IN ('starting', 'active', 'draining')"),
+            sqlite_where=text("thread_id IS NOT NULL AND source_kind = 'console' AND state IN ('starting', 'active', 'draining')"),
+        ),
     )
 
 

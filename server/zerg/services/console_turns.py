@@ -3,20 +3,45 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from uuid import UUID
+from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionRun
+from zerg.models.agents import SessionThread
+from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import SessionTurn
+from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.session_graph_writes import ensure_primary_thread
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
+from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
+from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
+from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import create_session_input_row
+from zerg.services.session_turns import SESSION_TURN_SOURCE_CONSOLE
+from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
+from zerg.services.session_turns import SESSION_TURN_STATE_CANCELLED
+from zerg.services.session_turns import SESSION_TURN_STATE_COMPLETED
+from zerg.services.session_turns import SESSION_TURN_STATE_DRAINING
+from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_QUEUED
+from zerg.services.session_turns import SESSION_TURN_STATE_STARTING
 from zerg.services.session_turns import create_session_turn
+
+CONSOLE_EXECUTION_OWNER_STATES = frozenset(
+    {
+        SESSION_TURN_STATE_STARTING,
+        SESSION_TURN_STATE_ACTIVE,
+        SESSION_TURN_STATE_DRAINING,
+    }
+)
 
 
 class ConsoleTurnUnavailable(RuntimeError):
@@ -35,6 +60,21 @@ class EnqueuedConsoleTurn:
     turn_id: int
     state: str
     created: bool
+
+
+@dataclass(frozen=True)
+class ClaimedConsoleTurn:
+    input_id: int
+    turn_id: int
+    run_id: UUID
+    session_id: UUID
+    thread_id: UUID
+    provider: str
+    device_id: str
+    cwd: str
+    message: str
+    provider_config: dict[str, object]
+    resume_provider_thread_id: str | None
 
 
 def enqueue_console_turn(
@@ -87,6 +127,7 @@ def enqueue_console_turn(
             request_id=normalized_request_id,
             expected_user_text=normalized_message,
             session_input_id=int(input_row.id),
+            source_kind=SESSION_TURN_SOURCE_CONSOLE,
             initial_state=SESSION_TURN_STATE_QUEUED,
         )
         db.commit()
@@ -108,6 +149,152 @@ def enqueue_console_turn(
         if existing is None:
             raise
         return existing
+
+
+def claim_next_console_turn(db: Session, *, thread_id: UUID) -> ClaimedConsoleTurn | None:
+    """Claim the oldest queued turn and bind its single provider invocation."""
+
+    owner = (
+        db.query(SessionTurn.id)
+        .filter(
+            SessionTurn.thread_id == thread_id,
+            SessionTurn.source_kind == SESSION_TURN_SOURCE_CONSOLE,
+            SessionTurn.state.in_(tuple(CONSOLE_EXECUTION_OWNER_STATES)),
+        )
+        .first()
+    )
+    if owner is not None:
+        return None
+
+    turn = (
+        db.query(SessionTurn)
+        .filter(
+            SessionTurn.thread_id == thread_id,
+            SessionTurn.source_kind == SESSION_TURN_SOURCE_CONSOLE,
+            SessionTurn.state == SESSION_TURN_STATE_QUEUED,
+        )
+        .order_by(SessionTurn.user_submitted_at.asc(), SessionTurn.created_at.asc(), SessionTurn.id.asc())
+        .first()
+    )
+    if turn is None:
+        return None
+
+    thread = db.get(SessionThread, thread_id)
+    input_row = db.get(SessionInput, turn.session_input_id)
+    if thread is None or input_row is None:
+        raise ConsoleTurnConflict("queued turn is missing its thread or input")
+    device_id = str(thread.device_id or "").strip()
+    cwd = str(thread.cwd or "").strip()
+    if not device_id or not cwd:
+        raise ConsoleTurnUnavailable("execution_target_missing", "Session thread has no Console execution target")
+
+    try:
+        run = record_run(
+            db,
+            thread=thread,
+            provider=thread.provider,
+            host_id=device_id,
+            cwd=cwd,
+            run_id=uuid4(),
+        )
+        turn.run_id = run.id
+        turn.state = SESSION_TURN_STATE_STARTING
+        input_row.status = INPUT_STATUS_DELIVERING
+        input_row.delivery_request_id = str(run.id)
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return None
+
+    return ClaimedConsoleTurn(
+        input_id=int(input_row.id),
+        turn_id=int(turn.id),
+        run_id=UUID(str(run.id)),
+        session_id=UUID(str(turn.session_id)),
+        thread_id=UUID(str(thread.id)),
+        provider=str(thread.provider),
+        device_id=device_id,
+        cwd=cwd,
+        message=str(input_row.body),
+        provider_config=dict(thread.provider_config_json or {}),
+        resume_provider_thread_id=_provider_resume_identity(db, thread),
+    )
+
+
+def mark_console_turn_active(db: Session, *, turn_id: int) -> None:
+    turn, input_row, _run = _load_turn_lifecycle(db, turn_id)
+    if turn.state != SESSION_TURN_STATE_STARTING:
+        raise ConsoleTurnConflict(f"turn {turn_id} cannot become active from {turn.state}")
+    now = datetime.now(timezone.utc)
+    turn.state = SESSION_TURN_STATE_ACTIVE
+    turn.send_accepted_at = turn.send_accepted_at or now
+    turn.active_phase_observed_at = turn.active_phase_observed_at or now
+    input_row.status = INPUT_STATUS_DELIVERED
+    input_row.delivered_at = input_row.delivered_at or now
+    db.commit()
+
+
+def begin_console_turn_drain(db: Session, *, turn_id: int, terminal_phase: str | None = None) -> None:
+    turn, _input_row, _run = _load_turn_lifecycle(db, turn_id)
+    if turn.state not in {SESSION_TURN_STATE_STARTING, SESSION_TURN_STATE_ACTIVE}:
+        raise ConsoleTurnConflict(f"turn {turn_id} cannot drain from {turn.state}")
+    turn.state = SESSION_TURN_STATE_DRAINING
+    turn.terminal_phase = terminal_phase
+    turn.terminal_at = turn.terminal_at or datetime.now(timezone.utc)
+    db.commit()
+
+
+def settle_console_turn(
+    db: Session,
+    *,
+    turn_id: int,
+    outcome: str,
+    exit_status: str | None = None,
+) -> None:
+    terminal_states = {
+        SESSION_TURN_STATE_COMPLETED,
+        SESSION_TURN_STATE_FAILED,
+        SESSION_TURN_STATE_CANCELLED,
+    }
+    if outcome not in terminal_states:
+        raise ValueError(f"invalid Console turn outcome: {outcome}")
+    turn, input_row, run = _load_turn_lifecycle(db, turn_id)
+    if turn.state != SESSION_TURN_STATE_DRAINING:
+        raise ConsoleTurnConflict(f"turn {turn_id} cannot settle from {turn.state}")
+    now = datetime.now(timezone.utc)
+    turn.state = outcome
+    turn.durable_at = now
+    run.ended_at = now
+    run.exit_status = exit_status or outcome
+    if outcome != SESSION_TURN_STATE_COMPLETED:
+        input_row.status = INPUT_STATUS_FAILED
+        input_row.last_error = outcome
+    db.commit()
+
+
+def _load_turn_lifecycle(db: Session, turn_id: int) -> tuple[SessionTurn, SessionInput, SessionRun]:
+    turn = db.get(SessionTurn, turn_id)
+    if turn is None or turn.run_id is None or turn.session_input_id is None:
+        raise ConsoleTurnConflict(f"turn {turn_id} has no invocation")
+    input_row = db.get(SessionInput, turn.session_input_id)
+    run = db.get(SessionRun, turn.run_id)
+    if input_row is None or run is None:
+        raise ConsoleTurnConflict(f"turn {turn_id} has incomplete invocation linkage")
+    return turn, input_row, run
+
+
+def _provider_resume_identity(db: Session, thread: SessionThread) -> str | None:
+    row = (
+        db.query(SessionThreadAlias.alias_value)
+        .filter(
+            SessionThreadAlias.thread_id == thread.id,
+            SessionThreadAlias.provider == thread.provider,
+            SessionThreadAlias.alias_kind == "provider_session_id",
+        )
+        .order_by(SessionThreadAlias.last_seen_at.desc(), SessionThreadAlias.id.desc())
+        .first()
+    )
+    return str(row[0]).strip() if row and str(row[0]).strip() else None
 
 
 def _existing_turn(
