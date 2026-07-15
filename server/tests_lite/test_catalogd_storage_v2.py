@@ -16,6 +16,7 @@ from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.models import CatalogBase
 from zerg.catalogd.models import RawObject as LiveRawObject
 from zerg.catalogd.models import SessionTombstone as LiveSessionTombstone
+from zerg.catalogd.models import SourceEpoch as LiveSourceEpoch
 from zerg.catalogd.schema import create_catalog_engine
 from zerg.catalogd.schema import initialize_catalog_schema
 from zerg.catalogd.server import CatalogDaemon
@@ -937,6 +938,14 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
 
         await client.close()
         await daemon.close()
+        engine = create_catalog_engine(database_path)
+        with engine.begin() as connection:
+            connection.execute(
+                LiveSourceEpoch.__table__.update()
+                .where(LiveSourceEpoch.__table__.c.source_epoch == str(next_epoch))
+                .values(accepted_through=f"{999:020d}")
+            )
+        engine.dispose()
         daemon = CatalogDaemon(database_path=database_path, socket_path=socket_path)
         await daemon.start()
         client = CatalogClient(socket_path)
@@ -945,8 +954,23 @@ async def test_source_epoch_raw_manifest_is_idempotent_ordered_and_overlap_safe(
             {"source_epoch": str(next_epoch), "after_position": 0, "limit": 100},
         )
         assert high_manifest["objects"][0]["range_start"] == "0"
-        assert high_manifest["source_epoch"]["accepted_through"] == "1"
-        assert (await client.call("ping.v2"))["commit_seq"] == "4"
+        assert high_manifest["source_epoch"]["accepted_through"] == "999"
+        reclaimed = _raw_params(
+            epoch=next_epoch,
+            predecessor=epoch,
+            session_id=session_id,
+            start=1,
+            end=2,
+            records=(b"y",),
+            sealed_at=now,
+        )
+        assert (await client.call("storage.raw_object.commit.v2", reclaimed))["created"] is True
+        reclaimed_manifest = await client.call(
+            "storage.source_epoch.manifest.v2",
+            {"source_epoch": str(next_epoch), "after_position": 0, "limit": 100},
+        )
+        assert reclaimed_manifest["source_epoch"]["accepted_through"] == "2"
+        assert (await client.call("ping.v2"))["commit_seq"] == "5"
     finally:
         await client.close()
         await daemon.close()

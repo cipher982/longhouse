@@ -317,7 +317,12 @@ impl HeartbeatPayload {
         let spool_pending_count = stats.spool.pending_count().unwrap_or(0);
         let spool_dead_count = stats.spool.dead_count().unwrap_or(0);
         let archive_backlog = stats.spool.archive_backlog_snapshot().unwrap_or_default();
-        let storage_v2_outbox = pending_source_envelope::snapshot(stats.conn).unwrap_or_default();
+        let storage_v2_outbox = pending_source_envelope::snapshot(stats.conn).unwrap_or_else(|error| {
+            StorageV2OutboxSnapshot {
+                error: Some(error.to_string()),
+                ..StorageV2OutboxSnapshot::default()
+            }
+        });
         let parse_error_count_1h = stats.parse_tracker.count_last_hour();
         let consecutive_ship_failures = stats.tracker.consecutive_count();
         let disk_free_bytes = get_disk_free();

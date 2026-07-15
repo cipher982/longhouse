@@ -889,8 +889,11 @@ public struct MenuBarPanelView: View {
 
     private var queueBoardDetail: String {
         let dead = Int(snapshot.spoolDeadLabel) ?? 0
-        if dead > 0 || snapshot.storageBlockedCount > 0 {
-            return "Blocked"
+        if snapshot.storageBlockedCount > 0 {
+            return "Source conflicts"
+        }
+        if dead > 0 {
+            return "Dead letters"
         }
         let pending = (Int(snapshot.spoolPendingLabel) ?? 0) + snapshot.storagePendingCount
         if pending > 0 || snapshot.outboxCount > 0 {

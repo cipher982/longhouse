@@ -43,6 +43,7 @@ class _HealthClassificationContext:
     archive_dead_ranges: int
     archive_dead_bytes: int
     storage_blocked_sources: int
+    storage_outbox_error: str | None
     disk_free_bytes: Any
     outbox_count: int
     outbox_oldest: Any
@@ -331,6 +332,7 @@ def _health_flags(
     archive_dead_ranges: int,
     archive_dead_bytes: int,
     storage_blocked_sources: int,
+    storage_outbox_error: str | None,
     orphan_bridge_count: int,
     managed_degraded: int,
     managed_detached: int,
@@ -346,6 +348,8 @@ def _health_flags(
     if archive_dead_ranges > 0 or archive_dead_bytes > 0:
         degraded = True
     if storage_blocked_sources > 0:
+        degraded = True
+    if storage_outbox_error:
         degraded = True
     managed_broken, managed_degraded_flag = _managed_health_flags(
         orphan_bridge_count=orphan_bridge_count,
@@ -477,6 +481,8 @@ def _degraded_health_headline(
         headline = "Archive upload blocked" if archive_state == "blocked" else "Longhouse archive repair pending"
     elif "storage_v2_sources_blocked" in reasons:
         headline = "Source upload conflict"
+    elif "storage_v2_outbox_unreadable" in reasons:
+        headline = "Source upload state unavailable"
     elif "managed_session_detached" in reasons:
         if managed_detached == 1 and managed_attached == 0:
             headline = "Managed session is running in background"
@@ -532,6 +538,7 @@ def _health_classification_context(
         archive_dead_ranges=archive_dead_ranges,
         archive_dead_bytes=archive_dead_bytes,
         storage_blocked_sources=int(storage_v2_outbox.get("blocked_source_count") or 0),
+        storage_outbox_error=str(storage_v2_outbox.get("error") or "").strip() or None,
         disk_free_bytes=payload.get("disk_free_bytes"),
         outbox_count=int(outbox.get("file_count") or 0),
         outbox_oldest=outbox.get("oldest_age_seconds"),
@@ -609,6 +616,9 @@ def _collect_health_reasons(
     if context.storage_blocked_sources > 0:
         reasons.append("storage_v2_sources_blocked")
         _with_action(actions, "Inspect the blocked source proof in engine-status.json")
+    if context.storage_outbox_error:
+        reasons.append("storage_v2_outbox_unreadable")
+        _with_action(actions, "Inspect the storage-v2 outbox database error in engine-status.json")
     _add_managed_session_reasons(
         reasons,
         actions,
@@ -826,6 +836,7 @@ def _classify_health(
         archive_dead_ranges=context.archive_dead_ranges,
         archive_dead_bytes=context.archive_dead_bytes,
         storage_blocked_sources=context.storage_blocked_sources,
+        storage_outbox_error=context.storage_outbox_error,
         orphan_bridge_count=context.orphan_bridge_count,
         managed_degraded=context.managed_degraded,
         managed_detached=context.managed_detached,

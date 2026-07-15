@@ -430,7 +430,12 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         let blocked = storageBlockedCount
 
         if dead > 0 || blocked > 0 {
-            return "\(pending + immutablePending) pending · \(dead + blocked) blocked"
+            var parts: [String] = []
+            if pending > 0 { parts.append("spool \(pending)") }
+            if immutablePending > 0 { parts.append("immutable \(immutablePending)") }
+            if dead > 0 { parts.append("dead \(dead)") }
+            if blocked > 0 { parts.append("source conflicts \(blocked)") }
+            return parts.joined(separator: " · ")
         }
         if pending + immutablePending > 0 && outboxCount > 0 {
             return "\(pending + immutablePending) pending · \(outboxCount) outbox"
@@ -1390,6 +1395,7 @@ public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {
     public let latestBlockKind: String?
     public let latestBlockDetail: String?
     public let byteLimit: UInt64?
+    public let error: String?
 }
 
 public struct ArchiveBacklogStatus: Codable, Equatable, Sendable {

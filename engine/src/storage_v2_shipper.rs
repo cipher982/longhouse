@@ -385,24 +385,13 @@ async fn reconcile_storage_v2_conflict(
     prepared: &PreparedStorageV2Envelope,
     request_timeout: Duration,
 ) -> Result<Option<StorageV2ShipOutcome>> {
-    let manifest = match client
+    let manifest = client
         .storage_v2_source_manifest(
             &prepared.source_epoch.to_string(),
             prepared.range_start,
             Some(request_timeout),
         )
-        .await
-    {
-        Ok(manifest) => manifest,
-        Err(error)
-            if error
-                .downcast_ref::<crate::shipping::client::StorageV2ManifestRejected>()
-                .is_some() =>
-        {
-            return Ok(None);
-        }
-        Err(error) => return Err(error),
-    };
+        .await?;
     let Some(proven_through) = proven_manifest_prefix(prepared, &manifest)? else {
         return Ok(None);
     };
@@ -2224,7 +2213,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn source_conflict_quarantines_exact_intent_after_one_request() {
+    async fn manifest_unavailable_after_conflict_keeps_exact_intent_retryable() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -2270,7 +2259,7 @@ mod tests {
         };
         let client = ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap();
 
-        let first_error = ship_next_envelope(
+        let error = ship_next_envelope(
             &mut conn,
             &client,
             &capabilities(),
@@ -2282,48 +2271,20 @@ mod tests {
         )
         .await
         .unwrap_err();
-        let first_block = first_error
-            .downcast_ref::<StorageV2SourceBlocked>()
-            .unwrap();
-        assert!(first_block.newly_blocked);
-        assert_eq!(first_block.kind, "source_epoch_conflict");
+        assert!(error.to_string().contains("manifest returned 404"));
         server.await.unwrap();
 
-        let pending = pending_source_envelope::load_for_epoch(&conn, first_block.source_epoch)
+        let pending = pending_source_envelope::load_for_path(
+            &conn,
+            &stable_source_path(&path).to_string_lossy(),
+        )
             .unwrap()
             .unwrap();
         assert_eq!(pending.attempt_count, 1);
-        assert!(pending.blocked_at.is_some());
+        assert!(pending.blocked_at.is_none());
         let snapshot = pending_source_envelope::snapshot(&conn).unwrap();
-        assert_eq!(snapshot.pending_count, 0);
-        assert_eq!(snapshot.blocked_source_count, 1);
-        assert_eq!(snapshot.latest_block_kind.as_deref(), Some("source_epoch_conflict"));
-        assert!(snapshot.blocked_bytes > 0);
-
-        let second_error = ship_next_envelope(
-            &mut conn,
-            &client,
-            &capabilities(),
-            &path,
-            "claude",
-            None,
-            "live",
-            Duration::from_millis(100),
-        )
-        .await
-        .unwrap_err();
-        let second_block = second_error
-            .downcast_ref::<StorageV2SourceBlocked>()
-            .unwrap();
-        assert!(!second_block.newly_blocked);
-        assert_eq!(
-            pending_source_envelope::load_for_epoch(&conn, first_block.source_epoch)
-                .unwrap()
-                .unwrap()
-                .attempt_count,
-            1,
-            "quarantined work must not attempt the network again"
-        );
+        assert_eq!(snapshot.pending_count, 1);
+        assert_eq!(snapshot.blocked_source_count, 0);
     }
 
     #[tokio::test]

@@ -26,6 +26,7 @@ pub struct StorageV2OutboxSnapshot {
     pub latest_block_kind: Option<String>,
     pub latest_block_detail: Option<String>,
     pub byte_limit: u64,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,7 +178,8 @@ pub fn persist_or_load(
     }
     let current_bytes: i64 = tx.query_row(
         "SELECT COALESCE(SUM(length(request_body_zstd) + length(media_objects_zstd)), 0)
-         FROM pending_source_envelope",
+         FROM pending_source_envelope
+         WHERE blocked_at IS NULL",
         [],
         |row| row.get(0),
     )?;
@@ -325,6 +327,7 @@ pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
         latest_block_kind: latest_block.as_ref().and_then(|value| value.0.clone()),
         latest_block_detail: latest_block.and_then(|value| value.1),
         byte_limit: MAX_PENDING_OUTBOX_BYTES,
+        error: None,
     })
 }
 
@@ -569,12 +572,57 @@ fn from_sql_u64(index: usize, value: i64) -> rusqlite::Result<u64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pending_outbox_has_capacity, MAX_PENDING_OUTBOX_BYTES};
+    use super::{
+        pending_outbox_has_capacity, persist_or_load, quarantine, snapshot,
+        PendingSourceEnvelope, MAX_PENDING_OUTBOX_BYTES,
+    };
+    use crate::state::db::open_db;
+    use uuid::Uuid;
 
     #[test]
     fn pending_outbox_capacity_is_exact_and_overflow_safe() {
         assert!(pending_outbox_has_capacity(MAX_PENDING_OUTBOX_BYTES - 1, 1));
         assert!(!pending_outbox_has_capacity(MAX_PENDING_OUTBOX_BYTES, 1));
         assert!(!pending_outbox_has_capacity(u64::MAX, u64::MAX));
+    }
+
+    #[test]
+    fn quarantined_bytes_do_not_consume_live_prepare_capacity() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut conn = open_db(Some(&dir.path().join("state.db"))).unwrap();
+        let blocked_epoch = Uuid::new_v4();
+        let blocked = candidate(blocked_epoch, "blocked");
+        persist_or_load(&mut conn, &blocked).unwrap();
+        assert!(quarantine(&mut conn, blocked_epoch, "source_epoch_conflict", "proof mismatch").unwrap());
+        let live = candidate(Uuid::new_v4(), "live");
+        persist_or_load(&mut conn, &live).unwrap();
+
+        let state = snapshot(&conn).unwrap();
+        assert_eq!(state.blocked_source_count, 1);
+        assert_eq!(state.pending_count, 1);
+        assert_eq!(state.pending_bytes, 2);
+        assert_eq!(state.blocked_bytes, 2);
+    }
+
+    fn candidate(source_epoch: Uuid, source_path: &str) -> PendingSourceEnvelope {
+        PendingSourceEnvelope {
+            source_epoch,
+            source_path: source_path.to_string(),
+            range_start: 0,
+            range_end: 1,
+            envelope_id: "a".repeat(64),
+            request_body_zstd: vec![1],
+            media_objects_zstd: vec![2],
+            raw_bytes: 1,
+            event_count: 1,
+            has_reply_evidence: true,
+            has_more: false,
+            created_at: "2026-07-15T00:00:00Z".to_string(),
+            attempt_count: 0,
+            last_attempt_at: None,
+            blocked_at: None,
+            block_kind: None,
+            block_detail: None,
+        }
     }
 }

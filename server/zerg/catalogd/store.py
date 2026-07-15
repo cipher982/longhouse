@@ -4351,7 +4351,18 @@ class CatalogStore:
                 ).scalar_one_or_none()
                 if linked_session is not None and str(linked_session) != session_key:
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
-                accepted_through = str(epoch_row["accepted_through"])
+                existing_raw_ranges = connection.execute(
+                    select(raw.c.range_start, raw.c.range_end)
+                    .where(raw.c.source_epoch == epoch_key, raw.c.retired_at.is_(None))
+                    .order_by(raw.c.range_start.asc(), raw.c.range_end.asc())
+                ).all()
+                accepted_through = _u64_key(_contiguous_range_prefix(existing_raw_ranges))
+                if accepted_through != str(epoch_row["accepted_through"]):
+                    connection.execute(
+                        update(epoch)
+                        .where(epoch.c.source_epoch == epoch_key)
+                        .values(accepted_through=accepted_through, updated_at=datetime.now(UTC))
+                    )
 
             same_range = connection.execute(
                 select(raw.c.envelope_id).where(
@@ -7501,6 +7512,18 @@ def _raw_object_receipt(row) -> dict[str, object]:
         media_state=str(row["media_state"]),
         missing_media_hashes=missing,
     ).as_wire()
+
+
+def _contiguous_range_prefix(rows) -> int:
+    """Return the proven contiguous end, ignoring any legacy high-water mark."""
+    through = 0
+    for row in rows:
+        start = int(row[0])
+        end = int(row[1])
+        if start != through or end < start:
+            break
+        through = end
+    return through
 
 
 def _raw_object_manifest_dto(row) -> dict[str, Any]:
