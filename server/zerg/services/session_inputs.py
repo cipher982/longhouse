@@ -73,6 +73,34 @@ def create_session_input(
     client_request_id: str | None = None,
     delivery_request_id: str | None = None,
 ) -> SessionInput:
+    row = create_session_input_row(
+        db,
+        session_id=session_id,
+        text=text,
+        intent=intent,
+        status=status,
+        owner_id=owner_id,
+        client_request_id=client_request_id,
+        delivery_request_id=delivery_request_id,
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def create_session_input_row(
+    db: Session,
+    *,
+    session_id: UUID,
+    text: str,
+    intent: InputIntent,
+    status: InputStatus,
+    owner_id: int | None = None,
+    client_request_id: str | None = None,
+    delivery_request_id: str | None = None,
+) -> SessionInput:
+    """Create an input without committing so callers can compose one transaction."""
+
     if intent not in VALID_INTENTS:
         raise ValueError(f"invalid intent: {intent}")
     # Phase 2: stamp thread_id so Phase 3 can flip session_inputs to
@@ -91,8 +119,7 @@ def create_session_input(
         delivery_request_id=delivery_request_id,
     )
     db.add(row)
-    db.commit()
-    db.refresh(row)
+    db.flush()
     return row
 
 

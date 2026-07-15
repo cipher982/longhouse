@@ -52,15 +52,23 @@ SESSION_TURN_CONFIDENCE_VALUES = {
 }
 
 SESSION_TURN_STATE_CREATED = "created"
+SESSION_TURN_STATE_QUEUED = "queued"
+SESSION_TURN_STATE_STARTING = "starting"
 SESSION_TURN_STATE_SEND_ACCEPTED = "send_accepted"
 SESSION_TURN_STATE_ACTIVE = "active"
+SESSION_TURN_STATE_DRAINING = "draining"
 SESSION_TURN_STATE_TERMINAL = "terminal"
 SESSION_TURN_STATE_DURABLE = "durable"
+SESSION_TURN_STATE_COMPLETED = "completed"
+SESSION_TURN_STATE_CANCELLED = "cancelled"
 SESSION_TURN_STATE_FAILED = "failed"
 PENDING_RESPONSE_TURN_STATES = frozenset(
     {
+        SESSION_TURN_STATE_QUEUED,
+        SESSION_TURN_STATE_STARTING,
         SESSION_TURN_STATE_SEND_ACCEPTED,
         SESSION_TURN_STATE_ACTIVE,
+        SESSION_TURN_STATE_DRAINING,
         SESSION_TURN_STATE_TERMINAL,
     }
 )
@@ -231,6 +239,7 @@ def create_session_turn(
     user_submitted_at: datetime | None = None,
     expected_user_text: str | None = None,
     session_input_id: int | None = None,
+    initial_state: str = SESSION_TURN_STATE_CREATED,
 ) -> SessionTurn:
     if request_id is not None:
         existing = (
@@ -258,7 +267,7 @@ def create_session_turn(
         source_kind=_normalize_turn_source_kind(source_kind),
         timing_confidence=_normalize_turn_confidence(timing_confidence),
         expected_user_text_hash=hash_user_text(expected_user_text) if expected_user_text else None,
-        state=SESSION_TURN_STATE_CREATED,
+        state=initial_state,
         baseline_event_id=baseline_event_id if baseline_event_id and baseline_event_id > 0 else None,
         baseline_observation_cursor=baseline_observation_cursor
         if baseline_observation_cursor and baseline_observation_cursor > 0
