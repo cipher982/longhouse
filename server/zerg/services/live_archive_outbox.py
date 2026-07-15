@@ -573,6 +573,7 @@ def _drain_console_session_create(row: LiveArchiveOutbox, archive_db: Session) -
             loop_mode=SessionLoopMode.ASSIST.value,
             launch_actor="user",
             launch_surface=str(data.get("launch_surface") or "console"),
+            origin_kind="console",
         )
         archive_db.add(session)
         archive_db.flush()

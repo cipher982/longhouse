@@ -104,6 +104,7 @@ async def create_empty_console_session(
         loop_mode="assist",
         launch_actor="user",
         launch_surface=launch_surface,
+        origin_kind="console",
     )
     db.add(session)
     db.flush()

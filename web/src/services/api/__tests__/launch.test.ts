@@ -7,7 +7,7 @@ const baseMocks = vi.hoisted(() => ({
 
 vi.mock("../base", () => baseMocks);
 
-import { fetchWorkspaceSuggestions, launchRemoteSession, listMachines } from "../launch";
+import { createConsoleSession, fetchWorkspaceSuggestions, listMachines } from "../launch";
 
 describe("fetchWorkspaceSuggestions", () => {
   beforeEach(() => {
@@ -55,26 +55,26 @@ describe("listMachines", () => {
   });
 });
 
-describe("launchRemoteSession", () => {
+describe("createConsoleSession", () => {
   beforeEach(() => {
     baseMocks.request.mockReset();
     baseMocks.request.mockResolvedValue({
       session_id: "s1",
-      launch_state: "live",
-      execution_lifetime: "live_control",
-      launch_error_code: null,
-      launch_error_message: null,
+      thread_id: "t1",
+      created: true,
     });
   });
 
-  it("posts to /sessions/launch with the chosen provider", async () => {
-    await launchRemoteSession({ device_id: "cinder", provider: "claude", cwd: "/Users/me/repo" });
+  it("creates an empty Console session without a task", async () => {
+    await createConsoleSession({ device_id: "cinder", provider: "claude", cwd: "/Users/me/repo" });
 
     expect(baseMocks.request).toHaveBeenCalledWith(
-      "/sessions/launch",
+      "/sessions/console",
       expect.objectContaining({ method: "POST" }),
     );
     const body = JSON.parse((baseMocks.request.mock.calls[0][1] as RequestInit).body as string);
     expect(body).toMatchObject({ device_id: "cinder", provider: "claude", cwd: "/Users/me/repo" });
+    expect(body).not.toHaveProperty("initial_prompt");
+    expect(body).not.toHaveProperty("execution_lifetime");
   });
 });

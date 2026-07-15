@@ -1525,7 +1525,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/launch": {
+    "/api/sessions/console": {
         parameters: {
             query?: never;
             header?: never;
@@ -1535,14 +1535,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Launch Remote Session Endpoint
-         * @description Start a session on a user-owned machine via the Machine Agent control channel.
-         *
-         *     See docs/specs/remote-session-launch.md. Pre-allocates a session UUID,
-         *     records a ``SessionLaunchAttempt(state=pending)``, and dispatches
-         *     ``session.launch`` over the existing control WebSocket.
+         * Create Console Session Endpoint
+         * @description Create an empty Console conversation without starting a provider.
          */
-        post: operations["launch_remote_session_endpoint_sessions_launch_post"];
+        post: operations["create_console_session_endpoint_sessions_console_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2948,7 +2944,11 @@ export interface paths {
          */
         get: operations["list_sessions_agents_sessions_get"];
         put?: never;
-        post?: never;
+        /**
+         * Create Console Session
+         * @description Create one idle Console thread; no provider process starts here.
+         */
+        post: operations["create_console_session_agents_sessions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3146,7 +3146,11 @@ export interface paths {
          */
         get: operations["get_session_turns_agents_sessions__session_id__turns_get"];
         put?: never;
-        post?: never;
+        /**
+         * Create Console Turn
+         * @description Accept one normal Console message and start or queue its turn.
+         */
+        post: operations["create_console_turn_agents_sessions__session_id__turns_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4825,6 +4829,60 @@ export interface components {
              * @default true
              */
             clear_ended_at: boolean;
+        };
+        /** ConsoleSessionCreate */
+        ConsoleSessionCreate: {
+            /** Device Id */
+            device_id: string;
+            /** Provider */
+            provider: string;
+            /** Cwd */
+            cwd: string;
+            /** Project */
+            project?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Launch Surface
+             * @default api
+             */
+            launch_surface: string;
+        };
+        /** ConsoleSessionCreateRequest */
+        ConsoleSessionCreateRequest: {
+            /** Device Id */
+            device_id: string;
+            /** Provider */
+            provider: string;
+            /** Cwd */
+            cwd: string;
+            /** Project */
+            project?: string | null;
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Launch Surface
+             * @default web
+             */
+            launch_surface: string;
+        };
+        /** ConsoleTurnCreate */
+        ConsoleTurnCreate: {
+            /** Message */
+            message: string;
+            /** Client Request Id */
+            client_request_id: string;
+        };
+        /** ConsoleTurnCreateResponse */
+        ConsoleTurnCreateResponse: {
+            /** Turn Id */
+            turn_id: number;
+            /** Run Id */
+            run_id?: string | null;
+            /** State */
+            state: string;
+            /** Created */
+            created: boolean;
         };
         /**
          * ControlPath
@@ -7040,69 +7098,8 @@ export interface components {
             client_request_id: string;
         };
         /**
-         * RemoteSessionLaunchRequest
-         * @description User-initiated remote session launch request.
-         */
-        RemoteSessionLaunchRequest: {
-            /**
-             * Device Id
-             * @description Target enrolled device id
-             */
-            device_id: string;
-            /**
-             * Provider
-             * @description Provider CLI to launch (v1: codex only)
-             */
-            provider: string;
-            /**
-             * Cwd
-             * @description Absolute working directory on the target machine
-             */
-            cwd: string;
-            /**
-             * Git Repo
-             * @description Optional git repository path
-             */
-            git_repo?: string | null;
-            /**
-             * Git Branch
-             * @description Optional git branch name
-             */
-            git_branch?: string | null;
-            /**
-             * Project
-             * @description Optional project label
-             */
-            project?: string | null;
-            /**
-             * Display Name
-             * @description Optional display name
-             */
-            display_name?: string | null;
-            /**
-             * Initial Prompt
-             * @description Initial one-shot prompt
-             */
-            initial_prompt?: string | null;
-            /**
-             * Execution Lifetime
-             * @description Remote launch execution lifetime: one_shot|live_control. Omitted defaults to one_shot.
-             */
-            execution_lifetime?: ("one_shot" | "live_control") | null;
-            /**
-             * Client Request Id
-             * @description Optional idempotency key; repeated calls with the same value return the same session
-             */
-            client_request_id?: string | null;
-            /**
-             * Launch Surface
-             * @description Optional client launch surface: web, ios, or api
-             */
-            launch_surface?: string | null;
-        };
-        /**
          * RemoteSessionLaunchResponse
-         * @description Response from POST /api/sessions/launch.
+         * @description Result of explicitly continuing an existing Helm session.
          */
         RemoteSessionLaunchResponse: {
             /** Session Id */
@@ -10860,6 +10857,30 @@ export interface components {
             /** Workspaces */
             workspaces?: components["schemas"]["WorkspaceSuggestion"][];
         };
+        /** ConsoleSessionCreateResponse */
+        zerg__routers__agents_sessions__ConsoleSessionCreateResponse: {
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+            /**
+             * Thread Id
+             * Format: uuid
+             */
+            thread_id: string;
+            /** Created */
+            created: boolean;
+        };
+        /** ConsoleSessionCreateResponse */
+        zerg__routers__session_chat__ConsoleSessionCreateResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Thread Id */
+            thread_id: string;
+            /** Created */
+            created: boolean;
+        };
     };
     responses: never;
     parameters: never;
@@ -13279,7 +13300,7 @@ export interface operations {
             };
         };
     };
-    launch_remote_session_endpoint_sessions_launch_post: {
+    create_console_session_endpoint_sessions_console_post: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -13291,17 +13312,17 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RemoteSessionLaunchRequest"];
+                "application/json": components["schemas"]["ConsoleSessionCreateRequest"];
             };
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["RemoteSessionLaunchResponse"];
+                    "application/json": components["schemas"]["zerg__routers__session_chat__ConsoleSessionCreateResponse"];
                 };
             };
             /** @description Validation Error */
@@ -15990,6 +16011,39 @@ export interface operations {
             };
         };
     };
+    create_console_session_agents_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsoleSessionCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["zerg__routers__agents_sessions__ConsoleSessionCreateResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_archive_manifest_agents_sessions_archive_manifest_get: {
         parameters: {
             query?: {
@@ -16320,6 +16374,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionTurnsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_console_turn_agents_sessions__session_id__turns_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConsoleTurnCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConsoleTurnCreateResponse"];
                 };
             };
             /** @description Validation Error */

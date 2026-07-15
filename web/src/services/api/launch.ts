@@ -55,19 +55,6 @@ export type RemoteLaunchErrorCode =
   | "transcript_not_found"
   | "launch_timeout";
 
-export type RemoteSessionLaunchRequest = {
-  device_id: string;
-  provider: string;
-  cwd: string;
-  git_repo?: string | null;
-  git_branch?: string | null;
-  project?: string | null;
-  display_name?: string | null;
-  initial_prompt?: string | null;
-  execution_lifetime?: ExecutionLifetime | null;
-  client_request_id?: string | null;
-};
-
 export type RemoteSessionLaunchResponse = {
   session_id: string;
   launch_state: LaunchState;
@@ -107,15 +94,6 @@ export type RemoteSessionContinueRequest = {
   execution_lifetime?: ExecutionLifetime | null;
   client_request_id: string;
 };
-
-export async function launchRemoteSession(
-  body: RemoteSessionLaunchRequest,
-): Promise<RemoteSessionLaunchResponse> {
-  return request<RemoteSessionLaunchResponse>("/sessions/launch", {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
 
 export async function continueRemoteSession(
   sessionId: string,

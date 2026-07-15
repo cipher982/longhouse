@@ -40,7 +40,6 @@ _STREAMING_FRAGMENTS = ("/stream", "/chat", "/branch", "/ws")
 _TIMEOUT_OVERRIDES = {
     "/devices/tokens": INTERACTIVE_AUTH_TIMEOUT_SECONDS,
     "/agents/ingest": INGEST_TIMEOUT_SECONDS,
-    "/sessions/launch": MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS,
     "/sessions/managed-local/this-device": MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS,
     "/agents/sessions/": ARCHIVE_BUNDLE_TIMEOUT_SECONDS,
 }

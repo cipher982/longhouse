@@ -68,9 +68,7 @@ from zerg.services.managed_local_launcher import managed_provider_has_lease_obse
 from zerg.services.managed_local_launcher import resolve_managed_local_launch_runner
 from zerg.services.remote_session_launch import RemoteContinueParams
 from zerg.services.remote_session_launch import RemoteLaunchError
-from zerg.services.remote_session_launch import RemoteLaunchParams
 from zerg.services.remote_session_launch import continue_remote_session
-from zerg.services.remote_session_launch import launch_remote_session
 from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
 from zerg.services.session_chat_impl import SessionDraftReplyResponse
 from zerg.services.session_chat_impl import SessionLockInfo
@@ -107,15 +105,9 @@ from zerg.services.session_inputs import mark_failed as _mark_input_failed
 from zerg.services.session_inputs import retry_failed_input
 from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_CONTINUE_MESSAGE_LIFETIME
-from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME
 from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
-from zerg.services.session_launch_provenance import LAUNCH_ACTOR_HUMAN_UI
-from zerg.services.session_launch_provenance import LAUNCH_SURFACE_API
-from zerg.services.session_launch_provenance import LAUNCH_SURFACE_IOS
-from zerg.services.session_launch_provenance import LAUNCH_SURFACE_WEB
-from zerg.services.session_launch_provenance import normalize_launch_surface
 from zerg.services.session_locks import session_lock_manager
 from zerg.services.session_pause_requests import PENDING_STATUS as PAUSE_PENDING_STATUS
 from zerg.services.session_pause_requests import REPLY_TRANSPORT_CLAUDE_PULL
@@ -169,32 +161,8 @@ class SessionDraftReplyRequest(BaseModel):
     max_chars: int = Field(1200, ge=100, le=4000, description="Maximum draft length")
 
 
-class RemoteSessionLaunchRequest(BaseModel):
-    """User-initiated remote session launch request."""
-
-    device_id: str = Field(..., min_length=1, description="Target enrolled device id")
-    provider: str = Field(..., description="Provider CLI to launch (v1: codex only)")
-    cwd: str = Field(..., min_length=1, description="Absolute working directory on the target machine")
-    git_repo: str | None = Field(None, description="Optional git repository path")
-    git_branch: str | None = Field(None, description="Optional git branch name")
-    project: str | None = Field(None, description="Optional project label")
-    display_name: str | None = Field(None, description="Optional display name")
-    initial_prompt: str | None = Field(None, min_length=1, max_length=20000, description="Initial one-shot prompt")
-    execution_lifetime: RemoteExecutionLifetime | None = Field(
-        None,
-        description="Remote launch execution lifetime: one_shot|live_control. Omitted defaults to one_shot.",
-    )
-    client_request_id: str | None = Field(
-        None,
-        min_length=1,
-        max_length=64,
-        description="Optional idempotency key; repeated calls with the same value return the same session",
-    )
-    launch_surface: str | None = Field(None, description="Optional client launch surface: web, ios, or api")
-
-
 class RemoteSessionLaunchResponse(BaseModel):
-    """Response from POST /api/sessions/launch."""
+    """Result of explicitly continuing an existing Helm session."""
 
     session_id: str
     launch_state: RemoteLaunchLifecycleState
@@ -1818,64 +1786,6 @@ async def create_console_session_endpoint(
     )
 
 
-@router.post("/launch", response_model=RemoteSessionLaunchResponse)
-async def launch_remote_session_endpoint(
-    body: RemoteSessionLaunchRequest,
-    db: Session = Depends(_catalog_control_db_dependency),
-    current_user: User = Depends(get_current_browser_route_user),
-) -> RemoteSessionLaunchResponse:
-    """Start a session on a user-owned machine via the Machine Agent control channel.
-
-    See docs/specs/remote-session-launch.md. Pre-allocates a session UUID,
-    records a ``SessionLaunchAttempt(state=pending)``, and dispatches
-    ``session.launch`` over the existing control WebSocket.
-    """
-    launch_surface = LAUNCH_SURFACE_API
-    if body.launch_surface is not None:
-        launch_surface = normalize_launch_surface(body.launch_surface) or ""
-        if launch_surface not in {LAUNCH_SURFACE_API, LAUNCH_SURFACE_WEB, LAUNCH_SURFACE_IOS}:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="launch_surface must be one of: api, web, ios",
-            )
-    try:
-        result = await launch_remote_session(
-            db,
-            RemoteLaunchParams(
-                owner_id=int(current_user.id),
-                device_id=body.device_id,
-                provider=body.provider,
-                cwd=body.cwd,
-                git_repo=body.git_repo,
-                git_branch=body.git_branch,
-                project=body.project,
-                display_name=body.display_name,
-                initial_prompt=body.initial_prompt,
-                execution_lifetime=body.execution_lifetime or DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME,
-                client_request_id=body.client_request_id,
-                launch_actor=LAUNCH_ACTOR_HUMAN_UI,
-                launch_surface=launch_surface,
-            ),
-        )
-    except RemoteLaunchError as exc:
-        if db is not None:
-            db.rollback()
-        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.detail}) from exc
-    except Exception:
-        if db is not None:
-            db.rollback()
-        logger.exception("Remote session launch failed unexpectedly")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Remote session launch failed")
-
-    return RemoteSessionLaunchResponse(
-        session_id=str(result.session_id),
-        launch_state=result.launch_state,
-        execution_lifetime=result.execution_lifetime,
-        launch_error_code=result.launch_error_code,
-        launch_error_message=result.launch_error_message,
-    )
-
-
 @router.post("/{session_id}/continue", response_model=RemoteSessionLaunchResponse)
 async def continue_remote_session_endpoint(
     session_id: uuid.UUID,
@@ -2165,7 +2075,7 @@ async def _create_catalog_session_input_response(
 ) -> SessionInputResponse:
     """Live-receipt authoritative input path used when the cold DB is absent."""
 
-    if str(getattr(source_session, "launch_surface", "") or "") == "console":
+    if str(getattr(source_session, "origin_kind", "") or "") == "console":
         client_request_id = _client_request_id_for_input(body)
         try:
             turn = await enqueue_catalog_console_turn(
@@ -2690,7 +2600,7 @@ async def _create_session_input_response(
         )
     thread = ensure_primary_thread(db, source_session)
     if (
-        str(getattr(source_session, "launch_surface", "") or "") == "console"
+        str(getattr(source_session, "origin_kind", "") or "") == "console"
         and str(thread.device_id or "").strip()
         and str(thread.cwd or "").strip()
     ):

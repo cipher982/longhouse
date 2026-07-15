@@ -1016,40 +1016,6 @@ extension LonghouseAPI {
         path.replacingOccurrences(of: #"^/Users/[^/]+"#, with: "~", options: .regularExpression)
     }
 
-    func launchRemoteSession(
-        deviceId: String,
-        provider: String = "codex",
-        cwd: String,
-        initialPrompt: String? = nil,
-        executionLifetime: RemoteExecutionLifetime = .oneShot,
-        displayName: String? = nil,
-        clientRequestId: String? = nil
-    ) async throws -> RemoteSessionLaunchResponse {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/launch"))
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.addValue("application/json", forHTTPHeaderField: "Accept")
-        var body: [String: Any] = [
-            "device_id": deviceId,
-            "provider": provider,
-            "cwd": cwd,
-            "execution_lifetime": executionLifetime.rawValue,
-        ]
-        if let initialPrompt, !initialPrompt.isEmpty { body["initial_prompt"] = initialPrompt }
-        if let displayName, !displayName.isEmpty { body["display_name"] = displayName }
-        if let clientRequestId, !clientRequestId.isEmpty { body["client_request_id"] = clientRequestId }
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, httpResponse) = try await data(for: request)
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            if let structured = Self.parseLaunchError(statusCode: httpResponse.statusCode, data: data) {
-                throw structured
-            }
-            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
-        }
-        return try JSONDecoder.snakeCase.decode(RemoteSessionLaunchResponse.self, from: data)
-    }
-
     func createConsoleSession(
         deviceId: String,
         provider: String,

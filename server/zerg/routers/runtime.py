@@ -564,6 +564,41 @@ async def ingest_runtime_observation_batch(
 
         await _run_runtime_followups(push_contexts, db)
 
+        terminal_events = [
+            event
+            for event in events
+            if event.kind == "terminal_signal"
+            and str((event.payload or {}).get("terminal_state") or "") in {"run_completed", "run_failed", "run_cancelled"}
+        ]
+        if owner_id is not None and terminal_events:
+            from zerg.database import get_session_factory
+            from zerg.models.agents import SessionTurn
+            from zerg.services.console_turns import dispatch_next_console_turn
+
+            SessionLocal = get_session_factory()
+            with SessionLocal() as turn_db:
+                thread_ids = {
+                    thread_id
+                    for event in terminal_events
+                    if (
+                        thread_id := event.thread_id
+                        or (
+                            turn_db.query(SessionTurn.thread_id)
+                            .filter(SessionTurn.run_id == event.run_id, SessionTurn.source_kind == "console")
+                            .scalar()
+                            if event.run_id is not None
+                            else None
+                        )
+                    )
+                    is not None
+                }
+                for thread_id in thread_ids:
+                    await dispatch_next_console_turn(
+                        turn_db,
+                        owner_id=int(owner_id),
+                        thread_id=thread_id,
+                    )
+
         return result
     except HTTPException:
         raise

@@ -58,6 +58,7 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
             permission_mode="bypass",
             launch_actor="user",
             launch_surface=str(data.get("launch_surface") or "console"),
+            origin_kind="console",
             created_at=started_at,
             updated_at=started_at,
         )
@@ -94,7 +95,7 @@ def create_live_console_session_shell(db: Session, *, data: dict[str, Any]) -> L
         "transcript_revision": 0,
         "archive_state": "pending",
         "archive_lag_records": 0,
-        "origin_kind": None,
+        "origin_kind": "console",
         "hidden_from_default_timeline": 0,
         "launch_actor": "user",
         "launch_surface": str(data.get("launch_surface") or "console"),
