@@ -972,6 +972,12 @@ public struct RemoteSessionLaunchResponse: Decodable, Sendable {
     public let launchErrorMessage: String?
 }
 
+public struct ConsoleSessionCreateResponse: Decodable, Sendable {
+    public let sessionId: String
+    public let threadId: String
+    public let created: Bool
+}
+
 extension LonghouseAPI {
     func listMachines() async throws -> [MachineDirectoryEntry] {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/machines"))
@@ -1042,6 +1048,34 @@ extension LonghouseAPI {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         return try JSONDecoder.snakeCase.decode(RemoteSessionLaunchResponse.self, from: data)
+    }
+
+    func createConsoleSession(
+        deviceId: String,
+        provider: String,
+        cwd: String,
+        displayName: String? = nil
+    ) async throws -> ConsoleSessionCreateResponse {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/console"))
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        var body: [String: Any] = [
+            "device_id": deviceId,
+            "provider": provider,
+            "cwd": cwd,
+            "launch_surface": "ios",
+        ]
+        if let displayName, !displayName.isEmpty { body["display_name"] = displayName }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
+                throw structured
+            }
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        return try JSONDecoder.snakeCase.decode(ConsoleSessionCreateResponse.self, from: data)
     }
 
     static func parseLaunchError(statusCode: Int, data: Data) -> LonghouseAPIError? {

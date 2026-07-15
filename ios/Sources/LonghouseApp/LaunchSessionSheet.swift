@@ -17,8 +17,6 @@ struct LaunchSessionSheet: View {
 
     @State private var selectedDeviceId: String = ""
     @State private var selectedProvider: String = ""
-    @State private var executionLifetime: RemoteExecutionLifetime = .liveControl
-    @State private var initialPrompt: String = ""
     @State private var workspaces: [WorkspaceSuggestion]
     @State private var loadingWorkspaces = false
     @State private var workspaceError: String?
@@ -39,7 +37,6 @@ struct LaunchSessionSheet: View {
             let provider = first.defaultProvider ?? ""
             _selectedDeviceId = State(initialValue: first.deviceId)
             _selectedProvider = State(initialValue: provider)
-            _executionLifetime = State(initialValue: first.launch.defaultExecutionLifetime ?? .liveControl)
         } else if let first = previewMachines?.first {
             _selectedDeviceId = State(initialValue: first.deviceId)
         }
@@ -64,16 +61,8 @@ struct LaunchSessionSheet: View {
         cwd.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var selectedProviderOption: MachineLaunchProviderOption? {
-        selectedMachine?.launch.providers.first { $0.provider == selectedProvider }
-    }
-
     private var availableProviders: [String] {
         selectedMachine?.remoteLaunchProviders ?? []
-    }
-
-    private var supportedExecutionLifetimes: [RemoteExecutionLifetime] {
-        selectedProviderOption?.executionLifetimes ?? []
     }
 
     private var canSubmit: Bool {
@@ -81,8 +70,7 @@ struct LaunchSessionSheet: View {
             && (selectedMachine?.isLaunchable ?? false)
             && !selectedProvider.isEmpty
             && normalizedCwd.starts(with: "/")
-            && supportedExecutionLifetimes.contains(executionLifetime)
-            && (executionLifetime != .oneShot || !initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            && availableProviders.contains(selectedProvider)
     }
 
     private var usesPreviewData: Bool {
@@ -170,12 +158,11 @@ struct LaunchSessionSheet: View {
                             ) { provider in
                                 selectedProvider = provider
                                 submitError = nil
-                                applyDefaultLifetimeForSelectedProvider()
                             }
                         } label: {
                             LaunchSummaryRow(
                                 title: providerDisplayName(selectedProvider),
-                                subtitle: "Agent · \(executionLifetimeLabel(executionLifetime))",
+                                subtitle: "Coding agent",
                                 showsChevron: true
                             )
                         }
@@ -183,7 +170,7 @@ struct LaunchSessionSheet: View {
                     } else {
                         LaunchSummaryRow(
                             title: providerDisplayName(selectedProvider),
-                            subtitle: "Agent · \(executionLifetimeLabel(executionLifetime))"
+                            subtitle: "Coding agent"
                         )
                     }
 
@@ -209,40 +196,9 @@ struct LaunchSessionSheet: View {
                     .buttonStyle(.plain)
                 }
 
-                if executionLifetime == .oneShot {
-                    launchSectionTitle("Task")
-                    TextField("What should the agent do?", text: $initialPrompt, axis: .vertical)
-                        .lineLimit(4 ... 8)
-                        .padding(14)
-                        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-                        .onChange(of: initialPrompt) { _, _ in submitError = nil }
-                }
-
                 LaunchCard {
                     DisclosureGroup("Advanced options") {
                         VStack(alignment: .leading, spacing: 14) {
-                            if supportedExecutionLifetimes.count > 1 {
-                                Text("Execution")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                ForEach(supportedExecutionLifetimes, id: \.self) { lifetime in
-                                    Button {
-                                        executionLifetime = lifetime
-                                        submitError = nil
-                                    } label: {
-                                        HStack {
-                                            Text(executionLifetimeLabel(lifetime))
-                                                .foregroundStyle(.primary)
-                                            Spacer()
-                                            if lifetime == executionLifetime {
-                                                Image(systemName: "checkmark")
-                                            }
-                                        }
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                                Divider()
-                            }
                             TextField("Session name (optional)", text: $displayName)
                                 .textInputAutocapitalization(.never)
                                 .autocorrectionDisabled(true)
@@ -331,7 +287,6 @@ struct LaunchSessionSheet: View {
                let first = result.first(where: { Self.canStartInteractiveSession($0) }) ?? result.first {
                 selectedDeviceId = first.deviceId
                 selectedProvider = first.defaultProvider ?? ""
-                executionLifetime = first.launch.defaultExecutionLifetime ?? .liveControl
             }
         } catch {
             loadError = (error as? LocalizedError)?.errorDescription ?? "Could not load machines."
@@ -342,22 +297,9 @@ struct LaunchSessionSheet: View {
     private func selectMachine(_ machine: MachineDirectoryEntry) {
         selectedDeviceId = machine.deviceId
         selectedProvider = machine.defaultProvider ?? ""
-        executionLifetime = machine.launch.defaultExecutionLifetime ?? .liveControl
         cwd = ""
         workspaceError = nil
         submitError = nil
-    }
-
-    private func applyDefaultLifetimeForSelectedProvider() {
-        guard let option = selectedProviderOption else { return }
-        if let preferred = selectedMachine?.launch.defaultExecutionLifetime,
-           option.executionLifetimes.contains(preferred) {
-            executionLifetime = preferred
-        } else if option.executionLifetimes.contains(.oneShot) {
-            executionLifetime = .oneShot
-        } else {
-            executionLifetime = .liveControl
-        }
     }
 
     private func loadWorkspaceSuggestions(for deviceId: String) async {
@@ -411,21 +353,12 @@ struct LaunchSessionSheet: View {
         defer { submitting = false }
         let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            let response = try await api.launchRemoteSession(
+            let response = try await api.createConsoleSession(
                 deviceId: selectedDeviceId,
                 provider: selectedProvider,
                 cwd: normalizedCwd,
-                initialPrompt: executionLifetime == .oneShot
-                    ? initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
-                    : nil,
-                executionLifetime: executionLifetime,
-                displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName,
-                clientRequestId: "launch-\(UUID().uuidString)"
+                displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName
             )
-            if response.launchState == .launchFailed || response.launchState == .launchOrphaned || response.launchState == .unknown {
-                submitError = formatLaunchFailure(response)
-                return
-            }
             onLaunched(response.sessionId)
         } catch let LonghouseAPIError.structured(_, _, message) {
             submitError = message.isEmpty ? "Launch failed." : message
@@ -477,10 +410,6 @@ struct LaunchSessionSheet: View {
         }
     }
 
-    private func executionLifetimeLabel(_ lifetime: RemoteExecutionLifetime) -> String {
-        lifetime == .oneShot ? "Run once" : "Keep session open"
-    }
-
     @ViewBuilder
     private func launchSectionTitle(_ title: String) -> some View {
         Text(title.uppercased())
@@ -501,16 +430,6 @@ struct LaunchSessionSheet: View {
         }
     }
 
-    private func formatLaunchFailure(_ response: RemoteSessionLaunchResponse) -> String {
-        let message = response.launchErrorMessage?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let message, !message.isEmpty { return message }
-        let code = response.launchErrorCode?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let code, !code.isEmpty { return code }
-        if response.launchState == .unknown {
-            return "Launch state was not recognized by this app build."
-        }
-        return "Launch failed."
-    }
 }
 
 private enum LaunchStatusStyle {
