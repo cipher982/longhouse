@@ -142,7 +142,8 @@ mod tests {
 
     #[test]
     fn parse_process_fact_extracts_pid_tty_stat_lstart_command() {
-        let line = "  4242 ttys000  S+   Mon May  5 11:58:00 2026 opencode serve --hostname 127.0.0.1";
+        let line =
+            "  4242 ttys000  S+   Mon May  5 11:58:00 2026 opencode serve --hostname 127.0.0.1";
         let (pid, fact) = parse_process_fact(line).unwrap();
         assert_eq!(pid, 4242);
         assert_eq!(fact.pid, 4242);

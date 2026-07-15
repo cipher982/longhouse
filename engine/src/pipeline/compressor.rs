@@ -319,8 +319,8 @@ pub fn build_payload_with_source_lines<'a>(
         .as_deref()
         .and_then(normalize_hidden_origin_kind)
         .or_else(hidden_origin_kind_from_env);
-    let is_sidechain = metadata.is_sidechain
-        || std::env::var("LONGHOUSE_IS_SIDECHAIN").as_deref() == Ok("1");
+    let is_sidechain =
+        metadata.is_sidechain || std::env::var("LONGHOUSE_IS_SIDECHAIN").as_deref() == Ok("1");
     let (launch_actor, launch_surface) = sanitize_launch_provenance(
         origin_kind.as_deref(),
         is_sidechain,

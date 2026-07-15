@@ -76,19 +76,11 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<CursorHelmObservation>
         let Ok(state) = serde_json::from_slice::<CursorHelmStateFile>(&bytes) else {
             continue;
         };
-        let session_id = state
-            .session_id
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        let session_id = state.session_id.unwrap_or_default().trim().to_string();
         if session_id.is_empty() {
             continue;
         }
-        let socket_str = state
-            .socket_path
-            .unwrap_or_default()
-            .trim()
-            .to_string();
+        let socket_str = state.socket_path.unwrap_or_default().trim().to_string();
         let socket_path = if socket_str.is_empty() {
             None
         } else {
@@ -99,10 +91,7 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<CursorHelmObservation>
             .and_then(|pid| i32::try_from(pid).ok())
             .map(pid_alive)
             .unwrap_or(false);
-        let socket_present = socket_path
-            .as_ref()
-            .map(|p| p.exists())
-            .unwrap_or(false);
+        let socket_present = socket_path.as_ref().map(|p| p.exists()).unwrap_or(false);
         let ready = state.ready.unwrap_or(false);
         let live = launcher_alive && socket_present && ready;
         out.push(CursorHelmObservation {
@@ -182,7 +171,10 @@ mod tests {
         fs::File::create(&socket).unwrap();
         write_state(dir.path(), "sess-dead-pid", &socket, Some(2_000_000));
         let obs = collect_observations_from(dir.path());
-        let dead = obs.iter().find(|o| o.session_id == "sess-dead-pid").unwrap();
+        let dead = obs
+            .iter()
+            .find(|o| o.session_id == "sess-dead-pid")
+            .unwrap();
         assert!(!dead.live);
     }
 
@@ -190,7 +182,12 @@ mod tests {
     fn missing_socket_is_not_live() {
         let dir = tmp_dir();
         let socket = dir.path().join("absent.sock");
-        write_state(dir.path(), "sess-no-sock", &socket, Some(std::process::id()));
+        write_state(
+            dir.path(),
+            "sess-no-sock",
+            &socket,
+            Some(std::process::id()),
+        );
         let obs = collect_observations_from(dir.path());
         let no_sock = obs.iter().find(|o| o.session_id == "sess-no-sock").unwrap();
         assert!(!no_sock.live);
@@ -201,9 +198,18 @@ mod tests {
         let dir = tmp_dir();
         let socket = dir.path().join("c.sock");
         fs::File::create(&socket).unwrap();
-        write_state_with_ready(dir.path(), "sess-not-ready", &socket, Some(std::process::id()), false);
+        write_state_with_ready(
+            dir.path(),
+            "sess-not-ready",
+            &socket,
+            Some(std::process::id()),
+            false,
+        );
         let obs = collect_observations_from(dir.path());
-        let pending = obs.iter().find(|o| o.session_id == "sess-not-ready").unwrap();
+        let pending = obs
+            .iter()
+            .find(|o| o.session_id == "sess-not-ready")
+            .unwrap();
         assert!(!pending.live);
     }
 

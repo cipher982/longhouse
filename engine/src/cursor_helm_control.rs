@@ -35,10 +35,9 @@ const SOCKET_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// Directory the Helm launcher writes per-session state files into:
 /// `~/.longhouse/managed-local/cursor-helm/`.
 pub fn default_cursor_helm_state_dir() -> Option<PathBuf> {
-    get_longhouse_home().ok().map(|home| {
-        home.join("managed-local")
-            .join("cursor-helm")
-    })
+    get_longhouse_home()
+        .ok()
+        .map(|home| home.join("managed-local").join("cursor-helm"))
 }
 
 /// Resolve the state directory, honoring an explicit override (tests / isolation).
@@ -123,7 +122,10 @@ pub struct CursorHelmCommandSummary {
     pub stderr: String,
 }
 
-fn load_state(session_id: &str, state_root: Option<&Path>) -> std::result::Result<CursorHelmState, CursorHelmControlError> {
+fn load_state(
+    session_id: &str,
+    state_root: Option<&Path>,
+) -> std::result::Result<CursorHelmState, CursorHelmControlError> {
     let path = state_file_path(session_id, state_root).map_err(CursorHelmControlError::failed)?;
     let bytes = fs::read(&path).map_err(|_| {
         CursorHelmControlError::not_attached(format!(
@@ -131,23 +133,15 @@ fn load_state(session_id: &str, state_root: Option<&Path>) -> std::result::Resul
             path.display()
         ))
     })?;
-    let state: CursorHelmStateFile =
-        serde_json::from_slice(&bytes).map_err(|e| CursorHelmControlError::failed(e.to_string()))?;
-    let parsed_session_id = state
-        .session_id
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let state: CursorHelmStateFile = serde_json::from_slice(&bytes)
+        .map_err(|e| CursorHelmControlError::failed(e.to_string()))?;
+    let parsed_session_id = state.session_id.unwrap_or_default().trim().to_string();
     if parsed_session_id.is_empty() || parsed_session_id != session_id {
         return Err(CursorHelmControlError::not_attached(
             "cursor helm state session_id mismatch",
         ));
     }
-    let socket_str = state
-        .socket_path
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+    let socket_str = state.socket_path.unwrap_or_default().trim().to_string();
     if socket_str.is_empty() {
         return Err(CursorHelmControlError::not_attached(
             "cursor helm state missing socket_path",
@@ -166,9 +160,7 @@ fn load_state(session_id: &str, state_root: Option<&Path>) -> std::result::Resul
             ));
         }
     }
-    Ok(CursorHelmState {
-        socket_path,
-    })
+    Ok(CursorHelmState { socket_path })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -224,9 +216,7 @@ async fn dispatch_command(
         ))
     })?;
     let mut stream = connect.map_err(|e| {
-        CursorHelmControlError::not_attached(format!(
-            "cursor helm socket connect failed: {e}"
-        ))
+        CursorHelmControlError::not_attached(format!("cursor helm socket connect failed: {e}"))
     })?;
 
     use tokio::io::AsyncWriteExt;
@@ -255,14 +245,13 @@ async fn dispatch_command(
     parse_reply(&reply_bytes)
 }
 
-fn parse_reply(bytes: &[u8]) -> std::result::Result<CursorHelmCommandSummary, CursorHelmControlError> {
+fn parse_reply(
+    bytes: &[u8],
+) -> std::result::Result<CursorHelmCommandSummary, CursorHelmControlError> {
     let reply: Value =
         serde_json::from_slice(bytes).map_err(|e| CursorHelmControlError::failed(e.to_string()))?;
     if reply.get("ok").and_then(Value::as_bool) == Some(true) {
-        let exit_code = reply
-            .get("exit_code")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
+        let exit_code = reply.get("exit_code").and_then(Value::as_i64).unwrap_or(0);
         let stdout = reply
             .get("stdout")
             .and_then(Value::as_str)
@@ -338,10 +327,8 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn tmp_state_root() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "cursor-helm-control-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("cursor-helm-control-test-{}", std::process::id()));
         let _ = fs::create_dir_all(&dir);
         dir
     }
@@ -386,7 +373,11 @@ mod tests {
         let session_id = "send-ok-session";
         let socket = root.join("send-ok.sock");
         write_state(&root, session_id, &socket, None);
-        let _server = echo_server(&socket, json!({"ok": true, "exit_code": 0, "stdout": "", "stderr": ""})).await;
+        let _server = echo_server(
+            &socket,
+            json!({"ok": true, "exit_code": 0, "stdout": "", "stderr": ""}),
+        )
+        .await;
 
         let summary = send_text(session_id, "hello", Some(&root)).await.unwrap();
         assert_eq!(summary.exit_code, 0);

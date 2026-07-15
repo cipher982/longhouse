@@ -955,7 +955,6 @@ fn claude_ui_presence(
     }
 }
 
-
 fn resolved_managed_cursor_session(
     lease: &ManagedSessionLease,
     obs: Option<&CursorHelmObservation>,
@@ -1826,7 +1825,8 @@ mod tests {
 
         let observations = vec![foreground, background];
         let leases = leases_from_observations(&conn, "cinder", &observations, now);
-        let sessions = resolved_sessions_from_observations(&leases, &[], &observations, &[], &[], &[]);
+        let sessions =
+            resolved_sessions_from_observations(&leases, &[], &observations, &[], &[], &[]);
 
         let foreground_session = sessions
             .iter()
@@ -1976,7 +1976,8 @@ mod tests {
         for (launch_mode, expected_presence) in cases {
             let lease = opencode_lease("managed-opencode");
             let obs = test_opencode_observation("managed-opencode", launch_mode);
-            let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[]);
+            let sessions =
+                resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs], &[]);
             let session = &sessions[0];
             assert_eq!(session.state, "attached", "launch_mode={launch_mode}");
             assert_eq!(session.bridge.ui_attached, Some(false));

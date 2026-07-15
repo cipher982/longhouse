@@ -452,9 +452,10 @@ fn apply_archive_repair_control(
         payload.archive_backlog.state = "complete".to_string();
         return;
     }
-    let uploading = payload.ship_scheduler.as_ref().is_some_and(|scheduler| {
-        scheduler.in_flight_retry > 0
-    });
+    let uploading = payload
+        .ship_scheduler
+        .as_ref()
+        .is_some_and(|scheduler| scheduler.in_flight_retry > 0);
     payload.archive_backlog.state = if uploading {
         "uploading"
     } else if payload.archive_backlog.ready_ranges == 0
@@ -535,7 +536,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             None
         }
         None => {
-            tracing::info!("Runtime Host does not advertise storage-v2; using the legacy ingest protocol");
+            tracing::info!(
+                "Runtime Host does not advertise storage-v2; using the legacy ingest protocol"
+            );
             None
         }
     };
@@ -1707,7 +1710,9 @@ fn observe_active_opencode_titles(
     conn: &rusqlite::Connection,
     observations: &[managed_opencode_scan::OpenCodeServerObservation],
 ) {
-    let Some(home) = std::env::var_os("HOME") else { return };
+    let Some(home) = std::env::var_os("HOME") else {
+        return;
+    };
     let db_path = PathBuf::from(home)
         .join(".local")
         .join("share")
@@ -1717,13 +1722,15 @@ fn observe_active_opencode_titles(
         return;
     }
     for observation in observations {
-        if matches!(crate::state::session_title::get(conn, &observation.session_id), Ok(Some(_))) {
+        if matches!(
+            crate::state::session_title::get(conn, &observation.session_id),
+            Ok(Some(_))
+        ) {
             continue;
         }
-        let Ok(parsed) = crate::opencode_db::parse_opencode_session(
-            &db_path,
-            &observation.provider_session_id,
-        ) else {
+        let Ok(parsed) =
+            crate::opencode_db::parse_opencode_session(&db_path, &observation.provider_session_id)
+        else {
             continue;
         };
         if let Err(error) = crate::state::session_title::observe_parse_result(
@@ -3197,8 +3204,8 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     result.local_retry_after = Some(local_retry_delay(result.job.priority));
                     return finish_path_task(result, task_started);
                 }
-                let backpressure = error
-                    .downcast_ref::<crate::shipping::client::StorageV2Backpressure>();
+                let backpressure =
+                    error.downcast_ref::<crate::shipping::client::StorageV2Backpressure>();
                 task_context.ship_stats.record_with_lane_detail_and_stages(
                     stats_lane,
                     ShipAttemptOutcome::RetryableClientError,
@@ -4988,7 +4995,10 @@ mod tests {
 
         assert_eq!(payload.archive_backlog.mode, "paused");
         assert_eq!(payload.archive_backlog.state, "paused");
-        assert_eq!(payload.archive_backlog.pause_actor.as_deref(), Some("menu_bar"));
+        assert_eq!(
+            payload.archive_backlog.pause_actor.as_deref(),
+            Some("menu_bar")
+        );
         assert_eq!(
             payload.archive_backlog.pause_reason.as_deref(),
             Some("user paused while travelling")
@@ -5016,7 +5026,11 @@ mod tests {
         assert_eq!(payload.archive_backlog.state, "scanning");
 
         let mut scheduler = PathScheduler::new(2);
-        scheduler.enqueue(PathBuf::from("/archive.jsonl"), "codex", WorkPriority::Retry);
+        scheduler.enqueue(
+            PathBuf::from("/archive.jsonl"),
+            "codex",
+            WorkPriority::Retry,
+        );
         let _job = scheduler.pop_launchable().unwrap();
         payload.ship_scheduler = Some(scheduler.snapshot());
         apply_archive_repair_control(&mut payload, &control, ArchiveRepairMode::Paused);

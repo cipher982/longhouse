@@ -453,12 +453,9 @@ impl ShipperClient {
         if !status.is_success() {
             let headers = response.headers().clone();
             let body = response.text().await.unwrap_or_default();
-            if let Some(backpressure) = parse_storage_v2_backpressure(
-                status.as_u16(),
-                &headers,
-                &body,
-                lane,
-            ) {
+            if let Some(backpressure) =
+                parse_storage_v2_backpressure(status.as_u16(), &headers, &body, lane)
+            {
                 return Err(backpressure.into());
             }
             anyhow::bail!("storage-v2 envelope POST returned {status}: {body}");
@@ -700,8 +697,8 @@ mod tests {
 
     use super::{
         classify_connect_error_kind, parse_server_backpressure, parse_server_timing,
-        parse_storage_v2_backpressure,
-        parse_server_write_backpressure, rate_limit_retry_wait_seconds, ShipResult,
+        parse_server_write_backpressure, parse_storage_v2_backpressure,
+        rate_limit_retry_wait_seconds, ShipResult,
     };
 
     fn classify_status(status: u16, body: &str) -> ShipResult {

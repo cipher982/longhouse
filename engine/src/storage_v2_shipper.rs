@@ -141,7 +141,9 @@ pub(crate) fn prepare_next_envelope(
     );
     let session_uuid =
         Uuid::parse_str(&session_id).context("storage-v2 session id is not a UUID")?;
-    if let Err(error) = crate::state::session_title::observe_parse_result(conn, &session_id, &parse_result) {
+    if let Err(error) =
+        crate::state::session_title::observe_parse_result(conn, &session_id, &parse_result)
+    {
         tracing::warn!(session_id, error = %error, "Unable to persist local prompt title");
     }
     let raw_bytes: Vec<Vec<u8>> = raw_batch
@@ -346,7 +348,9 @@ pub(crate) fn prepare_next_opencode_envelope(
             .unwrap_or_else(|| parse_result.metadata.session_id.clone());
             let session_uuid = Uuid::parse_str(&session_id)
                 .context("storage-v2 OpenCode session id is not a UUID")?;
-            if let Err(error) = crate::state::session_title::observe_parse_result(conn, &session_id, &parse_result) {
+            if let Err(error) =
+                crate::state::session_title::observe_parse_result(conn, &session_id, &parse_result)
+            {
                 tracing::warn!(session_id, error = %error, "Unable to persist local OpenCode prompt title");
             }
             let start =
@@ -1149,8 +1153,8 @@ mod tests {
 
     #[test]
     fn preparation_errors_are_distinct_from_transport_failures() {
-        let error = preparation_result::<()>(Err(anyhow::anyhow!("unsupported local shape")))
-            .unwrap_err();
+        let error =
+            preparation_result::<()>(Err(anyhow::anyhow!("unsupported local shape"))).unwrap_err();
         assert!(error.downcast_ref::<StorageV2PreparationError>().is_some());
     }
 

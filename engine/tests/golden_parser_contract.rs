@@ -190,6 +190,8 @@ fn golden_codex_turn_interrupted() {
 
 #[test]
 fn golden_antigravity_legacy_json_basic() {
-    let base = fixtures_dir().join("golden").join("antigravity_legacy_json");
+    let base = fixtures_dir()
+        .join("golden")
+        .join("antigravity_legacy_json");
     run_golden_test(&base.join("basic.json"), &base.join("basic.expected.json"));
 }

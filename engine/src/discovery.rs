@@ -69,7 +69,10 @@ fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
         },
         ProviderConfig {
             name: "cursor_acp",
-            root: home.join(".longhouse").join("agent").join("cursor-acp-source"),
+            root: home
+                .join(".longhouse")
+                .join("agent")
+                .join("cursor-acp-source"),
             extension: "jsonl",
         },
         ProviderConfig {
@@ -436,7 +439,11 @@ mod tests {
         let home = PathBuf::from("/tmp/home");
         let claude_root = PathBuf::from("/tmp/custom-claude");
         let providers = provider_candidates(&home, &claude_root);
-        let db = home.join(".cursor").join("chats").join("chat-a").join("store.db");
+        let db = home
+            .join(".cursor")
+            .join("chats")
+            .join("chat-a")
+            .join("store.db");
         let wal = db.with_file_name("store.db-wal");
 
         assert_eq!(provider_for_path(&db, &providers), Some("cursor"));
@@ -448,7 +455,11 @@ mod tests {
         let home = PathBuf::from("/tmp/home");
         let claude_root = PathBuf::from("/tmp/custom-claude");
         let providers = provider_candidates(&home, &claude_root);
-        let db = home.join(".cursor").join("chats").join("chat-a").join("store.db");
+        let db = home
+            .join(".cursor")
+            .join("chats")
+            .join("chat-a")
+            .join("store.db");
         let wal = db.with_file_name("store.db-wal");
         let shm = db.with_file_name("store.db-shm");
 

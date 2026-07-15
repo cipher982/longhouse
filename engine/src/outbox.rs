@@ -562,11 +562,11 @@ mod tests {
         let posts = collect_runtime_event_outbox(dir.path());
         assert_eq!(posts.len(), 1);
         assert_eq!(posts[0].event, event);
-        assert!(
-            fs::read_dir(dir.path())
-                .unwrap()
-                .all(|entry| !entry.unwrap().file_name().to_string_lossy().starts_with('.'))
-        );
+        assert!(fs::read_dir(dir.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with('.')));
     }
 
     fn write_presence(dir: &Path, name: &str, session_id: &str, state: &str) -> PathBuf {

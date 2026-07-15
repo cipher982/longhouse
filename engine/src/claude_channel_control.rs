@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use crate::process_identity::{
-    ProcessFact, collect_process_facts_by_pid, command_contains_basename, parse_rfc3339,
-    started_before_or_near_recorded,
+    collect_process_facts_by_pid, command_contains_basename, parse_rfc3339,
+    started_before_or_near_recorded, ProcessFact,
 };
 use chrono::DateTime;
 use chrono::Utc;
@@ -451,12 +451,10 @@ mod tests {
             Some("claude-provider-1")
         );
         let request = rx.await.unwrap();
-        assert!(
-            request
-                .headers
-                .to_ascii_lowercase()
-                .contains("x-longhouse-channel-token: secret-token")
-        );
+        assert!(request
+            .headers
+            .to_ascii_lowercase()
+            .contains("x-longhouse-channel-token: secret-token"));
         assert_eq!(request.body["content"], "hello");
         assert_eq!(request.body["meta"]["injected_by"], "longhouse");
         assert_eq!(request.body["meta"]["longhouse_session_id"], SESSION_ID);
@@ -565,11 +563,9 @@ mod tests {
 
         assert_eq!(state["session_id"], SESSION_ID);
         assert_eq!(state["auth_token"], "<redacted>");
-        assert!(
-            !serde_json::to_string(&state)
-                .unwrap()
-                .contains("very-secret-token")
-        );
+        assert!(!serde_json::to_string(&state)
+            .unwrap()
+            .contains("very-secret-token"));
     }
 
     #[test]

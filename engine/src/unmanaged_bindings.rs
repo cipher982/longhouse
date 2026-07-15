@@ -39,9 +39,9 @@ use chrono::Utc;
 
 use crate::discovery;
 use crate::heartbeat::UnmanagedSessionBinding;
-use crate::process_identity::parse_process_fact;
 #[cfg(test)]
 use crate::process_identity::parse_lstart;
+use crate::process_identity::parse_process_fact;
 use crate::state::unmanaged_process_binding::UnmanagedProcessBindingStore;
 
 /// Cap the number of bindings emitted per heartbeat. Provider roots with

@@ -61,7 +61,9 @@ fn parse_events(input_path: &Path) -> (usize, bool) {
 /// The messages with valid string content must still be shipped.
 #[test]
 fn antigravity_legacy_json_object_content_keeps_string_messages() {
-    let path = fixtures_dir().join("antigravity_legacy_json").join("object_content.json");
+    let path = fixtures_dir()
+        .join("antigravity_legacy_json")
+        .join("object_content.json");
     let (count, ok) = parse_events(&path);
     assert!(ok, "engine must exit 0 even with malformed content");
     // 3 messages: user (string), antigravity_legacy_json (object — skip), user (string)
@@ -77,7 +79,9 @@ fn antigravity_legacy_json_object_content_keeps_string_messages() {
 /// Unknown message type is silently skipped; surrounding valid messages are kept.
 #[test]
 fn antigravity_legacy_json_unknown_type_skipped_not_fatal() {
-    let path = fixtures_dir().join("antigravity_legacy_json").join("unknown_type.json");
+    let path = fixtures_dir()
+        .join("antigravity_legacy_json")
+        .join("unknown_type.json");
     let (count, ok) = parse_events(&path);
     assert!(ok, "engine must exit 0 on unknown message type");
     // 3 messages: user, system (unknown—skip), antigravity_legacy_json
@@ -91,7 +95,9 @@ fn antigravity_legacy_json_unknown_type_skipped_not_fatal() {
 /// Empty messages array is legitimate — 0 events, exit 0.
 #[test]
 fn antigravity_legacy_json_empty_messages_is_not_an_error() {
-    let path = fixtures_dir().join("antigravity_legacy_json").join("empty_messages.json");
+    let path = fixtures_dir()
+        .join("antigravity_legacy_json")
+        .join("empty_messages.json");
     let (count, ok) = parse_events(&path);
     assert!(ok, "engine must exit 0 on empty messages array");
     assert_eq!(count, 0, "Expected 0 events for empty messages");
@@ -103,7 +109,9 @@ fn antigravity_legacy_json_empty_messages_is_not_an_error() {
 fn antigravity_legacy_json_truncated_json_exits_cleanly() {
     // .broken extension bypasses JSON linters while keeping the file clearly
     // associated with the Gemini format it simulates.
-    let path = fixtures_dir().join("antigravity_legacy_json").join("truncated.json.broken");
+    let path = fixtures_dir()
+        .join("antigravity_legacy_json")
+        .join("truncated.json.broken");
     let (count, ok) = parse_events(&path);
     assert!(ok, "engine must exit 0 on truncated (invalid) JSON");
     assert_eq!(count, 0, "Expected 0 events from truncated JSON");

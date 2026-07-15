@@ -2939,19 +2939,46 @@ mod tests {
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.events.len(), 7);
 
-        assert_eq!(result.events[0].content_text.as_deref(), Some("Looking around"));
+        assert_eq!(
+            result.events[0].content_text.as_deref(),
+            Some("Looking around")
+        );
         assert_eq!(result.events[1].tool_name.as_deref(), Some("Grep"));
-        assert_eq!(result.events[1].tool_call_id.as_deref(), Some("toolu_grep1"));
-        assert_eq!(result.events[2].tool_call_id.as_deref(), Some("toolu_grep2"));
+        assert_eq!(
+            result.events[1].tool_call_id.as_deref(),
+            Some("toolu_grep1")
+        );
+        assert_eq!(
+            result.events[2].tool_call_id.as_deref(),
+            Some("toolu_grep2")
+        );
         assert_eq!(result.events[3].tool_name.as_deref(), Some("Read"));
-        assert_eq!(result.events[3].tool_call_id.as_deref(), Some("toolu_read1"));
+        assert_eq!(
+            result.events[3].tool_call_id.as_deref(),
+            Some("toolu_read1")
+        );
 
         assert_eq!(result.events[4].role, Role::Tool);
-        assert_eq!(result.events[4].tool_call_id.as_deref(), Some("toolu_grep2"));
-        assert_eq!(result.events[4].tool_output_text.as_deref(), Some("match-b"));
-        assert_eq!(result.events[5].tool_call_id.as_deref(), Some("toolu_grep1"));
-        assert_eq!(result.events[5].tool_output_text.as_deref(), Some("match-a"));
-        assert_eq!(result.events[6].tool_call_id.as_deref(), Some("toolu_read1"));
+        assert_eq!(
+            result.events[4].tool_call_id.as_deref(),
+            Some("toolu_grep2")
+        );
+        assert_eq!(
+            result.events[4].tool_output_text.as_deref(),
+            Some("match-b")
+        );
+        assert_eq!(
+            result.events[5].tool_call_id.as_deref(),
+            Some("toolu_grep1")
+        );
+        assert_eq!(
+            result.events[5].tool_output_text.as_deref(),
+            Some("match-a")
+        );
+        assert_eq!(
+            result.events[6].tool_call_id.as_deref(),
+            Some("toolu_read1")
+        );
     }
 
     #[test]
@@ -3256,7 +3283,10 @@ mod tests {
             result.events[1].tool_output_text.as_deref(),
             Some(EMPTY_TOOL_RESULT_PLACEHOLDER)
         );
-        assert_eq!(result.events[2].tool_call_id.as_deref(), Some("call_empty_items"));
+        assert_eq!(
+            result.events[2].tool_call_id.as_deref(),
+            Some("call_empty_items")
+        );
         assert_eq!(
             result.events[2].tool_output_text.as_deref(),
             Some(EMPTY_TOOL_RESULT_PLACEHOLDER)

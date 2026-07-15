@@ -1747,7 +1747,10 @@ mod tests {
             .contains("state schema 2 is newer than this Longhouse build"));
 
         let mut missing_schema = base_state_payload("http://127.0.0.1:12345", Some("/tmp/project"));
-        missing_schema.as_object_mut().unwrap().remove("schema_version");
+        missing_schema
+            .as_object_mut()
+            .unwrap()
+            .remove("schema_version");
         write_state_payload(temp.path(), SESSION_ID, missing_schema);
         let error = read_bridge_state(SESSION_ID, Some(temp.path())).unwrap_err();
         assert!(error
@@ -2141,10 +2144,7 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn spawn_fake_opencode_stop_target(
-        root: &Path,
-        new_process_group: bool,
-    ) -> TestChild {
+    fn spawn_fake_opencode_stop_target(root: &Path, new_process_group: bool) -> TestChild {
         let script_dir = root.join("stop-bin");
         fs::create_dir_all(&script_dir).unwrap();
         let path = script_dir.join("opencode");
