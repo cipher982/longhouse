@@ -23,8 +23,10 @@ from zerg.metrics import managed_codex_bridge_freshness_total
 from zerg.metrics import managed_codex_runtime_observations_total
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
+from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.agents import SessionTurn
 from zerg.models.live_store import LiveRuntimeState
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.models.live_store import LiveSessionConnection
@@ -873,6 +875,23 @@ def _apply_run_terminal_event(
         conn.can_terminate = 0
         conn.can_tail_output = 0
         conn.can_resume = 0
+    if not live_lane:
+        turn = db.query(SessionTurn).filter(SessionTurn.run_id == run.id, SessionTurn.source_kind == "console").one_or_none()
+        if turn is not None and turn.state in {"starting", "active", "draining"}:
+            outcome = {
+                "run_completed": "completed",
+                "run_cancelled": "cancelled",
+            }.get(terminal_state, "failed")
+            turn.state = outcome
+            turn.terminal_phase = terminal_state
+            turn.terminal_at = turn.terminal_at or occurred_at
+            turn.durable_at = occurred_at
+            if turn.session_input_id is not None:
+                input_row = db.get(SessionInput, turn.session_input_id)
+                if input_row is not None and outcome != "completed":
+                    input_row.status = "failed"
+                    input_row.last_error = terminal_state
+            changed = True
     return changed
 
 

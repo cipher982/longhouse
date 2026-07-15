@@ -25,6 +25,8 @@ from zerg.services.console_turns import mark_console_turn_active
 from zerg.services.console_turns import settle_console_turn
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_COMPLETED
 from zerg.services.session_turns import SESSION_TURN_STATE_DRAINING
@@ -278,3 +280,47 @@ async def test_dispatch_next_console_turn_fails_typed_when_adapter_is_missing(tm
     assert "does not advertise" in result.error
     assert db.get(SessionTurn, queued.turn_id).state == SESSION_TURN_STATE_FAILED
     assert db.get(SessionRun, result.run_id).ended_at is not None
+
+
+def test_run_terminal_event_settles_console_turn_after_output_drain(tmp_path):
+    db = _db(tmp_path)
+    session = _session(db)
+    thread = ensure_primary_thread(db, session)
+    set_thread_execution_target(thread, device_id="cinder", cwd="/tmp/longhouse")
+    db.commit()
+    queued = enqueue_console_turn(
+        db,
+        session=session,
+        owner_id=1,
+        message="Finish cleanly",
+        client_request_id="request-terminal",
+    )
+    claimed = claim_next_console_turn(db, thread_id=thread.id)
+    assert claimed is not None
+    mark_console_turn_active(db, turn_id=queued.turn_id)
+
+    ingest_runtime_events(
+        db,
+        [
+            RuntimeEventIngest(
+                runtime_key=f"codex:{session.id}",
+                session_id=session.id,
+                thread_id=thread.id,
+                run_id=claimed.run_id,
+                provider="codex",
+                device_id="cinder",
+                source="codex_exec",
+                kind="terminal_signal",
+                occurred_at=datetime.now(timezone.utc),
+                dedupe_key=f"terminal:{claimed.run_id}",
+                payload={"terminal_state": "run_completed", "exit_code": 0},
+            )
+        ],
+    )
+    db.commit()
+
+    turn = db.get(SessionTurn, queued.turn_id)
+    assert turn.state == SESSION_TURN_STATE_COMPLETED
+    assert turn.terminal_phase == "run_completed"
+    assert turn.durable_at is not None
+    assert db.get(SessionRun, claimed.run_id).exit_status == "exit_0"
