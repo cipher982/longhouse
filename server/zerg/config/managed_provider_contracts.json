@@ -92,7 +92,8 @@
         "codex.launch",
         "codex.continue",
         "codex.run_once",
-        "codex.resume_run_once"
+        "codex.resume_run_once",
+        "codex.turn_start"
       ]
     },
     {
@@ -105,7 +106,7 @@
       "control_plane_aliases": [],
       "launch_local": true,
       "launch_remote": true,
-      "run_once": false,
+      "run_once": true,
       "reattach": true,
       "send_input": true,
       "interrupt": true,
@@ -128,8 +129,8 @@
           "next": "promote with Runtime Host remote launch against real Claude or a hermetic engine launch happy-path"
         },
         "run_once": {
-          "level": "none",
-          "source": "run-once canary not implemented yet"
+          "level": "hermetic",
+          "source": "claude_print adapter uses stream-json with native session-id/resume"
         },
         "reattach": {
           "level": "hermetic",
@@ -180,7 +181,8 @@
         "claude.steer",
         "claude.answer_pause",
         "claude.launch",
-        "claude.continue"
+        "claude.continue",
+        "claude.turn_start"
       ]
     },
     {
@@ -193,7 +195,7 @@
       "control_plane_aliases": [],
       "launch_local": true,
       "launch_remote": true,
-      "run_once": false,
+      "run_once": true,
       "reattach": true,
       "send_input": true,
       "interrupt": true,
@@ -216,8 +218,8 @@
           "next": "promote with Runtime Host remote launch against real OpenCode"
         },
         "run_once": {
-          "level": "none",
-          "source": "run-once canary not implemented yet"
+          "level": "hermetic",
+          "source": "opencode_run adapter uses JSON output with native --session resume"
         },
         "reattach": {
           "level": "live_no_token",
@@ -266,7 +268,8 @@
         "opencode.send",
         "opencode.interrupt",
         "opencode.launch",
-        "opencode.terminate"
+        "opencode.terminate",
+        "opencode.turn_start"
       ]
     },
     {
@@ -432,7 +435,8 @@
         "cursor.interrupt",
         "cursor.terminate",
         "cursor.run_once",
-        "cursor.resume_run_once"
+        "cursor.resume_run_once",
+        "cursor.turn_start"
       ]
     }
   ]

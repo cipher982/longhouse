@@ -20,16 +20,13 @@ from typing import Any
 
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
-from zerg.services.managed_provider_contracts import machine_control_launch_capability_by_provider
 from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
 
-LAUNCH_CAPABILITY_BY_PROVIDER = machine_control_launch_capability_by_provider()
 CONTROL_CONNECTED = "connected"
 CONTROL_DISCONNECTED = "disconnected"
 LAUNCH_BLOCKED_CONTROL_DOWN = "control_down"
 LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT = "no_launch_support"
 ONE_SHOT = "one_shot"
-LIVE_CONTROL = "live_control"
 
 
 @dataclass(frozen=True)
@@ -98,10 +95,8 @@ def _launch_projection(
     options: list[MachineLaunchProviderOption] = []
     for provider, operations in sorted(operations_by_provider.items()):
         lifetimes: list[str] = []
-        if "run_once" in operations:
+        if "turn_start" in operations:
             lifetimes.append(ONE_SHOT)
-        if "launch" in operations:
-            lifetimes.append(LIVE_CONTROL)
         if lifetimes:
             options.append(MachineLaunchProviderOption(provider=provider, execution_lifetimes=tuple(lifetimes)))
 
@@ -113,7 +108,7 @@ def _launch_projection(
             default_execution_lifetime=None,
         )
 
-    default_lifetime = ONE_SHOT if any(ONE_SHOT in option.execution_lifetimes for option in options) else LIVE_CONTROL
+    default_lifetime = ONE_SHOT
     candidates = [option.provider for option in options if default_lifetime in option.execution_lifetimes]
     default_provider = "codex" if "codex" in candidates else candidates[0]
     return MachineLaunchProjection(
@@ -170,11 +165,7 @@ def build_machines_directory(
             connected=True,
         )
         launchable_providers = tuple(
-            sorted(
-                provider
-                for provider, operations in control_operations_by_provider.items()
-                if "launch" in operations and provider in LAUNCH_CAPABILITY_BY_PROVIDER
-            )
+            sorted(provider for provider, operations in control_operations_by_provider.items() if "turn_start" in operations)
         )
         can_launch_codex = "codex" in launchable_providers
         launch = _launch_projection(control_operations_by_provider, connected=True)
