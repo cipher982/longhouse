@@ -180,7 +180,7 @@ providers:
   tail_output: true
   runtime_phase: true
   transcript_binding: true
-  can_resume: true
+  can_resume: false
   operation_evidence:
     launch_local:
       level: live_no_token
@@ -332,10 +332,10 @@ providers:
   steer_active_turn: false
   answer_pause: false
   terminate: true
-  tail_output: false
-  runtime_phase: false
-  transcript_binding: false
-  can_resume: true
+  tail_output: true
+  runtime_phase: true
+  transcript_binding: true
+  can_resume: false
   operation_evidence:
     launch_local:
       level: hermetic
@@ -380,18 +380,17 @@ providers:
         pid with kill_on_drop for the one-shot path.'
       next: promote with live terminate canary
     tail_output:
-      level: none
-      source: unavailable until the native Cursor store.db adapter has storage-v2 receipt proof
+      level: hermetic
+      source: cursor_acp JSON-RPC source is persisted through the shared runtime sink
     runtime_phase:
-      level: none
-      source: unavailable until the native Cursor source and shared runtime outbox are receipt-backed
+      level: hermetic
+      source: cursor_acp phase and terminal events use the shared runtime reducer
     transcript_binding:
-      level: none
-      source: unavailable until the native Cursor source has deterministic provider-native binding proof
+      level: hermetic
+      source: cursor_acp emits the native ACP session id as a binding signal
   machine_control_supports:
   - cursor.send
   - cursor.interrupt
   - cursor.terminate
   - cursor.run_once
-  - cursor.resume_run_once
   - cursor.turn_start

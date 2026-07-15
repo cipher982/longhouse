@@ -205,6 +205,7 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
         "codex.continue",
         "codex.run_once",
         "codex.resume_run_once",
+        "codex.turn_start",
     )
     assert codex.machine_control_operations == (
         "send",
@@ -215,9 +216,10 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
         "continue",
         "run_once",
         "resume_run_once",
+        "turn_start",
     )
-    assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
-    assert run_once_supported_providers() == frozenset({"codex"})
+    assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode", "cursor"})
+    assert run_once_supported_providers() == frozenset({"codex", "claude", "opencode", "cursor"})
 
 
 def test_codex_and_managed_claude_advertise_remote_pause_answering():
@@ -232,8 +234,6 @@ def test_codex_and_managed_claude_advertise_remote_pause_answering():
 
 
 def test_continue_supported_providers_matches_manifest_can_resume():
-    # Cursor's former ACP resume path used retired legacy ingest, so only
-    # receipt-backed providers may advertise continuation.
     assert continue_supported_providers() == frozenset({"codex", "claude"})
 
 
@@ -257,6 +257,7 @@ def test_claude_contract_is_first_class_channel_control_provider():
         "claude.answer_pause",
         "claude.launch",
         "claude.continue",
+        "claude.turn_start",
     )
 
 
@@ -279,6 +280,7 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
         "opencode.interrupt",
         "opencode.launch",
         "opencode.terminate",
+        "opencode.turn_start",
     )
     assert opencode.connection_capabilities == {
         "can_send_input": 1,
@@ -384,6 +386,7 @@ def test_machine_control_command_projection_is_manifest_backed_for_every_provide
         "answer_pause": "session.answer_pause",
         "terminate": "session.terminate",
         "run_once": "session.run_once",
+        "turn_start": "session.turn.start",
     }
     launch_only_operations = {"launch", "continue", "resume_run_once"}
 
@@ -422,7 +425,7 @@ def test_machine_control_command_projection_is_manifest_backed_for_every_provide
     assert run_once_supported_providers() == frozenset(
         contract.provider
         for contract in all_managed_provider_contracts()
-        if f"{contract.provider}.run_once" in contract.machine_control_supports
+        if contract.run_once
     )
 
 

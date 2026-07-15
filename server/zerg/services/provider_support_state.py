@@ -43,7 +43,7 @@ EVIDENCE_RANK = {
     "live_token": 4,
 }
 _RELEASE_GAP_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
-_ONE_SHOT_CONTROL_OPERATIONS = frozenset({"run_once", "resume_run_once"})
+_ONE_SHOT_CONTROL_OPERATIONS = frozenset({"run_once", "resume_run_once", "turn_start"})
 
 
 def collect_provider_support_state(

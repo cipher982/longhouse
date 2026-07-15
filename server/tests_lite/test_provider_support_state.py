@@ -20,7 +20,7 @@ def _expected_live_operations(contract) -> list[str]:
     return [
         operation
         for operation in contract.machine_control_operations
-        if operation not in {"run_once", "resume_run_once"}
+        if operation not in {"run_once", "resume_run_once", "turn_start"}
     ]
 
 
