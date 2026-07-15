@@ -38,6 +38,7 @@ from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.services.agents.kernel_writes import primary_thread_id_for_session
+from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
 from zerg.services.live_catalog_launch import attach_live_catalog_control
@@ -51,6 +52,7 @@ from zerg.services.live_session_inputs import list_recent_live_input_receipts
 from zerg.services.live_session_inputs import list_recent_live_input_receipts_catalog
 from zerg.services.live_session_inputs import load_live_input_receipt_by_client_request_best_effort
 from zerg.services.live_session_inputs import record_live_input_receipt_best_effort
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_local_control import answer_pause_request_on_managed_local_session
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
@@ -193,6 +195,21 @@ class RemoteSessionLaunchResponse(BaseModel):
     execution_lifetime: RemoteExecutionLifetime
     launch_error_code: RemoteLaunchErrorCode | None = None
     launch_error_message: str | None = None
+
+
+class ConsoleSessionCreateRequest(BaseModel):
+    device_id: str = Field(..., min_length=1)
+    provider: str = Field(..., min_length=1)
+    cwd: str = Field(..., min_length=1)
+    project: str | None = None
+    display_name: str | None = None
+    launch_surface: str = "web"
+
+
+class ConsoleSessionCreateResponse(BaseModel):
+    session_id: str
+    thread_id: str
+    created: bool
 
 
 async def _launch_managed_local_session_serialized(
@@ -1757,6 +1774,42 @@ async def launch_managed_local_this_device(
         )
 
     return launch_response
+
+
+@router.post("/console", response_model=ConsoleSessionCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_console_session_endpoint(
+    body: ConsoleSessionCreateRequest,
+    db: Session | None = Depends(_catalog_control_db_dependency),
+    current_user: User = Depends(get_current_browser_route_user),
+) -> ConsoleSessionCreateResponse:
+    """Create an empty Console conversation without starting a provider."""
+
+    provider = body.provider.strip().lower()
+    capability = f"{provider}.turn_start"
+    registry = get_machine_control_channel_registry()
+    if not registry.supports(owner_id=int(current_user.id), device_id=body.device_id, capability=capability):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "adapter_unavailable", "message": f"Machine Agent does not advertise {capability}"},
+        )
+    try:
+        created = await create_empty_console_session(
+            db,
+            owner_id=int(current_user.id),
+            provider=provider,
+            device_id=body.device_id,
+            cwd=body.cwd,
+            project=body.project,
+            display_name=body.display_name,
+            launch_surface=body.launch_surface,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ConsoleSessionCreateResponse(
+        session_id=str(created.session_id),
+        thread_id=str(created.thread_id),
+        created=created.created,
+    )
 
 
 @router.post("/launch", response_model=RemoteSessionLaunchResponse)

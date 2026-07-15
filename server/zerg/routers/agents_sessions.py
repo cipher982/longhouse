@@ -47,6 +47,7 @@ from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import timeline_snapshot
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.console_sessions import create_empty_console_session
 from zerg.services.console_turns import ConsoleTurnConflict
 from zerg.services.console_turns import ConsoleTurnUnavailable
 from zerg.services.console_turns import dispatch_next_console_turn
@@ -55,6 +56,7 @@ from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import stream_live_catalog_machine_sessions
 from zerg.services.live_session_state import list_active_live_session_ids
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.raw_object_workers import RawObjectWorkerError
@@ -185,8 +187,30 @@ class ConsoleTurnCreateResponse(UTCBaseModel):
     created: bool
 
 
+class ConsoleSessionCreate(UTCBaseModel):
+    device_id: str
+    provider: str
+    cwd: str
+    project: str | None = None
+    display_name: str | None = None
+    launch_surface: str = "api"
+
+
+class ConsoleSessionCreateResponse(UTCBaseModel):
+    session_id: UUID
+    thread_id: UUID
+    created: bool
+
+
 def _no_viewer_owner_id() -> int | None:
     return None
+
+
+def _console_write_db():
+    if database_module.live_catalog_enabled():
+        yield None
+        return
+    yield from get_db()
 
 
 def _session_detail_db():
@@ -1015,6 +1039,44 @@ async def session_tail(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {"session_id": str(session_id), "events": events, "total": len(events)}
+
+
+@router.post("/sessions", response_model=ConsoleSessionCreateResponse, status_code=status.HTTP_201_CREATED)
+async def create_console_session(
+    body: ConsoleSessionCreate,
+    db: Session | None = Depends(_console_write_db),
+    auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> ConsoleSessionCreateResponse:
+    """Create one idle Console thread; no provider process starts here."""
+
+    owner_id = _resolve_agents_owner_id(db, auth)
+    provider = body.provider.strip().lower()
+    capability = f"{provider}.turn_start"
+    registry = get_machine_control_channel_registry()
+    if not registry.supports(owner_id=owner_id, device_id=body.device_id, capability=capability):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "adapter_unavailable", "message": f"Machine Agent does not advertise {capability}"},
+        )
+    try:
+        created = await create_empty_console_session(
+            db,
+            owner_id=owner_id,
+            provider=provider,
+            device_id=body.device_id,
+            cwd=body.cwd,
+            project=body.project,
+            display_name=body.display_name,
+            launch_surface=body.launch_surface,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return ConsoleSessionCreateResponse(
+        session_id=created.session_id,
+        thread_id=created.thread_id,
+        created=created.created,
+    )
 
 
 @router.post(
