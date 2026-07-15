@@ -2294,6 +2294,11 @@ mod tests {
             .unwrap();
         assert_eq!(pending.attempt_count, 1);
         assert!(pending.blocked_at.is_some());
+        let snapshot = pending_source_envelope::snapshot(&conn).unwrap();
+        assert_eq!(snapshot.pending_count, 0);
+        assert_eq!(snapshot.blocked_source_count, 1);
+        assert_eq!(snapshot.latest_block_kind.as_deref(), Some("source_epoch_conflict"));
+        assert!(snapshot.blocked_bytes > 0);
 
         let second_error = ship_next_envelope(
             &mut conn,

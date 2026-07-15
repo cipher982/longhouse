@@ -455,6 +455,29 @@ def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
     assert snapshot["launch_readiness"]["state"] == "unconfigured"
 
 
+def test_collect_local_health_surfaces_immutable_source_conflict_as_facts(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    outbox = {
+        "pending_count": 2,
+        "pending_bytes": 4096,
+        "blocked_source_count": 1,
+        "blocked_bytes": 2048,
+        "latest_block_kind": "source_epoch_conflict",
+        "latest_block_detail": "hosted prefix does not match local source",
+        "byte_limit": 1024 * 1024 * 1024,
+    }
+    _write_engine_status(tmp_path, age_seconds=5, payload={"storage_v2_outbox": outbox})
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["headline"] == "Source upload conflict"
+    assert snapshot["storage_v2_outbox"] == outbox
+    assert snapshot["reasons"].count("storage_v2_sources_blocked") == 1
+    assert snapshot["attention"]["state"] == "needs_attention"
+
+
 def test_collect_local_health_surfaces_control_channel_status(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

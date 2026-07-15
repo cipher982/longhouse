@@ -440,6 +440,12 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
     archive_repair = collect_archive_backlog(resolved_base_dir, engine_status_payload=engine_status.get("payload"))
+    raw_engine_payload = engine_status.get("payload")
+    storage_v2_outbox = (
+        dict(raw_engine_payload.get("storage_v2_outbox") or {})
+        if isinstance(raw_engine_payload, Mapping) and isinstance(raw_engine_payload.get("storage_v2_outbox"), Mapping)
+        else {}
+    )
     control_channel = _collect_control_channel_health(engine_status)
     provider_support_state = collect_provider_support_state(
         provider_clis=provider_clis,
@@ -587,6 +593,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
             assessment=transport_assessment,
         ),
         "archive_repair": archive_repair,
+        "storage_v2_outbox": storage_v2_outbox,
         "control_channel": control_channel,
         "outbox": outbox,
         "provider_clis": provider_clis,

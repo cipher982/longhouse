@@ -32,6 +32,7 @@ use crate::error_tracker::RecentIssueTracker;
 use crate::shipping::client::ShipperClient;
 use crate::shipping_stats::RecentShipStatsTracker;
 use crate::shipping_stats::ShipLaneSummarySet;
+use crate::state::pending_source_envelope::{self, StorageV2OutboxSnapshot};
 use crate::state::session_phase::PhaseLedgerRow;
 use crate::state::spool::ArchiveBacklogSnapshot;
 use crate::state::spool::DeadLetterEntry;
@@ -64,6 +65,8 @@ pub struct HeartbeatPayload {
     pub spool_dead_count: usize,
     #[serde(default)]
     pub archive_backlog: ArchiveBacklogSnapshot,
+    #[serde(default)]
+    pub storage_v2_outbox: StorageV2OutboxSnapshot,
     pub parse_error_count_1h: u32,
     pub consecutive_ship_failures: u32,
     pub ship_attempts_1h: u32,
@@ -286,6 +289,7 @@ struct ManagedPhaseOverlay {
 
 /// Stats needed to build a heartbeat.
 pub struct HeartbeatStats<'a> {
+    pub conn: &'a rusqlite::Connection,
     pub spool: &'a Spool<'a>,
     pub tracker: &'a ConsecutiveErrorTracker,
     pub parse_tracker: &'a RecentIssueTracker,
@@ -313,6 +317,7 @@ impl HeartbeatPayload {
         let spool_pending_count = stats.spool.pending_count().unwrap_or(0);
         let spool_dead_count = stats.spool.dead_count().unwrap_or(0);
         let archive_backlog = stats.spool.archive_backlog_snapshot().unwrap_or_default();
+        let storage_v2_outbox = pending_source_envelope::snapshot(stats.conn).unwrap_or_default();
         let parse_error_count_1h = stats.parse_tracker.count_last_hour();
         let consecutive_ship_failures = stats.tracker.consecutive_count();
         let disk_free_bytes = get_disk_free();
@@ -331,6 +336,7 @@ impl HeartbeatPayload {
             spool_pending_count,
             spool_dead_count,
             archive_backlog,
+            storage_v2_outbox,
             parse_error_count_1h,
             consecutive_ship_failures,
             ship_attempts_1h: ship_stats.ship_attempts_1h,
@@ -1606,6 +1612,7 @@ mod tests {
             spool_pending_count: 5,
             spool_dead_count: 1,
             archive_backlog: ArchiveBacklogSnapshot::default(),
+            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
             consecutive_ship_failures: 2,
             ship_attempts_1h: 7,
@@ -1674,6 +1681,7 @@ mod tests {
             spool_pending_count: 0,
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
+            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
@@ -2642,6 +2650,7 @@ mod tests {
             spool_pending_count: 0,
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
+            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
@@ -2703,6 +2712,7 @@ mod tests {
             spool_pending_count: 2,
             spool_dead_count: 3,
             archive_backlog: ArchiveBacklogSnapshot::default(),
+            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
@@ -2746,6 +2756,7 @@ mod tests {
             )
             .unwrap();
         let stats = HeartbeatStats {
+            conn: &conn,
             spool: &spool,
             tracker: &tracker,
             parse_tracker: &parse_tracker,
@@ -2833,6 +2844,7 @@ mod tests {
             spool_pending_count: 0,
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
+            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
@@ -2865,6 +2877,7 @@ mod tests {
             ship_scheduler: None,
         };
         let stats = HeartbeatStats {
+            conn: &conn,
             spool: &spool,
             tracker: &tracker,
             parse_tracker: &parse_tracker,
@@ -2918,6 +2931,7 @@ mod tests {
             spool_pending_count: 0,
             spool_dead_count: 0,
             archive_backlog: ArchiveBacklogSnapshot::default(),
+            storage_v2_outbox: StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,
@@ -2950,6 +2964,7 @@ mod tests {
             ship_scheduler: None,
         };
         let stats = HeartbeatStats {
+            conn: &conn,
             spool: &spool,
             tracker: &tracker,
             parse_tracker: &parse_tracker,

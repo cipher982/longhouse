@@ -415,18 +415,28 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         String(engineStatus?.payload?.spoolDeadCount ?? 0)
     }
 
+    public var storagePendingCount: Int {
+        engineStatus?.payload?.storageV2Outbox?.pendingCount ?? 0
+    }
+
+    public var storageBlockedCount: Int {
+        engineStatus?.payload?.storageV2Outbox?.blockedSourceCount ?? 0
+    }
+
     public var pipelineValueLabel: String {
         let pending = engineStatus?.payload?.spoolPendingCount ?? 0
         let dead = engineStatus?.payload?.spoolDeadCount ?? 0
+        let immutablePending = storagePendingCount
+        let blocked = storageBlockedCount
 
-        if dead > 0 {
-            return "\(pending) pending · \(dead) dead"
+        if dead > 0 || blocked > 0 {
+            return "\(pending + immutablePending) pending · \(dead + blocked) blocked"
         }
-        if pending > 0 && outboxCount > 0 {
-            return "\(pending) pending · \(outboxCount) outbox"
+        if pending + immutablePending > 0 && outboxCount > 0 {
+            return "\(pending + immutablePending) pending · \(outboxCount) outbox"
         }
-        if pending > 0 {
-            return "\(pending) pending"
+        if pending + immutablePending > 0 {
+            return "\(pending + immutablePending) pending"
         }
         if outboxCount > 0 {
             return "\(outboxCount) outbox"
@@ -1311,6 +1321,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
     public let spoolPendingCount: Int?
     public let spoolDeadCount: Int?
     public let archiveBacklog: ArchiveBacklogStatus?
+    public let storageV2Outbox: StorageV2OutboxStatus?
     public let parseErrorCount1H: Int?
     public let consecutiveShipFailures: Int?
     public let diskFreeBytes: UInt64?
@@ -1328,6 +1339,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         spoolPendingCount: Int?,
         spoolDeadCount: Int?,
         archiveBacklog: ArchiveBacklogStatus? = nil,
+        storageV2Outbox: StorageV2OutboxStatus? = nil,
         parseErrorCount1H: Int?,
         consecutiveShipFailures: Int?,
         diskFreeBytes: UInt64?,
@@ -1342,6 +1354,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         self.spoolPendingCount = spoolPendingCount
         self.spoolDeadCount = spoolDeadCount
         self.archiveBacklog = archiveBacklog
+        self.storageV2Outbox = storageV2Outbox
         self.parseErrorCount1H = parseErrorCount1H
         self.consecutiveShipFailures = consecutiveShipFailures
         self.diskFreeBytes = diskFreeBytes
@@ -1358,6 +1371,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         case spoolPendingCount
         case spoolDeadCount
         case archiveBacklog
+        case storageV2Outbox
         case parseErrorCount1H = "parseErrorCount1h"
         case consecutiveShipFailures
         case diskFreeBytes
@@ -1366,6 +1380,16 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         case lastUpdated
         case build
     }
+}
+
+public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {
+    public let pendingCount: Int?
+    public let pendingBytes: UInt64?
+    public let blockedSourceCount: Int?
+    public let blockedBytes: UInt64?
+    public let latestBlockKind: String?
+    public let latestBlockDetail: String?
+    public let byteLimit: UInt64?
 }
 
 public struct ArchiveBacklogStatus: Codable, Equatable, Sendable {

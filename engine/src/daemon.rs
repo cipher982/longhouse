@@ -1603,6 +1603,7 @@ fn write_local_status_snapshot(
 ) -> heartbeat::HeartbeatPayload {
     let spool = Spool::new(conn);
     let stats = heartbeat::HeartbeatStats {
+        conn,
         spool: &spool,
         tracker,
         parse_tracker,
@@ -3593,6 +3594,8 @@ mod tests {
             spool_pending_count: 0,
             spool_dead_count: 0,
             archive_backlog: crate::state::spool::ArchiveBacklogSnapshot::default(),
+            storage_v2_outbox:
+                crate::state::pending_source_envelope::StorageV2OutboxSnapshot::default(),
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,

@@ -210,6 +210,7 @@ class HeartbeatIn(BaseModel):
     spool_pending_count: int = 0
     spool_dead_count: int = 0
     archive_backlog: dict[str, object] = Field(default_factory=dict)
+    storage_v2_outbox: dict[str, object] = Field(default_factory=dict)
     parse_error_count_1h: int = 0
     consecutive_ship_failures: int = 0
     ship_attempts_1h: int = 0

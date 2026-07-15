@@ -873,11 +873,12 @@ public struct MenuBarPanelView: View {
 
     private var queueBoardValue: String {
         let dead = Int(snapshot.spoolDeadLabel) ?? 0
-        let pending = Int(snapshot.spoolPendingLabel) ?? 0
+        let pending = (Int(snapshot.spoolPendingLabel) ?? 0) + snapshot.storagePendingCount
+        let blocked = snapshot.storageBlockedCount
         let outbox = snapshot.outboxCount
 
-        if dead > 0 {
-            return "\(dead)"
+        if dead > 0 || blocked > 0 {
+            return "\(dead + blocked)"
         }
         let waiting = pending + outbox
         if waiting > 0 {
@@ -888,10 +889,10 @@ public struct MenuBarPanelView: View {
 
     private var queueBoardDetail: String {
         let dead = Int(snapshot.spoolDeadLabel) ?? 0
-        if dead > 0 {
-            return "Dead"
+        if dead > 0 || snapshot.storageBlockedCount > 0 {
+            return "Blocked"
         }
-        let pending = Int(snapshot.spoolPendingLabel) ?? 0
+        let pending = (Int(snapshot.spoolPendingLabel) ?? 0) + snapshot.storagePendingCount
         if pending > 0 || snapshot.outboxCount > 0 {
             return "Waiting"
         }
@@ -900,8 +901,8 @@ public struct MenuBarPanelView: View {
 
     private var queueBoardTone: Color {
         let dead = Int(snapshot.spoolDeadLabel) ?? 0
-        let pending = Int(snapshot.spoolPendingLabel) ?? 0
-        if dead > 0 {
+        let pending = (Int(snapshot.spoolPendingLabel) ?? 0) + snapshot.storagePendingCount
+        if dead > 0 || snapshot.storageBlockedCount > 0 {
             return .red
         }
         if pending > 0 || snapshot.outboxCount > 0 {

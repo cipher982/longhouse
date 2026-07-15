@@ -80,7 +80,7 @@ final class LocalStatusMonitor: @unchecked Sendable {
             "archive_backlog", "consecutive_ship_failures", "control_channel",
             "is_offline", "last_ship_at", "last_ship_error_kind", "last_ship_result",
             "managed_sessions", "phase_ledger", "sessions_digest", "sessions_sequence",
-            "spool_dead_count", "spool_pending_count", "unmanaged_session_bindings",
+            "spool_dead_count", "spool_pending_count", "storage_v2_outbox", "unmanaged_session_bindings",
         ]
         let semantic = Dictionary(uniqueKeysWithValues: keys.compactMap { key in
             payload[key].map { (key, $0) }

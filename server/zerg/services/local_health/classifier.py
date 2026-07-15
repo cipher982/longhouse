@@ -42,6 +42,7 @@ class _HealthClassificationContext:
     archive_pending_bytes: int
     archive_dead_ranges: int
     archive_dead_bytes: int
+    storage_blocked_sources: int
     disk_free_bytes: Any
     outbox_count: int
     outbox_oldest: Any
@@ -329,6 +330,7 @@ def _health_flags(
     archive_pending_bytes: int,
     archive_dead_ranges: int,
     archive_dead_bytes: int,
+    storage_blocked_sources: int,
     orphan_bridge_count: int,
     managed_degraded: int,
     managed_detached: int,
@@ -342,6 +344,8 @@ def _health_flags(
     if archive_pending_ranges > 0 or archive_pending_bytes > 0:
         degraded = True
     if archive_dead_ranges > 0 or archive_dead_bytes > 0:
+        degraded = True
+    if storage_blocked_sources > 0:
         degraded = True
     managed_broken, managed_degraded_flag = _managed_health_flags(
         orphan_bridge_count=orphan_bridge_count,
@@ -471,6 +475,8 @@ def _degraded_health_headline(
         headline = "Longhouse archive repair needs attention"
     elif "archive_backlog_pending" in reasons:
         headline = "Archive upload blocked" if archive_state == "blocked" else "Longhouse archive repair pending"
+    elif "storage_v2_sources_blocked" in reasons:
+        headline = "Source upload conflict"
     elif "managed_session_detached" in reasons:
         if managed_detached == 1 and managed_attached == 0:
             headline = "Managed session is running in background"
@@ -503,6 +509,9 @@ def _health_classification_context(
     archive_pending_bytes = int(archive_repair.get("pending_bytes") or 0)
     archive_dead_ranges = int(archive_repair.get("dead_ranges") or 0)
     archive_dead_bytes = int(archive_repair.get("dead_bytes") or 0)
+    storage_v2_outbox = payload.get("storage_v2_outbox") or {}
+    if not isinstance(storage_v2_outbox, dict):
+        storage_v2_outbox = {}
     unknown_managed_phase_count = 0
     for session in managed_sessions:
         if _managed_phase_is_unknown(session.get("raw_phase")):
@@ -522,6 +531,7 @@ def _health_classification_context(
         archive_pending_bytes=archive_pending_bytes,
         archive_dead_ranges=archive_dead_ranges,
         archive_dead_bytes=archive_dead_bytes,
+        storage_blocked_sources=int(storage_v2_outbox.get("blocked_source_count") or 0),
         disk_free_bytes=payload.get("disk_free_bytes"),
         outbox_count=int(outbox.get("file_count") or 0),
         outbox_oldest=outbox.get("oldest_age_seconds"),
@@ -596,6 +606,9 @@ def _collect_health_reasons(
         archive_dead_ranges=context.archive_dead_ranges,
         archive_dead_bytes=context.archive_dead_bytes,
     )
+    if context.storage_blocked_sources > 0:
+        reasons.append("storage_v2_sources_blocked")
+        _with_action(actions, "Inspect the blocked source proof in engine-status.json")
     _add_managed_session_reasons(
         reasons,
         actions,
@@ -812,6 +825,7 @@ def _classify_health(
         archive_pending_bytes=context.archive_pending_bytes,
         archive_dead_ranges=context.archive_dead_ranges,
         archive_dead_bytes=context.archive_dead_bytes,
+        storage_blocked_sources=context.storage_blocked_sources,
         orphan_bridge_count=context.orphan_bridge_count,
         managed_degraded=context.managed_degraded,
         managed_detached=context.managed_detached,

@@ -6,7 +6,27 @@
 use anyhow::{bail, Context, Result};
 use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
+use serde::Serialize;
 use uuid::Uuid;
+
+const MAX_PENDING_OUTBOX_BYTES: u64 = 1024 * 1024 * 1024;
+
+fn pending_outbox_has_capacity(current_bytes: u64, candidate_bytes: u64) -> bool {
+    current_bytes.saturating_add(candidate_bytes) <= MAX_PENDING_OUTBOX_BYTES
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct StorageV2OutboxSnapshot {
+    pub pending_count: u64,
+    pub pending_bytes: u64,
+    pub oldest_pending_at: Option<String>,
+    pub blocked_source_count: u64,
+    pub blocked_bytes: u64,
+    pub oldest_blocked_at: Option<String>,
+    pub latest_block_kind: Option<String>,
+    pub latest_block_detail: Option<String>,
+    pub byte_limit: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PendingSourceEnvelope {
@@ -139,6 +159,38 @@ pub fn persist_or_load(
     candidate: &PendingSourceEnvelope,
 ) -> Result<PendingSourceEnvelope> {
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let existing = tx
+        .query_row(
+            "SELECT source_epoch, source_path, range_start, range_end, envelope_id,
+                    request_body_zstd, media_objects_zstd, raw_bytes, event_count,
+                    has_reply_evidence, has_more, created_at, attempt_count,
+                    last_attempt_at, blocked_at, block_kind, block_detail
+             FROM pending_source_envelope
+             WHERE source_epoch = ?1",
+            [candidate.source_epoch.to_string()],
+            row_to_pending,
+        )
+        .optional()?;
+    if let Some(existing) = existing {
+        tx.commit()?;
+        return Ok(existing);
+    }
+    let current_bytes: i64 = tx.query_row(
+        "SELECT COALESCE(SUM(length(request_body_zstd) + length(media_objects_zstd)), 0)
+         FROM pending_source_envelope",
+        [],
+        |row| row.get(0),
+    )?;
+    let current_bytes = u64::try_from(current_bytes).context("pending outbox size is negative")?;
+    let candidate_bytes = u64::try_from(
+        candidate.request_body_zstd.len() + candidate.media_objects_zstd.len(),
+    )
+    .context("pending envelope size exceeds u64")?;
+    if !pending_outbox_has_capacity(current_bytes, candidate_bytes) {
+        bail!(
+            "storage-v2 pending outbox byte limit exceeded ({MAX_PENDING_OUTBOX_BYTES} bytes)"
+        );
+    }
     tx.execute(
         "INSERT INTO pending_source_envelope (
             source_epoch, source_path, range_start, range_end, envelope_id,
@@ -227,6 +279,53 @@ pub fn source_is_blocked(
         |row| row.get(0),
     )
     .context("checking blocked storage-v2 source")
+}
+
+pub fn snapshot(conn: &Connection) -> Result<StorageV2OutboxSnapshot> {
+    let (
+        pending_count,
+        pending_bytes,
+        oldest_pending_at,
+        blocked_source_count,
+        blocked_bytes,
+        oldest_blocked_at,
+    ): (i64, i64, Option<String>, i64, i64, Option<String>) = conn.query_row(
+        "SELECT
+            COALESCE(SUM(CASE WHEN blocked_at IS NULL THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN blocked_at IS NULL
+                THEN length(request_body_zstd) + length(media_objects_zstd) ELSE 0 END), 0),
+            MIN(CASE WHEN blocked_at IS NULL THEN created_at END),
+            COALESCE(SUM(CASE WHEN blocked_at IS NOT NULL THEN 1 ELSE 0 END), 0),
+            COALESCE(SUM(CASE WHEN blocked_at IS NOT NULL
+                THEN length(request_body_zstd) + length(media_objects_zstd) ELSE 0 END), 0),
+            MIN(blocked_at)
+         FROM pending_source_envelope",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+    )?;
+    let latest_block = conn
+        .query_row(
+            "SELECT block_kind, block_detail
+             FROM pending_source_envelope
+             WHERE blocked_at IS NOT NULL
+             ORDER BY blocked_at DESC, source_epoch
+             LIMIT 1",
+            [],
+            |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+        )
+        .optional()?;
+    Ok(StorageV2OutboxSnapshot {
+        pending_count: u64::try_from(pending_count).context("pending outbox count is negative")?,
+        pending_bytes: u64::try_from(pending_bytes).context("pending outbox bytes are negative")?,
+        oldest_pending_at,
+        blocked_source_count: u64::try_from(blocked_source_count)
+            .context("blocked source count is negative")?,
+        blocked_bytes: u64::try_from(blocked_bytes).context("blocked source bytes are negative")?,
+        oldest_blocked_at,
+        latest_block_kind: latest_block.as_ref().and_then(|value| value.0.clone()),
+        latest_block_detail: latest_block.and_then(|value| value.1),
+        byte_limit: MAX_PENDING_OUTBOX_BYTES,
+    })
 }
 
 /// Remove an intent that was prepared for a product gate but never sent.
@@ -466,4 +565,16 @@ fn from_sql_u64(index: usize, value: i64) -> rusqlite::Result<u64> {
             Box::new(error),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pending_outbox_has_capacity, MAX_PENDING_OUTBOX_BYTES};
+
+    #[test]
+    fn pending_outbox_capacity_is_exact_and_overflow_safe() {
+        assert!(pending_outbox_has_capacity(MAX_PENDING_OUTBOX_BYTES - 1, 1));
+        assert!(!pending_outbox_has_capacity(MAX_PENDING_OUTBOX_BYTES, 1));
+        assert!(!pending_outbox_has_capacity(u64::MAX, u64::MAX));
+    }
 }
