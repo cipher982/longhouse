@@ -4330,7 +4330,10 @@ class CatalogStore:
                     )
                 elif open_rows:
                     return {"source_epoch_conflict": True, "commit_seq": str(_current_commit_seq(connection))}
-                accepted_through = _u64_key(0)
+                # Source offsets are coordinates, not byte counts. An initial
+                # storage-v2 epoch may begin at a proven legacy cursor, so its
+                # first durable envelope defines the contiguous base.
+                accepted_through = range_start_key
             else:
                 if any(
                     (
@@ -4356,8 +4359,12 @@ class CatalogStore:
                     .where(raw.c.source_epoch == epoch_key, raw.c.retired_at.is_(None))
                     .order_by(raw.c.range_start.asc(), raw.c.range_end.asc())
                 ).all()
-                accepted_through = _u64_key(_contiguous_range_prefix(existing_raw_ranges))
-                if accepted_through != str(epoch_row["accepted_through"]):
+                accepted_through = (
+                    range_start_key
+                    if not existing_raw_ranges and int(epoch_row["object_count"] or 0) == 0
+                    else _u64_key(_contiguous_range_prefix(existing_raw_ranges))
+                )
+                if existing_raw_ranges and accepted_through != str(epoch_row["accepted_through"]):
                     connection.execute(
                         update(epoch)
                         .where(epoch.c.source_epoch == epoch_key)
@@ -7516,7 +7523,9 @@ def _raw_object_receipt(row) -> dict[str, object]:
 
 def _contiguous_range_prefix(rows) -> int:
     """Return the proven contiguous end, ignoring any legacy high-water mark."""
-    through = 0
+    if not rows:
+        return 0
+    through = int(rows[0][0])
     for row in rows:
         start = int(row[0])
         end = int(row[1])
