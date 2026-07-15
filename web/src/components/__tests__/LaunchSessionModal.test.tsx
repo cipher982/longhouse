@@ -6,9 +6,9 @@ import LaunchSessionModal from "../LaunchSessionModal";
 import type { MachineDirectoryEntry } from "../../services/api";
 
 const apiMocks = vi.hoisted(() => ({
+  createConsoleSession: vi.fn(),
   fetchWorkspaceSuggestions: vi.fn(),
   listMachines: vi.fn(),
-  launchRemoteSession: vi.fn(),
 }));
 
 vi.mock("../../services/api", async (importOriginal) => {
@@ -255,7 +255,7 @@ describe("LaunchSessionModal", () => {
     expect(picker).not.toHaveTextContent("abc123");
   });
 
-  it("preserves the authored task when the target machine changes", async () => {
+  it("does not expose task or process-lifetime controls", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [
         machine({ device_id: "cinder", machine_name: "cinder" }),
@@ -265,15 +265,15 @@ describe("LaunchSessionModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    const prompt = await screen.findByTestId("launch-initial-prompt");
-    await user.type(prompt, "Keep this task");
+    await screen.findByTestId("launch-machine-select");
     await user.click(screen.getByRole("option", { name: /cube Ready/ }));
 
-    expect(prompt).toHaveValue("Keep this task");
+    expect(screen.queryByText("Task")).not.toBeInTheDocument();
+    expect(screen.queryByText("Keep session open")).not.toBeInTheDocument();
     expect(screen.getByRole("option", { name: /cube Ready/ })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("submits a launch and invokes onLaunched with the session id", async () => {
+  it("creates an empty Console session and invokes onLaunched with the session id", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [
         machine({
@@ -290,12 +290,10 @@ describe("LaunchSessionModal", () => {
         }),
       ],
     });
-    apiMocks.launchRemoteSession.mockResolvedValue({
+    apiMocks.createConsoleSession.mockResolvedValue({
       session_id: "new-session-id",
-      launch_state: "live",
-      execution_lifetime: "one_shot",
-      launch_error_code: null,
-      launch_error_message: null,
+      thread_id: "new-thread-id",
+      created: true,
     });
 
     const onLaunched = vi.fn();
@@ -305,102 +303,16 @@ describe("LaunchSessionModal", () => {
     const cwdInput = await screen.findByTestId("launch-cwd-input");
     await user.type(cwdInput, "/Users/me/repo");
     expect(screen.getByTestId("launch-advanced-runtime")).not.toHaveAttribute("open");
-    expect(screen.getByTestId("launch-submit")).toBeDisabled();
-    await user.type(screen.getByTestId("launch-initial-prompt"), "Fix the telemetry test");
+    expect(screen.getByTestId("launch-submit")).toBeEnabled();
     await user.click(screen.getByTestId("launch-submit"));
 
     await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("new-session-id"));
-    expect(apiMocks.launchRemoteSession).toHaveBeenCalledWith(
+    expect(apiMocks.createConsoleSession).toHaveBeenCalledWith(
       expect.objectContaining({
         device_id: "cinder",
         provider: "codex",
         cwd: "/Users/me/repo",
-        initial_prompt: "Fix the telemetry test",
-        execution_lifetime: "one_shot",
-      }),
-    );
-  });
-
-  it("falls back to live-control launch when run-once is not advertised", async () => {
-    apiMocks.listMachines.mockResolvedValue({
-      machines: [
-        machine({
-          device_id: "old-cinder",
-          machine_name: "old-cinder",
-          supports: ["codex.launch"],
-          control_operations_by_provider: { codex: ["launch"] },
-          launchable_providers: ["codex"],
-        }),
-      ],
-    });
-    apiMocks.launchRemoteSession.mockResolvedValue({
-      session_id: "live-session-id",
-      launch_state: "live",
-      execution_lifetime: "live_control",
-      launch_error_code: null,
-      launch_error_message: null,
-    });
-
-    const user = userEvent.setup();
-    renderModal();
-
-    await user.type(await screen.findByTestId("launch-cwd-input"), "/Users/me/repo");
-    expect(screen.queryByTestId("launch-initial-prompt")).not.toBeInTheDocument();
-    await user.click(screen.getByText("Advanced options"));
-    expect(screen.getByRole("button", { name: "Keep session open" })).toHaveAttribute("aria-pressed", "true");
-    await user.click(screen.getByTestId("launch-submit"));
-
-    await waitFor(() => expect(apiMocks.launchRemoteSession).toHaveBeenCalled());
-    expect(apiMocks.launchRemoteSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        device_id: "old-cinder",
-        provider: "codex",
-        cwd: "/Users/me/repo",
-        execution_lifetime: "live_control",
-      }),
-    );
-    expect(apiMocks.launchRemoteSession.mock.calls[0][0]).not.toHaveProperty("initial_prompt");
-  });
-
-  it("keeps live-control launch behind the advanced runtime picker", async () => {
-    apiMocks.listMachines.mockResolvedValue({
-      machines: [
-        machine({
-          device_id: "cinder",
-          machine_name: "cinder",
-          online: true,
-          control_channel_status: "connected",
-          supports: ["codex.launch", "codex.run_once"],
-          control_operations_by_provider: { codex: ["launch", "run_once"] },
-          can_launch_codex: true,
-          launch_blocked_by: null,
-        }),
-      ],
-    });
-    apiMocks.launchRemoteSession.mockResolvedValue({
-      session_id: "live-session-id",
-      launch_state: "live",
-      execution_lifetime: "live_control",
-      launch_error_code: null,
-      launch_error_message: null,
-    });
-
-    const user = userEvent.setup();
-    renderModal();
-
-    await user.type(await screen.findByTestId("launch-cwd-input"), "/Users/me/repo");
-    await user.click(screen.getByText("Advanced options"));
-    await user.click(screen.getByRole("button", { name: "Keep session open" }));
-    expect(screen.queryByTestId("launch-initial-prompt")).not.toBeInTheDocument();
-    await user.click(screen.getByTestId("launch-submit"));
-
-    await waitFor(() => expect(apiMocks.launchRemoteSession).toHaveBeenCalled());
-    expect(apiMocks.launchRemoteSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        device_id: "cinder",
-        provider: "codex",
-        cwd: "/Users/me/repo",
-        execution_lifetime: "live_control",
+        launch_surface: "web",
       }),
     );
   });
@@ -455,13 +367,7 @@ describe("LaunchSessionModal", () => {
         }),
       ],
     });
-    apiMocks.launchRemoteSession.mockResolvedValue({
-      session_id: "failed-session-id",
-      launch_state: "launch_failed",
-      execution_lifetime: "one_shot",
-      launch_error_code: "cwd_not_allowed",
-      launch_error_message: "Check the workspace path: cwd must be absolute",
-    });
+    apiMocks.createConsoleSession.mockRejectedValue(new Error("Check the workspace path: cwd must be absolute"));
 
     const onLaunched = vi.fn();
     const user = userEvent.setup();
@@ -469,12 +375,9 @@ describe("LaunchSessionModal", () => {
 
     const cwdInput = await screen.findByTestId("launch-cwd-input");
     await user.type(cwdInput, "/Users/example/git/zerg");
-    await user.type(screen.getByTestId("launch-initial-prompt"), "Start and fail");
     await user.click(screen.getByTestId("launch-submit"));
 
-    expect(await screen.findByTestId("launch-error")).toHaveTextContent(
-      "Check the workspace path: cwd must be absolute",
-    );
+    expect(await screen.findByTestId("launch-error")).toHaveTextContent("Launch failed");
     expect(onLaunched).not.toHaveBeenCalled();
   });
 });

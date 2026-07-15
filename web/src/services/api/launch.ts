@@ -76,6 +76,30 @@ export type RemoteSessionLaunchResponse = {
   launch_error_message: string | null;
 };
 
+export type ConsoleSessionCreateRequest = {
+  device_id: string;
+  provider: string;
+  cwd: string;
+  project?: string | null;
+  display_name?: string | null;
+  launch_surface?: "web" | "ios" | "api";
+};
+
+export type ConsoleSessionCreateResponse = {
+  session_id: string;
+  thread_id: string;
+  created: boolean;
+};
+
+export async function createConsoleSession(
+  body: ConsoleSessionCreateRequest,
+): Promise<ConsoleSessionCreateResponse> {
+  return request<ConsoleSessionCreateResponse>("/sessions/console", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
 export type RemoteSessionContinueRequest = {
   device_id?: string | null;
   cwd?: string | null;

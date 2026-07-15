@@ -3,12 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 
 import {
   ApiError,
+  createConsoleSession,
   fetchWorkspaceSuggestions,
-  launchRemoteSession,
   listMachines,
-  type ExecutionLifetime,
   type MachineDirectoryEntry,
-  type RemoteSessionLaunchRequest,
 } from "../services/api";
 import { Button, Spinner } from "./ui";
 import { getProviderLabel } from "../lib/providers";
@@ -35,25 +33,6 @@ function launchProvidersForMachine(m: MachineDirectoryEntry): string[] {
   return m.launch.providers.map((option) => option.provider);
 }
 
-function providerLifetimes(m: MachineDirectoryEntry | undefined, provider: string): ExecutionLifetime[] {
-  return (m?.launch.providers.find((option) => option.provider === provider)?.execution_lifetimes ?? []) as ExecutionLifetime[];
-}
-
-function supportsRunOnce(m: MachineDirectoryEntry | undefined, provider: string): boolean {
-  return providerLifetimes(m, provider).includes("one_shot");
-}
-
-function supportsLiveControl(m: MachineDirectoryEntry | undefined, provider: string): boolean {
-  return providerLifetimes(m, provider).includes("live_control");
-}
-
-function defaultExecutionLifetime(m: MachineDirectoryEntry | undefined, provider: string): ExecutionLifetime {
-  if (m?.launch.default_provider === provider && m.launch.default_execution_lifetime) {
-    return m.launch.default_execution_lifetime;
-  }
-  return supportsRunOnce(m, provider) ? "one_shot" : "live_control";
-}
-
 export default function LaunchSessionModal({
   isOpen,
   onClose,
@@ -75,8 +54,6 @@ export default function LaunchSessionModal({
   const [provider, setProvider] = useState<string>("");
   const [cwd, setCwd] = useState<string>("");
   const [workspaceSearch, setWorkspaceSearch] = useState<string>("");
-  const [executionLifetime, setExecutionLifetime] = useState<ExecutionLifetime>("one_shot");
-  const [initialPrompt, setInitialPrompt] = useState<string>("");
   const [displayName, setDisplayName] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -89,18 +66,12 @@ export default function LaunchSessionModal({
   const unavailable = useMemo(() => machines.filter((machine) => !machineCanLaunch(machine)), [machines]);
 
   const selectedMachine = launchable.find((m) => m.device_id === deviceId);
-  const selectedCanRunOnce = supportsRunOnce(selectedMachine, provider);
-  const selectedCanLiveControl = supportsLiveControl(selectedMachine, provider);
-  const selectedModeSupported =
-    executionLifetime === "one_shot" ? selectedCanRunOnce : selectedCanLiveControl;
-  const promptRequired = executionLifetime === "one_shot";
   const canSubmit =
     !submitting &&
     !!deviceId &&
     !!provider &&
     !!cwd.trim() &&
-    selectedModeSupported &&
-    (!promptRequired || !!initialPrompt.trim());
+    selectedMachine?.launch.providers.some((option) => option.provider === provider);
 
   const workspacesQuery = useQuery({
     queryKey: ["launch-workspaces", deviceId],
@@ -152,17 +123,6 @@ export default function LaunchSessionModal({
     }
   }, [isOpen, selectedMachine, provider]);
 
-  // Keep the execution lifetime valid for the selected machine/provider.
-  useEffect(() => {
-    if (!isOpen || !selectedMachine || !provider) return;
-    if (
-      (executionLifetime === "one_shot" && !selectedCanRunOnce) ||
-      (executionLifetime === "live_control" && !selectedCanLiveControl)
-    ) {
-      setExecutionLifetime(defaultExecutionLifetime(selectedMachine, provider));
-    }
-  }, [isOpen, selectedMachine, provider, executionLifetime, selectedCanRunOnce, selectedCanLiveControl]);
-
   // Start with the top-ranked workspace the user has actually used on this machine.
   useEffect(() => {
     if (!isOpen || cwd.trim() || workspaces.length === 0) return;
@@ -176,8 +136,6 @@ export default function LaunchSessionModal({
     setProvider("");
     setCwd("");
     setWorkspaceSearch("");
-    setExecutionLifetime("one_shot");
-    setInitialPrompt("");
     setDisplayName("");
     setSubmitting(false);
     setError(null);
@@ -208,22 +166,13 @@ export default function LaunchSessionModal({
     setSubmitting(true);
     setError(null);
     try {
-      const payload: RemoteSessionLaunchRequest = {
+      const result = await createConsoleSession({
         device_id: deviceId,
         provider,
         cwd: cwd.trim(),
-        execution_lifetime: executionLifetime,
         display_name: displayName.trim() || null,
-        client_request_id: `launch-${crypto.randomUUID()}`,
-      };
-      if (executionLifetime === "one_shot") {
-        payload.initial_prompt = initialPrompt.trim();
-      }
-      const result = await launchRemoteSession(payload);
-      if (result.launch_state === "launch_failed" || result.launch_state === "launch_orphaned") {
-        setError(formatLaunchFailure(result));
-        return;
-      }
+        launch_surface: "web",
+      });
       onLaunched(result.session_id);
     } catch (err) {
       if (err instanceof ApiError) {
@@ -234,7 +183,7 @@ export default function LaunchSessionModal({
     } finally {
       setSubmitting(false);
     }
-  }, [canSubmit, deviceId, provider, cwd, executionLifetime, initialPrompt, displayName, onLaunched]);
+  }, [canSubmit, deviceId, provider, cwd, displayName, onLaunched]);
 
   if (!isOpen) return null;
 
@@ -296,7 +245,6 @@ export default function LaunchSessionModal({
                           const nextProvider = defaultProvider(machine);
                           setDeviceId(machine.device_id);
                           setProvider(nextProvider);
-                          setExecutionLifetime(defaultExecutionLifetime(machine, nextProvider));
                           setCwd("");
                           setWorkspaceSearch("");
                           setError(null);
@@ -334,12 +282,11 @@ export default function LaunchSessionModal({
               <div className="launch-session-card">
                 {selectedMachine && launchProvidersForMachine(selectedMachine).length > 1 ? (
                   <details ref={providerPickerRef} className="launch-choice launch-choice--nested" data-testid="launch-provider-select">
-                    <summary><span className="launch-choice-copy"><strong>{getProviderLabel(provider)}</strong><small>Agent · {executionLifetimeLabel(executionLifetime)}</small></span></summary>
+                    <summary><span className="launch-choice-copy"><strong>{getProviderLabel(provider)}</strong><small>Coding agent</small></span></summary>
                     <div className="launch-choice-panel">
                       {launchProvidersForMachine(selectedMachine).map((p) => (
                         <button key={p} type="button" className="launch-option-row" onClick={() => {
                           setProvider(p);
-                          setExecutionLifetime(defaultExecutionLifetime(selectedMachine, p));
                           setError(null);
                           if (providerPickerRef.current) providerPickerRef.current.open = false;
                         }}>
@@ -349,7 +296,7 @@ export default function LaunchSessionModal({
                     </div>
                   </details>
                 ) : (
-                  <div className="launch-static-choice"><strong>{getProviderLabel(provider)}</strong><small>Agent · {executionLifetimeLabel(executionLifetime)}</small></div>
+                  <div className="launch-static-choice"><strong>{getProviderLabel(provider)}</strong><small>Coding agent</small></div>
                 )}
 
                 <details ref={workspacePickerRef} className="launch-choice launch-choice--nested">
@@ -375,53 +322,8 @@ export default function LaunchSessionModal({
                 </details>
               </div>
 
-              {executionLifetime === "one_shot" && (
-                <label className="form-field">
-                  <span className="launch-section-label">Task</span>
-                  <textarea
-                    value={initialPrompt}
-                    onChange={(e) => {
-                      setInitialPrompt(e.target.value);
-                      setError(null);
-                    }}
-                    placeholder="What should the agent do?"
-                    rows={4}
-                    data-testid="launch-initial-prompt"
-                  />
-                </label>
-              )}
-
               <details ref={advancedPickerRef} className="launch-advanced" data-testid="launch-advanced-runtime">
                 <summary>Advanced options</summary>
-                <div className="form-field">
-                  <span>Runtime</span>
-                  <div className="launch-mode-segment" role="radiogroup" aria-label="Runtime">
-                    <button
-                      type="button"
-                      className={`launch-mode-option${executionLifetime === "one_shot" ? " is-selected" : ""}`}
-                      aria-pressed={executionLifetime === "one_shot"}
-                      disabled={!selectedCanRunOnce}
-                      onClick={() => {
-                        setExecutionLifetime("one_shot");
-                        setError(null);
-                      }}
-                    >
-                      Run once
-                    </button>
-                    <button
-                      type="button"
-                      className={`launch-mode-option${executionLifetime === "live_control" ? " is-selected" : ""}`}
-                      aria-pressed={executionLifetime === "live_control"}
-                      disabled={!selectedCanLiveControl}
-                      onClick={() => {
-                        setExecutionLifetime("live_control");
-                        setError(null);
-                      }}
-                    >
-                      Keep session open
-                    </button>
-                  </div>
-                </div>
                 <label className="form-field">
                   <span>Session name (optional)</span>
                   <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="e.g. zerg — refactor launch" data-testid="launch-display-name" />
@@ -519,10 +421,6 @@ function machineStatusClass(machine: MachineDirectoryEntry): string {
   return "is-warning";
 }
 
-function executionLifetimeLabel(lifetime: ExecutionLifetime): string {
-  return lifetime === "one_shot" ? "Run once" : "Keep session open";
-}
-
 function compactPath(path: string): string {
   return path.replace(/^\/Users\/[^/]+/, "~");
 }
@@ -530,15 +428,4 @@ function compactPath(path: string): string {
 function workspaceTitle(cwd: string, workspaces: Array<{ path: string; label: string }>): string {
   if (!cwd) return "Choose a workspace";
   return workspaces.find((workspace) => workspace.path === cwd)?.label ?? cwd.split("/").filter(Boolean).at(-1) ?? cwd;
-}
-
-function formatLaunchFailure(result: {
-  launch_error_code: string | null;
-  launch_error_message: string | null;
-}): string {
-  const message = result.launch_error_message?.trim();
-  if (message) return message;
-  const code = result.launch_error_code?.trim();
-  if (code) return code;
-  return "Launch failed";
 }
