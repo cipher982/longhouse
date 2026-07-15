@@ -42,10 +42,15 @@ from zerg.routers.agents_search import search_storage_v2_sessions
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.agents.session_graph_writes import ensure_primary_thread
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalog_read_gateway import timeline_snapshot
 from zerg.services.catalogd_supervisor import get_catalogd_client
+from zerg.services.console_turns import ConsoleTurnConflict
+from zerg.services.console_turns import ConsoleTurnUnavailable
+from zerg.services.console_turns import dispatch_next_console_turn
+from zerg.services.console_turns import enqueue_console_turn
 from zerg.services.live_catalog_timeline import list_live_catalog_sessions
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 from zerg.services.live_catalog_timeline import stream_live_catalog_machine_sessions
@@ -166,6 +171,18 @@ VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
 _ACTIVE_LIVE_SESSION_CANDIDATE_MULTIPLIER = 5
 _ACTIVE_LIVE_SESSION_CANDIDATE_MAX = 1000
+
+
+class ConsoleTurnCreate(UTCBaseModel):
+    message: str
+    client_request_id: str
+
+
+class ConsoleTurnCreateResponse(UTCBaseModel):
+    turn_id: int
+    run_id: UUID | None = None
+    state: str
+    created: bool
 
 
 def _no_viewer_owner_id() -> int | None:
@@ -998,6 +1015,57 @@ async def session_tail(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {"session_id": str(session_id), "events": events, "total": len(events)}
+
+
+@router.post(
+    "/sessions/{session_id}/turns",
+    response_model=ConsoleTurnCreateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_console_turn(
+    session_id: UUID,
+    body: ConsoleTurnCreate,
+    db: Session = Depends(get_db),
+    auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> ConsoleTurnCreateResponse:
+    """Accept one normal Console message and start or queue its turn."""
+
+    session = AgentsStore(db).get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
+    owner_id = _resolve_agents_owner_id(db, auth)
+    try:
+        queued = enqueue_console_turn(
+            db,
+            session=session,
+            owner_id=owner_id,
+            message=body.message,
+            client_request_id=body.client_request_id,
+        )
+        thread = ensure_primary_thread(db, session)
+        dispatched = await dispatch_next_console_turn(
+            db,
+            owner_id=owner_id,
+            thread_id=thread.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ConsoleTurnUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except ConsoleTurnConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    state = dispatched.state if dispatched.turn_id == queued.turn_id else queued.state
+    return ConsoleTurnCreateResponse(
+        turn_id=queued.turn_id,
+        run_id=dispatched.run_id if dispatched.turn_id == queued.turn_id else None,
+        state=state,
+        created=queued.created,
+    )
 
 
 @router.get("/sessions/{session_id}/turns", response_model=SessionTurnsListResponse)
