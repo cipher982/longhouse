@@ -3543,10 +3543,19 @@ class CatalogStore:
 
         # Legacy live cards predate per-session ownership. They are still
         # unambiguously owned by the one active tenant in this catalog.
-        catalog_exists = connection.execute(
-            select(LiveSessionCatalog.session_id).where(LiveSessionCatalog.session_id == session_id)
-        ).scalar_one_or_none()
-        return catalog_exists is not None
+        catalog_row = connection.execute(
+            select(LiveSessionCatalog.session_id, LiveSessionCatalog.origin_kind).where(LiveSessionCatalog.session_id == session_id)
+        ).one_or_none()
+        if catalog_row is None:
+            return False
+        if catalog_row.origin_kind == "console":
+            outbox_owner = connection.execute(
+                select(func.json_extract(LiveArchiveOutbox.payload_json, "$.session.owner_id")).where(
+                    LiveArchiveOutbox.idempotency_key == f"console_session_create.v1:{session_id}"
+                )
+            ).scalar_one_or_none()
+            return outbox_owner is not None and str(outbox_owner) == owner_text
+        return True
 
     def create_session_message(
         self,

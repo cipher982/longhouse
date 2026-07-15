@@ -10,6 +10,7 @@ import zerg.services.storage_v2_workspace as workspace_module
 from zerg.catalogd.schema import create_catalog_engine, initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveUser
+from zerg.models.live_store import LiveSession
 
 
 class _Catalog:
@@ -164,6 +165,12 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
             "started_at": datetime.now(UTC),
         }
     )
+    # Simulate a Console shell created by the prior release, before creation
+    # also persisted the direct LiveSession ownership row. Its durable outbox
+    # payload remains the compatibility source of ownership truth.
+    with Session(engine) as db:
+        db.query(LiveSession).filter(LiveSession.session_id == str(session_id)).delete()
+        db.commit()
 
     class ArchiveNotMaterialized:
         async def call(self, method, params):
