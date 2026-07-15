@@ -1,10 +1,13 @@
 from types import SimpleNamespace
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
 
 import zerg.services.session_workspace as session_workspace_module
 import zerg.services.storage_v2_workspace as workspace_module
+from zerg.catalogd.schema import create_catalog_engine, initialize_catalog_schema
+from zerg.catalogd.store import CatalogStore
 
 
 class _Catalog:
@@ -132,8 +135,25 @@ async def test_storage_v2_workspace_keeps_live_control_only_session_openable(mon
 
 
 @pytest.mark.asyncio
-async def test_empty_console_session_is_openable_before_archive_outbox_drains(monkeypatch):
+async def test_empty_console_session_is_openable_before_archive_outbox_drains(monkeypatch, tmp_path):
     session_id = uuid4()
+    thread_id = uuid4()
+    engine = create_catalog_engine(tmp_path / "empty-console-read-after-write.db")
+    initialize_catalog_schema(engine)
+    store = CatalogStore(engine)
+    store.create_console_session(
+        data={
+            "session_id": str(session_id),
+            "thread_id": str(thread_id),
+            "owner_id": 1,
+            "provider": "codex",
+            "device_id": "cinder",
+            "cwd": "/tmp/longhouse",
+            "project": "longhouse",
+            "provider_config": {"permission_mode": "bypass"},
+            "started_at": datetime.now(UTC),
+        }
+    )
 
     class ArchiveNotMaterialized:
         async def call(self, method, params):
@@ -141,23 +161,8 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
             assert params == {"session_id": str(session_id)}
             return {"found": False, "deleted": False}
 
-    session = SimpleNamespace(
-        origin_kind="console",
-        capabilities=SimpleNamespace(live_control_available=False),
-        model_dump=lambda **_kwargs: {
-            "id": str(session_id),
-            "origin_kind": "console",
-            "capabilities": {"live_control_available": False},
-        },
-    )
     monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: ArchiveNotMaterialized())
-
-    def read_live(candidate, *, owner_id):
-        assert candidate == session_id
-        assert owner_id == 42
-        return session, None, "12"
-
-    monkeypatch.setattr(workspace_module, "read_live_catalog_session", read_live)
+    monkeypatch.setattr("zerg.services.live_catalog_timeline.session_snapshot", lambda candidate: store.read_session(session_id=candidate))
 
     result = await workspace_module.build_storage_v2_workspace(
         session_id=session_id,
