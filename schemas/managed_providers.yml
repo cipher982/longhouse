@@ -92,7 +92,7 @@ providers:
   control_plane_aliases: []
   launch_local: true
   launch_remote: true
-  run_once: false
+  run_once: true
   reattach: true
   send_input: true
   interrupt: true
@@ -116,8 +116,8 @@ providers:
       next: promote with Runtime Host remote launch against real Claude or a hermetic
         engine launch happy-path
     run_once:
-      level: none
-      source: run-once canary not implemented yet
+      level: hermetic
+      source: claude_print adapter uses stream-json with native session-id/resume
     reattach:
       level: hermetic
       source: Claude channel bridge session state and resume unit coverage
@@ -160,6 +160,7 @@ providers:
   - claude.answer_pause
   - claude.launch
   - claude.continue
+  - claude.turn_start
 - provider: opencode
   provider_cli_binary: opencode
   provider_cli_env: LONGHOUSE_OPENCODE_BIN
@@ -169,7 +170,7 @@ providers:
   control_plane_aliases: []
   launch_local: true
   launch_remote: true
-  run_once: false
+  run_once: true
   reattach: true
   send_input: true
   interrupt: true
@@ -191,8 +192,8 @@ providers:
       source: provider-control-e2e OpenCode fake server bridge launch
       next: promote with Runtime Host remote launch against real OpenCode
     run_once:
-      level: none
-      source: run-once canary not implemented yet
+      level: hermetic
+      source: opencode_run adapter uses JSON output with native --session resume
     reattach:
       level: live_no_token
       source: longhouse provider-live canary OpenCode process-restart session recovery
@@ -235,6 +236,7 @@ providers:
   - opencode.interrupt
   - opencode.launch
   - opencode.terminate
+  - opencode.turn_start
 - provider: antigravity
   provider_cli_binary: agy
   provider_cli_env: LONGHOUSE_ANTIGRAVITY_BIN

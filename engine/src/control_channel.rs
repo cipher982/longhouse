@@ -29,6 +29,7 @@ use crate::claude_channel_launch::{
     launch_detached as launch_detached_claude_channel, ClaudeChannelLaunchConfig,
     ClaudePermissionMode,
 };
+use crate::cli_turn::{start_cli_turn, CliTurnConfig};
 use crate::codex_bridge::{
     cmd_codex_bridge_interrupt, cmd_codex_bridge_pause_response, cmd_codex_bridge_send,
     cmd_codex_bridge_start, cmd_codex_bridge_steer, validate_codex_bridge_attached,
@@ -1371,7 +1372,10 @@ async fn execute_turn_start(
     }
     let thread_id = payload_required_string(payload, "thread_id")?;
     let provider = payload_required_string(payload, "provider")?;
-    if provider != "codex" && provider != "cursor" {
+    if !matches!(
+        provider.as_str(),
+        "codex" | "cursor" | "claude" | "opencode"
+    ) {
         return Err(CommandError {
             code: "provider_unsupported".to_string(),
             message: format!("provider={provider} has no Console turn adapter"),
@@ -1452,7 +1456,7 @@ async fn execute_turn_start(
                 "argv": summary.argv,
             })
         })
-    } else {
+    } else if provider == "codex" {
         let api_token = config
             .api_token
             .clone()
@@ -1486,6 +1490,71 @@ async fn execute_turn_start(
                     "argv": summary.argv,
                 })
             }),
+            Err(err) => Err(err),
+        }
+    } else {
+        let api_token = config
+            .api_token
+            .clone()
+            .ok_or_else(|| anyhow!("Machine Agent has no device token configured"));
+        match api_token {
+            Ok(api_token) => {
+                let (binary, transport, args) = if provider == "claude" {
+                    let mut args = vec![
+                        OsString::from("--print"),
+                        OsString::from("--verbose"),
+                        OsString::from("--output-format"),
+                        OsString::from("stream-json"),
+                        OsString::from("--permission-mode"),
+                        OsString::from("bypassPermissions"),
+                    ];
+                    if let Some(resume) = resume_provider_thread_id.as_ref() {
+                        args.extend([OsString::from("--resume"), OsString::from(resume)]);
+                    } else {
+                        args.extend([OsString::from("--session-id"), OsString::from(session_id)]);
+                    }
+                    args.push(OsString::from(message));
+                    ("claude", "claude_print", args)
+                } else {
+                    let mut args = vec![
+                        OsString::from("run"),
+                        OsString::from("--format"),
+                        OsString::from("json"),
+                        OsString::from("--auto"),
+                    ];
+                    if let Some(resume) = resume_provider_thread_id.as_ref() {
+                        args.extend([OsString::from("--session"), OsString::from(resume)]);
+                    }
+                    args.push(OsString::from(message));
+                    ("opencode", "opencode_run", args)
+                };
+                start_cli_turn(CliTurnConfig {
+                    session_id: session_id.to_string(),
+                    run_id: run_id.clone(),
+                    provider: provider.clone(),
+                    transport: transport.to_string(),
+                    cwd,
+                    binary: binary.to_string(),
+                    args,
+                    api_url: config.api_url.clone(),
+                    api_token,
+                    machine_name: config.machine_name.clone(),
+                    launch_actor,
+                    launch_surface,
+                })
+                .await
+                .map(|summary| {
+                    json!({
+                        "session_id": summary.session_id,
+                        "thread_id": thread_id,
+                        "run_id": summary.run_id,
+                        "provider": provider,
+                        "transport": transport,
+                        "pid": summary.pid,
+                        "argv": summary.argv,
+                    })
+                })
+            }
             Err(err) => Err(err),
         }
     };
@@ -2376,6 +2445,8 @@ mod tests {
         ("codex", "run_once", COMMAND_RUN_ONCE),
         ("codex", "resume_run_once", COMMAND_RUN_ONCE),
         ("codex", "turn_start", COMMAND_TURN_START),
+        ("claude", "turn_start", COMMAND_TURN_START),
+        ("opencode", "turn_start", COMMAND_TURN_START),
         ("cursor", "run_once", COMMAND_RUN_ONCE),
         ("cursor", "resume_run_once", COMMAND_RUN_ONCE),
         ("cursor", "turn_start", COMMAND_TURN_START),
