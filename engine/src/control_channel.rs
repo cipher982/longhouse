@@ -39,6 +39,9 @@ use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig};
 use crate::config::ShipperConfig;
 use crate::console_prompt::wrap_console_run_once_prompt;
 use crate::cursor_acp::{start_cursor_acp_once, CursorAcpRunConfig};
+use crate::turn_claims::{
+    default_registry as default_turn_claim_registry, process_start_time_for_pid, ClaimOutcome,
+};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -50,6 +53,7 @@ const COMMAND_ANSWER_PAUSE: &str = "session.answer_pause";
 const COMMAND_LAUNCH: &str = "session.launch";
 const COMMAND_TERMINATE: &str = "session.terminate";
 const COMMAND_RUN_ONCE: &str = "session.run_once";
+const COMMAND_TURN_START: &str = "session.turn.start";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL_V2: &str = "archive.backlog_control.v2";
@@ -810,6 +814,7 @@ async fn execute_command(
     let session_id = required_string(frame, "session_id")?;
 
     match command_type.as_str() {
+        COMMAND_TURN_START => execute_turn_start(frame, &payload, &session_id, config).await,
         COMMAND_RUN_ONCE => {
             let provider = payload_required_string(&payload, "provider")?;
             if provider != "codex" && provider != "cursor" {
@@ -1350,6 +1355,171 @@ async fn execute_command(
     }
 }
 
+async fn execute_turn_start(
+    frame: &Value,
+    payload: &Value,
+    session_id: &str,
+    config: &ShipperConfig,
+) -> std::result::Result<Value, CommandError> {
+    let command_id = required_string(frame, "command_id")?;
+    let run_id = payload_required_string(payload, "run_id")?;
+    if command_id != run_id {
+        return Err(CommandError {
+            code: "invalid_command".to_string(),
+            message: "session.turn.start command_id must equal run_id".to_string(),
+        });
+    }
+    let thread_id = payload_required_string(payload, "thread_id")?;
+    let provider = payload_required_string(payload, "provider")?;
+    if provider != "codex" && provider != "cursor" {
+        return Err(CommandError {
+            code: "provider_unsupported".to_string(),
+            message: format!("provider={provider} has no Console turn adapter"),
+        });
+    }
+    let cwd_raw = payload_required_string(payload, "cwd")?;
+    let cwd = PathBuf::from(&cwd_raw);
+    if !cwd.is_absolute() {
+        return Err(CommandError {
+            code: "cwd_not_allowed".to_string(),
+            message: "cwd must be absolute".to_string(),
+        });
+    }
+    if !cwd.is_dir() {
+        return Err(CommandError {
+            code: "cwd_not_found".to_string(),
+            message: format!("cwd does not exist: {}", cwd.display()),
+        });
+    }
+    let message = payload_required_string(payload, "message")?;
+    let resume_provider_thread_id = payload_optional_string(payload, "resume_provider_thread_id");
+    let launch_actor = payload_optional_string(payload, "launch_actor");
+    let launch_surface = payload_optional_string(payload, "launch_surface");
+    let registry = default_turn_claim_registry().map_err(CommandError::command_failed)?;
+    match registry
+        .claim(&run_id, session_id, &thread_id, &provider)
+        .map_err(CommandError::command_failed)?
+    {
+        ClaimOutcome::Existing(claim) if claim.state == "spawned" => {
+            return claim.result.ok_or_else(|| CommandError {
+                code: "turn_claim_invalid".to_string(),
+                message: format!("spawned run {run_id} has no stored result"),
+            });
+        }
+        ClaimOutcome::Existing(claim) if claim.state == "failed" => {
+            return Err(CommandError {
+                code: "provider_launch_failed".to_string(),
+                message: claim
+                    .error
+                    .unwrap_or_else(|| format!("run {run_id} previously failed")),
+            });
+        }
+        ClaimOutcome::Existing(_) => {
+            return Err(CommandError {
+                code: "turn_start_ambiguous".to_string(),
+                message: format!("run {run_id} was claimed but its spawn outcome is not proven"),
+            });
+        }
+        ClaimOutcome::Acquired => {}
+    }
+
+    let local_db_path = config
+        .db_path
+        .clone()
+        .or_else(|| crate::config::get_agent_db_path().ok());
+    let launch_result = if provider == "cursor" {
+        start_cursor_acp_once(CursorAcpRunConfig {
+            session_id: session_id.to_string(),
+            run_id: run_id.clone(),
+            cwd,
+            cursor_bin: DEFAULT_CURSOR_BIN.to_string(),
+            prompt: message,
+            launch_actor,
+            launch_surface,
+            resume_acp_session_id: resume_provider_thread_id,
+            machine_name: config.machine_name.clone(),
+            local_db_path,
+        })
+        .await
+        .map(|summary| {
+            json!({
+                "session_id": summary.session_id,
+                "thread_id": thread_id,
+                "run_id": summary.run_id,
+                "provider": "cursor",
+                "transport": "cursor_acp",
+                "pid": summary.pid,
+                "argv": summary.argv,
+            })
+        })
+    } else {
+        let api_token = config
+            .api_token
+            .clone()
+            .ok_or_else(|| anyhow!("Machine Agent has no device token configured"));
+        match api_token {
+            Ok(api_token) => start_codex_exec_once(CodexExecRunConfig {
+                session_id: session_id.to_string(),
+                run_id: run_id.clone(),
+                cwd,
+                api_url: config.api_url.clone(),
+                api_token,
+                codex_bin: DEFAULT_CODEX_BIN.to_string(),
+                approval_policy: Some(REMOTE_CODEX_EXEC_APPROVAL_POLICY.to_string()),
+                sandbox: Some(REMOTE_CODEX_EXEC_SANDBOX.to_string()),
+                prompt: message,
+                launch_actor,
+                launch_surface,
+                resume_thread_id: resume_provider_thread_id,
+                machine_name: config.machine_name.clone(),
+                local_db_path,
+            })
+            .await
+            .map(|summary| {
+                json!({
+                    "session_id": summary.session_id,
+                    "thread_id": thread_id,
+                    "run_id": summary.run_id,
+                    "provider": "codex",
+                    "transport": "codex_exec",
+                    "pid": summary.pid,
+                    "argv": summary.argv,
+                })
+            }),
+            Err(err) => Err(err),
+        }
+    };
+
+    match launch_result {
+        Ok(result) => {
+            let pid = result
+                .get("pid")
+                .and_then(Value::as_u64)
+                .map(|value| value as u32);
+            registry
+                .mark_spawned(
+                    &run_id,
+                    pid,
+                    process_start_time_for_pid(pid),
+                    result.clone(),
+                )
+                .map_err(|err| CommandError {
+                    code: "turn_claim_update_failed".to_string(),
+                    message: err.to_string(),
+                })?;
+            Ok(result)
+        }
+        Err(err) => {
+            let message = err.to_string();
+            let _ = registry.mark_failed(&run_id, &message);
+            Err(CommandError {
+                code: "provider_launch_failed".to_string(),
+                message,
+            })
+        }
+    }
+}
+
 async fn run_archive_backlog_control_command(
     payload: &Value,
 ) -> std::result::Result<Value, CommandError> {
@@ -1370,7 +1540,12 @@ async fn run_archive_backlog_control_command(
         "updated_at": timestamp_now(),
         "actor": payload.get("actor").and_then(Value::as_str).unwrap_or("machine_api"),
     });
-    if let Some(reason) = payload.get("reason").and_then(Value::as_str).map(str::trim).filter(|reason| !reason.is_empty()) {
+    if let Some(reason) = payload
+        .get("reason")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|reason| !reason.is_empty())
+    {
         control["reason"] = json!(reason);
     }
     if normalized_mode != "paused" {
@@ -2200,8 +2375,10 @@ mod tests {
         ("codex", "continue", COMMAND_LAUNCH),
         ("codex", "run_once", COMMAND_RUN_ONCE),
         ("codex", "resume_run_once", COMMAND_RUN_ONCE),
+        ("codex", "turn_start", COMMAND_TURN_START),
         ("cursor", "run_once", COMMAND_RUN_ONCE),
         ("cursor", "resume_run_once", COMMAND_RUN_ONCE),
+        ("cursor", "turn_start", COMMAND_TURN_START),
         ("cursor", "send", COMMAND_SEND_TEXT),
         ("cursor", "interrupt", COMMAND_INTERRUPT),
         ("cursor", "terminate", COMMAND_TERMINATE),

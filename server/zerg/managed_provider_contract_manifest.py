@@ -54,9 +54,11 @@ MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX = {
     "continue": "can_resume",
     "run_once": "run_once",
     "resume_run_once": "run_once",
+    "turn_start": "run_once",
 }
 _MACHINE_CONTROL_SUPPORT_EXTRA_REQUIREMENTS = {
     "resume_run_once": ("can_resume",),
+    "turn_start": ("can_resume",),
 }
 _OPERATION_EVIDENCE_LEVELS = frozenset(
     {

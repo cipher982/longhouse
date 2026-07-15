@@ -15,8 +15,8 @@ mod console_prompt;
 mod control_channel;
 mod cursor_acp;
 mod cursor_helm_control;
-mod cursor_store;
 mod cursor_launch_binding;
+mod cursor_store;
 mod daemon;
 mod device;
 mod discovery;
@@ -46,6 +46,7 @@ mod state;
 mod storage_v2_contract;
 mod storage_v2_shipper;
 mod text;
+mod turn_claims;
 mod unmanaged_bindings;
 mod watcher;
 

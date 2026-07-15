@@ -82,6 +82,7 @@ providers:
   - codex.continue
   - codex.run_once
   - codex.resume_run_once
+  - codex.turn_start
 - provider: claude
   provider_cli_binary: claude
   provider_cli_env: null
@@ -391,3 +392,4 @@ providers:
   - cursor.terminate
   - cursor.run_once
   - cursor.resume_run_once
+  - cursor.turn_start
