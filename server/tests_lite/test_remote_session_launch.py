@@ -2322,7 +2322,7 @@ def _patch_registry(registry):
     return original, module
 
 
-def test_http_endpoint_happy_path(tmp_path):
+def test_removed_prompt_at_launch_endpoint_is_not_public(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
     registry = _StubRegistry()
@@ -2346,13 +2346,8 @@ def test_http_endpoint_happy_path(tmp_path):
     finally:
         module.get_machine_control_channel_registry = original
 
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["launch_state"] == "live"
-    assert body["execution_lifetime"] == "one_shot"
-    assert body["session_id"]
-    assert registry.sent[0]["command_type"] == "session.run_once"
-    assert registry.sent[0]["payload"]["execution_lifetime"] == "one_shot"
+    assert resp.status_code == 404, resp.text
+    assert registry.sent == []
 
 
 def test_http_endpoint_omitted_lifetime_without_prompt_rejects(tmp_path):
@@ -2378,8 +2373,7 @@ def test_http_endpoint_omitted_lifetime_without_prompt_rejects(tmp_path):
     finally:
         module.get_machine_control_channel_registry = original
 
-    assert resp.status_code == 400, resp.text
-    assert resp.json()["detail"]["code"] == "invalid_request"
+    assert resp.status_code == 404, resp.text
     assert registry.sent == []
 
 
@@ -2407,12 +2401,8 @@ def test_http_endpoint_explicit_live_control_survives_one_shot_default(tmp_path)
     finally:
         module.get_machine_control_channel_registry = original
 
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["execution_lifetime"] == "live_control"
-    assert registry.sent[0]["command_type"] == "session.launch"
-    assert registry.sent[0]["payload"]["execution_lifetime"] == "live_control"
-    assert "initial_prompt" not in registry.sent[0]["payload"]
+    assert resp.status_code == 404, resp.text
+    assert registry.sent == []
 
 
 def test_http_continue_endpoint_happy_path(tmp_path):
@@ -3993,6 +3983,4 @@ def test_http_endpoint_offline_machine_is_409(tmp_path):
     finally:
         module.get_machine_control_channel_registry = original
 
-    assert resp.status_code == 409, resp.text
-    detail = resp.json()["detail"]
-    assert detail["code"] == "machine_offline"
+    assert resp.status_code == 404, resp.text

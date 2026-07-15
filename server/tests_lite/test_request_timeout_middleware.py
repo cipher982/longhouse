@@ -40,7 +40,7 @@ def test_managed_local_launch_route_uses_longer_timeout_budget():
     assert response.json() == {"ok": True}
 
 
-def test_remote_session_launch_route_uses_longer_timeout_budget():
+def test_removed_remote_launch_route_has_no_special_timeout_budget():
     app = FastAPI()
     app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
 
@@ -52,8 +52,7 @@ def test_remote_session_launch_route_uses_longer_timeout_budget():
     with TestClient(app) as client:
         response = client.post("/api/sessions/launch")
 
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    assert response.status_code == 503
 
 
 def test_agents_ingest_route_uses_longer_timeout_budget():
