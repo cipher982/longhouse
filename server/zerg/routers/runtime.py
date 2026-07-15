@@ -432,6 +432,45 @@ async def ingest_runtime_observation_batch(
                         ),
                     },
                 ) from exc
+            catalog_owner_id = getattr(_token, "owner_id", None)
+            if catalog_owner_id is not None:
+                from zerg.services.console_turns import dispatch_catalog_claimed_turn
+
+                for event in events:
+                    terminal_state = str((event.payload or {}).get("terminal_state") or "")
+                    if (
+                        event.kind != "terminal_signal"
+                        or event.run_id is None
+                        or terminal_state
+                        not in {
+                            "run_completed",
+                            "run_failed",
+                            "run_cancelled",
+                        }
+                    ):
+                        continue
+                    outcome = {
+                        "run_completed": "completed",
+                        "run_cancelled": "cancelled",
+                    }.get(terminal_state, "failed")
+                    turn_result = await catalogd.call(
+                        "session.console.turn.update.v2",
+                        {
+                            "turn": {
+                                "run_id": str(event.run_id),
+                                "state": outcome,
+                                "error": None if outcome == "completed" else terminal_state,
+                                "updated_at": (event.occurred_at or now_utc).isoformat(),
+                            }
+                        },
+                    )
+                    next_turn = turn_result.get("next_turn")
+                    if isinstance(next_turn, dict):
+                        await dispatch_catalog_claimed_turn(
+                            owner_id=int(catalog_owner_id),
+                            turn=next_turn,
+                            client=catalogd,
+                        )
             commit_seq = raw_result.pop("commit_seq", None)
             if not isinstance(commit_seq, str) or not commit_seq.isdecimal():
                 raise HTTPException(

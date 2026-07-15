@@ -728,6 +728,37 @@ class LiveSessionInputReceipt(LiveBase):
     )
 
 
+class LiveConsoleTurn(LiveBase):
+    """Hot authoritative FIFO state for one Console message/invocation."""
+
+    __tablename__ = "live_console_turns"
+
+    id = Column(String(36), primary_key=True)
+    session_id = Column(String(36), nullable=False, index=True)
+    thread_id = Column(String(36), nullable=False, index=True)
+    receipt_id = Column(String(36), nullable=False, unique=True)
+    run_id = Column(String(36), nullable=True, unique=True, index=True)
+    state = Column(String(20), nullable=False, index=True)
+    provider = Column(String(64), nullable=False)
+    device_id = Column(String(255), nullable=False)
+    cwd = Column(Text, nullable=False)
+    resume_provider_thread_id = Column(String(1024), nullable=True)
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False)
+    terminal_at = Column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_live_console_turn_fifo", "thread_id", "state", "created_at"),
+        Index(
+            "ux_live_console_turn_one_owner",
+            "thread_id",
+            unique=True,
+            sqlite_where=sql_text("state IN ('starting', 'active', 'draining')"),
+        ),
+    )
+
+
 class LiveSessionInputAttachment(LiveBase):
     """Bounded metadata for an input attachment whose bytes live on disk."""
 

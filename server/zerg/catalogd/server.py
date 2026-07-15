@@ -279,6 +279,10 @@ class CatalogDaemon:
             return await self._read_launch_idempotency(request)
         if request.method == "session.console.create.v2":
             return await self._create_console_session(request)
+        if request.method == "session.console.turn.enqueue.v2":
+            return await self._enqueue_console_turn(request)
+        if request.method == "session.console.turn.update.v2":
+            return await self._update_console_turn(request)
         if request.method == "session.launch.intent.create.v2":
             return await self._create_launch_intent(request)
         if request.method == "session.launch.local.create.v2":
@@ -1325,6 +1329,40 @@ class CatalogDaemon:
         assert self._store is not None
         result = await self._run_store(self._store.create_console_session, data=data)
         return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _enqueue_console_turn(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"turn"} or not isinstance(request.params["turn"], dict):
+            return self._error(request, "invalid_request", "session.console.turn.enqueue.v2 requires turn")
+        data = dict(request.params["turn"])
+        required = {"session_id", "owner_id", "message", "client_request_id", "created_at"}
+        if not required.issubset(data):
+            return self._error(request, "invalid_request", "console turn is missing required fields")
+        try:
+            uuid.UUID(str(data["session_id"]))
+            data["created_at"] = _parse_datetime(data["created_at"], "console turn.created_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        return CatalogRpcResponse(id=request.id, result=await self._run_store(self._store.enqueue_console_turn, data=data))
+
+    async def _update_console_turn(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"turn"} or not isinstance(request.params["turn"], dict):
+            return self._error(request, "invalid_request", "session.console.turn.update.v2 requires turn")
+        data = dict(request.params["turn"])
+        required = {"run_id", "state", "updated_at"}
+        if not required.issubset(data):
+            return self._error(request, "invalid_request", "console turn update is missing required fields")
+        try:
+            if data.get("turn_id") is not None:
+                uuid.UUID(str(data["turn_id"]))
+            uuid.UUID(str(data["run_id"]))
+            data["updated_at"] = _parse_datetime(data["updated_at"], "console turn.updated_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        if data["state"] not in {"active", "completed", "failed", "cancelled"}:
+            return self._error(request, "invalid_request", "console turn state is invalid")
+        assert self._store is not None
+        return CatalogRpcResponse(id=request.id, result=await self._run_store(self._store.update_console_turn, data=data))
 
     async def _create_local_launch(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
         if set(request.params) != {"launch"}:

@@ -270,6 +270,11 @@ impl CodexExecRuntimeSink {
     }
 
     async fn post_progress(&self, seq: u64, mut payload: Value) {
+        let provider_thread_id = payload
+            .get("thread_id")
+            .and_then(Value::as_str)
+            .filter(|_| payload.get("type").and_then(Value::as_str) == Some("thread.started"))
+            .map(str::to_string);
         if let Some(obj) = payload.as_object_mut() {
             obj.insert(
                 "managed_transport".to_string(),
@@ -280,7 +285,7 @@ impl CodexExecRuntimeSink {
                 Value::String("one_shot".to_string()),
             );
         }
-        self.post_events(vec![json!({
+        let mut events = vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
             "run_id": self.run_id,
@@ -293,8 +298,22 @@ impl CodexExecRuntimeSink {
             "occurred_at": Utc::now().to_rfc3339(),
             "dedupe_key": format!("codex-exec:{}:{}:stdout:{seq}", self.session_id, self.run_id),
             "payload": payload,
-        })])
-        .await;
+        })];
+        if let Some(provider_thread_id) = provider_thread_id {
+            events.push(json!({
+                "runtime_key": format!("codex:{}", self.session_id),
+                "session_id": self.session_id,
+                "run_id": self.run_id,
+                "provider": "codex",
+                "device_id": self.machine_name,
+                "source": CODEX_EXEC_RUNTIME_SOURCE,
+                "kind": "binding_signal",
+                "occurred_at": Utc::now().to_rfc3339(),
+                "dedupe_key": format!("codex-exec:{}:{}:binding", self.session_id, self.run_id),
+                "payload": {"provider_session_id": provider_thread_id},
+            }));
+        }
+        self.post_events(events).await;
     }
 
     async fn post_terminal(

@@ -37,8 +37,14 @@ from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import SessionInput
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import primary_thread_id_for_session
 from zerg.services.console_sessions import create_empty_console_session
+from zerg.services.console_turns import ConsoleTurnConflict
+from zerg.services.console_turns import ConsoleTurnUnavailable
+from zerg.services.console_turns import dispatch_next_console_turn
+from zerg.services.console_turns import enqueue_catalog_console_turn
+from zerg.services.console_turns import enqueue_console_turn
 from zerg.services.live_archive_outbox import enqueue_managed_local_launch_outbox
 from zerg.services.live_archive_outbox import project_session_input_receipt_to_archive
 from zerg.services.live_catalog_launch import attach_live_catalog_control
@@ -2159,6 +2165,30 @@ async def _create_catalog_session_input_response(
 ) -> SessionInputResponse:
     """Live-receipt authoritative input path used when the cold DB is absent."""
 
+    if str(getattr(source_session, "launch_surface", "") or "") == "console":
+        client_request_id = _client_request_id_for_input(body)
+        try:
+            turn = await enqueue_catalog_console_turn(
+                owner_id=owner_id,
+                session_id=uuid.UUID(str(source_session.id)),
+                message=body.text,
+                client_request_id=client_request_id,
+            )
+        except ConsoleTurnUnavailable as exc:
+            raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from exc
+        except ConsoleTurnConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if turn.error:
+            raise HTTPException(status_code=502, detail={"code": "provider_launch_failed", "message": turn.error})
+        return SessionInputResponse(
+            outcome="sent" if turn.state == "active" else "queued",
+            input_id=None,
+            live_input_id=str(turn.turn_id),
+            client_request_id=client_request_id,
+            intent=INPUT_INTENT_AUTO,
+            queued=[],
+        )
+
     if body.intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER):
         raise HTTPException(status_code=400, detail=f"unknown intent: {body.intent}")
     _assert_live_session_send_available(db, source_session, owner_id=owner_id)
@@ -2657,6 +2687,41 @@ async def _create_session_input_response(
             owner_id=owner_id,
             body=body,
             db=db,
+        )
+    thread = ensure_primary_thread(db, source_session)
+    if (
+        str(getattr(source_session, "launch_surface", "") or "") == "console"
+        and str(thread.device_id or "").strip()
+        and str(thread.cwd or "").strip()
+    ):
+        client_request_id = _client_request_id_for_input(body)
+        try:
+            queued = enqueue_console_turn(
+                db,
+                session=source_session,
+                owner_id=owner_id,
+                message=body.text,
+                client_request_id=client_request_id,
+            )
+            dispatched = await dispatch_next_console_turn(
+                db,
+                owner_id=owner_id,
+                thread_id=thread.id,
+            )
+        except ConsoleTurnUnavailable as exc:
+            raise HTTPException(status_code=409, detail={"code": exc.code, "message": str(exc)}) from exc
+        except ConsoleTurnConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        state = dispatched.state if dispatched.turn_id == queued.turn_id else queued.state
+        if dispatched.turn_id == queued.turn_id and dispatched.error:
+            raise HTTPException(status_code=502, detail={"code": "provider_launch_failed", "message": dispatched.error})
+        return SessionInputResponse(
+            outcome="sent" if state == "active" else "queued",
+            input_id=queued.input_id,
+            live_input_id=None,
+            client_request_id=client_request_id,
+            intent=INPUT_INTENT_AUTO,
+            queued=_recent_input_summaries(source_session, db),
         )
     if body.intent not in (INPUT_INTENT_AUTO, INPUT_INTENT_QUEUE, INPUT_INTENT_STEER):
         raise HTTPException(

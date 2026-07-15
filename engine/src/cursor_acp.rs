@@ -222,8 +222,7 @@ async fn run_acp_turn(
         }),
     )
     .await?;
-    let init_resp =
-        read_response(&mut lines, init_id, sink).await?;
+    let init_resp = read_response(&mut lines, init_id, sink).await?;
     if let Some(err) = init_resp.get("error") {
         anyhow::bail!("initialize error: {err}");
     }
@@ -243,12 +242,7 @@ async fn run_acp_turn(
         ),
     };
     write_request(&mut stdin, session_id_req, session_method, session_params).await?;
-    let session_resp = read_response(
-        &mut lines,
-        session_id_req,
-        sink,
-    )
-    .await?;
+    let session_resp = read_response(&mut lines, session_id_req, sink).await?;
     if let Some(err) = session_resp.get("error") {
         anyhow::bail!("{session_method} error: {err}");
     }
@@ -261,6 +255,7 @@ async fn run_acp_turn(
     let acp_session_id = acp_session_id
         .context("session/new returned no sessionId")?
         .clone();
+    sink.post_binding(&acp_session_id).await;
 
     // 3. session/prompt
     let prompt_id = next_id;
@@ -276,12 +271,7 @@ async fn run_acp_turn(
     .await?;
 
     // Stream notifications until the prompt response arrives.
-    let prompt_resp = read_response(
-        &mut lines,
-        prompt_id,
-        sink,
-    )
-    .await?;
+    let prompt_resp = read_response(&mut lines, prompt_id, sink).await?;
     if let Some(err) = prompt_resp.get("error") {
         anyhow::bail!("session/prompt error: {err}");
     }
@@ -389,6 +379,22 @@ fn normalized_optional(value: &Option<String>) -> Option<String> {
 }
 
 impl CursorAcpSink {
+    async fn post_binding(&self, provider_session_id: &str) {
+        self.post_events(vec![json!({
+            "runtime_key": format!("cursor:{}", self.session_id),
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "provider": "cursor",
+            "device_id": self.machine_name,
+            "source": CURSOR_ACP_RUNTIME_SOURCE,
+            "kind": "binding_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("cursor-acp:{}:{}:binding", self.session_id, self.run_id),
+            "payload": {"provider_session_id": provider_session_id},
+        })])
+        .await;
+    }
+
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
         let observed_at = Utc::now();
         self.persist_local_phase(phase, tool_name.clone(), observed_at);
@@ -533,10 +539,9 @@ impl CursorAcpSink {
 
     async fn post_events(&self, events: Vec<Value>) {
         for event in events {
-            if let Err(error) = crate::outbox::enqueue_runtime_event(
-                &self.runtime_events_outbox_dir,
-                &event,
-            ) {
+            if let Err(error) =
+                crate::outbox::enqueue_runtime_event(&self.runtime_events_outbox_dir, &event)
+            {
                 eprintln!("[cursor-acp] runtime outbox write failed: {error}");
             }
         }

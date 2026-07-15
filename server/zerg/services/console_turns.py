@@ -87,6 +87,15 @@ class ConsoleTurnDispatch:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class CatalogConsoleTurn:
+    turn_id: UUID
+    run_id: UUID | None
+    state: str
+    created: bool
+    error: str | None = None
+
+
 def enqueue_console_turn(
     db: Session,
     *,
@@ -356,6 +365,170 @@ async def dispatch_next_console_turn(
         run_id=claimed.run_id,
         state=SESSION_TURN_STATE_ACTIVE,
     )
+
+
+async def enqueue_catalog_console_turn(
+    *,
+    owner_id: int,
+    session_id: UUID,
+    message: str,
+    client_request_id: str,
+    registry=None,
+) -> CatalogConsoleTurn:
+    """Live-catalog equivalent of enqueue + claim + machine dispatch."""
+
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.services.machine_control_channel import get_machine_control_channel_registry
+
+    client = get_catalogd_client()
+    if client is None:
+        raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
+    result = await client.call(
+        "session.console.turn.enqueue.v2",
+        {
+            "turn": {
+                "session_id": str(session_id),
+                "owner_id": owner_id,
+                "message": message,
+                "client_request_id": client_request_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+    if result.get("found") is not True:
+        raise ConsoleTurnUnavailable("session_not_found", "Console session was not found")
+    if result.get("idempotency_conflict") is True:
+        raise ConsoleTurnConflict("client_request_id was reused with different text")
+    if result.get("unavailable"):
+        raise ConsoleTurnUnavailable(str(result["unavailable"]), "Console execution target is unavailable")
+    turn = dict(result.get("turn") or {})
+    turn_id = UUID(str(turn["turn_id"]))
+    run_id = UUID(str(turn["run_id"])) if turn.get("run_id") else None
+    state = str(turn.get("state") or "queued")
+    if state != SESSION_TURN_STATE_STARTING or run_id is None:
+        return CatalogConsoleTurn(turn_id=turn_id, run_id=run_id, state=state, created=bool(result.get("created")))
+
+    control = registry or get_machine_control_channel_registry()
+    provider = str(turn["provider"])
+    device_id = str(turn["device_id"])
+    capability = f"{provider}.turn_start"
+    error = None
+    if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+        error = f"Machine Agent does not advertise {capability}"
+    else:
+        payload = {
+            "run_id": str(run_id),
+            "thread_id": str(turn["thread_id"]),
+            "provider": provider,
+            "cwd": str(turn["cwd"]),
+            "message": str(turn.get("message") or message),
+            "launch_actor": "user",
+            "launch_surface": "console",
+            **dict(turn.get("provider_config") or {}),
+        }
+        if turn.get("resume_provider_thread_id"):
+            payload["resume_provider_thread_id"] = turn["resume_provider_thread_id"]
+        response = await control.send_command(
+            owner_id=owner_id,
+            device_id=device_id,
+            session_id=str(session_id),
+            command_type=CONSOLE_TURN_START_COMMAND,
+            payload=payload,
+            command_id=str(run_id),
+            timeout_secs=15,
+        )
+        response_message = dict(response.message or {})
+        if not response.transport_ok or response_message.get("ok") is not True:
+            detail = response_message.get("error") if isinstance(response_message.get("error"), dict) else {}
+            error = str(detail.get("message") or response.error or "Console turn dispatch failed")
+
+    state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
+    await client.call(
+        "session.console.turn.update.v2",
+        {
+            "turn": {
+                "turn_id": str(turn_id),
+                "run_id": str(run_id),
+                "state": state,
+                "error": error,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+    return CatalogConsoleTurn(
+        turn_id=turn_id,
+        run_id=run_id,
+        state=state,
+        created=bool(result.get("created")),
+        error=error,
+    )
+
+
+async def dispatch_catalog_claimed_turn(
+    *,
+    owner_id: int,
+    turn: dict[str, object],
+    client=None,
+    registry=None,
+) -> CatalogConsoleTurn:
+    """Dispatch a turn already claimed by catalogd, used for FIFO wakeups."""
+
+    from zerg.services.catalogd_supervisor import get_catalogd_client
+    from zerg.services.machine_control_channel import get_machine_control_channel_registry
+
+    turn_id = UUID(str(turn["turn_id"]))
+    run_id = UUID(str(turn["run_id"]))
+    provider = str(turn["provider"])
+    device_id = str(turn["device_id"])
+    session_id = UUID(str(turn["session_id"]))
+    control = registry or get_machine_control_channel_registry()
+    catalog = client or get_catalogd_client()
+    if catalog is None:
+        raise ConsoleTurnUnavailable("catalog_unavailable", "Console turn catalog is unavailable")
+    capability = f"{provider}.turn_start"
+    error = None
+    if not control.supports(owner_id=owner_id, device_id=device_id, capability=capability):
+        error = f"Machine Agent does not advertise {capability}"
+    else:
+        payload = {
+            "run_id": str(run_id),
+            "thread_id": str(turn["thread_id"]),
+            "provider": provider,
+            "cwd": str(turn["cwd"]),
+            "message": str(turn.get("message") or ""),
+            "launch_actor": "user",
+            "launch_surface": "console",
+            **dict(turn.get("provider_config") or {}),
+        }
+        if turn.get("resume_provider_thread_id"):
+            payload["resume_provider_thread_id"] = turn["resume_provider_thread_id"]
+        response = await control.send_command(
+            owner_id=owner_id,
+            device_id=device_id,
+            session_id=str(session_id),
+            command_type=CONSOLE_TURN_START_COMMAND,
+            payload=payload,
+            command_id=str(run_id),
+            timeout_secs=15,
+        )
+        message = dict(response.message or {})
+        if not response.transport_ok or message.get("ok") is not True:
+            detail = message.get("error") if isinstance(message.get("error"), dict) else {}
+            error = str(detail.get("message") or response.error or "Console turn dispatch failed")
+    state = SESSION_TURN_STATE_FAILED if error else SESSION_TURN_STATE_ACTIVE
+    await catalog.call(
+        "session.console.turn.update.v2",
+        {
+            "turn": {
+                "turn_id": str(turn_id),
+                "run_id": str(run_id),
+                "state": state,
+                "error": error,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        },
+    )
+    return CatalogConsoleTurn(turn_id=turn_id, run_id=run_id, state=state, created=True, error=error)
 
 
 def _fail_starting_console_turn(db: Session, *, turn_id: int, error: str) -> None:

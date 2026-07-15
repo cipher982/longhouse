@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import NAMESPACE_URL
 from uuid import UUID
+from uuid import uuid4
 from uuid import uuid5
 
 from sqlalchemy import Engine
@@ -44,6 +45,7 @@ from zerg.catalogd.schema import catalog_meta
 from zerg.models.live_store import LiveAPNSDeviceRegistration
 from zerg.models.live_store import LiveAPNSLiveActivityRegistration
 from zerg.models.live_store import LiveArchiveOutbox
+from zerg.models.live_store import LiveConsoleTurn
 from zerg.models.live_store import LiveControlLease
 from zerg.models.live_store import LiveDeviceToken
 from zerg.models.live_store import LiveHeartbeatStamp
@@ -94,6 +96,23 @@ def _json_launch_result(result: dict[str, Any]) -> dict[str, Any]:
     return {
         **result,
         "session_id": str(result["session_id"]),
+    }
+
+
+def _live_console_turn_dto(turn: LiveConsoleTurn, *, message: str | None = None, provider_config: str | None = None) -> dict[str, Any]:
+    return {
+        "turn_id": turn.id,
+        "session_id": turn.session_id,
+        "thread_id": turn.thread_id,
+        "run_id": turn.run_id,
+        "state": turn.state,
+        "provider": turn.provider,
+        "device_id": turn.device_id,
+        "cwd": turn.cwd,
+        "message": message,
+        "provider_config": json.loads(provider_config or "{}"),
+        "resume_provider_thread_id": turn.resume_provider_thread_id,
+        "error": turn.error,
     }
 
 
@@ -1595,6 +1614,34 @@ class CatalogStore:
                 for event in events:
                     if event.runtime_key in updated_keys and event.kind in {"pause_request", "pause_resolution"}:
                         _apply_live_interaction_event(orm, event)
+                    if event.runtime_key in updated_keys and event.kind == "binding_signal":
+                        provider_session_id = str((event.payload or {}).get("provider_session_id") or "").strip()
+                        if provider_session_id and event.session_id is not None:
+                            catalog = orm.get(LiveSessionCatalog, str(event.session_id))
+                            thread_id = str(event.thread_id or (catalog.primary_thread_id if catalog is not None else ""))
+                            alias = (
+                                orm.query(LiveSessionThreadAlias)
+                                .filter(
+                                    LiveSessionThreadAlias.thread_id == thread_id,
+                                    LiveSessionThreadAlias.provider == event.provider,
+                                    LiveSessionThreadAlias.alias_kind == "provider_session_id",
+                                    LiveSessionThreadAlias.alias_value == provider_session_id,
+                                )
+                                .one_or_none()
+                            )
+                            if alias is None:
+                                orm.add(
+                                    LiveSessionThreadAlias(
+                                        thread_id=thread_id,
+                                        provider=event.provider,
+                                        alias_kind="provider_session_id",
+                                        alias_value=provider_session_id,
+                                        first_seen_at=event.occurred_at or observed_at,
+                                        last_seen_at=event.occurred_at or observed_at,
+                                    )
+                                )
+                            else:
+                                alias.last_seen_at = event.occurred_at or observed_at
                 orm.commit()
             except BaseException:
                 orm.rollback()
@@ -2422,6 +2469,198 @@ class CatalogStore:
                 "thread_id": str(data["thread_id"]),
                 "commit_seq": str(commit_seq),
             }
+
+    def enqueue_console_turn(self, *, data: dict[str, Any]) -> dict[str, Any]:
+        """Accept one idempotent Console message and claim it when the thread is idle."""
+
+        now = data["created_at"]
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                session = orm.get(LiveSessionCatalog, data["session_id"])
+                if session is None or not session.primary_thread_id:
+                    orm.rollback()
+                    return {"found": False}
+                thread = orm.get(LiveSessionThread, str(session.primary_thread_id))
+                if thread is None or not thread.device_id or not thread.cwd:
+                    orm.rollback()
+                    return {"found": True, "unavailable": "execution_target_missing"}
+                existing_receipt = (
+                    orm.query(LiveSessionInputReceipt)
+                    .filter(
+                        LiveSessionInputReceipt.owner_id == data["owner_id"],
+                        LiveSessionInputReceipt.session_id == data["session_id"],
+                        LiveSessionInputReceipt.client_request_id == data["client_request_id"],
+                    )
+                    .one_or_none()
+                )
+                if existing_receipt is not None:
+                    turn = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.receipt_id == existing_receipt.id).one()
+                    exact = existing_receipt.text == data["message"]
+                    replay_turn = _live_console_turn_dto(
+                        turn,
+                        message=existing_receipt.text,
+                        provider_config=thread.provider_config_json,
+                    )
+                    orm.rollback()
+                    return {
+                        "found": True,
+                        "created": False,
+                        "idempotency_conflict": not exact,
+                        "turn": replay_turn if exact else None,
+                    }
+                receipt_id = str(uuid4())
+                turn_id = str(uuid4())
+                resume_alias = (
+                    orm.query(LiveSessionThreadAlias)
+                    .filter(
+                        LiveSessionThreadAlias.thread_id == thread.id,
+                        LiveSessionThreadAlias.provider == session.provider,
+                        LiveSessionThreadAlias.alias_kind == "provider_session_id",
+                    )
+                    .order_by(LiveSessionThreadAlias.last_seen_at.desc())
+                    .first()
+                )
+                receipt = LiveSessionInputReceipt(
+                    id=receipt_id,
+                    owner_id=data["owner_id"],
+                    session_id=data["session_id"],
+                    thread_id=thread.id,
+                    provider=session.provider,
+                    device_id=thread.device_id,
+                    client_request_id=data["client_request_id"],
+                    intent="auto",
+                    status="queued",
+                    text=data["message"],
+                    created_at=now,
+                    updated_at=now,
+                )
+                turn = LiveConsoleTurn(
+                    id=turn_id,
+                    session_id=data["session_id"],
+                    thread_id=thread.id,
+                    receipt_id=receipt_id,
+                    state="queued",
+                    provider=session.provider,
+                    device_id=thread.device_id,
+                    cwd=thread.cwd,
+                    resume_provider_thread_id=resume_alias.alias_value if resume_alias is not None else None,
+                    created_at=now,
+                    updated_at=now,
+                )
+                orm.add_all([receipt, turn])
+                owner = (
+                    orm.query(LiveConsoleTurn.id)
+                    .filter(
+                        LiveConsoleTurn.thread_id == thread.id,
+                        LiveConsoleTurn.state.in_(("starting", "active", "draining")),
+                    )
+                    .first()
+                )
+                if owner is None:
+                    run_id = str(uuid4())
+                    turn.run_id = run_id
+                    turn.state = "starting"
+                    receipt.status = "delivering"
+                    receipt.delivery_request_id = run_id
+                    orm.add(
+                        LiveSessionRun(
+                            id=run_id,
+                            thread_id=thread.id,
+                            provider=session.provider,
+                            host_id=thread.device_id,
+                            cwd=thread.cwd,
+                            launch_origin="longhouse_spawned",
+                            started_at=now,
+                        )
+                    )
+                orm.commit()
+                result = _live_console_turn_dto(
+                    turn,
+                    message=receipt.text,
+                    provider_config=thread.provider_config_json,
+                )
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, now)
+            return {
+                "found": True,
+                "created": True,
+                "idempotency_conflict": False,
+                "turn": result,
+                "commit_seq": str(commit_seq),
+            }
+
+    def update_console_turn(self, *, data: dict[str, Any]) -> dict[str, Any]:
+        now = data["updated_at"]
+        with _write_transaction(self.engine) as connection:
+            orm = Session(bind=connection, join_transaction_mode="create_savepoint", expire_on_commit=False)
+            try:
+                turn = orm.query(LiveConsoleTurn).filter(LiveConsoleTurn.run_id == data["run_id"]).one_or_none()
+                if turn is None or (data.get("turn_id") and turn.id != data["turn_id"]):
+                    orm.rollback()
+                    return {"found": False}
+                receipt = orm.get(LiveSessionInputReceipt, turn.receipt_id)
+                next_state = data["state"]
+                turn.state = next_state
+                turn.updated_at = now
+                turn.error = data.get("error")
+                if receipt is not None:
+                    receipt.status = "delivered" if next_state == "active" else ("failed" if next_state == "failed" else receipt.status)
+                    receipt.error_json = json.dumps({"message": data["error"]}) if data.get("error") else None
+                    receipt.updated_at = now
+                next_turn_result = None
+                if next_state in {"completed", "failed", "cancelled"}:
+                    turn.terminal_at = now
+                    run = orm.get(LiveSessionRun, turn.run_id)
+                    if run is not None:
+                        run.ended_at = now
+                        run.exit_status = next_state
+                    next_turn = (
+                        orm.query(LiveConsoleTurn)
+                        .filter(LiveConsoleTurn.thread_id == turn.thread_id, LiveConsoleTurn.state == "queued")
+                        .order_by(LiveConsoleTurn.created_at.asc(), LiveConsoleTurn.id.asc())
+                        .first()
+                    )
+                    if next_turn is not None:
+                        next_receipt = orm.get(LiveSessionInputReceipt, next_turn.receipt_id)
+                        thread = orm.get(LiveSessionThread, next_turn.thread_id)
+                        next_run_id = str(uuid4())
+                        next_turn.run_id = next_run_id
+                        next_turn.state = "starting"
+                        next_turn.updated_at = now
+                        if next_receipt is not None:
+                            next_receipt.status = "delivering"
+                            next_receipt.delivery_request_id = next_run_id
+                            next_receipt.updated_at = now
+                        orm.add(
+                            LiveSessionRun(
+                                id=next_run_id,
+                                thread_id=next_turn.thread_id,
+                                provider=next_turn.provider,
+                                host_id=next_turn.device_id,
+                                cwd=next_turn.cwd,
+                                launch_origin="longhouse_spawned",
+                                started_at=now,
+                            )
+                        )
+                        next_turn_result = _live_console_turn_dto(
+                            next_turn,
+                            message=next_receipt.text if next_receipt is not None else None,
+                            provider_config=thread.provider_config_json if thread is not None else None,
+                        )
+                orm.commit()
+                result = _live_console_turn_dto(turn)
+            except BaseException:
+                orm.rollback()
+                raise
+            finally:
+                orm.close()
+            commit_seq = _advance_commit_seq(connection, now)
+            return {"found": True, "turn": result, "next_turn": next_turn_result, "commit_seq": str(commit_seq)}
 
     def create_local_launch(self, *, launch: dict[str, Any]) -> dict[str, Any]:
         """Atomically create a Helm launch shell, control attachment, and outbox row."""
