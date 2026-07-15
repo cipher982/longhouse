@@ -167,25 +167,49 @@ pub async fn start_cursor_acp_once(config: CursorAcpRunConfig) -> Result<CursorA
             _ => Err(anyhow::anyhow!("missing cursor-agent acp stdio")),
         };
 
-        match turn_outcome {
-            Ok(stop_reason) => {
-                let terminal_state = match stop_reason.as_deref() {
-                    Some("end_turn") | Some("end_turn_refused") => "run_completed",
-                    _ => "run_completed",
-                };
+        if turn_outcome.is_err() {
+            let _ = child.kill().await;
+        }
+        let process_status = child.wait().await;
+
+        if let Some(task) = stderr_task {
+            let _ = task.await;
+        }
+
+        match (turn_outcome, process_status) {
+            (Ok(_stop_reason), Ok(status)) if status.success() => {
                 monitor_sink
-                    .post_terminal(terminal_state, Some(0), stderr_tail_snapshot(&stderr_tail))
+                    .post_terminal(
+                        "run_completed",
+                        status.code(),
+                        stderr_tail_snapshot(&stderr_tail),
+                    )
                     .await;
             }
-            Err(err) => {
+            (Ok(_), Ok(status)) => {
+                monitor_sink
+                    .post_terminal(
+                        "run_failed",
+                        status.code(),
+                        stderr_tail_snapshot(&stderr_tail)
+                            .or_else(|| Some(format!("cursor-agent exited with {status}"))),
+                    )
+                    .await;
+            }
+            (Ok(_), Err(err)) => {
+                monitor_sink
+                    .post_terminal(
+                        "run_failed",
+                        None,
+                        Some(format!("waiting for cursor-agent failed: {err}")),
+                    )
+                    .await;
+            }
+            (Err(err), _) => {
                 monitor_sink
                     .post_terminal("run_failed", None, Some(format!("acp turn failed: {err}")))
                     .await;
             }
-        }
-
-        if let Some(task) = stderr_task {
-            let _ = task.await;
         }
     });
 
