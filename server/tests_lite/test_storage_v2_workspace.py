@@ -11,6 +11,7 @@ from zerg.catalogd.schema import create_catalog_engine, initialize_catalog_schem
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveUser
 from zerg.models.live_store import LiveSession
+from zerg.models.live_store import LiveSessionCatalog
 
 
 class _Catalog:
@@ -106,7 +107,6 @@ async def test_storage_v2_workspace_returns_none_for_legacy_session(monkeypatch)
         )
         is None
     )
-
 
 @pytest.mark.asyncio
 async def test_storage_v2_workspace_keeps_live_control_only_session_openable(monkeypatch):
@@ -209,3 +209,18 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
         )
         is None
     )
+
+    with Session(engine) as db:
+        catalog_session = db.get(LiveSessionCatalog, str(session_id))
+        catalog_session.closed_at = datetime.now(UTC)
+        catalog_session.close_reason = "user_closed"
+        db.commit()
+    closed = await workspace_module.build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=1,
+        branch_mode="head",
+        limit=50,
+    )
+    assert closed is not None
+    assert closed["session"]["capabilities"]["composer_enabled"] is False
+    assert closed["session"]["capabilities"]["can_send_input"] is False

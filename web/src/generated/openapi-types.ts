@@ -8087,7 +8087,7 @@ export interface components {
              * @default read_only
              * @enum {string}
              */
-            input_mode: "live" | "offline" | "read_only";
+            input_mode: "live" | "console" | "offline" | "read_only";
             /**
              * Default Input Intent
              * @description Default POST input intent clients should use for the primary send action
@@ -8121,7 +8121,7 @@ export interface components {
              * Control Label
              * @description Kernel-projected control bucket for this session
              */
-            control_label?: ("live" | "reattach" | "search-only" | "imported") | null;
+            control_label?: ("live" | "console" | "reattach" | "search-only" | "imported") | null;
             /**
              * Observe Only
              * @description True when Longhouse can read transcript output but cannot steer this session

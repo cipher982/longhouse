@@ -127,9 +127,9 @@ def _project_console_composer(
     capabilities: SessionCapabilitiesResponse,
     *,
     session: LiveSessionCatalog,
-    ended_at: datetime | None,
+    closed: bool,
 ) -> SessionCapabilitiesResponse:
-    if session.origin_kind != "console" or ended_at is not None:
+    if session.origin_kind != "console" or closed:
         return capabilities
     return capabilities.model_copy(
         update={
@@ -193,7 +193,11 @@ def _pending_response_from_catalog(
         now=now,
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state)
-    capabilities = _project_console_composer(capabilities, session=session, ended_at=ended_at)
+    capabilities = _project_console_composer(
+        capabilities,
+        session=session,
+        closed=session_state.disposition.state == "closed",
+    )
     launch_state = readiness.launch_state
     execution_lifetime = readiness.execution_lifetime
     return response.model_copy(
@@ -327,7 +331,11 @@ def _response_from_catalog(
         kernel_capabilities=capability_flags,
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state)
-    capabilities = _project_console_composer(capabilities, session=session, ended_at=ended_at)
+    capabilities = _project_console_composer(
+        capabilities,
+        session=session,
+        closed=session_state.disposition.state == "closed",
+    )
     title = _title(session, card)
     return SessionResponse(
         id=str(session.session_id),

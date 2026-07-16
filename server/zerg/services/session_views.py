@@ -721,7 +721,7 @@ class SessionCapabilitiesResponse(BaseModel):
         description="User-facing capability explanation",
     )
     display_tone: str = Field("neutral", description="Stable capability tone for clients")
-    input_mode: Literal["live", "offline", "read_only"] = Field(
+    input_mode: Literal["live", "console", "offline", "read_only"] = Field(
         "read_only",
         description="Canonical input/composer availability state for clients",
     )
@@ -736,7 +736,7 @@ class SessionCapabilitiesResponse(BaseModel):
         None,
         description="Stable reason code when the primary send action is disabled",
     )
-    control_label: Optional[Literal["live", "reattach", "search-only", "imported"]] = Field(
+    control_label: Optional[Literal["live", "console", "reattach", "search-only", "imported"]] = Field(
         None,
         description="Kernel-projected control bucket for this session",
     )
