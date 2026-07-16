@@ -417,6 +417,35 @@ impl ManagedObservationSnapshot {
         }
         left == right
     }
+
+    fn current_only(&self) -> Self {
+        Self {
+            codex: self
+                .codex
+                .iter()
+                .filter(|row| row.bridge_alive || row.app_server_alive || row.has_tui_attachment)
+                .cloned()
+                .collect(),
+            claude: self
+                .claude
+                .iter()
+                .filter(|row| row.claude_alive || row.bridge_alive)
+                .cloned()
+                .collect(),
+            opencode: self
+                .opencode
+                .iter()
+                .filter(|row| row.server_alive || row.has_tui_attachment)
+                .cloned()
+                .collect(),
+            cursor: self
+                .cursor
+                .iter()
+                .filter(|row| row.live)
+                .cloned()
+                .collect(),
+        }
+    }
 }
 
 fn managed_provider_state_dirs() -> Vec<PathBuf> {
@@ -2601,6 +2630,11 @@ fn maybe_start_managed_observation_scan(
 
     let previous = previous.clone();
     scan_tasks.spawn_blocking(move || {
+        let previous = if full_reconciliation {
+            previous
+        } else {
+            previous.current_only()
+        };
         let started = Instant::now();
         let process_started = Instant::now();
         let process_inventory = crate::process_identity::try_collect_process_facts_by_pid();
@@ -2629,7 +2663,7 @@ fn maybe_start_managed_observation_scan(
             let paths = previous
                 .codex
                 .iter()
-                .map(|observation| observation.state_file.clone())
+                .map(|row| row.state_file.clone())
                 .collect::<Vec<_>>();
             managed_bridge_scan::collect_observations_from_paths(&paths, &process_facts)
         };
@@ -2649,7 +2683,7 @@ fn maybe_start_managed_observation_scan(
             let paths = previous
                 .claude
                 .iter()
-                .map(|observation| observation.state_file.clone())
+                .map(|row| row.state_file.clone())
                 .collect::<Vec<_>>();
             managed_claude_scan::collect_observations_from_paths(&paths, &process_facts)
         };
@@ -2678,7 +2712,7 @@ fn maybe_start_managed_observation_scan(
             let paths = previous
                 .opencode
                 .iter()
-                .map(|observation| observation.state_file.clone())
+                .map(|row| row.state_file.clone())
                 .collect::<Vec<_>>();
             managed_opencode_scan::collect_observations_from_paths(&paths, &process_facts)
         };
@@ -2698,7 +2732,7 @@ fn maybe_start_managed_observation_scan(
             let paths = previous
                 .cursor
                 .iter()
-                .map(|observation| observation.state_file.clone())
+                .map(|row| row.state_file.clone())
                 .collect::<Vec<_>>();
             managed_cursor_helm_scan::collect_observations_from_paths(&paths, &process_facts)
         };
@@ -4027,6 +4061,19 @@ mod tests {
 
         writer_churn.codex[0].has_tui_attachment = true;
         assert!(!first.projection_equivalent(&writer_churn));
+
+        let mut dead = first.codex[0].clone();
+        dead.session_id = "dead-history".to_string();
+        dead.bridge_alive = false;
+        dead.app_server_alive = false;
+        dead.has_tui_attachment = false;
+        let with_history = ManagedObservationSnapshot {
+            codex: vec![first.codex[0].clone(), dead],
+            ..ManagedObservationSnapshot::default()
+        };
+        let current = with_history.current_only();
+        assert_eq!(current.codex.len(), 1);
+        assert_eq!(current.codex[0].session_id, first.codex[0].session_id);
     }
 
     #[test]
