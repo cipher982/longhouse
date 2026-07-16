@@ -4904,6 +4904,15 @@ export interface components {
             /** Created */
             created: boolean;
         };
+        /** ConsoleTurnReceiptResponse */
+        ConsoleTurnReceiptResponse: {
+            /** Turn Id */
+            turn_id: string;
+            /** Run Id */
+            run_id?: string | null;
+            /** State */
+            state: string;
+        };
         /**
          * ControlPath
          * @enum {string}
@@ -8397,6 +8406,7 @@ export interface components {
             live_input_id?: string | null;
             /** Client Request Id */
             client_request_id?: string | null;
+            turn?: components["schemas"]["ConsoleTurnReceiptResponse"] | null;
             /**
              * Intent
              * @enum {string}

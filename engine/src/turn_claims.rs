@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::Value;
 use uuid::Uuid;
 
-const CLAIM_SCHEMA_VERSION: u32 = 1;
+const CLAIM_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TurnClaim {
@@ -20,6 +20,10 @@ pub struct TurnClaim {
     pub run_id: String,
     pub session_id: String,
     pub thread_id: String,
+    #[serde(default)]
+    pub turn_id: Option<String>,
+    #[serde(default)]
+    pub client_request_id: Option<String>,
     pub provider: String,
     pub state: String,
     pub claimed_at: String,
@@ -51,6 +55,8 @@ impl TurnClaimRegistry {
         run_id: &str,
         session_id: &str,
         thread_id: &str,
+        turn_id: Option<&str>,
+        client_request_id: Option<&str>,
         provider: &str,
     ) -> Result<ClaimOutcome> {
         validate_id(run_id, "run_id")?;
@@ -64,6 +70,8 @@ impl TurnClaimRegistry {
             run_id: run_id.to_string(),
             session_id: session_id.to_string(),
             thread_id: thread_id.to_string(),
+            turn_id: turn_id.map(str::to_string),
+            client_request_id: client_request_id.map(str::to_string),
             provider: provider.to_string(),
             state: "claimed".to_string(),
             claimed_at: now.clone(),
@@ -231,17 +239,33 @@ mod tests {
 
         assert!(matches!(
             registry
-                .claim(&run_id, &session_id, &thread_id, "codex")
+                .claim(
+                    &run_id,
+                    &session_id,
+                    &thread_id,
+                    Some(&id(4)),
+                    Some("request-1"),
+                    "codex"
+                )
                 .unwrap(),
             ClaimOutcome::Acquired
         ));
         let duplicate = registry
-            .claim(&run_id, &session_id, &thread_id, "codex")
+            .claim(
+                &run_id,
+                &session_id,
+                &thread_id,
+                Some(&id(4)),
+                Some("request-1"),
+                "codex",
+            )
             .unwrap();
         let ClaimOutcome::Existing(existing) = duplicate else {
             panic!("duplicate claim was reacquired");
         };
         assert_eq!(existing.state, "claimed");
+        assert_eq!(existing.turn_id, Some(id(4)));
+        assert_eq!(existing.client_request_id.as_deref(), Some("request-1"));
     }
 
     #[test]
@@ -249,7 +273,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let run_id = id(11);
         let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
-        registry.claim(&run_id, &id(12), &id(13), "cursor").unwrap();
+        registry
+            .claim(&run_id, &id(12), &id(13), None, None, "cursor")
+            .unwrap();
         registry
             .mark_spawned(
                 &run_id,
@@ -271,7 +297,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let run_id = id(21);
         let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
-        registry.claim(&run_id, &id(22), &id(23), "codex").unwrap();
+        registry
+            .claim(&run_id, &id(22), &id(23), None, None, "codex")
+            .unwrap();
         registry
             .mark_spawned(
                 &run_id,

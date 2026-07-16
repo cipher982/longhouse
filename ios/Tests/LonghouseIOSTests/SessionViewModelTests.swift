@@ -516,6 +516,35 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func activeConsoleReceiptKeepsOptimisticBubbleWorking() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            sendResponse: SessionInputResponse(
+                outcome: .sent,
+                inputId: nil,
+                clientRequestId: "request-console",
+                turn: ConsoleTurnReceipt(
+                    turnId: "turn-1",
+                    runId: "run-1",
+                    state: "active"
+                ),
+                intent: .auto,
+                queued: []
+            )
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        #expect(await model.send(text: "work on this", sessionId: "session-1", appState: appState))
+        #expect(model.submittedInputs.first?.phase == .working)
+        #expect(model.submittedInputs.first?.turnId == "turn-1")
+        #expect(model.submittedInputs.first?.runId == "run-1")
+    }
+
+    @Test
     func queueInsteadOfSteerRemovesOriginalDecisionBubble() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let queuedResponse = SessionInputResponse(

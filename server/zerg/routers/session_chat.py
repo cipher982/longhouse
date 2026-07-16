@@ -468,6 +468,12 @@ class QueuedInputSummary(BaseModel):
     created_at: datetime | None = None
 
 
+class ConsoleTurnReceiptResponse(BaseModel):
+    turn_id: str
+    run_id: str | None = None
+    state: str
+
+
 class SessionInputResponse(BaseModel):
     """Shape returned from POST /api/sessions/{id}/input."""
 
@@ -475,6 +481,7 @@ class SessionInputResponse(BaseModel):
     input_id: int | None = None
     live_input_id: str | None = None
     client_request_id: str | None = None
+    turn: ConsoleTurnReceiptResponse | None = None
     intent: InputIntent
     queued: list[QueuedInputSummary] = Field(default_factory=list)
 
@@ -2095,6 +2102,11 @@ async def _create_catalog_session_input_response(
             input_id=None,
             live_input_id=str(turn.turn_id),
             client_request_id=client_request_id,
+            turn=ConsoleTurnReceiptResponse(
+                turn_id=str(turn.turn_id),
+                run_id=str(turn.run_id) if getattr(turn, "run_id", None) is not None else None,
+                state=turn.state,
+            ),
             intent=INPUT_INTENT_AUTO,
             queued=[],
         )
@@ -2630,6 +2642,11 @@ async def _create_session_input_response(
             input_id=queued.input_id,
             live_input_id=None,
             client_request_id=client_request_id,
+            turn=ConsoleTurnReceiptResponse(
+                turn_id=str(queued.turn_id),
+                run_id=str(dispatched.run_id) if dispatched.turn_id == queued.turn_id and dispatched.run_id else None,
+                state=state,
+            ),
             intent=INPUT_INTENT_AUTO,
             queued=_recent_input_summaries(source_session, db),
         )

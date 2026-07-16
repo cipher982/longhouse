@@ -20,6 +20,9 @@ const STDERR_TAIL_LINES: usize = 40;
 pub struct CodexExecRunConfig {
     pub session_id: String,
     pub run_id: String,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub client_request_id: Option<String>,
     pub cwd: PathBuf,
     pub api_url: String,
     pub api_token: String,
@@ -46,6 +49,9 @@ pub struct CodexExecRunSummary {
 struct CodexExecRuntimeSink {
     session_id: String,
     run_id: String,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    client_request_id: Option<String>,
     api_url: String,
     api_token: String,
     machine_name: String,
@@ -132,6 +138,9 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     let sink = CodexExecRuntimeSink {
         session_id: config.session_id.clone(),
         run_id: config.run_id.clone(),
+        thread_id: config.thread_id.clone(),
+        turn_id: config.turn_id.clone(),
+        client_request_id: config.client_request_id.clone(),
         api_url: config.api_url.clone(),
         api_token: config.api_token.clone(),
         machine_name: config.machine_name.clone(),
@@ -258,6 +267,7 @@ impl CodexExecRuntimeSink {
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
             "run_id": self.run_id,
+            "thread_id": self.thread_id,
             "provider": "codex",
             "device_id": self.machine_name,
             "source": CODEX_EXEC_RUNTIME_SOURCE,
@@ -269,6 +279,8 @@ impl CodexExecRuntimeSink {
             "payload": {
                 "managed_transport": CODEX_EXEC_RUNTIME_SOURCE,
                 "execution_lifetime": "one_shot",
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
             }
         })])
         .await;
@@ -277,11 +289,7 @@ impl CodexExecRuntimeSink {
     async fn post_provider_event(&self, seq: u64, event: Value) {
         // Inspect the decoded provider record before adding Longhouse's transport
         // envelope. Looking for thread_id on the envelope silently loses binding.
-        let provider_thread_id = event
-            .get("thread_id")
-            .and_then(Value::as_str)
-            .filter(|_| event.get("type").and_then(Value::as_str) == Some("thread.started"))
-            .map(str::to_string);
+        let provider_thread_id = provider_thread_id_from_event(&event);
         self.post_progress(
             seq,
             json!({"progress_kind": "codex_exec_jsonl", "seq": seq, "event": event}),
@@ -310,6 +318,7 @@ impl CodexExecRuntimeSink {
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
             "run_id": self.run_id,
+            "thread_id": self.thread_id,
             "provider": "codex",
             "device_id": self.machine_name,
             "source": CODEX_EXEC_RUNTIME_SOURCE,
@@ -325,13 +334,18 @@ impl CodexExecRuntimeSink {
                 "runtime_key": format!("codex:{}", self.session_id),
                 "session_id": self.session_id,
                 "run_id": self.run_id,
+                "thread_id": self.thread_id,
                 "provider": "codex",
                 "device_id": self.machine_name,
                 "source": CODEX_EXEC_RUNTIME_SOURCE,
                 "kind": "binding_signal",
                 "occurred_at": Utc::now().to_rfc3339(),
                 "dedupe_key": format!("codex-exec:{}:{}:binding", self.session_id, self.run_id),
-                "payload": {"provider_session_id": provider_thread_id},
+                "payload": {
+                    "provider_session_id": provider_thread_id,
+                    "turn_id": self.turn_id,
+                    "client_request_id": self.client_request_id,
+                },
             }));
         }
         self.post_events(events).await;
@@ -350,6 +364,7 @@ impl CodexExecRuntimeSink {
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
             "run_id": self.run_id,
+            "thread_id": self.thread_id,
             "provider": "codex",
             "device_id": self.machine_name,
             "source": CODEX_EXEC_RUNTIME_SOURCE,
@@ -366,6 +381,8 @@ impl CodexExecRuntimeSink {
                 "terminal_source": CODEX_EXEC_RUNTIME_SOURCE,
                 "exit_code": exit_code,
                 "stderr_tail": stderr_tail,
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
             }
         })])
         .await;
@@ -462,6 +479,14 @@ impl CodexExecRuntimeSink {
     }
 }
 
+fn provider_thread_id_from_event(event: &Value) -> Option<String> {
+    event
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .filter(|_| event.get("type").and_then(Value::as_str) == Some("thread.started"))
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,6 +495,9 @@ mod tests {
         CodexExecRunConfig {
             session_id: "11111111-1111-4111-8111-111111111111".to_string(),
             run_id: "22222222-2222-4222-8222-222222222222".to_string(),
+            thread_id: Some("44444444-4444-4444-8444-444444444444".to_string()),
+            turn_id: Some("55555555-5555-4555-8555-555555555555".to_string()),
+            client_request_id: Some("request-1".to_string()),
             cwd: PathBuf::from("/tmp/project"),
             api_url: "http://localhost:8080".to_string(),
             api_token: "token".to_string(),
@@ -594,14 +622,11 @@ mod tests {
             "type": "thread.started",
             "thread_id": "019f6b93-edf6-7bd0-a757-b5195a61abdd"
         });
-        let provider_thread_id = event
-            .get("thread_id")
-            .and_then(Value::as_str)
-            .filter(|_| event.get("type").and_then(Value::as_str) == Some("thread.started"));
+        let provider_thread_id = provider_thread_id_from_event(&event);
 
         assert_eq!(
             provider_thread_id,
-            Some("019f6b93-edf6-7bd0-a757-b5195a61abdd")
+            Some("019f6b93-edf6-7bd0-a757-b5195a61abdd".to_string())
         );
         let envelope = json!({
             "progress_kind": "codex_exec_jsonl",
@@ -610,5 +635,6 @@ mod tests {
         });
         assert_eq!(envelope["event"]["type"], "thread.started");
         assert!(envelope.get("thread_id").is_none());
+        assert_eq!(provider_thread_id_from_event(&envelope), None);
     }
 }

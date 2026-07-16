@@ -888,6 +888,9 @@ async fn execute_command(
             let summary = start_codex_exec_once(CodexExecRunConfig {
                 session_id: session_id.clone(),
                 run_id: run_id.clone(),
+                thread_id: None,
+                turn_id: None,
+                client_request_id: None,
                 cwd,
                 api_url: config.api_url.clone(),
                 api_token,
@@ -1370,6 +1373,8 @@ async fn execute_turn_start(
         });
     }
     let thread_id = payload_required_string(payload, "thread_id")?;
+    let turn_id = payload_optional_string(payload, "turn_id");
+    let client_request_id = payload_optional_string(payload, "client_request_id");
     let provider = payload_required_string(payload, "provider")?;
     if !matches!(provider.as_str(), "codex" | "cursor") {
         return Err(CommandError {
@@ -1397,7 +1402,14 @@ async fn execute_turn_start(
     let launch_surface = payload_optional_string(payload, "launch_surface");
     let registry = default_turn_claim_registry().map_err(CommandError::command_failed)?;
     match registry
-        .claim(&run_id, session_id, &thread_id, &provider)
+        .claim(
+            &run_id,
+            session_id,
+            &thread_id,
+            turn_id.as_deref(),
+            client_request_id.as_deref(),
+            &provider,
+        )
         .map_err(CommandError::command_failed)?
     {
         ClaimOutcome::Existing(claim) if claim.state == "terminal" => {
@@ -1482,6 +1494,9 @@ async fn execute_turn_start(
             Ok(api_token) => start_codex_exec_once(CodexExecRunConfig {
                 session_id: session_id.to_string(),
                 run_id: run_id.clone(),
+                thread_id: Some(thread_id.clone()),
+                turn_id: turn_id.clone(),
+                client_request_id: client_request_id.clone(),
                 cwd,
                 api_url: config.api_url.clone(),
                 api_token,

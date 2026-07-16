@@ -2300,15 +2300,10 @@ fn extract_codex_events(
 
             // Parse arguments string as raw JSON
             let tool_input = if is_custom {
-                payload.input.as_ref().and_then(|input| {
-                    let value = serde_json::from_str::<serde_json::Value>(input.get()).ok()?;
-                    let normalized = if value.is_object() {
-                        value
-                    } else {
-                        serde_json::json!({"input": value})
-                    };
-                    RawValue::from_string(normalized.to_string()).ok()
-                })
+                payload
+                    .input
+                    .as_ref()
+                    .and_then(|input| RawValue::from_string(input.get().to_string()).ok())
             } else {
                 payload.arguments.as_ref().and_then(|args| {
                     let trimmed = args.trim();
@@ -3302,7 +3297,10 @@ mod tests {
         assert_eq!(result.events[0].tool_call_id.as_deref(), Some("call_HEf"));
         assert_eq!(result.events[0].raw_type, "codex_custom_tool_call");
         let input = result.events[0].tool_input_json.as_ref().unwrap().get();
-        assert!(input.contains("docs/as-built.md"));
+        assert_eq!(
+            serde_json::from_str::<String>(input).unwrap(),
+            "const result = await tools.exec_command({cmd:\"sed -n '1,80p' docs/as-built.md\"}); text(result.output)"
+        );
         assert_eq!(result.events[1].role, Role::Tool);
         assert_eq!(result.events[1].tool_call_id.as_deref(), Some("call_HEf"));
         assert_eq!(

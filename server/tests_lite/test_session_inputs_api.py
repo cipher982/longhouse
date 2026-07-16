@@ -379,6 +379,8 @@ def test_session_input_api_schema_exposes_typed_lifecycle_contract():
     assert request_schema["properties"]["intent"]["enum"] == ["auto", "queue", "steer"]
     assert response_schema["properties"]["outcome"]["enum"] == ["sent", "queued"]
     assert response_schema["properties"]["intent"]["enum"] == ["auto", "queue", "steer"]
+    turn_schema = response_schema["properties"]["turn"]
+    assert "ConsoleTurnReceiptResponse" in str(turn_schema)
     assert queued_schema["properties"]["intent"]["enum"] == ["auto", "queue", "steer"]
     assert queued_schema["properties"]["status"]["enum"] == [
         "queued",
