@@ -47,6 +47,13 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
     public let commandTimeoutSeconds: TimeInterval
     let currentBundlePath: String?
 
+    var usesDefaultInvocation: Bool {
+        let invocation = LonghouseCLI.defaultHealthInvocation()
+        return currentBundlePath == nil
+            && launchPath == invocation.launchPath
+            && arguments == invocation.arguments
+    }
+
     public init() {
         let invocation = LonghouseCLI.defaultHealthInvocation()
         self.launchPath = invocation.launchPath

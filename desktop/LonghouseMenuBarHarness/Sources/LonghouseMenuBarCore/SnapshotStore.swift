@@ -60,7 +60,13 @@ public final class SnapshotStore: ObservableObject {
             appendHistorySample(for: cachedSnapshot)
             loadError = nil
         }
-        if source is CLIHealthSnapshotSource {
+        if let cliSource = source as? CLIHealthSnapshotSource {
+            if cliSource.usesDefaultInvocation,
+               snapshot == nil,
+               let nativeSnapshot = Self.loadNativeBootstrapSnapshot() {
+                snapshot = nativeSnapshot
+                appendHistorySample(for: nativeSnapshot)
+            }
             isBooting = true
             scheduleBootGraceTimeout()
             refresh(reason: .initial)
@@ -371,6 +377,68 @@ public final class SnapshotStore: ObservableObject {
             return nil
         }
         return try? HealthSnapshotDecoder.decode(data: data)
+    }
+
+    static func loadNativeBootstrapSnapshot(
+        from statusURL: URL? = nil,
+        referenceDate: Date = Date()
+    ) -> HealthSnapshot? {
+        let resolvedURL: URL
+        if let statusURL {
+            resolvedURL = statusURL
+        } else {
+            let home = ProcessInfo.processInfo.environment["LONGHOUSE_HOME"]
+                .map { URL(fileURLWithPath: $0, isDirectory: true) }
+                ?? FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".longhouse", isDirectory: true)
+            resolvedURL = home
+                .appendingPathComponent("agent", isDirectory: true)
+                .appendingPathComponent("engine-status.json")
+        }
+        guard let data = try? Data(contentsOf: resolvedURL) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let payload = try? decoder.decode(EngineStatusPayload.self, from: data) else {
+            return nil
+        }
+        let pulse = payload.localProjection?.enginePulseAt ?? payload.lastUpdated
+        let pulseDate = pulse.flatMap(parseISO8601)
+        let age = pulseDate.map { max(0, referenceDate.timeIntervalSince($0)) }
+        let fresh = age.map { $0 <= 30 } ?? false
+        let reconciliation = payload.localProjection?.reconciliation?.state
+        let headline = reconciliation == "reconciling"
+            ? "Refreshing local status"
+            : "Loading local status"
+        return HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: pulse,
+            healthState: "loading",
+            severity: "gray",
+            headline: headline,
+            reasons: ["native_status_bootstrap"],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: EngineStatusSnapshot(
+                path: resolvedURL.path,
+                exists: true,
+                fresh: fresh,
+                ageSeconds: age.map { Int($0) },
+                payload: payload,
+                error: nil
+            ),
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+    }
+
+    private static func parseISO8601(_ value: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) {
+            return date
+        }
+        return ISO8601DateFormatter().date(from: value)
     }
 
     private func persistCachedSnapshot(_ snapshot: HealthSnapshot) {

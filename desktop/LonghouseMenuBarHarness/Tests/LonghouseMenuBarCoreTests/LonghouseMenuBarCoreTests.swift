@@ -952,6 +952,27 @@ struct LonghouseMenuBarCoreTests {
 
     @Test
     @MainActor
+    func nativeBootstrapDecodesEnginePulseWithoutLaunchingCLI() throws {
+        let tempDir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let statusURL = tempDir.appendingPathComponent("engine-status.json")
+        try Data(
+            #"{"daemon_pid":42,"local_projection":{"engine_pulse_at":"2026-07-16T16:00:00Z","reconciliation":{"state":"reconciling","reason":"startup"}},"last_updated":"2026-07-16T16:00:00Z"}"#.utf8
+        ).write(to: statusURL)
+
+        let snapshot = SnapshotStore.loadNativeBootstrapSnapshot(
+            from: statusURL,
+            referenceDate: ISO8601DateFormatter().date(from: "2026-07-16T16:00:01Z")!
+        )
+
+        #expect(snapshot?.headline == "Refreshing local status")
+        #expect(snapshot?.engineStatus?.fresh == true)
+        #expect(snapshot?.engineStatus?.payload?.daemonPid == 42)
+    }
+
+    @Test
+    @MainActor
     func snapshotStoreSkipsPresentationRefreshWhenSnapshotIsFresh() async throws {
         let collectedAt = "2026-05-05T12:00:00Z"
         let snapshot = HealthSnapshot(
