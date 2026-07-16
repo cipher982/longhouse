@@ -15,6 +15,7 @@ from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventIngest
 
 FIXTURE = Path(__file__).parent / "fixtures" / "codex_bridge_runtime_events.json"
+CONSOLE_FIXTURE = Path(__file__).parent / "fixtures" / "codex_console_runtime_events.json"
 
 
 def test_codex_bridge_runtime_events_fixture_deserializes():
@@ -35,6 +36,17 @@ def test_codex_bridge_runtime_events_fixture_is_a_valid_batch():
     assert first.source == "codex_bridge"
     assert first.session_id is not None
     assert first.runtime_key.startswith("codex:")
+
+
+def test_codex_console_app_server_events_are_a_valid_runtime_batch():
+    data = json.loads(CONSOLE_FIXTURE.read_text())
+    batch = RuntimeEventBatchIngest(events=data["events"])
+
+    assert len(batch.events) == 1
+    event = batch.events[0]
+    assert event.source == "codex_console_live"
+    assert event.payload["progress_kind"] == "console_live_tool_item"
+    assert event.payload["managed_transport"] == "codex_app_server"
 
 
 def test_canary_producer_events_match_runtime_event_schema():
