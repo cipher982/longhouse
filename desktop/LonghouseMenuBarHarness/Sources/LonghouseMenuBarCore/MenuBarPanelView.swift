@@ -209,25 +209,10 @@ public struct MenuBarPanelView: View {
     }
 
     public var body: some View {
-        PanelChrome(accent: snapshot.parsedSeverity.accentColor) {
+        PanelChrome(accent: presentation.promotion.accentColor) {
             VStack(alignment: .leading, spacing: MenuBarPanelLayout.rootSpacing) {
                 header
-
-                if isHealthy {
-                    healthySurface
-                } else {
-                    if snapshot.hasManagedRuntimeTruth {
-                        managedRuntimeSurface
-                    }
-                    if usesCompactWatchingSurface {
-                        watchingSection
-                        watchingActions
-                    } else {
-                        blockerSection
-                        runbookSection
-                        issueActions
-                    }
-                }
+                primarySurface
 
                 if let feedback {
                     feedbackBanner(feedback)
@@ -237,6 +222,10 @@ public struct MenuBarPanelView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.panel)
+    }
+
+    private var presentation: MenuBarPresentation {
+        snapshot.menuBarPresentation(relativeTo: presentationDate)
     }
 
     private var isHealthy: Bool {
@@ -253,48 +242,19 @@ public struct MenuBarPanelView: View {
     }
 
     private var displayHeadline: String {
-        if isHealthy {
-            return "Longhouse"
-        }
-
-        let trimmed = snapshot.effectiveHeadline.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.lowercased().hasPrefix("longhouse ") else {
-            return trimmed
-        }
-
-        let dropped = String(trimmed.dropFirst("Longhouse ".count))
-        guard let first = dropped.first else {
-            return trimmed
-        }
-        return first.uppercased() + dropped.dropFirst()
+        presentation.headline
     }
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            longhouseBrandEmblem(severity: snapshot.displaySeverity)
+            longhouseBrandEmblem(severity: presentation.promotion.iconSeverity)
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
 
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Text("LONGHOUSE APP")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.secondary)
-                        .tracking(0.9)
-
-                    Text(snapshot.installedVersionLabel)
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(
-                            snapshot.hasResolvedInstalledVersion
-                                ? Color.secondary.opacity(0.7)
-                                : Color.orange
-                        )
-                        .tracking(0.6)
-                        .help(
-                            snapshot.hasResolvedInstalledVersion
-                                ? "Installed Longhouse version"
-                                : "Longhouse cannot read its build identity. Run scripts/build/generate_build_identity.py and reinstall, or run longhouse machine repair."
-                        )
-                }
+                Text("LONGHOUSE")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+                    .tracking(0.9)
 
                 Text(displayHeadline)
                     .font(.system(size: 20, weight: .semibold))
@@ -318,13 +278,15 @@ public struct MenuBarPanelView: View {
     @ViewBuilder
     private var headerSummaryBlock: some View {
         VStack(alignment: .leading, spacing: 6) {
-            switch headerSummaryVariant {
-            case .minimal:
-                headerMinimalSummary
-            case .telemetryRail:
-                headerTelemetryRailSummary
-            case .sessionRibbon:
-                headerSessionRibbonSummary
+            HStack(spacing: 8) {
+                if presentation.promotion != .normal {
+                    headerSummaryStatusPill(
+                        title: presentation.promotion.statusLabel.uppercased(),
+                        color: presentation.promotion.accentColor,
+                        identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
+                    )
+                }
+                headerSummaryLabel(presentation.subheadline)
             }
 
             if let updateChip = snapshot.updateAvailableChipLabel {
@@ -372,19 +334,87 @@ public struct MenuBarPanelView: View {
 
     private var headerControlGroup: some View {
         HStack(spacing: 6) {
-            if isHealthy {
-                headerAccessoryButton(
-                    systemImage: "arrow.up.forward.square",
-                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse,
-                    accessibilityLabel: "Open Longhouse"
-                ) {
-                    perform(.openLonghouse)
-                }
-
-                healthyToolsMenu
+            headerAccessoryButton(
+                systemImage: "arrow.up.forward.square",
+                accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse,
+                accessibilityLabel: "Open Longhouse"
+            ) {
+                perform(.openLonghouse)
             }
 
+            healthyToolsMenu
+
             refreshControl
+        }
+    }
+
+    private var primarySurface: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            managedRuntimeSurface
+
+            if !unmanagedActivityEntries.isEmpty {
+                sectionDivider.padding(.horizontal, 4)
+                PanelSection(title: "Other agent processes", trailing: snapshot.liveUnmanagedSummaryLabel) {
+                    UnmanagedActivityList(entries: unmanagedActivityEntries)
+                }
+            }
+
+            sectionDivider.padding(.horizontal, 4)
+            systemFactsSection
+
+            if let backgroundActivity = presentation.backgroundActivity {
+                sectionDivider.padding(.horizontal, 4)
+                PanelSection(title: "Background activity") {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .foregroundStyle(Color.secondary)
+                        Text(backgroundActivity)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text("Current sessions and durable uploads have priority.")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                }
+            }
+
+            if presentation.promotion == .repair {
+                sectionDivider.padding(.horizontal, 4)
+                PanelSection(title: "Action required") {
+                    Text(repairGuidance)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                watchingActions
+            }
+        }
+    }
+
+    private var repairGuidance: String {
+        if snapshot.storageBlockedCount > 0 {
+            return "Local source evidence is retained. Inspect the source conflict before retrying or discarding it."
+        }
+        if snapshot.isSetupRequired {
+            return "Finish setup to install the local agent and connect this Mac."
+        }
+        if snapshot.isInstallLocationBlocked {
+            return "Move Longhouse.app to /Applications, then reopen it."
+        }
+        return "Current local evidence shows a broken product promise. Open Logs for the exact failing fact."
+    }
+
+    private var systemFactsSection: some View {
+        PanelSection(title: "System facts") {
+            TelemetryTable(entries: presentation.facts.map { fact in
+                PanelTelemetryEntry(
+                    id: fact.id,
+                    label: fact.label,
+                    value: [fact.value, fact.detail].compactMap { $0 }.joined(separator: " · "),
+                    valueColor: fact.promotion.accentColor
+                )
+            })
         }
     }
 
@@ -454,42 +484,42 @@ public struct MenuBarPanelView: View {
 
     private var managedRuntimeSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if !foregroundManagedSessionEntries.isEmpty || (consoleManagedSessionEntries.isEmpty && attentionManagedSessionEntries.isEmpty && backgroundBridgeEntries.isEmpty) {
-                PanelSection(title: "Managed now", trailing: snapshot.managedSummaryLabel) {
-                    if foregroundManagedSessionEntries.isEmpty {
-                        Text("No managed Claude or Codex sessions are running on this Mac.")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Color.secondary)
-                    } else {
-                        ManagedSessionList(entries: foregroundManagedSessionEntries)
-                    }
+            if !needsUserManagedSessionEntries.isEmpty {
+                PanelSection(title: "Needs you", trailing: "\(needsUserManagedSessionEntries.count)") {
+                    ManagedSessionList(entries: needsUserManagedSessionEntries)
                 }
             }
 
-            if !consoleManagedSessionEntries.isEmpty {
-                sectionDivider.padding(.horizontal, 4)
-
-                PanelSection(title: "Console sessions", trailing: "\(consoleManagedSessionEntries.count)") {
-                    ManagedSessionList(entries: consoleManagedSessionEntries)
+            if !workingManagedSessionEntries.isEmpty {
+                if !needsUserManagedSessionEntries.isEmpty {
+                    sectionDivider.padding(.horizontal, 4)
+                }
+                PanelSection(title: "Working", trailing: "\(workingManagedSessionEntries.count)") {
+                    ManagedSessionList(entries: workingManagedSessionEntries)
                 }
             }
 
-            if !attentionManagedSessionEntries.isEmpty {
-                sectionDivider.padding(.horizontal, 4)
+            if !readyManagedSessionEntries.isEmpty {
+                if !needsUserManagedSessionEntries.isEmpty || !workingManagedSessionEntries.isEmpty {
+                    sectionDivider.padding(.horizontal, 4)
+                }
+                PanelSection(title: "Ready and background", trailing: "\(readyManagedSessionEntries.count)") {
+                    ManagedSessionList(entries: readyManagedSessionEntries)
+                }
+            }
 
-                PanelSection(title: "Needs attention", trailing: "\(attentionManagedSessionEntries.count)") {
-                    ManagedSessionList(
-                        entries: attentionManagedSessionEntries,
-                        bulkStopAction: attentionManagedStopAllAction(),
-                        bulkStopTargetCount: attentionManagedBulkStopTargets.count
-                    )
+            if snapshot.currentManagedSessions.isEmpty {
+                PanelSection(title: "Sessions") {
+                    Text("No managed sessions are running on this Mac.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
                 }
             }
 
             if !backgroundBridgeEntries.isEmpty {
                 sectionDivider.padding(.horizontal, 4)
 
-                PanelSection(title: "Detached bridges", trailing: "\(backgroundBridgeEntries.count)") {
+                PanelSection(title: "Cleanup needed", trailing: "\(backgroundBridgeEntries.count)") {
                     BackgroundBridgeList(
                         entries: backgroundBridgeEntries,
                         bulkStopAction: backgroundBridgeStopAllAction(),
@@ -498,6 +528,24 @@ public struct MenuBarPanelView: View {
                 }
             }
         }
+    }
+
+    private var needsUserManagedSessionEntries: [ManagedSessionEntry] {
+        snapshot.currentManagedSessions
+            .filter { $0.explicitlyNeedsUser }
+            .map { managedSessionEntry(for: $0) }
+    }
+
+    private var workingManagedSessionEntries: [ManagedSessionEntry] {
+        snapshot.currentManagedSessions
+            .filter { !$0.explicitlyNeedsUser && $0.menuBarAttentionKind == .working }
+            .map { managedSessionEntry(for: $0) }
+    }
+
+    private var readyManagedSessionEntries: [ManagedSessionEntry] {
+        snapshot.currentManagedSessions
+            .filter { !$0.explicitlyNeedsUser && $0.menuBarAttentionKind != .working }
+            .map { managedSessionEntry(for: $0) }
     }
 
     private var primaryReadouts: [PanelReadout] {
@@ -818,7 +866,9 @@ public struct MenuBarPanelView: View {
         if let title = compactSessionText(session.resolvedTitleText, maxCharacters: 72) {
             return title
         }
-        return "Naming session…"
+        let provider = HealthSnapshot.providerDisplayName(session.provider ?? "Agent")
+        let workspace = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return workspace.isEmpty ? "\(provider) session" : "\(provider) session in \(workspace)"
     }
 
     private func managedSessionWorkspaceContext(_ session: ManagedSessionSnapshot) -> String {

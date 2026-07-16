@@ -2373,9 +2373,9 @@ def test_collect_local_health_flags_unknown_managed_phase_contract_drift(monkeyp
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["health_state"] == "broken"
-    assert snapshot["severity"] == "red"
-    assert snapshot["headline"] == "Longhouse saw an unknown managed phase"
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["severity"] == "green"
+    assert snapshot["headline"] == "Longhouse shipping healthy"
     assert "managed_unknown_phase" in snapshot["reasons"]
     assert any("Update the managed phase contract" in action for action in snapshot["suggested_actions"])
     assert snapshot["managed_sessions"][0]["state"] == "attached"

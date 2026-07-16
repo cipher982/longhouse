@@ -761,7 +761,7 @@ private func attentionColor(_ kind: ManagedAttentionKind) -> Color {
     case .idle:
         return Color.secondary
     case .unknown:
-        return Color(red: 0.86, green: 0.29, blue: 0.23)
+        return Color.secondary
     }
 }
 

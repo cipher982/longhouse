@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "collected_at": "2026-07-15T21:30:00Z",
+  "health_state": "degraded",
+  "severity": "yellow",
+  "headline": "Source upload conflict",
+  "reasons": ["storage_v2_sources_blocked"],
+  "suggested_actions": ["Inspect the blocked source proof in engine-status.json"],
+  "service": { "status": "running" },
+  "engine_status": {
+    "exists": true,
+    "fresh": true,
+    "age_seconds": 2,
+    "payload": {
+      "last_ship_at": "2026-07-15T21:29:50Z",
+      "spool_pending_count": 0,
+      "spool_dead_count": 0,
+      "storage_v2_outbox": {
+        "pending_count": 1,
+        "pending_bytes": 4096,
+        "blocked_source_count": 1,
+        "blocked_bytes": 2048,
+        "latest_block_kind": "source_epoch_conflict",
+        "latest_block_detail": "hosted prefix does not match local source",
+        "byte_limit": 1073741824
+      }
+    }
+  },
+  "outbox": { "file_count": 0 },
+  "managed_summary": {
+    "attached_count": 1,
+    "detached_count": 0,
+    "degraded_count": 0,
+    "orphan_bridge_count": 0
+  },
+  "managed_sessions": [
+    {
+      "session_id": "session-needs-user",
+      "provider": "codex",
+      "workspace_label": "longhouse",
+      "timeline_title": "Resolve immutable source conflict",
+      "state": "attached",
+      "phase": "needs permission",
+      "last_activity_at": "2026-07-15T21:29:55Z",
+      "bridge_status": "ready",
+      "ui_presence": "foreground_tui"
+    }
+  ],
+  "launch_readiness": {
+    "state": "ready",
+    "stored_url": "https://david010.longhouse.ai",
+    "machine_name": "cinder"
+  }
+}

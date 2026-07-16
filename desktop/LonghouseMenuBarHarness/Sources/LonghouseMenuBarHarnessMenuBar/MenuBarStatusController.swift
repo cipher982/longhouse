@@ -150,26 +150,17 @@ final class MenuBarStatusController: NSObject {
         guard let snapshot = store.snapshot else {
             return nil
         }
-        if snapshot.isInstallLocationBlocked || snapshot.isSetupRequired {
-            return .systemRed
-        }
-        if let managedSeverity = snapshot.managedAttentionSeverity {
-            switch managedSeverity {
-            case .yellow:
-                return .systemOrange
-            case .red:
-                return .systemRed
-            case .green, .gray:
-                break
-            }
-        }
-        switch snapshot.menuBarAttentionSeverity {
-        case .yellow?:
-            return .systemOrange
-        case .red?:
-            return .systemRed
-        case .green?, .gray?, nil:
+        switch snapshot.menuBarPresentation(relativeTo: Date()).promotion {
+        case .normal:
             return nil
+        case .needsUser:
+            return .systemBlue
+        case .inspect:
+            return .systemOrange
+        case .unavailable:
+            return .systemGray
+        case .repair:
+            return .systemRed
         }
     }
 
@@ -180,10 +171,12 @@ final class MenuBarStatusController: NSObject {
         if store.isRecovering {
             return "Longhouse is catching up"
         }
-        guard let snapshot = store.snapshot, snapshot.needsMenuBarAttention else {
+        guard let snapshot = store.snapshot else {
             return nil
         }
-        return snapshot.statusItemSummaryLabel
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date())
+        guard presentation.needsStatusItemBadge else { return nil }
+        return presentation.headline
     }
 
     private func installEventMonitors(for generation: UInt64) {

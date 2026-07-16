@@ -251,7 +251,7 @@ def _managed_health_flags(
     managed_detached: int,
     unknown_managed_phase_count: int,
 ) -> tuple[bool, bool]:
-    if orphan_bridge_count > 0 or managed_degraded > 0 or unknown_managed_phase_count > 0:
+    if orphan_bridge_count > 0 or managed_degraded > 0:
         return True, False
     if managed_detached > 0:
         return False, True

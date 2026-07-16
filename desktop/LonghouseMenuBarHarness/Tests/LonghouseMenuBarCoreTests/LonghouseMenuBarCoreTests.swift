@@ -137,6 +137,29 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(presentation.promotion == .needsUser)
         #expect(presentation.headline == "1 session needs you")
+        #expect(presentation.needsStatusItemBadge)
+    }
+
+    @Test
+    func externalBlockIsVisibleWithoutClaimingUserAction() {
+        let snapshot = presentationSnapshot(sessions: [presentationSession(phase: "blocked on network")])
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.subheadline.contains("1 blocked"))
+        #expect(!presentation.headline.contains("needs you"))
+    }
+
+    @Test
+    func unknownPhaseIsVisibleWithoutGlobalFailure() {
+        let snapshot = presentationSnapshot(sessions: [presentationSession(phase: "future provider phase")])
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.subheadline.contains("1 phase unavailable"))
+        #expect(!presentation.needsStatusItemBadge)
     }
 
     @Test
@@ -1282,6 +1305,7 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(snapshot.parsedSeverity == .green)
         #expect(snapshot.managedAttentionSeverity == .red)
+        #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .inspect)
         #expect(snapshot.displaySeverity == .red)
     }
 
@@ -1795,7 +1819,8 @@ struct LonghouseMenuBarCoreTests {
         let session = try #require(snapshot.currentManagedSessions.first)
 
         #expect(snapshot.healthState == "broken")
-        #expect(snapshot.managedAttentionSeverity == .red)
+        #expect(snapshot.managedAttentionSeverity == nil)
+        #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
         #expect(session.menuBarAttentionKind == .unknown("unknown phase"))
         #expect(session.rawPhase == "future_magic")
     }
@@ -2011,7 +2036,7 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func unknownManagedPhasePromotesManagedAttentionSeverity() {
+    func unknownManagedPhaseStaysRowLevelInformation() {
         let snapshot = HealthSnapshot(
             schemaVersion: 1,
             collectedAt: "2026-04-22T03:00:00Z",
@@ -2052,8 +2077,8 @@ struct LonghouseMenuBarCoreTests {
             launchReadiness: nil
         )
 
-        #expect(snapshot.managedAttentionSeverity == .red)
-        #expect(snapshot.needsMenuBarAttention == true)
+        #expect(snapshot.managedAttentionSeverity == nil)
+        #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
     }
 
     @Test

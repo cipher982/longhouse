@@ -610,14 +610,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var managedAttentionSeverity: HarnessSeverity? {
-        if currentManagedSessions.contains(where: {
-            if case .unknown = $0.menuBarAttentionKind {
-                return true
-            }
-            return false
-        }) {
-            return .red
-        }
         if orphanBridgeCount > 0 || degradedManagedCount > 0 {
             return .red
         }

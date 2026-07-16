@@ -31,6 +31,15 @@ public enum MenuBarPromotion: String, Equatable, Sendable {
         case .repair: return "Repair"
         }
     }
+
+    public var iconSeverity: HarnessSeverity {
+        switch self {
+        case .normal, .needsUser: return .green
+        case .inspect: return .yellow
+        case .unavailable: return .gray
+        case .repair: return .red
+        }
+    }
 }
 
 public struct MenuBarSystemFact: Identifiable, Equatable, Sendable {
@@ -54,14 +63,17 @@ public struct MenuBarPresentation: Equatable, Sendable {
 extension HealthSnapshot {
     public func menuBarPresentation(relativeTo referenceDate: Date) -> MenuBarPresentation {
         let sessions = currentManagedSessions
-        let needsUser = sessions.filter {
-            $0.menuBarAttentionKind == .needsYou || $0.menuBarAttentionKind == .blocked
-        }.count
+        let needsUser = sessions.filter { $0.explicitlyNeedsUser }.count
         let working = sessions.filter { $0.menuBarAttentionKind == .working }.count
+        let blocked = sessions.filter { $0.menuBarAttentionKind == .blocked && !$0.explicitlyNeedsUser }.count
+        let unknown = sessions.filter {
+            if case .unknown = $0.menuBarAttentionKind { return true }
+            return false
+        }.count
         let degraded = sessions.filter {
             $0.menuBarAttentionKind == .degraded || $0.menuBarAttentionKind == .detached
         }.count
-        let ready = max(0, sessions.count - needsUser - working - degraded)
+        let ready = max(0, sessions.count - needsUser - working - blocked - degraded - unknown)
 
         let repairReasons: Set<String> = [
             "storage_v2_sources_blocked", "storage_v2_outbox_unreadable",
@@ -119,7 +131,9 @@ extension HealthSnapshot {
         if working > 0 { counts.append("\(working) working") }
         if needsUser > 0 { counts.append("\(needsUser) waiting") }
         if ready > 0 { counts.append("\(ready) ready") }
+        if blocked > 0 { counts.append("\(blocked) blocked") }
         if degraded > 0 { counts.append("\(degraded) limited") }
+        if unknown > 0 { counts.append("\(unknown) phase unavailable") }
         counts.append("updated \(snapshotAgeCompactLabel(relativeTo: referenceDate))")
 
         return MenuBarPresentation(
@@ -133,7 +147,11 @@ extension HealthSnapshot {
 
     private func menuBarSystemFacts(relativeTo referenceDate: Date) -> [MenuBarSystemFact] {
         let localValue = serviceStatusLabel == "running" ? "Running" : serviceStatusTitle
-        let localPromotion: MenuBarPromotion = serviceStatusLabel == "running" ? .normal : .repair
+        let freshnessValue = engineFreshnessValueLabel(relativeTo: referenceDate)
+        let freshnessIsCurrent = freshnessValue.hasPrefix("Fresh")
+        let localPromotion: MenuBarPromotion = serviceStatusLabel != "running"
+            ? .repair
+            : freshnessIsCurrent ? .normal : .unavailable
 
         let controlLimited = degradedManagedCount > 0 || detachedManagedCount > 0
         let controlValue = controlLimited ? "Limited" : hasManagedRuntimeTruth ? "Connected" : "Ready"
@@ -167,6 +185,17 @@ extension HealthSnapshot {
                 detail: "last receipt \(lastShipValueLabel(relativeTo: referenceDate))",
                 promotion: durablePromotion
             ),
+            MenuBarSystemFact(
+                id: "transport", label: "Transport",
+                value: engineStatus?.payload?.isOffline == true ? "Offline" : "Connected",
+                detail: engineStatus?.payload?.isOffline == true ? "data retained locally" : nil,
+                promotion: engineStatus?.payload?.isOffline == true ? .unavailable : .normal
+            ),
+            MenuBarSystemFact(
+                id: "freshness", label: "Status freshness",
+                value: freshnessValue, detail: "Local engine",
+                promotion: freshnessIsCurrent ? .normal : .unavailable
+            ),
         ]
     }
 
@@ -175,7 +204,7 @@ extension HealthSnapshot {
         let state = (archive.state ?? "idle").lowercased()
         let pending = archive.pendingRanges ?? 0
         let pendingBytes = archive.pendingBytes ?? 0
-        guard state != "complete" && state != "idle" || pending > 0 else { return nil }
+        guard (state != "complete" && state != "idle") || pending > 0 else { return nil }
         let action = state == "uploading" ? "uploading" : state == "scanning" ? "scanning" : state
         return "Archive projection \(action) \(Self.compactBytes(pendingBytes)) · \(pending) range\(pending == 1 ? "" : "s")"
     }
@@ -189,5 +218,13 @@ extension HealthSnapshot {
             index += 1
         }
         return index == 0 ? "\(Int(scaled)) \(units[index])" : String(format: "%.1f %@", scaled, units[index])
+    }
+}
+
+extension ManagedSessionSnapshot {
+    var explicitlyNeedsUser: Bool {
+        if menuBarAttentionKind == .needsYou { return true }
+        let normalized = phase?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return normalized == "needs permission" || normalized == "needs user"
     }
 }
