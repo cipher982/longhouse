@@ -762,6 +762,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut managed_codex_transcript_paths: HashSet<PathBuf> = HashSet::new();
+    let mut managed_process_pids: HashSet<u32> = HashSet::new();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
@@ -786,15 +787,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     );
     let (transcript_wake_tx, mut transcript_wake_rx) = mpsc::unbounded_channel();
     let transcript_wake_task = spawn_transcript_wake_listener(transcript_wake_tx)?;
-    maybe_start_unmanaged_binding_refresh(
-        &mut unmanaged_binding_refresh_tasks,
-        config.shipper_config.db_path.clone(),
-        config.shipper_config.machine_name.clone(),
-        last_unmanaged_session_bindings_refreshed_at,
-        Instant::now(),
-        "startup",
-    );
-
     loop {
         if !startup_archive_replay_pending {
             match queue_failed_shipment_retries_if_idle(
@@ -1340,11 +1332,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &mut deferred_retries,
                             offline.is_offline,
                         );
+                        managed_process_pids = managed_process_pids_from_observations(
+                            &result.codex_observations,
+                            &result.claude_observations,
+                            &result.opencode_observations,
+                            &result.cursor_observations,
+                        );
                         maybe_start_unmanaged_binding_refresh(
                             &mut unmanaged_binding_refresh_tasks,
                             config.shipper_config.db_path.clone(),
                             config.shipper_config.machine_name.clone(),
                             last_unmanaged_session_bindings_refreshed_at,
+                            managed_process_pids.clone(),
                             Instant::now(),
                             result.reason,
                         );
@@ -1657,6 +1656,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         config.shipper_config.db_path.clone(),
                         config.shipper_config.machine_name.clone(),
                         None,
+                        managed_process_pids.clone(),
                         Instant::now(),
                         "wake",
                     );
@@ -1727,6 +1727,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     config.shipper_config.db_path.clone(),
                     config.shipper_config.machine_name.clone(),
                     last_unmanaged_session_bindings_refreshed_at,
+                    managed_process_pids.clone(),
                     Instant::now(),
                     "heartbeat",
                 );
@@ -1842,6 +1843,8 @@ fn build_local_status_projection(
             unmanaged_session_bindings.to_vec(),
             observations,
             claude_observations,
+            opencode_observations,
+            cursor_observations,
         );
     payload.sessions = heartbeat::resolved_sessions_from_observations(
         &payload.managed_sessions,
@@ -2221,6 +2224,7 @@ fn maybe_start_unmanaged_binding_refresh(
     db_path: Option<PathBuf>,
     machine_id: String,
     last_refreshed_at: Option<Instant>,
+    excluded_managed_pids: HashSet<u32>,
     now: Instant,
     reason: &'static str,
 ) {
@@ -2242,6 +2246,7 @@ fn maybe_start_unmanaged_binding_refresh(
                     &conn,
                     &machine_id,
                     chrono::Utc::now(),
+                    &excluded_managed_pids,
                 )
             });
         UnmanagedBindingRefreshResult {
@@ -2250,6 +2255,43 @@ fn maybe_start_unmanaged_binding_refresh(
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });
+}
+
+fn managed_process_pids_from_observations(
+    codex: &[managed_bridge_scan::CodexBridgeObservation],
+    claude: &[managed_claude_scan::ClaudeChannelObservation],
+    opencode: &[managed_opencode_scan::OpenCodeServerObservation],
+    cursor: &[managed_cursor_helm_scan::CursorHelmObservation],
+) -> HashSet<u32> {
+    let mut pids = HashSet::new();
+    for observation in codex {
+        if observation.bridge_alive {
+            pids.insert(observation.bridge_pid);
+        }
+        if observation.app_server_alive {
+            pids.extend(observation.app_server_pid);
+        }
+    }
+    for observation in claude {
+        if observation.claude_alive {
+            pids.extend(observation.claude_pid);
+        }
+        if observation.bridge_alive {
+            pids.extend(observation.bridge_pid);
+        }
+    }
+    for observation in opencode {
+        if observation.server_alive {
+            pids.extend(observation.pid);
+        }
+    }
+    for observation in cursor {
+        if observation.live {
+            pids.extend(observation.launcher_pid);
+            pids.extend(observation.cursor_pid);
+        }
+    }
+    pids
 }
 
 fn maybe_start_managed_observation_scan(

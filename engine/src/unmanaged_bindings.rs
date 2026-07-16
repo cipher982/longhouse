@@ -64,13 +64,12 @@ pub fn collect_unmanaged_session_bindings_with_store(
     conn: &rusqlite::Connection,
     machine_id: &str,
     now: DateTime<Utc>,
+    excluded_managed_pids: &HashSet<u32>,
 ) -> Result<Vec<UnmanagedSessionBinding>, String> {
     let scanner = SystemScanner;
     let processes = scanner.list_processes()?;
-    let provider_processes = processes
-        .into_iter()
-        .filter(|process| is_provider_process(&process.command).is_some())
-        .collect::<Vec<_>>();
+    let provider_processes =
+        unresolved_unmanaged_processes(processes, excluded_managed_pids);
     let store = UnmanagedProcessBindingStore::new(conn);
     if let Err(err) = store.prune_older_than(now - chrono::Duration::days(30)) {
         tracing::warn!("pruning unmanaged process binding state failed: {err}");
@@ -148,6 +147,19 @@ pub fn collect_unmanaged_session_bindings_with_store(
         upsert_newer_binding(&mut out, binding);
     }
     Ok(out)
+}
+
+fn unresolved_unmanaged_processes(
+    processes: Vec<ProcessInfo>,
+    excluded_managed_pids: &HashSet<u32>,
+) -> Vec<ProcessInfo> {
+    processes
+        .into_iter()
+        .filter(|process| {
+            is_provider_process(&process.command).is_some()
+                && !excluded_managed_pids.contains(&process.pid)
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -718,6 +730,19 @@ mod tests {
             None
         );
         assert_eq!(is_provider_process("node server.js"), None);
+    }
+
+    #[test]
+    fn managed_provider_pids_are_excluded_before_lsof_candidates() {
+        let processes = vec![
+            proc_info(41, "2026-04-27T10:00:00Z", "/usr/local/bin/codex"),
+            proc_info(42, "2026-04-27T10:00:00Z", "/usr/local/bin/codex"),
+        ];
+
+        let unresolved = unresolved_unmanaged_processes(processes, &HashSet::from([41]));
+
+        assert_eq!(unresolved.len(), 1);
+        assert_eq!(unresolved[0].pid, 42);
     }
 
     #[test]

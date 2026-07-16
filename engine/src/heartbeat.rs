@@ -689,14 +689,45 @@ pub fn filter_unmanaged_bindings_owned_by_managed_observations(
     bindings: Vec<UnmanagedSessionBinding>,
     codex_observations: &[CodexBridgeObservation],
     claude_observations: &[ClaudeChannelObservation],
+    opencode_observations: &[OpenCodeServerObservation],
+    cursor_observations: &[CursorHelmObservation],
 ) -> Vec<UnmanagedSessionBinding> {
     let managed_codex = ManagedCodexKeys::from_observations(codex_observations);
     let managed_claude = ManagedClaudeKeys::from_observations(claude_observations);
+    let mut managed_pids = HashSet::new();
+    for observation in codex_observations {
+        if observation.bridge_alive {
+            managed_pids.insert(observation.bridge_pid);
+        }
+        if observation.app_server_alive {
+            managed_pids.extend(observation.app_server_pid);
+        }
+    }
+    for observation in claude_observations {
+        if observation.claude_alive {
+            managed_pids.extend(observation.claude_pid);
+        }
+        if observation.bridge_alive {
+            managed_pids.extend(observation.bridge_pid);
+        }
+    }
+    for observation in opencode_observations {
+        if observation.server_alive {
+            managed_pids.extend(observation.pid);
+        }
+    }
+    for observation in cursor_observations {
+        if observation.live {
+            managed_pids.extend(observation.launcher_pid);
+            managed_pids.extend(observation.cursor_pid);
+        }
+    }
 
     bindings
         .into_iter()
         .filter(|binding| {
-            !binding_owned_by_codex(binding, &managed_codex)
+            !binding.pid.is_some_and(|pid| managed_pids.contains(&pid))
+                && !binding_owned_by_codex(binding, &managed_codex)
                 && !binding_owned_by_claude(binding, &managed_claude)
         })
         .collect()
@@ -2294,7 +2325,7 @@ mod tests {
         ];
 
         let filtered =
-            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[obs], &[]);
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[obs], &[], &[], &[]);
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].provider_session_id, "thread-unmanaged");
@@ -2312,7 +2343,7 @@ mod tests {
         let bindings = vec![test_binding("codex", "thread-stopped", 123)];
 
         let filtered =
-            filter_unmanaged_bindings_owned_by_managed_observations(bindings.clone(), &[obs], &[]);
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings.clone(), &[obs], &[], &[], &[]);
 
         assert_eq!(filtered, bindings);
     }
@@ -2339,7 +2370,7 @@ mod tests {
         ];
 
         let filtered =
-            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[obs], &[]);
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[obs], &[], &[], &[]);
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].provider_session_id, "real-unmanaged");
@@ -2364,7 +2395,7 @@ mod tests {
         let bindings = vec![test_binding("codex", "real-unmanaged", current_pid)];
 
         let filtered =
-            filter_unmanaged_bindings_owned_by_managed_observations(bindings.clone(), &[obs], &[]);
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings.clone(), &[obs], &[], &[], &[]);
 
         assert_eq!(filtered, bindings);
     }
@@ -2394,7 +2425,27 @@ mod tests {
         ];
 
         let filtered =
-            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[], &[obs]);
+            filter_unmanaged_bindings_owned_by_managed_observations(bindings, &[], &[obs], &[], &[]);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].provider_session_id, "real-unmanaged");
+    }
+
+    #[test]
+    fn filters_unmanaged_binding_owned_by_live_opencode_server_pid() {
+        let observation = test_opencode_observation("managed-opencode", "keep_server");
+        let bindings = vec![
+            test_binding("opencode", "managed-provider-session", 9876),
+            test_binding("opencode", "real-unmanaged", 7777),
+        ];
+
+        let filtered = filter_unmanaged_bindings_owned_by_managed_observations(
+            bindings,
+            &[],
+            &[],
+            &[observation],
+            &[],
+        );
 
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].provider_session_id, "real-unmanaged");
