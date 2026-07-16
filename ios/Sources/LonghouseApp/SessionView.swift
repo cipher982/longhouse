@@ -2114,20 +2114,27 @@ final class SessionViewModel: ObservableObject {
             var ticks = 0
             while !Task.isCancelled {
                 guard let self = self else { break }
-                try? await Task.sleep(nanoseconds: Self.visiblePollDelayNanoseconds(completedTicks: ticks))
+                let hasPendingInput = await MainActor.run { !self.submittedInputs.isEmpty }
+                let delay = hasPendingInput
+                    ? 750_000_000
+                    : Self.visiblePollDelayNanoseconds(completedTicks: ticks)
+                try? await Task.sleep(nanoseconds: delay)
                 if Task.isCancelled { break }
                 ticks += 1
-                let (connected, hasRunningTool, setupPending) = await MainActor.run {
+                let (connected, hasRunningTool, setupPending, stillHasPendingInput) = await MainActor.run {
                     (
                         self.streamConnected,
                         self.lastWorkspaceEvents.contains { $0.toolCallState == .running },
-                        self.detail?.canDraftBeforeSendReady == true
+                        self.detail?.canDraftBeforeSendReady == true,
+                        !self.submittedInputs.isEmpty
                     )
                 }
                 let managed = await MainActor.run {
                     if self.detail?.canDraftBeforeSendReady == true { return true }
                     guard let caps = self.detail?.capabilities else { return false }
-                    return caps.liveControlAvailable == true || caps.hostReattachAvailable == true
+                    return caps.liveControlAvailable == true
+                        || caps.hostReattachAvailable == true
+                        || caps.inputMode == "console"
                 }
                 // Fast fallback when SSE is down. When SSE is up, the server
                 // flips unpaired tool calls to "dropped" lazily on read, so
@@ -2140,6 +2147,7 @@ final class SessionViewModel: ObservableObject {
                     hasRunningTool: hasRunningTool,
                     managed: managed,
                     setupPending: setupPending,
+                    pendingInput: stillHasPendingInput,
                     ticks: ticks
                 ) {
                     await self.pollTick(sessionId: sessionId, appState: appState)
@@ -2153,9 +2161,11 @@ final class SessionViewModel: ObservableObject {
         hasRunningTool: Bool,
         managed: Bool,
         setupPending: Bool = false,
+        pendingInput: Bool = false,
         ticks: Int
     ) -> Bool {
         if ticks <= 3 { return true }
+        if pendingInput { return true }
         if setupPending { return true }
         if !connected { return true }
         if hasRunningTool, ticks % 12 == 0 { return true }
@@ -2740,6 +2750,7 @@ final class SessionViewModel: ObservableObject {
 
     private func reconcileSubmittedInputs(with events: [SessionEvent]) {
         guard !submittedInputs.isEmpty else { return }
+        var matchedEventIds = Set<String>()
         submittedInputs.removeAll { input in
             guard input.phase == .sent
                 || input.phase == .queued
@@ -2748,14 +2759,38 @@ final class SessionViewModel: ObservableObject {
                 || input.phase == .couldNotConfirm
                 || input.phase == .failed
             else { return false }
-            return events.contains { event in
+            if let matched = events.first(where: { event in
                 guard event.role == "user", event.isHeadBranch, let origin = event.inputOrigin else { return false }
                 if let serverInputId = input.serverInputId,
                    origin.sessionInputId == serverInputId {
                     return true
                 }
                 return origin.clientRequestId == input.clientRequestId
+            }) {
+                matchedEventIds.insert(matched.id)
+                return true
             }
+
+            guard input.phase == .working || input.phase == .sent else { return false }
+            // Storage-v2 provider transcripts do not always retain the
+            // Longhouse input receipt. Fall back to a one-to-one exact-text
+            // match in a bounded time window so the durable user event can
+            // replace its optimistic bubble without collapsing repeated
+            // identical prompts.
+            if let matched = events.first(where: { event in
+                guard event.role == "user",
+                      event.isHeadBranch,
+                      !matchedEventIds.contains(event.id),
+                      event.contentText == input.text,
+                      let eventAt = LonghouseDateParser.parse(event.timestamp)
+                else { return false }
+                let delta = eventAt.timeIntervalSince(input.createdAt)
+                return delta >= -5 && delta <= 600
+            }) {
+                matchedEventIds.insert(matched.id)
+                return true
+            }
+            return false
         }
     }
 

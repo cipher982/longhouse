@@ -808,6 +808,41 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func submittedInputReconcilesByExactRecentTextWhenOriginIsMissing() async throws {
+        let before = try makeWorkspace(eventId: 10, content: "Before send")
+        let api = FakeSessionWorkspaceClient(
+            workspaces: [before],
+            sendResponse: SessionInputResponse(
+                outcome: .sent,
+                inputId: nil,
+                clientRequestId: nil,
+                turn: ConsoleTurnReceipt(turnId: "turn-1", runId: "run-1", state: "active"),
+                intent: .auto,
+                queued: []
+            ),
+            afterSendWorkspace: { _ in
+                try makeWorkspace(
+                    eventId: 11,
+                    content: "continue",
+                    timestamp: ISO8601DateFormatter().string(from: Date()),
+                    inputOriginJSON: nil
+                )
+            }
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let sent = await model.send(text: "continue", sessionId: "session-1", appState: appState)
+        await waitForSubmittedInputsToClear(model)
+
+        #expect(sent)
+        #expect(model.submittedInputs.isEmpty)
+        #expect(model.items.map(\.id) == ["user:11"])
+    }
+
+    @Test
     func unconfirmedSubmittedInputReconcilesByClientRequestIdAfterTailRefresh() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(
@@ -843,12 +878,12 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func submittedInputDoesNotReconcileByMatchingTextWithoutIdentity() async throws {
+    func submittedInputDoesNotReconcileByMatchingStaleTextWithoutIdentity() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let after = try makeWorkspace(
             eventId: 11,
             content: "continue",
-            timestamp: ISO8601DateFormatter().string(from: Date())
+            timestamp: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-700))
         )
         let api = FakeSessionWorkspaceClient(workspaces: [before, after])
         let appState = AppState()
