@@ -136,7 +136,6 @@ fn failed_shipment_retry_path_limit(limiter: &AdaptiveLimiter) -> usize {
 }
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
-const UNMANAGED_BINDING_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const MANAGED_WAKE_FSEVENT_DEFER_WINDOW: Duration = Duration::from_secs(30);
 const MANAGED_WAKE_FSEVENT_FALLBACK_DELAY: Duration = Duration::from_secs(5);
 const MAX_TRANSCRIPT_WAKE_TRACKED_PATHS: usize = 4096;
@@ -395,6 +394,28 @@ impl ManagedObservationSnapshot {
             || self.claude.iter().any(|row| row.state_file == path)
             || self.opencode.iter().any(|row| row.state_file == path)
             || self.cursor.iter().any(|row| row.state_file == path)
+    }
+
+    fn projection_equivalent(&self, other: &Self) -> bool {
+        let mut left = self.clone();
+        let mut right = other.clone();
+        for snapshot in [&mut left, &mut right] {
+            for row in &mut snapshot.codex {
+                row.updated_at.clear();
+                row.active_turn_id = None;
+                row.last_turn_status = None;
+            }
+            for row in &mut snapshot.claude {
+                row.updated_at.clear();
+            }
+            for row in &mut snapshot.opencode {
+                row.updated_at.clear();
+            }
+            for row in &mut snapshot.cursor {
+                row.updated_at.clear();
+            }
+        }
+        left == right
     }
 }
 
@@ -821,7 +842,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_projected_managed_observations = ManagedObservationSnapshot::default();
     let mut last_projected_managed_scan_partial = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
-    let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut managed_codex_transcript_paths: HashSet<PathBuf> = HashSet::new();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
@@ -1258,7 +1278,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 last_projected_managed_observations = result.managed;
                                 last_projected_managed_scan_partial = result.managed_scan_partial;
                                 last_unmanaged_session_bindings = Some(bindings);
-                                last_unmanaged_session_bindings_refreshed_at = Some(Instant::now());
                                 if result.full_reconciliation_candidate {
                                     last_full_reconciled_at = Some(chrono::Utc::now().to_rfc3339());
                                 }
@@ -1334,6 +1353,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             "full_reconciliation",
                             chrono::Utc::now().to_rfc3339(),
                         );
+                    } else if pending_periodic_observation
+                        && maybe_start_managed_observation_scan(
+                            &mut managed_observation_scan_tasks,
+                            "periodic",
+                            false,
+                            &last_managed_observations,
+                        )
+                    {
+                        pending_periodic_observation = false;
                     }
                 }
             }
@@ -1410,8 +1438,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                         let next_managed_observations =
                             ManagedObservationSnapshot::from_result(&result);
-                        let managed_observations_changed =
-                            next_managed_observations != last_managed_observations;
+                        let managed_observations_changed = !next_managed_observations
+                            .projection_equivalent(&last_managed_observations);
                         last_managed_observations = next_managed_observations;
                         let managed_scan_partial = result.retained_stale_rows > 0;
                         refresh_managed_codex_transcript_paths(
@@ -1431,25 +1459,22 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &result.opencode_observations,
                             &result.cursor_observations,
                         );
+                        let should_refresh_unmanaged =
+                            result.full_reconciliation || managed_observations_changed;
                         let paired_generation = projection_generation.saturating_add(1);
-                        let paired_refresh_started = maybe_start_unmanaged_binding_refresh(
-                            &mut unmanaged_binding_refresh_tasks,
-                            config.shipper_config.db_path.clone(),
-                            config.shipper_config.machine_name.clone(),
-                            if result.full_reconciliation || managed_observations_changed {
-                                None
-                            } else {
-                                last_unmanaged_session_bindings_refreshed_at
-                            },
-                            managed_process_pids.clone(),
-                            result.process_inventory.clone(),
-                            Instant::now(),
-                            result.reason,
-                            paired_generation,
-                            last_managed_observations.clone(),
-                            managed_scan_partial,
-                            result.full_reconciliation && result.retained_stale_rows == 0,
-                        );
+                        let paired_refresh_started = should_refresh_unmanaged
+                            && maybe_start_unmanaged_binding_refresh(
+                                &mut unmanaged_binding_refresh_tasks,
+                                config.shipper_config.db_path.clone(),
+                                config.shipper_config.machine_name.clone(),
+                                managed_process_pids.clone(),
+                                result.process_inventory.clone(),
+                                result.reason,
+                                paired_generation,
+                                last_managed_observations.clone(),
+                                managed_scan_partial,
+                                result.full_reconciliation && result.retained_stale_rows == 0,
+                            );
                         if paired_refresh_started {
                             projection_generation = paired_generation;
                         } else if result.full_reconciliation {
@@ -1458,6 +1483,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             } else {
                                 pending_full_reconciliation = true;
                             }
+                        } else if managed_observations_changed {
+                            pending_periodic_observation = true;
                         }
                         maybe_start_opencode_title_refresh(
                             &mut opencode_title_refresh_tasks,
@@ -2487,10 +2514,8 @@ fn maybe_start_unmanaged_binding_refresh(
     refresh_tasks: &mut JoinSet<UnmanagedBindingRefreshResult>,
     db_path: Option<PathBuf>,
     machine_id: String,
-    last_refreshed_at: Option<Instant>,
     excluded_managed_pids: HashSet<u32>,
     process_inventory: Vec<unmanaged_bindings::ProcessInfo>,
-    now: Instant,
     reason: &'static str,
     generation: u64,
     managed: ManagedObservationSnapshot,
@@ -2498,11 +2523,6 @@ fn maybe_start_unmanaged_binding_refresh(
     full_reconciliation_candidate: bool,
 ) -> bool {
     if !refresh_tasks.is_empty() {
-        return false;
-    }
-    if last_refreshed_at.is_some_and(|refreshed_at| {
-        now.duration_since(refreshed_at) < UNMANAGED_BINDING_REFRESH_INTERVAL
-    }) {
         return false;
     }
 
@@ -3983,6 +4003,30 @@ mod tests {
             &snapshot,
             &[PathBuf::from("/tmp/new-managed-session.json")],
         ));
+    }
+
+    #[test]
+    fn managed_projection_equivalence_ignores_writer_churn_but_not_tui_state() {
+        let observation = codex_bridge_observation(
+            Path::new("/tmp/transcript.jsonl"),
+            Some("turn-1"),
+            Some("running"),
+            "2026-07-16T00:00:00Z",
+            true,
+        );
+        let first = ManagedObservationSnapshot {
+            codex: vec![observation],
+            ..ManagedObservationSnapshot::default()
+        };
+        let mut writer_churn = first.clone();
+        writer_churn.codex[0].updated_at = "2026-07-16T00:00:05Z".to_string();
+        writer_churn.codex[0].active_turn_id = Some("turn-2".to_string());
+        writer_churn.codex[0].last_turn_status = Some("completed".to_string());
+
+        assert!(first.projection_equivalent(&writer_churn));
+
+        writer_churn.codex[0].has_tui_attachment = true;
+        assert!(!first.projection_equivalent(&writer_churn));
     }
 
     #[test]
