@@ -62,9 +62,18 @@ async def generate_storage_session_title(candidate: dict[str, Any]) -> bool:
         if result.get("changed"):
             from zerg.services.session_pubsub import publish_session_title_update
 
-            publish_session_title_update(session_id=session_id, provider=candidate.get("provider"), source="storage_ai_title")
+            publish_session_title_update(
+                session_id=session_id,
+                provider=candidate.get("provider"),
+                source="storage_ai_title",
+            )
             elapsed_ms = int((datetime.now(UTC) - started).total_seconds() * 1000)
-            logger.info("Generated storage-v2 AI title session=%s elapsed_ms=%d title=%s", session_id, elapsed_ms, title)
+            logger.info(
+                "Generated storage-v2 AI title session=%s elapsed_ms=%d title=%s",
+                session_id,
+                elapsed_ms,
+                title,
+            )
         return bool(result.get("changed"))
     except Exception as exc:  # noqa: BLE001 - failure becomes durable retry state
         reason = type(exc).__name__ if str(exc) == "" else str(exc)[:128]
@@ -90,7 +99,7 @@ def schedule_storage_session_title(candidate: dict[str, Any]) -> None:
     asyncio.create_task(generate_storage_session_title(candidate))
 
 
-async def run_storage_title_reconciler(*, interval_seconds: float = 2.0, batch_size: int = 8) -> None:
+async def run_storage_title_reconciler(*, interval_seconds: float = 0.5, batch_size: int = 16) -> None:
     if get_settings().llm_disabled:
         return
     while True:
