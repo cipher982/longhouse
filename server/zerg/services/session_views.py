@@ -259,11 +259,9 @@ def build_session_capabilities_response(
         can_tail_output=(kernel_capabilities.can_tail_output if kernel_capabilities is not None else False),
         can_resume=(bool(kernel_capabilities.can_resume) and not lifecycle_closed if kernel_capabilities is not None else False),
         turn_state=(kernel_capabilities.turn_state if kernel_capabilities is not None else "idle"),
-        can_start_turn=(bool(kernel_capabilities.can_start_turn) and control_available if kernel_capabilities is not None else False),
+        can_start_turn=(bool(kernel_capabilities.can_start_turn) if kernel_capabilities is not None else False),
         start_turn_blocked_by=(kernel_capabilities.start_turn_blocked_by if kernel_capabilities is not None else None),
-        can_interrupt_active_turn=(
-            bool(kernel_capabilities.can_interrupt_active_turn) and control_available if kernel_capabilities is not None else False
-        ),
+        can_interrupt_active_turn=(bool(kernel_capabilities.can_interrupt_active_turn) if kernel_capabilities is not None else False),
         # can_continue means "launch a fresh managed process from this
         # transcript" — a CLOSED-session operation by definition. Do NOT gate it
         # on lifecycle_closed; that defeated the whole resume feature (the button
