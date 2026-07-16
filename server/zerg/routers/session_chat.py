@@ -2075,7 +2075,7 @@ async def _create_catalog_session_input_response(
 ) -> SessionInputResponse:
     """Live-receipt authoritative input path used when the cold DB is absent."""
 
-    if str(getattr(source_session, "origin_kind", "") or "") == "console":
+    if getattr(source_session, "command_family", None) == "console_turn":
         client_request_id = _client_request_id_for_input(body)
         try:
             turn = await enqueue_catalog_console_turn(

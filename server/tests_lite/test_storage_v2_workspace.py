@@ -208,7 +208,7 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
 
     control_session = load_live_control_session_snapshot(session_id)
     assert control_session is not None
-    assert control_session.origin_kind == "console"
+    assert control_session.command_family == "console_turn"
 
     dispatched = {}
 
