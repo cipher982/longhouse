@@ -111,6 +111,143 @@ private func watchingAttentionSnapshot() -> HealthSnapshot {
 
 struct LonghouseMenuBarCoreTests {
     @Test
+    func archiveScanningStaysBackgroundAndDoesNotPromoteAttention() {
+        let snapshot = presentationSnapshot(
+            sessions: [presentationSession(phase: "running tools")],
+            archive: ArchiveBacklogStatus(
+                state: "scanning", mode: "trickle", pendingRanges: 2,
+                pendingPaths: 2, pendingSessions: 2, pendingBytes: 1_503_238_554,
+                deadRanges: 0, deadBytes: 0
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.headline == "1 session active")
+        #expect(presentation.backgroundActivity == "Archive projection scanning 1.4 GB · 2 ranges")
+        #expect(!presentation.needsStatusItemBadge)
+    }
+
+    @Test
+    func sessionInputPromotesBlueNeedsUserState() {
+        let snapshot = presentationSnapshot(sessions: [presentationSession(phase: "needs permission")])
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .needsUser)
+        #expect(presentation.headline == "1 session needs you")
+        #expect(presentation.needsStatusItemBadge)
+    }
+
+    @Test
+    func externalBlockIsVisibleWithoutClaimingUserAction() {
+        let snapshot = presentationSnapshot(sessions: [presentationSession(phase: "blocked on network")])
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.subheadline.contains("1 blocked"))
+        #expect(!presentation.headline.contains("needs you"))
+    }
+
+    @Test
+    func unknownPhaseIsVisibleWithoutGlobalFailure() {
+        let snapshot = presentationSnapshot(sessions: [presentationSession(phase: "future provider phase")])
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.subheadline.contains("1 phase unavailable"))
+        #expect(!presentation.needsStatusItemBadge)
+    }
+
+    @Test
+    func durableConflictOutranksSessionInput() {
+        let snapshot = presentationSnapshot(
+            reasons: ["storage_v2_sources_blocked"],
+            sessions: [presentationSession(phase: "needs permission")],
+            storageBlocked: 1
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .repair)
+        #expect(presentation.headline == "Durable upload blocked for 1 source")
+    }
+
+    @Test
+    func youngImmutablePendingWorkStaysNormal() {
+        let snapshot = presentationSnapshot(sessions: [], storagePending: 2)
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.facts.first(where: { $0.id == "durable-upload" })?.value == "2 pending")
+    }
+
+    @Test
+    func transientOfflineRetryPreservesNormalHeadlineAndNamesTransportFact() {
+        let snapshot = presentationSnapshot(reasons: ["reported_offline"], sessions: [], isOffline: true)
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.value == "Offline")
+    }
+
+    @Test
+    func staleStatusPromotesUnknownInsteadOfRepair() {
+        let snapshot = presentationSnapshot(reasons: ["engine_status_stale"], sessions: [], engineFresh: false)
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .unavailable)
+        #expect(presentation.headline == "Current local status unavailable")
+    }
+
+    @Test
+    func stoppedAgentWithRetainedWorkPromotesRepair() {
+        let snapshot = presentationSnapshot(
+            reasons: ["service_stopped"], sessions: [], storagePending: 1,
+            serviceStatus: "stopped"
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .repair)
+        #expect(presentation.facts.first(where: { $0.id == "local-agent" })?.value == "Stopped")
+    }
+
+    @Test
+    func archiveDeadLettersAreInspectableNotRepair() {
+        let snapshot = presentationSnapshot(reasons: ["archive_dead_lettered"], sessions: [])
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Historical archive needs review")
+    }
+
+    @Test
+    func archivePendingWhileIdleDoesNotBadge() {
+        let snapshot = presentationSnapshot(
+            reasons: ["archive_backlog_pending"], sessions: [],
+            archive: ArchiveBacklogStatus(
+                state: "blocked", mode: "trickle", pendingRanges: 2,
+                pendingPaths: 2, pendingSessions: 2, pendingBytes: 4096,
+                deadRanges: 0, deadBytes: 0
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.backgroundActivity?.contains("2 ranges") == true)
+        #expect(!presentation.needsStatusItemBadge)
+    }
+
+    @Test
     func localRefreshPreservesRealtimeTitleProjection() {
         let titled = ManagedSessionSnapshot(
             sessionId: "session-1", provider: "codex", workspaceLabel: "zerg",
@@ -1239,6 +1376,7 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(snapshot.parsedSeverity == .green)
         #expect(snapshot.managedAttentionSeverity == .red)
+        #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .inspect)
         #expect(snapshot.displaySeverity == .red)
     }
 
@@ -1752,7 +1890,8 @@ struct LonghouseMenuBarCoreTests {
         let session = try #require(snapshot.currentManagedSessions.first)
 
         #expect(snapshot.healthState == "broken")
-        #expect(snapshot.managedAttentionSeverity == .red)
+        #expect(snapshot.managedAttentionSeverity == nil)
+        #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
         #expect(session.menuBarAttentionKind == .unknown("unknown phase"))
         #expect(session.rawPhase == "future_magic")
     }
@@ -1968,7 +2107,7 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func unknownManagedPhasePromotesManagedAttentionSeverity() {
+    func unknownManagedPhaseStaysRowLevelInformation() {
         let snapshot = HealthSnapshot(
             schemaVersion: 1,
             collectedAt: "2026-04-22T03:00:00Z",
@@ -2009,8 +2148,8 @@ struct LonghouseMenuBarCoreTests {
             launchReadiness: nil
         )
 
-        #expect(snapshot.managedAttentionSeverity == .red)
-        #expect(snapshot.needsMenuBarAttention == true)
+        #expect(snapshot.managedAttentionSeverity == nil)
+        #expect(snapshot.menuBarPresentation(relativeTo: Date()).promotion == .normal)
     }
 
     @Test
@@ -2238,4 +2377,51 @@ struct LonghouseMenuBarCoreTests {
     private enum SnapshotComparisonError: Error {
         case missingBitmapData(String)
     }
+}
+
+private func presentationSession(phase: String) -> ManagedSessionSnapshot {
+    ManagedSessionSnapshot(
+        sessionId: UUID().uuidString, provider: "codex", workspaceLabel: "longhouse",
+        timelineTitle: "Review menu bar state", branch: "main", state: "attached",
+        phase: phase, lastActivityAt: "1970-01-01T00:00:00Z", bridgeStatus: "ready",
+        bridgePid: 42, bridgeHeartbeatAt: "1970-01-01T00:00:00Z", reasonCodes: []
+    )
+}
+
+private func presentationSnapshot(
+    reasons: [String] = [],
+    sessions: [ManagedSessionSnapshot],
+    archive: ArchiveBacklogStatus? = nil,
+    storageBlocked: Int = 0,
+    storagePending: Int = 0,
+    isOffline: Bool = false,
+    engineFresh: Bool = true,
+    serviceStatus: String = "running"
+) -> HealthSnapshot {
+    HealthSnapshot(
+        schemaVersion: 1, collectedAt: "1970-01-01T00:00:00Z",
+        healthState: "healthy", severity: "green", headline: "Healthy",
+        reasons: reasons, suggestedActions: [],
+        service: ServiceSnapshot(
+            platform: "macos", status: serviceStatus, serviceName: "com.longhouse.shipper",
+            serviceFile: nil, logPath: nil
+        ),
+        engineStatus: EngineStatusSnapshot(
+            path: nil, exists: true, fresh: engineFresh, ageSeconds: engineFresh ? 1 : 600,
+            payload: EngineStatusPayload(
+                version: "test", daemonPid: 1, lastShipAt: "1970-01-01T00:00:00Z",
+                spoolPendingCount: 0, spoolDeadCount: 0, archiveBacklog: archive,
+                storageV2Outbox: StorageV2OutboxStatus(
+                    pendingCount: storagePending, pendingBytes: 0, blockedSourceCount: storageBlocked,
+                    blockedBytes: 0, latestBlockKind: nil, latestBlockDetail: nil,
+                    byteLimit: 1_073_741_824, error: nil
+                ),
+                parseErrorCount1H: 0, consecutiveShipFailures: 0, diskFreeBytes: nil,
+                isOffline: isOffline, recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z"
+            ),
+            error: nil
+        ),
+        outbox: OutboxSnapshot(path: nil, fileCount: 0, oldestAgeSeconds: nil),
+        activitySummary: nil, managedSessions: sessions, launchReadiness: nil
+    )
 }

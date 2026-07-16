@@ -1709,17 +1709,11 @@ def test_collect_local_health_watches_active_archive_drain_with_live_healthy_cop
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["health_state"] == "degraded"
-    assert snapshot["severity"] == "yellow"
-    assert snapshot["headline"] == "Uploading archive backlog"
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["severity"] == "green"
+    assert snapshot["headline"] == "Longhouse shipping healthy"
     assert "archive_repair_draining" in snapshot["reasons"]
-    assert snapshot["attention"] == {
-        "state": "watching",
-        "headline": "Uploading archive backlog",
-        "summary": "Live shipping is healthy. Longhouse is uploading 15.6 GB across 6375 range(s).",
-        "reasons": snapshot["reasons"],
-        "suggested_actions": [],
-    }
+    assert snapshot["attention"]["state"] == "quiet"
     assert snapshot["transport_health"]["status"] == "healthy"
     assert snapshot["transport_health"]["status_reason"] == "healthy"
 
@@ -2379,9 +2373,9 @@ def test_collect_local_health_flags_unknown_managed_phase_contract_drift(monkeyp
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["health_state"] == "broken"
-    assert snapshot["severity"] == "red"
-    assert snapshot["headline"] == "Longhouse saw an unknown managed phase"
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["severity"] == "green"
+    assert snapshot["headline"] == "Longhouse shipping healthy"
     assert "managed_unknown_phase" in snapshot["reasons"]
     assert any("Update the managed phase contract" in action for action in snapshot["suggested_actions"])
     assert snapshot["managed_sessions"][0]["state"] == "attached"

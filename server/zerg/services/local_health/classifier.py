@@ -251,7 +251,7 @@ def _managed_health_flags(
     managed_detached: int,
     unknown_managed_phase_count: int,
 ) -> tuple[bool, bool]:
-    if orphan_bridge_count > 0 or managed_degraded > 0 or unknown_managed_phase_count > 0:
+    if orphan_bridge_count > 0 or managed_degraded > 0:
         return True, False
     if managed_detached > 0:
         return False, True
@@ -329,6 +329,8 @@ def _health_flags(
     spool_pending: int,
     archive_pending_ranges: int,
     archive_pending_bytes: int,
+    archive_state: str,
+    archive_mode: str,
     archive_dead_ranges: int,
     archive_dead_bytes: int,
     storage_blocked_sources: int,
@@ -343,7 +345,8 @@ def _health_flags(
     broken, degraded = _launch_health_flags(launch_state)
     if canonical_sessions_missing or canonical_sessions_invalid:
         degraded = True
-    if archive_pending_ranges > 0 or archive_pending_bytes > 0:
+    archive_is_actionable = archive_state not in {"draining", "scanning", "uploading"} or archive_mode == "paused"
+    if (archive_pending_ranges > 0 or archive_pending_bytes > 0) and archive_is_actionable:
         degraded = True
     if archive_dead_ranges > 0 or archive_dead_bytes > 0:
         degraded = True
@@ -833,6 +836,8 @@ def _classify_health(
         spool_pending=context.spool_pending,
         archive_pending_ranges=context.archive_pending_ranges,
         archive_pending_bytes=context.archive_pending_bytes,
+        archive_state=context.archive_state,
+        archive_mode=context.archive_mode,
         archive_dead_ranges=context.archive_dead_ranges,
         archive_dead_bytes=context.archive_dead_bytes,
         storage_blocked_sources=context.storage_blocked_sources,

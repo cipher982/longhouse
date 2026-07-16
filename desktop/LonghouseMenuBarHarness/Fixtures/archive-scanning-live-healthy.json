@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "collected_at": "2026-07-15T21:30:00Z",
+  "health_state": "healthy",
+  "severity": "green",
+  "headline": "Longhouse shipping healthy",
+  "reasons": ["archive_repair_draining"],
+  "suggested_actions": [],
+  "service": { "status": "running" },
+  "engine_status": {
+    "exists": true,
+    "fresh": true,
+    "age_seconds": 3,
+    "payload": {
+      "last_ship_at": "2026-07-15T21:29:58Z",
+      "spool_pending_count": 0,
+      "spool_dead_count": 0,
+      "archive_backlog": {
+        "state": "scanning",
+        "mode": "trickle",
+        "pending_ranges": 2,
+        "pending_bytes": 1503238554,
+        "dead_ranges": 0,
+        "dead_bytes": 0
+      },
+      "storage_v2_outbox": {
+        "pending_count": 0,
+        "pending_bytes": 0,
+        "blocked_source_count": 0,
+        "blocked_bytes": 0,
+        "byte_limit": 1073741824
+      }
+    }
+  },
+  "outbox": { "file_count": 0 },
+  "managed_summary": {
+    "attached_count": 2,
+    "detached_count": 0,
+    "degraded_count": 0,
+    "orphan_bridge_count": 0
+  },
+  "managed_sessions": [
+    {
+      "session_id": "session-working",
+      "provider": "codex",
+      "workspace_label": "longhouse",
+      "timeline_title": "Refine menu bar state model",
+      "state": "attached",
+      "phase": "running tools",
+      "last_activity_at": "2026-07-15T21:29:59Z",
+      "bridge_status": "ready",
+      "ui_presence": "foreground_tui"
+    },
+    {
+      "session_id": "session-ready",
+      "provider": "claude",
+      "workspace_label": "website",
+      "timeline_title": "Review launch copy",
+      "state": "attached",
+      "phase": "idle",
+      "last_activity_at": "2026-07-15T21:29:30Z",
+      "bridge_status": "ready",
+      "ui_presence": "background"
+    }
+  ],
+  "launch_readiness": {
+    "state": "ready",
+    "stored_url": "https://david010.longhouse.ai",
+    "machine_name": "cinder"
+  }
+}
