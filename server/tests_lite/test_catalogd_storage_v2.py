@@ -322,6 +322,17 @@ async def test_storage_title_fallback_is_immediate_and_ai_completion_is_write_on
         candidates = await client.call("storage.session.title.candidates.v2", {"limit": 10})
         assert [row["session_id"] for row in candidates["sessions"]] == [str(session_id)]
 
+        exempted = await client.call(
+            "storage.session.title.fail.v2",
+            {
+                "session_id": str(session_id),
+                "reason": "no_meaningful_user_text",
+                "failed_at": now.isoformat(),
+            },
+        )
+        assert exempted["changed"] is True
+        assert exempted["retry_at"] is None
+
         completed = await client.call(
             "storage.session.title.complete.v2",
             {"session_id": str(session_id), "title": "Repair OpenCode Session Naming", "completed_at": now.isoformat()},

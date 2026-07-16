@@ -5208,7 +5208,7 @@ class CatalogStore:
             return {
                 "changed": True,
                 "attempt_count": attempts,
-                "retry_at": retry_at.isoformat(),
+                "retry_at": retry_at.isoformat() if retry_at is not None else None,
                 "commit_seq": str(commit_seq),
             }
 
