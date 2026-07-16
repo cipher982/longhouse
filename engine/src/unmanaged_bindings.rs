@@ -405,27 +405,6 @@ fn canonicalize(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
-/// Core logic, pure over (provider discovery + scanner + clock). Tests
-/// inject all three.
-#[cfg(test)]
-pub fn collect_with_scanner(
-    machine_id: &str,
-    scanner: &dyn ProcessScanner,
-    now: DateTime<Utc>,
-) -> Result<Vec<UnmanagedSessionBinding>, String> {
-    let processes = scanner
-        .list_processes()?
-        .into_iter()
-        .filter(|process| is_provider_process(&process.command).is_some())
-        .collect::<Vec<_>>();
-    if processes.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let transcripts = discover_recent_transcripts(now);
-    collect_from_transcripts_with_processes(machine_id, &transcripts, scanner, now, &processes)
-}
-
 fn discover_recent_transcripts(now: DateTime<Utc>) -> Vec<(PathBuf, &'static str)> {
     let providers = discovery::get_providers();
     let mut transcripts: Vec<(PathBuf, &'static str)> = Vec::new();
@@ -446,8 +425,7 @@ fn discover_recent_transcripts(now: DateTime<Utc>) -> Vec<(PathBuf, &'static str
     transcripts
 }
 
-/// Same as [`collect_with_scanner`] but takes the already-discovered
-/// transcripts. Keeps the integration surface small for tests.
+/// Test seam over already-discovered transcripts and injected process/fd truth.
 #[cfg(test)]
 pub fn collect_from_transcripts(
     machine_id: &str,
