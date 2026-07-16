@@ -107,13 +107,19 @@ final class SharedProjectionFixtureTests: XCTestCase {
             staleReason: nil
         )
 
-        let event = TranscriptPreviewProjection.visibleEvents(durableEvents: [], preview: preview).first
+        let events = TranscriptPreviewProjection.visibleEvents(durableEvents: [], preview: preview)
+        let items = TimelineBuilder.build(events: events)
 
-        XCTAssertEqual(event?.toolName, "exec")
-        XCTAssertEqual(event?.toolInputJSON?["command"], .string("pwd"))
-        XCTAssertEqual(event?.toolOutputText, "/tmp/project\n")
-        XCTAssertEqual(event?.toolCallId, "exec-1")
-        XCTAssertEqual(event?.toolCallState, .completed)
+        XCTAssertEqual(events.count, 2)
+        guard case .tool(let call, let result, let pairing) = items.first else {
+            return XCTFail("expected one paired live tool row")
+        }
+        XCTAssertEqual(call.toolName, "exec")
+        XCTAssertEqual(call.toolInputJSON?["command"], .string("pwd"))
+        XCTAssertEqual(result?.toolOutputText, "/tmp/project\n")
+        XCTAssertEqual(call.toolCallId, "exec-1")
+        XCTAssertEqual(call.toolCallState, .completed)
+        XCTAssertEqual(pairing, .id)
     }
 
     private func loadFixture(_ name: String) throws -> Fixture {

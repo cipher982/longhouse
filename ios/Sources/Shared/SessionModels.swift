@@ -723,13 +723,36 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && isStale != true
     }
 
-    var syntheticEvent: SessionEvent {
-        SessionEvent(
-            id: "synthetic:preview:\(eventId)",
+    var syntheticEvents: [SessionEvent] {
+        let callId = toolName == nil
+            ? "synthetic:preview:\(eventId)"
+            : "synthetic:preview:\(eventId):call"
+        let call = SessionEvent(
+            id: callId,
             role: role ?? "assistant",
-            contentText: text,
+            contentText: toolName == nil ? text : nil,
             toolName: toolName,
             toolInputJSON: toolInputJSON,
+            toolOutputText: nil,
+            toolCallId: toolCallId,
+            toolCallState: toolCallState,
+            timestamp: timestamp ?? "",
+            inActiveContext: true,
+            isHeadBranch: true,
+            inputOrigin: nil,
+            eventOrigin: eventOrigin
+        )
+        guard toolName != nil,
+              let toolOutputText,
+              toolCallState != .running else {
+            return [call]
+        }
+        let result = SessionEvent(
+            id: "synthetic:preview:\(eventId):result",
+            role: "tool",
+            contentText: nil,
+            toolName: toolName,
+            toolInputJSON: nil,
             toolOutputText: toolOutputText,
             toolCallId: toolCallId,
             toolCallState: toolCallState,
@@ -739,6 +762,7 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
             inputOrigin: nil,
             eventOrigin: eventOrigin
         )
+        return [call, result]
     }
 }
 
@@ -766,7 +790,7 @@ enum TranscriptPreviewProjection {
             return durableEvents
         }
 
-        return durableEvents + [preview.syntheticEvent]
+        return durableEvents + preview.syntheticEvents
     }
 }
 

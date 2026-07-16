@@ -210,13 +210,18 @@ describe("projectionItemsWithTranscriptPreview", () => {
 
     const projected = projectionItemsWithTranscriptPreview([], session);
 
+    expect(projected).toHaveLength(2);
     expect(projected[0]?.event).toMatchObject({
       role: "assistant",
       tool_name: "exec",
       tool_input_json: { command: "pwd" },
-      tool_output_text: "/tmp/project\n",
       tool_call_id: "exec-1",
       tool_call_state: "completed",
+    });
+    expect(projected[1]?.event).toMatchObject({
+      role: "tool",
+      tool_output_text: "/tmp/project\n",
+      tool_call_id: "exec-1",
     });
   });
 
