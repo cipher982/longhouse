@@ -275,6 +275,8 @@ async def test_dispatch_next_console_turn_uses_run_id_as_durable_command_id(tmp_
     assert registry.command["command_type"] == "session.turn.start"
     assert registry.command["command_id"] == str(result.run_id)
     assert registry.command["payload"]["run_id"] == str(result.run_id)
+    assert registry.command["payload"]["turn_id"] == str(queued.turn_id)
+    assert registry.command["payload"]["client_request_id"] == "request-dispatch"
     assert registry.command["payload"]["message"] == "Continue exactly once"
 
 

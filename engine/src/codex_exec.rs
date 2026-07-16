@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use walkdir::WalkDir;
 
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
 const CODEX_EXEC_RUNTIME_SOURCE: &str = "codex_exec";
@@ -20,6 +21,9 @@ const STDERR_TAIL_LINES: usize = 40;
 pub struct CodexExecRunConfig {
     pub session_id: String,
     pub run_id: String,
+    pub thread_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub client_request_id: Option<String>,
     pub cwd: PathBuf,
     pub api_url: String,
     pub api_token: String,
@@ -46,6 +50,9 @@ pub struct CodexExecRunSummary {
 struct CodexExecRuntimeSink {
     session_id: String,
     run_id: String,
+    thread_id: Option<String>,
+    turn_id: Option<String>,
+    client_request_id: Option<String>,
     api_url: String,
     api_token: String,
     machine_name: String,
@@ -132,6 +139,9 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     let sink = CodexExecRuntimeSink {
         session_id: config.session_id.clone(),
         run_id: config.run_id.clone(),
+        thread_id: config.thread_id.clone(),
+        turn_id: config.turn_id.clone(),
+        client_request_id: config.client_request_id.clone(),
         api_url: config.api_url.clone(),
         api_token: config.api_token.clone(),
         machine_name: config.machine_name.clone(),
@@ -204,12 +214,17 @@ async fn read_stdout_jsonl(stream: tokio::process::ChildStdout, sink: CodexExecR
             continue;
         }
         seq += 1;
-        let payload = serde_json::from_str::<Value>(trimmed)
-            .map(|value| json!({"progress_kind": "codex_exec_jsonl", "seq": seq, "event": value}))
-            .unwrap_or_else(
-                |_| json!({"progress_kind": "codex_exec_stdout", "seq": seq, "line": trimmed}),
-            );
-        sink.post_progress(seq, payload).await;
+        match serde_json::from_str::<Value>(trimmed) {
+            Ok(event) => sink.post_provider_event(seq, event).await,
+            Err(_) => {
+                sink.post_progress(
+                    seq,
+                    json!({"progress_kind": "codex_exec_stdout", "seq": seq, "line": trimmed}),
+                    None,
+                )
+                .await
+            }
+        }
     }
 }
 
@@ -253,6 +268,7 @@ impl CodexExecRuntimeSink {
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
             "run_id": self.run_id,
+            "thread_id": self.thread_id,
             "provider": "codex",
             "device_id": self.machine_name,
             "source": CODEX_EXEC_RUNTIME_SOURCE,
@@ -264,17 +280,34 @@ impl CodexExecRuntimeSink {
             "payload": {
                 "managed_transport": CODEX_EXEC_RUNTIME_SOURCE,
                 "execution_lifetime": "one_shot",
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
             }
         })])
         .await;
     }
 
-    async fn post_progress(&self, seq: u64, mut payload: Value) {
-        let provider_thread_id = payload
-            .get("thread_id")
-            .and_then(Value::as_str)
-            .filter(|_| payload.get("type").and_then(Value::as_str) == Some("thread.started"))
-            .map(str::to_string);
+    async fn post_provider_event(&self, seq: u64, event: Value) {
+        // Inspect the decoded provider record before adding Longhouse's transport
+        // envelope. Looking for thread_id on the envelope silently loses binding.
+        let provider_thread_id = provider_thread_id_from_event(&event);
+        if let Some(provider_thread_id) = provider_thread_id.as_deref() {
+            self.persist_local_provider_binding(provider_thread_id);
+        }
+        self.post_progress(
+            seq,
+            json!({"progress_kind": "codex_exec_jsonl", "seq": seq, "event": event}),
+            provider_thread_id,
+        )
+        .await;
+    }
+
+    async fn post_progress(
+        &self,
+        seq: u64,
+        mut payload: Value,
+        provider_thread_id: Option<String>,
+    ) {
         if let Some(obj) = payload.as_object_mut() {
             obj.insert(
                 "managed_transport".to_string(),
@@ -289,6 +322,7 @@ impl CodexExecRuntimeSink {
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
             "run_id": self.run_id,
+            "thread_id": self.thread_id,
             "provider": "codex",
             "device_id": self.machine_name,
             "source": CODEX_EXEC_RUNTIME_SOURCE,
@@ -304,13 +338,18 @@ impl CodexExecRuntimeSink {
                 "runtime_key": format!("codex:{}", self.session_id),
                 "session_id": self.session_id,
                 "run_id": self.run_id,
+                "thread_id": self.thread_id,
                 "provider": "codex",
                 "device_id": self.machine_name,
                 "source": CODEX_EXEC_RUNTIME_SOURCE,
                 "kind": "binding_signal",
                 "occurred_at": Utc::now().to_rfc3339(),
                 "dedupe_key": format!("codex-exec:{}:{}:binding", self.session_id, self.run_id),
-                "payload": {"provider_session_id": provider_thread_id},
+                "payload": {
+                    "provider_session_id": provider_thread_id,
+                    "turn_id": self.turn_id,
+                    "client_request_id": self.client_request_id,
+                },
             }));
         }
         self.post_events(events).await;
@@ -329,6 +368,7 @@ impl CodexExecRuntimeSink {
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
             "run_id": self.run_id,
+            "thread_id": self.thread_id,
             "provider": "codex",
             "device_id": self.machine_name,
             "source": CODEX_EXEC_RUNTIME_SOURCE,
@@ -345,9 +385,35 @@ impl CodexExecRuntimeSink {
                 "terminal_source": CODEX_EXEC_RUNTIME_SOURCE,
                 "exit_code": exit_code,
                 "stderr_tail": stderr_tail,
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
             }
         })])
         .await;
+    }
+
+    fn persist_local_provider_binding(&self, provider_thread_id: &str) {
+        let source_path = codex_rollout_path(provider_thread_id);
+        if let Some(db_path) = self.local_db_path.as_deref() {
+            if let Some(source_path) = source_path.as_deref() {
+                match crate::state::db::open_db(Some(db_path)) {
+                    Ok(conn) => {
+                        let binding = crate::state::session_binding::SessionBinding::new(&conn);
+                        if let Err(err) =
+                            binding.bind(&source_path.to_string_lossy(), &self.session_id, "codex")
+                        {
+                            eprintln!("[codex-exec] persist transcript binding failed: {err}");
+                        }
+                    }
+                    Err(err) => eprintln!("[codex-exec] open transcript binding DB failed: {err}"),
+                }
+            }
+        }
+        if let Ok(registry) = crate::turn_claims::default_registry() {
+            let source = source_path.as_ref().map(|path| path.to_string_lossy());
+            let _ =
+                registry.mark_provider_binding(&self.run_id, provider_thread_id, source.as_deref());
+        }
     }
 
     fn persist_local_phase(
@@ -441,6 +507,37 @@ impl CodexExecRuntimeSink {
     }
 }
 
+fn provider_thread_id_from_event(event: &Value) -> Option<String> {
+    event
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .filter(|_| event.get("type").and_then(Value::as_str) == Some("thread.started"))
+        .map(str::to_string)
+}
+
+fn codex_rollout_path(provider_thread_id: &str) -> Option<PathBuf> {
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))?;
+    find_codex_rollout_path(&codex_home.join("sessions"), provider_thread_id)
+}
+
+fn find_codex_rollout_path(
+    sessions_root: &std::path::Path,
+    provider_thread_id: &str,
+) -> Option<PathBuf> {
+    let suffix = format!("-{provider_thread_id}.jsonl");
+    WalkDir::new(sessions_root)
+        .min_depth(1)
+        .max_depth(5)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .find(|entry| {
+            entry.file_type().is_file() && entry.file_name().to_string_lossy().ends_with(&suffix)
+        })
+        .map(|entry| entry.into_path())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -449,6 +546,9 @@ mod tests {
         CodexExecRunConfig {
             session_id: "11111111-1111-4111-8111-111111111111".to_string(),
             run_id: "22222222-2222-4222-8222-222222222222".to_string(),
+            thread_id: Some("44444444-4444-4444-8444-444444444444".to_string()),
+            turn_id: Some("55555555-5555-4555-8555-555555555555".to_string()),
+            client_request_id: Some("request-1".to_string()),
             cwd: PathBuf::from("/tmp/project"),
             api_url: "http://localhost:8080".to_string(),
             api_token: "token".to_string(),
@@ -565,5 +665,42 @@ mod tests {
         );
         assert_eq!(obj["managed_transport"], "codex_exec");
         assert_eq!(obj["execution_lifetime"], "one_shot");
+    }
+
+    #[test]
+    fn decoded_thread_started_record_exposes_provider_binding() {
+        let event = json!({
+            "type": "thread.started",
+            "thread_id": "019f6b93-edf6-7bd0-a757-b5195a61abdd"
+        });
+        let provider_thread_id = provider_thread_id_from_event(&event);
+
+        assert_eq!(
+            provider_thread_id,
+            Some("019f6b93-edf6-7bd0-a757-b5195a61abdd".to_string())
+        );
+        let envelope = json!({
+            "progress_kind": "codex_exec_jsonl",
+            "seq": 1,
+            "event": event,
+        });
+        assert_eq!(envelope["event"]["type"], "thread.started");
+        assert!(envelope.get("thread_id").is_none());
+        assert_eq!(provider_thread_id_from_event(&envelope), None);
+    }
+
+    #[test]
+    fn finds_codex_rollout_by_provider_thread_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let thread_id = "019f6b93-edf6-7bd0-a757-b5195a61abdd";
+        let day = temp.path().join("2026/07/16");
+        std::fs::create_dir_all(&day).unwrap();
+        let rollout = day.join(format!("rollout-2026-07-16T11-38-04-{thread_id}.jsonl"));
+        std::fs::write(&rollout, "{}\n").unwrap();
+
+        assert_eq!(
+            find_codex_rollout_path(temp.path(), thread_id),
+            Some(rollout)
+        );
     }
 }

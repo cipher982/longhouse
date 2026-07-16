@@ -526,6 +526,12 @@ struct APISessionWorkspaceResponse: Codable, Hashable, Sendable {
     let controlOnly: Bool?
 }
 
+struct APIConsoleTurnReceiptResponse: Codable, Hashable, Sendable {
+    let turnId: String
+    let runId: String?
+    let state: String
+}
+
 struct APIQueuedInputSummary: Codable, Hashable, Sendable {
     let id: Int?
     let liveInputId: String?
@@ -541,6 +547,7 @@ struct APISessionInputResponse: Codable, Hashable, Sendable {
     let inputId: Int?
     let liveInputId: String?
     let clientRequestId: String?
+    let turn: APIConsoleTurnReceiptResponse?
     let intent: String
     let queued: [APIQueuedInputSummary]?
 }

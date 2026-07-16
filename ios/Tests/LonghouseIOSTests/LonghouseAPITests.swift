@@ -180,6 +180,26 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func sendInputDecodesConsoleTurnReceipt() throws {
+        let data = try #require("""
+        {
+          "outcome": "sent",
+          "input_id": null,
+          "live_input_id": "turn-1",
+          "client_request_id": "request-1",
+          "turn": {"turn_id": "turn-1", "run_id": "run-1", "state": "active"},
+          "intent": "auto",
+          "queued": []
+        }
+        """.data(using: .utf8))
+
+        let response = try LonghouseAPI.decodeSessionInputResponse(data)
+        #expect(response.turn?.turnId == "turn-1")
+        #expect(response.turn?.runId == "run-1")
+        #expect(response.turn?.state == "active")
+    }
+
+    @Test
     func launchErrorParsingAcceptsErrorCodeField() throws {
         let data = try #require("""
         {

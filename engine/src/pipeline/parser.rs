@@ -240,6 +240,8 @@ struct CodexPayload {
     name: Option<String>,
     /// function_call: JSON-encoded arguments
     arguments: Option<String>,
+    /// custom_tool_call: arbitrary JSON input (often a plain command string).
+    input: Option<Box<RawValue>>,
     /// function_call / function_call_output: call correlation ID
     call_id: Option<String>,
     /// event_msg: provider reason for lifecycle/control artifacts.
@@ -2289,21 +2291,29 @@ fn extract_codex_events(
                 raw_line: Some(raw_line.to_string()),
             });
         }
-        "function_call" => {
+        "function_call" | "custom_tool_call" => {
             pending.suppress_next_turn_aborted_marker = false;
+            let is_custom = payload.r#type.as_deref() == Some("custom_tool_call");
             let tool_name = payload.name.as_deref().unwrap_or("").to_string();
             let call_id = payload.call_id.as_deref().unwrap_or("");
             let uuid_suffix = if call_id.is_empty() { "0" } else { call_id };
 
             // Parse arguments string as raw JSON
-            let tool_input = payload.arguments.as_ref().and_then(|args| {
-                let trimmed = args.trim();
-                if trimmed.starts_with('{') {
-                    RawValue::from_string(trimmed.to_string()).ok()
-                } else {
-                    None
-                }
-            });
+            let tool_input = if is_custom {
+                payload
+                    .input
+                    .as_ref()
+                    .and_then(|input| RawValue::from_string(input.get().to_string()).ok())
+            } else {
+                payload.arguments.as_ref().and_then(|args| {
+                    let trimmed = args.trim();
+                    if trimmed.starts_with('{') {
+                        RawValue::from_string(trimmed.to_string()).ok()
+                    } else {
+                        None
+                    }
+                })
+            };
 
             events.push(ParsedEvent {
                 uuid: format!("{}-tool-{}", msg_uuid, uuid_suffix),
@@ -2320,12 +2330,17 @@ fn extract_codex_events(
                     Some(call_id.to_string())
                 },
                 source_offset: line_offset,
-                raw_type: "codex_function_call".to_string(),
+                raw_type: if is_custom {
+                    "codex_custom_tool_call".to_string()
+                } else {
+                    "codex_function_call".to_string()
+                },
                 raw_line: Some(raw_line.to_string()),
             });
         }
-        "function_call_output" => {
+        "function_call_output" | "custom_tool_call_output" => {
             pending.suppress_next_turn_aborted_marker = false;
+            let is_custom = payload.r#type.as_deref() == Some("custom_tool_call_output");
             let call_id = payload.call_id.as_deref().unwrap_or("");
             let uuid_suffix = if call_id.is_empty() { "0" } else { call_id };
 
@@ -2380,7 +2395,11 @@ fn extract_codex_events(
                     Some(call_id.to_string())
                 },
                 source_offset: line_offset,
-                raw_type: "codex_function_call_output".to_string(),
+                raw_type: if is_custom {
+                    "codex_custom_tool_call_output".to_string()
+                } else {
+                    "codex_function_call_output".to_string()
+                },
                 raw_line: Some(raw_line.to_string()),
             });
         }
@@ -3257,6 +3276,38 @@ mod tests {
             Some("file1.txt\nfile2.txt")
         );
         assert_eq!(result.events[1].raw_type, "codex_function_call_output");
+    }
+
+    #[test]
+    fn test_codex_custom_tool_call_and_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-000000000003.jsonl",
+            &[
+                r#"{"type":"response_item","timestamp":"2026-07-16T15:38:17Z","payload":{"type":"custom_tool_call","name":"exec","input":"const result = await tools.exec_command({cmd:\"sed -n '1,80p' docs/as-built.md\"}); text(result.output)","call_id":"call_HEf"}}"#,
+                r#"{"type":"response_item","timestamp":"2026-07-16T15:38:18Z","payload":{"type":"custom_tool_call_output","call_id":"call_HEf","output":[{"type":"input_text","text":"Bilstein B6 shocks on all four corners"}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 2);
+        assert_eq!(result.events[0].role, Role::Assistant);
+        assert_eq!(result.events[0].tool_name.as_deref(), Some("exec"));
+        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("call_HEf"));
+        assert_eq!(result.events[0].raw_type, "codex_custom_tool_call");
+        let input = result.events[0].tool_input_json.as_ref().unwrap().get();
+        assert_eq!(
+            serde_json::from_str::<String>(input).unwrap(),
+            "const result = await tools.exec_command({cmd:\"sed -n '1,80p' docs/as-built.md\"}); text(result.output)"
+        );
+        assert_eq!(result.events[1].role, Role::Tool);
+        assert_eq!(result.events[1].tool_call_id.as_deref(), Some("call_HEf"));
+        assert_eq!(
+            result.events[1].tool_output_text.as_deref(),
+            Some("Bilstein B6 shocks on all four corners")
+        );
+        assert_eq!(result.events[1].raw_type, "codex_custom_tool_call_output");
     }
 
     #[test]

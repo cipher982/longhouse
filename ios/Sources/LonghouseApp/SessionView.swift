@@ -1528,6 +1528,7 @@ struct LoopModeButtons: View {
 
 enum SubmittedInputPhase: String, Sendable {
     case submitting
+    case working
     case sent
     case queued
     case couldNotConfirm
@@ -1542,8 +1543,34 @@ struct SubmittedInput: Identifiable, Sendable {
     let intent: String
     var phase: SubmittedInputPhase
     var serverInputId: Int?
+    var turnId: String?
+    var runId: String?
     var lastError: String?
     let createdAt: Date
+
+    init(
+        id: String,
+        clientRequestId: String,
+        text: String,
+        intent: String,
+        phase: SubmittedInputPhase,
+        serverInputId: Int?,
+        turnId: String? = nil,
+        runId: String? = nil,
+        lastError: String?,
+        createdAt: Date
+    ) {
+        self.id = id
+        self.clientRequestId = clientRequestId
+        self.text = text
+        self.intent = intent
+        self.phase = phase
+        self.serverInputId = serverInputId
+        self.turnId = turnId
+        self.runId = runId
+        self.lastError = lastError
+        self.createdAt = createdAt
+    }
 }
 
 // MARK: - ViewModel
@@ -1908,8 +1935,12 @@ final class SessionViewModel: ObservableObject {
             turnEndedDraft = nil
             updateSubmittedInput(
                 clientRequestId,
-                phase: response.outcome == .sent ? .sent : .queued,
+                phase: response.turn.map { ["starting", "active", "draining"].contains($0.state) } == true
+                    ? .working
+                    : (response.outcome == .sent ? .sent : .queued),
                 serverInputId: response.inputId,
+                turnId: response.turn?.turnId,
+                runId: response.turn?.runId,
                 lastError: nil
             )
             clearSupersededSubmittedInputs(text: text, keepClientRequestId: clientRequestId)
@@ -2682,11 +2713,15 @@ final class SessionViewModel: ObservableObject {
         _ id: String,
         phase: SubmittedInputPhase,
         serverInputId: Int?,
+        turnId: String? = nil,
+        runId: String? = nil,
         lastError: String?
     ) {
         guard let index = submittedInputs.firstIndex(where: { $0.id == id }) else { return }
         submittedInputs[index].phase = phase
         submittedInputs[index].serverInputId = serverInputId
+        if let turnId { submittedInputs[index].turnId = turnId }
+        if let runId { submittedInputs[index].runId = runId }
         submittedInputs[index].lastError = lastError
     }
 
@@ -2704,6 +2739,7 @@ final class SessionViewModel: ObservableObject {
             guard input.phase == .sent
                 || input.phase == .queued
                 || input.phase == .submitting
+                || input.phase == .working
                 || input.phase == .couldNotConfirm
                 || input.phase == .failed
             else { return false }
