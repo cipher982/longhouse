@@ -1811,6 +1811,60 @@ def test_collect_local_health_degraded_when_status_is_aging(monkeypatch, tmp_pat
     assert "aging" in snapshot["headline"].lower()
 
 
+def test_collect_local_health_prefers_engine_pulse_over_status_file_age(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    now = datetime.now(timezone.utc)
+    _write_engine_status(
+        tmp_path,
+        age_seconds=90,
+        payload={
+            "local_projection": {
+                "version": 7,
+                "generated_at": (now - timedelta(seconds=90)).isoformat(),
+                "engine_pulse_at": now.isoformat(),
+                "last_reconciled_at": (now - timedelta(seconds=90)).isoformat(),
+                "reconciliation": {"state": "reconciling", "reason": "local_status"},
+            }
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "healthy"
+    assert "engine_status_aging" not in snapshot["reasons"]
+    assert snapshot["engine_status"]["age_seconds"] <= 1
+    assert snapshot["engine_status"]["file_age_seconds"] >= 89
+    assert snapshot["engine_status"]["evidence_age_seconds"] >= 89
+    assert snapshot["engine_status"]["reconciliation"]["state"] == "reconciling"
+
+
+def test_collect_local_health_treats_stale_engine_pulse_as_stale(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    now = datetime.now(timezone.utc)
+    _write_engine_status(
+        tmp_path,
+        age_seconds=1,
+        payload={
+            "local_projection": {
+                "version": 7,
+                "generated_at": (now - timedelta(seconds=180)).isoformat(),
+                "engine_pulse_at": (now - timedelta(seconds=180)).isoformat(),
+                "last_reconciled_at": (now - timedelta(seconds=180)).isoformat(),
+                "reconciliation": {"state": "idle"},
+            }
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert "engine_status_stale" in snapshot["reasons"]
+    assert snapshot["engine_status"]["age_seconds"] >= 179
+    assert snapshot["engine_status"]["file_age_seconds"] <= 2
+
+
 def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

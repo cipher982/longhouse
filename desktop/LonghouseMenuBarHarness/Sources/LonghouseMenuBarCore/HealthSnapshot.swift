@@ -1323,6 +1323,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
     public let consecutiveShipFailures: Int?
     public let diskFreeBytes: UInt64?
     public let isOffline: Bool?
+    public let localProjection: LocalProjectionStatus?
     public let recentDeadLetters: [DeadLetterSnapshot]?
     public let lastUpdated: String?
     /// Engine-compiled build identity (from build.rs). Same shape as the
@@ -1341,6 +1342,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         consecutiveShipFailures: Int?,
         diskFreeBytes: UInt64?,
         isOffline: Bool?,
+        localProjection: LocalProjectionStatus? = nil,
         recentDeadLetters: [DeadLetterSnapshot]?,
         lastUpdated: String?,
         build: BuildIdentityRecord? = nil
@@ -1356,6 +1358,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         self.consecutiveShipFailures = consecutiveShipFailures
         self.diskFreeBytes = diskFreeBytes
         self.isOffline = isOffline
+        self.localProjection = localProjection
         self.recentDeadLetters = recentDeadLetters
         self.lastUpdated = lastUpdated
         self.build = build
@@ -1373,10 +1376,25 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         case consecutiveShipFailures
         case diskFreeBytes
         case isOffline
+        case localProjection
         case recentDeadLetters
         case lastUpdated
         case build
     }
+}
+
+public struct LocalProjectionStatus: Codable, Equatable, Sendable {
+    public let version: UInt64?
+    public let generatedAt: String?
+    public let enginePulseAt: String?
+    public let lastReconciledAt: String?
+    public let reconciliation: ProjectionReconciliationStatus?
+}
+
+public struct ProjectionReconciliationStatus: Codable, Equatable, Sendable {
+    public let state: String?
+    public let reason: String?
+    public let startedAt: String?
 }
 
 public struct StorageV2OutboxStatus: Codable, Equatable, Sendable {

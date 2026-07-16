@@ -298,7 +298,7 @@ pub struct HeartbeatStats<'a> {
     pub last_ship_at: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 struct StatusDeadLetter {
     provider: String,
     file_path: String,
@@ -1424,6 +1424,64 @@ pub enum PhaseLedgerStatus {
     ReadFailed(String),
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ProjectionReconciliation {
+    pub state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+}
+
+impl ProjectionReconciliation {
+    pub fn idle() -> Self {
+        Self {
+            state: "idle".to_string(),
+            reason: None,
+            started_at: None,
+        }
+    }
+
+    pub fn running(reason: impl Into<String>, started_at: impl Into<String>) -> Self {
+        Self {
+            state: "reconciling".to_string(),
+            reason: Some(reason.into()),
+            started_at: Some(started_at.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StatusFileProjection {
+    pub payload: HeartbeatPayload,
+    recent_dead_letters: Vec<StatusDeadLetter>,
+    phase_ledger: Vec<PhaseLedgerRow>,
+    phase_ledger_status: PhaseLedgerStatus,
+    generated_at: String,
+}
+
+pub fn build_status_file_projection(
+    payload: HeartbeatPayload,
+    stats: &HeartbeatStats<'_>,
+    phase_ledger: Vec<PhaseLedgerRow>,
+    phase_ledger_status: PhaseLedgerStatus,
+) -> StatusFileProjection {
+    let recent_dead_letters = stats
+        .spool
+        .recent_dead(5)
+        .unwrap_or_default()
+        .into_iter()
+        .map(status_dead_letter_from_entry)
+        .collect();
+    StatusFileProjection {
+        payload,
+        recent_dead_letters,
+        phase_ledger,
+        phase_ledger_status,
+        generated_at: chrono::Utc::now().to_rfc3339(),
+    }
+}
+
 impl Serialize for PhaseLedgerStatus {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         match self {
@@ -1443,17 +1501,26 @@ impl Serialize for PhaseLedgerStatus {
 /// can surface the distinction. Compute both with
 /// `SessionPhaseStore::new(conn).fresh_rows(now)` at the call site.
 pub fn write_status_file(
-    payload: &HeartbeatPayload,
-    stats: &HeartbeatStats<'_>,
-    phase_ledger: Vec<PhaseLedgerRow>,
-    ledger_status: PhaseLedgerStatus,
+    projection: &StatusFileProjection,
     control_channel: Option<serde_json::Value>,
+    reconciliation: &ProjectionReconciliation,
     status_path: &std::path::Path,
 ) {
+    #[derive(Serialize)]
+    struct LocalProjectionFile<'a> {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<u64>,
+        generated_at: &'a str,
+        engine_pulse_at: &'a str,
+        last_reconciled_at: &'a str,
+        reconciliation: &'a ProjectionReconciliation,
+    }
+
     #[derive(Serialize)]
     struct StatusFile<'a> {
         #[serde(flatten)]
         payload: &'a HeartbeatPayload,
+        local_projection: LocalProjectionFile<'a>,
         /// Build identity compiled into the currently-running engine binary.
         /// Compare this against the on-disk engine binary via `binary_mtime`
         /// (see below) to detect "daemon needs restart" after an
@@ -1490,29 +1557,30 @@ pub fn write_status_file(
         last_updated: String,
     }
 
-    let recent_dead_letters = stats
-        .spool
-        .recent_dead(5)
-        .unwrap_or_default()
-        .into_iter()
-        .map(status_dead_letter_from_entry)
-        .collect();
     let now_utc = chrono::Utc::now();
+    let now = now_utc.to_rfc3339();
     let daemon_started_at = DAEMON_STARTED_AT
-        .get_or_init(|| now_utc.to_rfc3339())
+        .get_or_init(|| now.clone())
         .clone();
     let (binary_path, binary_mtime) = inspect_current_exe();
     let status = StatusFile {
-        payload,
+        payload: &projection.payload,
+        local_projection: LocalProjectionFile {
+            version: projection.payload.sessions_sequence,
+            generated_at: &projection.generated_at,
+            engine_pulse_at: &now,
+            last_reconciled_at: &projection.generated_at,
+            reconciliation,
+        },
         build: BuildIdentity::current(),
         binary_path,
         binary_mtime,
         daemon_started_at,
-        recent_dead_letters,
-        phase_ledger,
-        phase_ledger_status: ledger_status,
+        recent_dead_letters: projection.recent_dead_letters.clone(),
+        phase_ledger: projection.phase_ledger.clone(),
+        phase_ledger_status: projection.phase_ledger_status.clone(),
         control_channel,
-        last_updated: now_utc.to_rfc3339(),
+        last_updated: now.clone(),
     };
 
     if let Some(parent) = status_path.parent() {
@@ -2771,16 +2839,20 @@ mod tests {
         };
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        write_status_file(
-            &payload,
+        let projection = build_status_file_projection(
+            payload,
             &stats,
             Vec::new(),
             PhaseLedgerStatus::Ok,
+        );
+        write_status_file(
+            &projection,
             Some(serde_json::json!({
                 "enabled": true,
                 "status": "connected",
                 "supports": ["codex.launch"],
             })),
+            &ProjectionReconciliation::idle(),
             &status_path,
         );
 
@@ -2809,6 +2881,29 @@ mod tests {
         assert!(build["dirty"].is_boolean());
         assert_eq!(parsed["control_channel"]["status"], "connected");
         assert_eq!(parsed["control_channel"]["supports"][0], "codex.launch");
+        assert_eq!(parsed["local_projection"]["reconciliation"]["state"], "idle");
+        assert!(parsed["local_projection"]["engine_pulse_at"].is_string());
+
+        let generated_at = parsed["local_projection"]["generated_at"].clone();
+        let stable_dead_letters = parsed["recent_dead_letters"].clone();
+        write_status_file(
+            &projection,
+            None,
+            &ProjectionReconciliation::running("local_status", "2026-07-16T12:00:00Z"),
+            &status_path,
+        );
+        let refreshed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(status_path).unwrap()).unwrap();
+        assert_eq!(refreshed["local_projection"]["generated_at"], generated_at);
+        assert_eq!(refreshed["recent_dead_letters"], stable_dead_letters);
+        assert_eq!(
+            refreshed["local_projection"]["reconciliation"]["state"],
+            "reconciling"
+        );
+        assert_eq!(
+            refreshed["local_projection"]["reconciliation"]["reason"],
+            "local_status"
+        );
     }
 
     #[test]
@@ -2896,12 +2991,16 @@ mod tests {
             .expect("fresh_rows should succeed on a live DB");
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        write_status_file(
-            &payload,
+        let projection = build_status_file_projection(
+            payload,
             &stats,
             phase_ledger,
             PhaseLedgerStatus::Ok,
+        );
+        write_status_file(
+            &projection,
             None,
+            &ProjectionReconciliation::idle(),
             &status_path,
         );
 
@@ -2979,12 +3078,16 @@ mod tests {
         };
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        write_status_file(
-            &payload,
+        let projection = build_status_file_projection(
+            payload,
             &stats,
             Vec::new(),
             PhaseLedgerStatus::ReadFailed("db locked".to_string()),
+        );
+        write_status_file(
+            &projection,
             None,
+            &ProjectionReconciliation::idle(),
             &status_path,
         );
 

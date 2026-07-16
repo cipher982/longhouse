@@ -323,13 +323,13 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func localStatusMonitorIgnoresClockOnlyWritesAndWakesForSessionChanges() async throws {
+    func localStatusMonitorIgnoresPulseOnlyWritesAndWakesForReconciliationOrSessionChanges() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("longhouse-status-monitor-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let statusURL = directory.appendingPathComponent("engine-status.json")
-        try Data(#"{"last_updated":"one","sessions_sequence":1}"#.utf8).write(to: statusURL, options: .atomic)
+        try Data(#"{"last_updated":"one","sessions_sequence":1,"local_projection":{"version":1,"engine_pulse_at":"one","reconciliation":{"state":"idle"}}}"#.utf8).write(to: statusURL, options: .atomic)
         let changed = ChangeCounter()
         let monitor = LocalStatusMonitor(statusPath: statusURL.path) { _ in
             Task { await changed.increment() }
@@ -337,14 +337,18 @@ struct LonghouseMenuBarCoreTests {
         monitor.start()
         try await Task.sleep(for: .milliseconds(75))
 
-        try Data(#"{"last_updated":"two","sessions_sequence":1}"#.utf8).write(to: statusURL, options: .atomic)
+        try Data(#"{"last_updated":"two","sessions_sequence":1,"local_projection":{"version":1,"engine_pulse_at":"two","reconciliation":{"state":"idle"}}}"#.utf8).write(to: statusURL, options: .atomic)
         try await Task.sleep(for: .milliseconds(100))
         #expect(await changed.value == 0)
 
-        try Data(#"{"last_updated":"three","sessions_sequence":2}"#.utf8).write(to: statusURL, options: .atomic)
+        try Data(#"{"last_updated":"three","sessions_sequence":1,"local_projection":{"version":1,"engine_pulse_at":"three","reconciliation":{"state":"reconciling","reason":"wake"}}}"#.utf8).write(to: statusURL, options: .atomic)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(await changed.value == 1)
+
+        try Data(#"{"last_updated":"four","sessions_sequence":2,"local_projection":{"version":2,"engine_pulse_at":"four","reconciliation":{"state":"idle"}}}"#.utf8).write(to: statusURL, options: .atomic)
         try await Task.sleep(for: .milliseconds(150))
         monitor.stop()
-        #expect(await changed.value == 1)
+        #expect(await changed.value == 2)
     }
 
     @Test

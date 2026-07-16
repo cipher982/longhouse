@@ -706,7 +706,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut last_runtime_truth_signature: Option<String> = None;
     let mut runtime_truth_bootstrapped = false;
     let mut session_snapshot_state = SessionSnapshotState::default();
-    let mut last_managed_observations: Option<ManagedObservationScanResult> = None;
+    let mut last_status_projection: Option<heartbeat::StatusFileProjection> = None;
+    let mut managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+        "startup",
+        chrono::Utc::now().to_rfc3339(),
+    );
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
@@ -1259,7 +1263,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         let empty_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] = &[];
                         let unmanaged_binding_override =
                             last_unmanaged_session_bindings.as_deref().unwrap_or(empty_unmanaged_bindings);
-                        let payload = write_local_status_snapshot(
+                        let projection = build_local_status_projection(
                             &conn,
                             &tracker,
                             &parse_tracker,
@@ -1267,19 +1271,25 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             offline.is_offline,
                             &last_ship_at,
                             &config.shipper_config.machine_name,
-                            &status_path,
                             &result.codex_observations,
                             &result.claude_observations,
                             &result.opencode_observations,
                             &result.cursor_observations,
-                            serde_json::to_value(control_channel_status.snapshot()).ok(),
                             unmanaged_binding_override,
                             Some(adaptive_limiter.as_ref()),
                             Some(&scheduler),
                             config.archive_repair_mode,
                             &mut session_snapshot_state,
                         );
-                        last_managed_observations = Some(result.clone());
+                        managed_reconciliation = heartbeat::ProjectionReconciliation::idle();
+                        heartbeat::write_status_file(
+                            &projection,
+                            serde_json::to_value(control_channel_status.snapshot()).ok(),
+                            &managed_reconciliation,
+                            &status_path,
+                        );
+                        let payload = projection.payload.clone();
+                        last_status_projection = Some(projection);
                         let signature = runtime_truth_signature(&payload);
                         if !runtime_truth_bootstrapped {
                             last_runtime_truth_signature = Some(signature);
@@ -1476,30 +1486,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Frequent local status file refresh for ambient UX and debugging
             _ = local_status_timer.tick() => {
-                maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "local_status");
-                if let Some(observations) = last_managed_observations.as_ref() {
-                    let empty_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] = &[];
-                    let unmanaged_binding_override =
-                        last_unmanaged_session_bindings.as_deref().unwrap_or(empty_unmanaged_bindings);
-                    write_local_status_snapshot(
-                        &conn,
-                        &tracker,
-                        &parse_tracker,
-                        &ship_stats,
-                        offline.is_offline,
-                        &last_ship_at,
-                        &config.shipper_config.machine_name,
-                        &status_path,
-                        &observations.codex_observations,
-                        &observations.claude_observations,
-                        &observations.opencode_observations,
-                        &observations.cursor_observations,
+                if maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "local_status") {
+                    managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                        "local_status",
+                        chrono::Utc::now().to_rfc3339(),
+                    );
+                }
+                if let Some(projection) = last_status_projection.as_ref() {
+                    heartbeat::write_status_file(
+                        projection,
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
-                        unmanaged_binding_override,
-                        Some(adaptive_limiter.as_ref()),
-                        Some(&scheduler),
-                        config.archive_repair_mode,
-                        &mut session_snapshot_state,
+                        &managed_reconciliation,
+                        &status_path,
                     );
                 }
             }
@@ -1527,33 +1525,17 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Instant::now(),
                     "heartbeat",
                 );
-                let empty_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] = &[];
-                let unmanaged_binding_override =
-                    last_unmanaged_session_bindings.as_deref().unwrap_or(empty_unmanaged_bindings);
-                if let Some(observations) = last_managed_observations.as_ref() {
-                    let payload = write_local_status_snapshot(
-                        &conn,
-                        &tracker,
-                        &parse_tracker,
-                        &ship_stats,
-                        offline.is_offline,
-                        &last_ship_at,
-                        &config.shipper_config.machine_name,
-                        &status_path,
-                        &observations.codex_observations,
-                        &observations.claude_observations,
-                        &observations.opencode_observations,
-                        &observations.cursor_observations,
+                if let Some(projection) = last_status_projection.as_ref() {
+                    heartbeat::write_status_file(
+                        projection,
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
-                        unmanaged_binding_override,
-                        Some(adaptive_limiter.as_ref()),
-                        Some(&scheduler),
-                        config.archive_repair_mode,
-                        &mut session_snapshot_state,
+                        &managed_reconciliation,
+                        &status_path,
                     );
                     if !offline.is_offline {
                         runtime_truth_bootstrapped = true;
                         if heartbeat_post_tasks.is_empty() {
+                            let payload = projection.payload.clone();
                             let signature = runtime_truth_signature(&payload);
                             spawn_heartbeat_post(
                                 &mut heartbeat_post_tasks,
@@ -1585,7 +1567,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn write_local_status_snapshot(
+fn build_local_status_projection(
     conn: &rusqlite::Connection,
     tracker: &ConsecutiveErrorTracker,
     parse_tracker: &RecentIssueTracker,
@@ -1593,18 +1575,16 @@ fn write_local_status_snapshot(
     is_offline: bool,
     last_ship_at: &Option<String>,
     machine_id: &str,
-    status_path: &Path,
     observations: &[managed_bridge_scan::CodexBridgeObservation],
     claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
-    control_channel: Option<Value>,
     unmanaged_session_bindings: &[heartbeat::UnmanagedSessionBinding],
     limiter: Option<&crate::scheduler::AdaptiveLimiter>,
     scheduler: Option<&PathScheduler>,
     archive_repair_mode: ArchiveRepairMode,
     session_snapshot_state: &mut SessionSnapshotState,
-) -> heartbeat::HeartbeatPayload {
+) -> heartbeat::StatusFileProjection {
     let spool = Spool::new(conn);
     let stats = heartbeat::HeartbeatStats {
         conn,
@@ -1690,15 +1670,12 @@ fn write_local_status_snapshot(
                 )
             }
         };
-    heartbeat::write_status_file(
-        &payload,
+    heartbeat::build_status_file_projection(
+        payload,
         &stats,
         phase_ledger,
         ledger_status,
-        control_channel,
-        status_path,
-    );
-    payload
+    )
 }
 
 fn observe_active_opencode_titles(
@@ -2058,9 +2035,9 @@ fn maybe_start_unmanaged_binding_refresh(
 fn maybe_start_managed_observation_scan(
     scan_tasks: &mut JoinSet<ManagedObservationScanResult>,
     reason: &'static str,
-) {
+) -> bool {
     if !scan_tasks.is_empty() {
-        return;
+        return false;
     }
 
     scan_tasks.spawn_blocking(move || {
@@ -2078,6 +2055,7 @@ fn maybe_start_managed_observation_scan(
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });
+    true
 }
 
 #[cfg(unix)]
@@ -3723,9 +3701,8 @@ mod tests {
     }
 
     #[test]
-    fn test_write_local_status_snapshot_uses_cached_unmanaged_bindings() {
+    fn test_build_local_status_projection_uses_cached_unmanaged_bindings() {
         let db = tempfile::NamedTempFile::new().unwrap();
-        let status = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         let tracker = ConsecutiveErrorTracker::new();
         let parse_tracker = RecentIssueTracker::new();
@@ -3733,7 +3710,7 @@ mod tests {
         let cached = vec![unmanaged_binding("sess-cached", 42)];
         let mut session_snapshot_state = SessionSnapshotState::default();
 
-        let payload = write_local_status_snapshot(
+        let projection = build_local_status_projection(
             &conn,
             &tracker,
             &parse_tracker,
@@ -3741,12 +3718,10 @@ mod tests {
             false,
             &None,
             "cinder",
-            status.path(),
             &[],
             &[],
             &[],
             &[],
-            None,
             &cached,
             None,
             None,
@@ -3754,13 +3729,12 @@ mod tests {
             &mut session_snapshot_state,
         );
 
-        assert_eq!(payload.unmanaged_session_bindings, cached);
+        assert_eq!(projection.payload.unmanaged_session_bindings, cached);
     }
 
     #[test]
-    fn test_write_local_status_snapshot_sequences_only_digest_changes() {
+    fn test_build_local_status_projection_sequences_only_digest_changes() {
         let db = tempfile::NamedTempFile::new().unwrap();
-        let status = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         let tracker = ConsecutiveErrorTracker::new();
         let parse_tracker = RecentIssueTracker::new();
@@ -3768,7 +3742,7 @@ mod tests {
         let cached = vec![unmanaged_binding("sess-cached", 42)];
         let mut session_snapshot_state = SessionSnapshotState::default();
 
-        let first = write_local_status_snapshot(
+        let first = build_local_status_projection(
             &conn,
             &tracker,
             &parse_tracker,
@@ -3776,19 +3750,17 @@ mod tests {
             false,
             &None,
             "cinder",
-            status.path(),
             &[],
             &[],
             &[],
             &[],
-            None,
             &cached,
             None,
             None,
             ArchiveRepairMode::Drain,
             &mut session_snapshot_state,
         );
-        let second = write_local_status_snapshot(
+        let second = build_local_status_projection(
             &conn,
             &tracker,
             &parse_tracker,
@@ -3796,12 +3768,10 @@ mod tests {
             false,
             &None,
             "cinder",
-            status.path(),
             &[],
             &[],
             &[],
             &[],
-            None,
             &cached,
             None,
             None,
@@ -3809,7 +3779,7 @@ mod tests {
             &mut session_snapshot_state,
         );
         let changed = vec![unmanaged_binding("sess-cached", 43)];
-        let third = write_local_status_snapshot(
+        let third = build_local_status_projection(
             &conn,
             &tracker,
             &parse_tracker,
@@ -3817,12 +3787,10 @@ mod tests {
             false,
             &None,
             "cinder",
-            status.path(),
             &[],
             &[],
             &[],
             &[],
-            None,
             &changed,
             None,
             None,
@@ -3830,11 +3798,11 @@ mod tests {
             &mut session_snapshot_state,
         );
 
-        assert_eq!(first.sessions_digest, second.sessions_digest);
-        assert_eq!(first.sessions_sequence, Some(1));
-        assert_eq!(second.sessions_sequence, Some(1));
-        assert_ne!(second.sessions_digest, third.sessions_digest);
-        assert_eq!(third.sessions_sequence, Some(2));
+        assert_eq!(first.payload.sessions_digest, second.payload.sessions_digest);
+        assert_eq!(first.payload.sessions_sequence, Some(1));
+        assert_eq!(second.payload.sessions_sequence, Some(1));
+        assert_ne!(second.payload.sessions_digest, third.payload.sessions_digest);
+        assert_eq!(third.payload.sessions_sequence, Some(2));
     }
 
     #[test]

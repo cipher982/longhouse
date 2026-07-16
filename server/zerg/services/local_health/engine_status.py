@@ -116,7 +116,7 @@ def _collect_engine_status(base_dir: Path, *, now: datetime) -> dict[str, Any]:
         }
 
     try:
-        age_seconds = int(max(0.0, now.timestamp() - status_path.stat().st_mtime))
+        file_age_seconds = int(max(0.0, now.timestamp() - status_path.stat().st_mtime))
     except OSError as exc:
         return {
             "path": str(status_path),
@@ -134,7 +134,8 @@ def _collect_engine_status(base_dir: Path, *, now: datetime) -> dict[str, Any]:
             "path": str(status_path),
             "exists": True,
             "fresh": False,
-            "age_seconds": age_seconds,
+            "age_seconds": file_age_seconds,
+            "file_age_seconds": file_age_seconds,
             "payload": None,
             "error": str(exc),
         }
@@ -143,16 +144,28 @@ def _collect_engine_status(base_dir: Path, *, now: datetime) -> dict[str, Any]:
             "path": str(status_path),
             "exists": True,
             "fresh": False,
-            "age_seconds": age_seconds,
+            "age_seconds": file_age_seconds,
+            "file_age_seconds": file_age_seconds,
             "payload": None,
             "error": "engine status payload must be a JSON object",
         }
 
+    raw_projection = payload.get("local_projection")
+    projection = raw_projection if isinstance(raw_projection, Mapping) else {}
+    pulse_at = _parse_rfc3339(_normalize_optional_string(projection.get("engine_pulse_at")))
+    generated_at = _parse_rfc3339(_normalize_optional_string(projection.get("generated_at")))
+    pulse_age_seconds = int(max(0.0, (now - pulse_at).total_seconds())) if pulse_at is not None else None
+    evidence_age_seconds = int(max(0.0, (now - generated_at).total_seconds())) if generated_at is not None else None
+    effective_age_seconds = pulse_age_seconds if pulse_age_seconds is not None else file_age_seconds
+
     return {
         "path": str(status_path),
         "exists": True,
-        "fresh": age_seconds <= ENGINE_FRESH_SECONDS,
-        "age_seconds": age_seconds,
+        "fresh": effective_age_seconds <= ENGINE_FRESH_SECONDS,
+        "age_seconds": effective_age_seconds,
+        "file_age_seconds": file_age_seconds,
+        "evidence_age_seconds": evidence_age_seconds,
+        "reconciliation": projection.get("reconciliation") if isinstance(projection.get("reconciliation"), Mapping) else None,
         "payload": payload,
         "error": None,
     }

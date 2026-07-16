@@ -82,9 +82,15 @@ final class LocalStatusMonitor: @unchecked Sendable {
             "managed_sessions", "phase_ledger", "sessions_digest", "sessions_sequence",
             "spool_dead_count", "spool_pending_count", "storage_v2_outbox", "unmanaged_session_bindings",
         ]
-        let semantic = Dictionary(uniqueKeysWithValues: keys.compactMap { key in
+        var semantic = Dictionary(uniqueKeysWithValues: keys.compactMap { key in
             payload[key].map { (key, $0) }
         })
+        if let localProjection = payload["local_projection"] as? [String: Any] {
+            var projectionSemantic: [String: Any] = [:]
+            projectionSemantic["version"] = localProjection["version"]
+            projectionSemantic["reconciliation"] = localProjection["reconciliation"]
+            semantic["local_projection"] = projectionSemantic
+        }
         return try? JSONSerialization.data(withJSONObject: semantic, options: [.sortedKeys])
     }
 

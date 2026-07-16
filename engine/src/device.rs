@@ -141,6 +141,10 @@ struct NativeEngineStatus {
     fresh: bool,
     age_seconds: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    file_age_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    evidence_age_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_updated: Option<String>,
@@ -148,6 +152,8 @@ struct NativeEngineStatus {
     daemon_pid: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     is_offline: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reconciliation: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -531,6 +537,18 @@ fn native_fast_health_from_parts(
     error: Option<String>,
 ) -> NativeFastLocalHealth {
     let object = payload.as_ref().and_then(Value::as_object);
+    let local_projection = object
+        .and_then(|value| value.get("local_projection"))
+        .and_then(Value::as_object);
+    let pulse_age_seconds = local_projection
+        .and_then(|value| value.get("engine_pulse_at"))
+        .and_then(Value::as_str)
+        .and_then(rfc3339_age_seconds);
+    let evidence_age_seconds = local_projection
+        .and_then(|value| value.get("generated_at"))
+        .and_then(Value::as_str)
+        .and_then(rfc3339_age_seconds);
+    let effective_age_seconds = pulse_age_seconds.or(age_seconds);
     let is_offline = object
         .and_then(|value| value.get("is_offline"))
         .and_then(Value::as_bool);
@@ -554,17 +572,17 @@ fn native_fast_health_from_parts(
         reasons.push("engine_status_unreadable".to_string());
     } else if !exists {
         reasons.push("engine_status_missing".to_string());
-    } else if age_seconds
+    } else if effective_age_seconds
         .map(|age| age > ENGINE_STALE_SECONDS)
         .unwrap_or(false)
     {
         reasons.push("engine_status_stale".to_string());
-    } else if age_seconds
+    } else if effective_age_seconds
         .map(|age| age > ENGINE_FRESH_SECONDS)
         .unwrap_or(false)
     {
         reasons.push("engine_status_aging".to_string());
-    } else if exists && error.is_none() && age_seconds.is_none() {
+    } else if exists && error.is_none() && effective_age_seconds.is_none() {
         reasons.push("engine_status_age_unknown".to_string());
     }
     if is_offline == Some(true) {
@@ -617,10 +635,12 @@ fn native_fast_health_from_parts(
             exists,
             fresh: exists
                 && error.is_none()
-                && age_seconds
+                && effective_age_seconds
                     .map(|age| age <= ENGINE_FRESH_SECONDS)
                     .unwrap_or(false),
-            age_seconds,
+            age_seconds: effective_age_seconds,
+            file_age_seconds: age_seconds,
+            evidence_age_seconds,
             error,
             last_updated: object
                 .and_then(|value| value.get("last_updated"))
@@ -628,6 +648,9 @@ fn native_fast_health_from_parts(
                 .map(str::to_string),
             daemon_pid: object.and_then(|value| value.get("daemon_pid")).cloned(),
             is_offline,
+            reconciliation: local_projection
+                .and_then(|value| value.get("reconciliation"))
+                .cloned(),
         },
         transport,
         spool: NativeSpoolStatus {
@@ -642,6 +665,18 @@ fn native_fast_health_from_parts(
             .cloned(),
         build: object.and_then(|value| value.get("build")).cloned(),
     }
+}
+
+fn rfc3339_age_seconds(value: &str) -> Option<u64> {
+    let observed = chrono::DateTime::parse_from_rfc3339(value)
+        .ok()?
+        .with_timezone(&chrono::Utc);
+    Some(
+        chrono::Utc::now()
+            .signed_duration_since(observed)
+            .num_seconds()
+            .max(0) as u64,
+    )
 }
 
 fn collect_native_repair_plan(state_root: Option<&Path>) -> anyhow::Result<NativeRepairPlan> {
@@ -2805,6 +2840,63 @@ mod tests {
             true,
             Some(ENGINE_STALE_SECONDS + 1),
             Some(json!({})),
+            None,
+        );
+
+        assert_eq!(health.health_state, "broken");
+        assert!(!health.engine_status.fresh);
+        assert!(health.reasons.contains(&"engine_status_stale".to_string()));
+    }
+
+    #[test]
+    fn native_fast_local_health_prefers_projection_pulse_over_file_age() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let now = chrono::Utc::now().to_rfc3339();
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(ENGINE_STALE_SECONDS + 1),
+            Some(json!({
+                "local_projection": {
+                    "generated_at": "2026-01-01T00:00:00Z",
+                    "engine_pulse_at": now,
+                    "reconciliation": {"state": "reconciling", "reason": "local_status"}
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "healthy");
+        assert!(health.engine_status.fresh);
+        assert!(health.engine_status.age_seconds.unwrap_or_default() <= 1);
+        assert_eq!(
+            health
+                .engine_status
+                .reconciliation
+                .as_ref()
+                .and_then(|value| value.get("state"))
+                .and_then(Value::as_str),
+            Some("reconciling")
+        );
+    }
+
+    #[test]
+    fn native_fast_local_health_rejects_stale_projection_pulse_on_fresh_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let stale = (chrono::Utc::now() - chrono::Duration::seconds(180)).to_rfc3339();
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(1),
+            Some(json!({
+                "local_projection": {
+                    "generated_at": stale.clone(),
+                    "engine_pulse_at": stale,
+                    "reconciliation": {"state": "idle"}
+                }
+            })),
             None,
         );
 
