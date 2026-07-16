@@ -38,6 +38,7 @@ func makeSessionStateFacts(
         activityValidUntil: nil,
         controlOwnership: owned ? "owned" : "unowned",
         controlConnection: owned ? "connected" : "not_applicable",
+        startTurn: unavailable,
         sendInput: owned ? available : unavailable,
         interrupt: owned ? available : unavailable,
         terminate: owned ? available : unavailable,
@@ -144,6 +145,7 @@ private func canonicalFixtureFacts(
         access = ["key": "search_only", "label": "Search only", "tone": "search"]
     }
     let actions = [
+        "start_turn": action(false),
         "send_input": action(live && canReply),
         "interrupt": action(live),
         "terminate": action(live),

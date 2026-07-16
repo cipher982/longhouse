@@ -28,6 +28,7 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
     let activityValidUntil: String?
     let controlOwnership: String
     let controlConnection: String
+    let startTurn: SessionStateAction?
     let sendInput: SessionStateAction
     let interrupt: SessionStateAction
     let terminate: SessionStateAction
@@ -52,6 +53,7 @@ struct SessionStateFacts: Hashable, Codable, Sendable {
         activityValidUntil: nil,
         controlOwnership: "unowned",
         controlConnection: "unknown",
+        startTurn: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
         sendInput: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
         interrupt: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
         terminate: SessionStateAction(state: "unknown", reason: "missing_state_facts"),
