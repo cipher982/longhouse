@@ -279,7 +279,7 @@ pub struct ManagedSessionLease {
 }
 
 #[derive(Debug, Clone)]
-struct ManagedPhaseOverlay {
+pub(crate) struct ManagedPhaseOverlay {
     phase: Option<String>,
     tool_name: Option<String>,
     observed_at: Option<String>,
@@ -451,13 +451,12 @@ pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
 /// Build lease views from a pre-collected set of bridge observations.
 /// Kept pure (no fs/ps side effects) so the reaper and tests can share
 /// the same scan pass.
-pub fn leases_from_observations(
-    conn: &rusqlite::Connection,
+pub(crate) fn leases_from_observations(
+    phase_overlay: &HashMap<String, ManagedPhaseOverlay>,
     machine_id: &str,
     observations: &[CodexBridgeObservation],
     now: DateTime<Utc>,
 ) -> Vec<ManagedSessionLease> {
-    let phase_overlay = load_managed_phase_overlay(conn);
     let sequence = now.timestamp_millis().max(0) as u64;
     let observed_at = now.to_rfc3339();
     let mut leases = Vec::with_capacity(observations.len());
@@ -533,13 +532,12 @@ fn codex_bridge_observation_is_stopped(obs: &CodexBridgeObservation) -> bool {
 /// `managed_sessions` as a complete snapshot, so a previously leased session
 /// disappearing from this list becomes an explicit `process_gone` terminal
 /// signal there.
-pub fn leases_from_claude_channel_observations(
-    conn: &rusqlite::Connection,
+pub(crate) fn leases_from_claude_channel_observations(
+    phase_overlay: &HashMap<String, ManagedPhaseOverlay>,
     machine_id: &str,
     observations: &[ClaudeChannelObservation],
     now: DateTime<Utc>,
 ) -> Vec<ManagedSessionLease> {
-    let phase_overlay = load_managed_phase_overlay(conn);
     let sequence = now.timestamp_millis().max(0) as u64;
     let observed_at = now.to_rfc3339();
     let mut leases = Vec::with_capacity(observations.len());
@@ -596,13 +594,12 @@ pub fn leases_from_claude_channel_observations(
 /// `opencode serve` process plus Longhouse's private bridge state is the
 /// readiness observation. Dead state files are omitted from the complete
 /// heartbeat snapshot so the Runtime Host can detach the prior connection.
-pub fn leases_from_opencode_server_observations(
-    conn: &rusqlite::Connection,
+pub(crate) fn leases_from_opencode_server_observations(
+    phase_overlay: &HashMap<String, ManagedPhaseOverlay>,
     machine_id: &str,
     observations: &[OpenCodeServerObservation],
     now: DateTime<Utc>,
 ) -> Vec<ManagedSessionLease> {
-    let phase_overlay = load_managed_phase_overlay(conn);
     let sequence = now.timestamp_millis().max(0) as u64;
     let observed_at = now.to_rfc3339();
     let mut leases = Vec::with_capacity(observations.len());
@@ -654,13 +651,12 @@ pub fn leases_from_opencode_server_observations(
 /// socket present) is the readiness observation. Dead state files are omitted so
 /// the Runtime Host detaches the prior connection. There is no separate lease
 /// sidecar; the launcher's state file + socket IS the liveness signal.
-pub fn leases_from_cursor_helm_observations(
-    conn: &rusqlite::Connection,
+pub(crate) fn leases_from_cursor_helm_observations(
+    phase_overlay: &HashMap<String, ManagedPhaseOverlay>,
     machine_id: &str,
     observations: &[CursorHelmObservation],
     now: DateTime<Utc>,
 ) -> Vec<ManagedSessionLease> {
-    let phase_overlay = load_managed_phase_overlay(conn);
     let sequence = now.timestamp_millis().max(0) as u64;
     let observed_at = now.to_rfc3339();
     let mut leases = Vec::with_capacity(observations.len());
@@ -1409,7 +1405,9 @@ fn normalize_managed_phase(value: Option<&str>) -> Option<String> {
     }
 }
 
-fn load_managed_phase_overlay(conn: &rusqlite::Connection) -> HashMap<String, ManagedPhaseOverlay> {
+pub(crate) fn load_managed_phase_overlay(
+    conn: &rusqlite::Connection,
+) -> HashMap<String, ManagedPhaseOverlay> {
     let mut rows = HashMap::new();
     let Ok(mut stmt) = conn.prepare(
         "SELECT session_id, phase_kind, tool_name, phase_observed_at
@@ -1944,7 +1942,12 @@ mod tests {
             .unwrap();
 
         let obs = test_observation(session_id, "ws://127.0.0.1:45678/session");
-        let leases = leases_from_observations(&conn, "cinder", &[obs], now);
+        let leases = leases_from_observations(
+            &load_managed_phase_overlay(&conn),
+            "cinder",
+            &[obs],
+            now,
+        );
 
         assert_eq!(leases.len(), 1);
         let lease = &leases[0];
@@ -1969,7 +1972,12 @@ mod tests {
         obs.app_server_alive = true;
         obs.thread_id = Some("thread-detached-ui".to_string());
 
-        let leases = leases_from_observations(&conn, "cinder", &[obs], now);
+        let leases = leases_from_observations(
+            &load_managed_phase_overlay(&conn),
+            "cinder",
+            &[obs],
+            now,
+        );
 
         assert_eq!(leases.len(), 1);
         assert_eq!(leases[0].state, "attached");
@@ -1993,7 +2001,12 @@ mod tests {
         background.thread_id = Some("thread-background".to_string());
 
         let observations = vec![foreground, background];
-        let leases = leases_from_observations(&conn, "cinder", &observations, now);
+        let leases = leases_from_observations(
+            &load_managed_phase_overlay(&conn),
+            "cinder",
+            &observations,
+            now,
+        );
         let sessions =
             resolved_sessions_from_observations(&leases, &[], &observations, &[], &[], &[]);
 
@@ -2118,7 +2131,7 @@ mod tests {
         observation.health_ready = false;
 
         let leases = leases_from_opencode_server_observations(
-            &conn,
+            &load_managed_phase_overlay(&conn),
             "cinder",
             &[observation],
             chrono::Utc::now(),
@@ -2211,7 +2224,12 @@ mod tests {
         let mut detached = test_observation("detached-session", "ws://127.0.0.1:45680/session");
         detached.bridge_alive = false; // lock not held → detached
 
-        let leases = leases_from_observations(&conn, "cinder", &[degraded, detached], now);
+        let leases = leases_from_observations(
+            &load_managed_phase_overlay(&conn),
+            "cinder",
+            &[degraded, detached],
+            now,
+        );
 
         assert_eq!(leases.len(), 2);
         let degraded_lease = leases
@@ -2235,7 +2253,12 @@ mod tests {
         let mut obs = test_observation("provider-switch-session", "ws://127.0.0.1:45679/session");
         obs.thread_subscription_status = Some("provider_thread_switched".to_string());
 
-        let leases = leases_from_observations(&conn, "cinder", &[obs], now);
+        let leases = leases_from_observations(
+            &load_managed_phase_overlay(&conn),
+            "cinder",
+            &[obs],
+            now,
+        );
 
         assert_eq!(leases.len(), 1);
         assert_eq!(leases[0].state, "degraded");
@@ -2260,7 +2283,12 @@ mod tests {
 
         let live = test_observation("live-session", "ws://127.0.0.1:45682/session");
 
-        let leases = leases_from_observations(&conn, "cinder", &[stopped, live], now);
+        let leases = leases_from_observations(
+            &load_managed_phase_overlay(&conn),
+            "cinder",
+            &[stopped, live],
+            now,
+        );
 
         assert_eq!(leases.len(), 1);
         assert_eq!(leases[0].session_id, "live-session");
@@ -2318,7 +2346,12 @@ mod tests {
             claude_foreground_tui: false,
         };
 
-        let leases = leases_from_claude_channel_observations(&conn, "cinder", &[live, dead], now);
+        let leases = leases_from_claude_channel_observations(
+            &load_managed_phase_overlay(&conn),
+            "cinder",
+            &[live, dead],
+            now,
+        );
 
         assert_eq!(leases.len(), 1);
         let lease = leases

@@ -20,7 +20,7 @@ use crate::codex_bridge::BridgeStateFile;
 use crate::process_identity::{command_contains_basename, lstart_matches_recorded, ProcessFact};
 
 /// Raw, per-bridge signals captured by a single scan pass.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodexBridgeObservation {
     pub session_id: String,
     pub state_file: PathBuf,
@@ -110,16 +110,21 @@ pub fn collect_observations_from(
     state_dir: &Path,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<CodexBridgeObservation> {
+    let paths = state_file_paths(state_dir);
+    collect_observations_from_paths(&paths, process_facts)
+}
+
+pub(crate) fn collect_observations_from_paths(
+    paths: &[PathBuf],
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> Vec<CodexBridgeObservation> {
     let mut out = Vec::new();
-    let Ok(entries) = fs::read_dir(state_dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for path in paths {
+        let path = path.as_path();
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
             continue;
         }
-        let Ok(bytes) = fs::read(&path) else {
+        let Ok(bytes) = fs::read(path) else {
             continue;
         };
         let Ok(state) = serde_json::from_slice::<BridgeStateFile>(&bytes) else {
@@ -129,7 +134,7 @@ pub fn collect_observations_from(
         if session_id.is_empty() {
             continue;
         }
-        let bridge_alive = bridge_lock_is_held(&path);
+        let bridge_alive = bridge_lock_is_held(path);
         let has_tui_attachment = state.ws_url.as_deref().is_some_and(|ws| {
             process_facts
                 .values()
@@ -153,7 +158,7 @@ pub fn collect_observations_from(
 
         out.push(CodexBridgeObservation {
             session_id,
-            state_file: path,
+            state_file: path.to_path_buf(),
             schema_version: state.schema_version,
             cwd: Some(state.cwd),
             launch_mode: state.launch_mode,
@@ -176,6 +181,21 @@ pub fn collect_observations_from(
     }
     out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     out
+}
+
+fn state_file_paths(state_dir: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let Ok(entries) = fs::read_dir(state_dir) else {
+        return paths;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        paths.push(path);
+    }
+    paths
 }
 
 #[cfg(test)]
@@ -217,6 +237,57 @@ mod tests {
         fs::write(tmp.path().join("note.txt"), b"{}").unwrap();
         let obs = collect_observations_from(tmp.path(), &HashMap::new());
         assert!(obs.is_empty());
+    }
+
+    #[test]
+    fn current_row_scan_uses_only_retained_paths_and_refreshes_tui_evidence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let retained = tmp.path().join("retained.json");
+        let undiscovered = tmp.path().join("undiscovered.json");
+        for (path, session_id, ws_url) in [
+            (&retained, "retained-session", "ws://127.0.0.1:65001"),
+            (&undiscovered, "new-session", "ws://127.0.0.1:65002"),
+        ] {
+            fs::write(
+                path,
+                serde_json::json!({
+                    "schema_version": 1,
+                    "session_id": session_id,
+                    "cwd": "/tmp",
+                    "codex_bin": "codex",
+                    "ws_url": ws_url,
+                    "thread_id": "thread-1",
+                    "pid": 111,
+                    "status": "ready",
+                    "log_file": "/tmp/codex.log",
+                    "updated_at": "2026-06-30T00:00:00Z"
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+
+        let without_tui =
+            collect_observations_from_paths(std::slice::from_ref(&retained), &HashMap::new());
+        assert_eq!(without_tui.len(), 1);
+        assert_eq!(without_tui[0].session_id, "retained-session");
+        assert!(!without_tui[0].has_tui_attachment);
+
+        let tui = ProcessFact {
+            pid: 222,
+            tty: "ttys001".to_string(),
+            stat: "S+".to_string(),
+            lstart: "Tue Jun 30 00:00:00 2026".to_string(),
+            command: "codex --remote ws://127.0.0.1:65001".to_string(),
+            start_time: None,
+        };
+        let with_tui = collect_observations_from_paths(
+            std::slice::from_ref(&retained),
+            &HashMap::from([(222, tui)]),
+        );
+        assert_eq!(with_tui.len(), 1);
+        assert!(with_tui[0].has_tui_attachment);
+        assert_eq!(collect_observations_from(tmp.path(), &HashMap::new()).len(), 2);
     }
 
     #[test]

@@ -346,7 +346,7 @@ struct ManagedObservationScanResult {
     elapsed_ms: u64,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 struct ManagedObservationSnapshot {
     codex: Vec<managed_bridge_scan::CodexBridgeObservation>,
     claude: Vec<managed_claude_scan::ClaudeChannelObservation>,
@@ -1385,8 +1385,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             }
                             continue;
                         }
-                        last_managed_observations =
+                        let next_managed_observations =
                             ManagedObservationSnapshot::from_result(&result);
+                        let managed_observations_changed =
+                            next_managed_observations != last_managed_observations;
+                        last_managed_observations = next_managed_observations;
                         let managed_scan_partial = result.retained_stale_rows > 0;
                         refresh_managed_codex_transcript_paths(
                             &mut managed_codex_transcript_paths,
@@ -1410,7 +1413,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &mut unmanaged_binding_refresh_tasks,
                             config.shipper_config.db_path.clone(),
                             config.shipper_config.machine_name.clone(),
-                            if result.full_reconciliation {
+                            if result.full_reconciliation || managed_observations_changed {
                                 None
                             } else {
                                 last_unmanaged_session_bindings_refreshed_at
@@ -1987,12 +1990,13 @@ fn build_local_status_projection(
     payload.ship_scheduler = scheduler_snapshot;
     apply_archive_repair_control(&mut payload, &archive_control, archive_repair_mode);
     let now = chrono::Utc::now();
+    let phase_overlay = heartbeat::load_managed_phase_overlay(conn);
     payload.managed_sessions =
-        heartbeat::leases_from_observations(conn, machine_id, observations, now);
+        heartbeat::leases_from_observations(&phase_overlay, machine_id, observations, now);
     payload
         .managed_sessions
         .extend(heartbeat::leases_from_claude_channel_observations(
-            conn,
+            &phase_overlay,
             machine_id,
             claude_observations,
             now,
@@ -2000,7 +2004,7 @@ fn build_local_status_projection(
     payload
         .managed_sessions
         .extend(heartbeat::leases_from_opencode_server_observations(
-            conn,
+            &phase_overlay,
             machine_id,
             opencode_observations,
             now,
@@ -2008,7 +2012,7 @@ fn build_local_status_projection(
     payload
         .managed_sessions
         .extend(heartbeat::leases_from_cursor_helm_observations(
-            conn,
+            &phase_overlay,
             machine_id,
             cursor_observations,
             now,
@@ -2510,19 +2514,40 @@ fn maybe_start_managed_observation_scan(
             .collect();
         let process_inventory_ms = process_started.elapsed().as_millis() as u64;
         let codex_started = Instant::now();
-        let mut codex_observations = managed_bridge_scan::default_codex_bridge_state_dir()
-            .map(|state_dir| {
-                managed_bridge_scan::collect_observations_from(&state_dir, &process_facts)
-            })
-            .unwrap_or_default();
+        let mut codex_observations = if full_reconciliation {
+            managed_bridge_scan::default_codex_bridge_state_dir()
+                .map(|state_dir| {
+                    managed_bridge_scan::collect_observations_from(&state_dir, &process_facts)
+                })
+                .unwrap_or_default()
+        } else {
+            let paths = previous
+                .codex
+                .iter()
+                .map(|observation| observation.state_file.clone())
+                .collect::<Vec<_>>();
+            managed_bridge_scan::collect_observations_from_paths(&paths, &process_facts)
+        };
         let codex_elapsed_ms = codex_started.elapsed().as_millis() as u64;
 
         let claude_started = Instant::now();
-        let mut claude_observations = managed_claude_scan::default_claude_channel_state_dir()
-            .map(|state_dir| {
-                managed_claude_scan::collect_observations_from_processes(&state_dir, &process_facts)
-            })
-            .unwrap_or_default();
+        let mut claude_observations = if full_reconciliation {
+            managed_claude_scan::default_claude_channel_state_dir()
+                .map(|state_dir| {
+                    managed_claude_scan::collect_observations_from_processes(
+                        &state_dir,
+                        &process_facts,
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            let paths = previous
+                .claude
+                .iter()
+                .map(|observation| observation.state_file.clone())
+                .collect::<Vec<_>>();
+            managed_claude_scan::collect_observations_from_paths(&paths, &process_facts)
+        };
         let retained_codex =
             retain_existing_observations(&mut codex_observations, &previous.codex, |observation| {
                 &observation.state_file
@@ -2535,25 +2560,43 @@ fn maybe_start_managed_observation_scan(
         let claude_elapsed_ms = claude_started.elapsed().as_millis() as u64;
 
         let opencode_started = Instant::now();
-        let mut opencode_observations = managed_opencode_scan::default_opencode_server_state_dir()
-            .map(|state_dir| {
-                managed_opencode_scan::collect_observations_from_processes(
-                    &state_dir,
-                    &process_facts,
-                )
-            })
-            .unwrap_or_default();
+        let mut opencode_observations = if full_reconciliation {
+            managed_opencode_scan::default_opencode_server_state_dir()
+                .map(|state_dir| {
+                    managed_opencode_scan::collect_observations_from_processes(
+                        &state_dir,
+                        &process_facts,
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            let paths = previous
+                .opencode
+                .iter()
+                .map(|observation| observation.state_file.clone())
+                .collect::<Vec<_>>();
+            managed_opencode_scan::collect_observations_from_paths(&paths, &process_facts)
+        };
         let opencode_elapsed_ms = opencode_started.elapsed().as_millis() as u64;
 
         let cursor_started = Instant::now();
-        let mut cursor_observations = managed_cursor_helm_scan::default_cursor_helm_state_dir()
-            .map(|state_dir| {
-                managed_cursor_helm_scan::collect_observations_from_processes(
-                    &state_dir,
-                    &process_facts,
-                )
-            })
-            .unwrap_or_default();
+        let mut cursor_observations = if full_reconciliation {
+            managed_cursor_helm_scan::default_cursor_helm_state_dir()
+                .map(|state_dir| {
+                    managed_cursor_helm_scan::collect_observations_from_processes(
+                        &state_dir,
+                        &process_facts,
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            let paths = previous
+                .cursor
+                .iter()
+                .map(|observation| observation.state_file.clone())
+                .collect::<Vec<_>>();
+            managed_cursor_helm_scan::collect_observations_from_paths(&paths, &process_facts)
+        };
         let retained_opencode = retain_existing_observations(
             &mut opencode_observations,
             &previous.opencode,

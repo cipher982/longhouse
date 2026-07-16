@@ -96,16 +96,21 @@ pub(crate) fn collect_observations_from_processes(
     state_dir: &Path,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<OpenCodeServerObservation> {
+    let paths = state_file_paths(state_dir);
+    collect_observations_from_paths(&paths, process_facts)
+}
+
+pub(crate) fn collect_observations_from_paths(
+    paths: &[PathBuf],
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> Vec<OpenCodeServerObservation> {
     let mut candidates = Vec::new();
-    let Ok(entries) = fs::read_dir(state_dir) else {
-        return Vec::new();
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
+    for path in paths {
+        let path = path.as_path();
         if path.extension().and_then(|value| value.to_str()) != Some("json") {
             continue;
         }
-        let Ok(bytes) = fs::read(&path) else {
+        let Ok(bytes) = fs::read(path) else {
             continue;
         };
         let Ok(mut state) = serde_json::from_slice::<OpenCodeServerStateFile>(&bytes) else {
@@ -142,7 +147,7 @@ pub(crate) fn collect_observations_from_processes(
         let has_tui_attachment =
             opencode_attach_foreground(server_url.as_deref(), &provider_session_id, process_facts);
         candidates.push(OpenCodeCandidate {
-            state_file: path,
+            state_file: path.to_path_buf(),
             session_id,
             provider_session_id,
             server_url,
@@ -152,6 +157,27 @@ pub(crate) fn collect_observations_from_processes(
         });
     }
 
+    observations_from_candidates(candidates)
+}
+
+fn state_file_paths(state_dir: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let Ok(entries) = fs::read_dir(state_dir) else {
+        return paths;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
+        paths.push(path);
+    }
+    paths
+}
+
+fn observations_from_candidates(
+    candidates: Vec<OpenCodeCandidate>,
+) -> Vec<OpenCodeServerObservation> {
     // Health probes are independent localhost reads. Run viable candidates in
     // parallel so one wedged server costs at most one timeout for the whole
     // provider scan rather than N sequential timeouts.
@@ -404,6 +430,42 @@ mod tests {
         assert!(!obs[0].server_alive);
         assert!(!obs[0].health_ready);
         assert!(!obs[0].has_tui_attachment);
+    }
+
+    #[test]
+    fn current_row_scan_does_not_discover_unretained_state_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let retained = tmp.path().join("retained.json");
+        let undiscovered = tmp.path().join("undiscovered.json");
+        for (path, session_id) in [
+            (&retained, "retained-session"),
+            (&undiscovered, "new-session"),
+        ] {
+            fs::write(
+                path,
+                serde_json::json!({
+                    "schema_version": 1,
+                    "session_id": session_id,
+                    "provider_session_id": format!("provider-{session_id}"),
+                    "server_url": "http://127.0.0.1:9",
+                    "pid": 999999,
+                    "started_at": "2026-06-17T10:00:00Z",
+                    "updated_at": "2026-06-17T10:00:01Z"
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+
+        let observations =
+            collect_observations_from_paths(std::slice::from_ref(&retained), &HashMap::new());
+
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].session_id, "retained-session");
+        assert_eq!(
+            collect_observations_from_processes(tmp.path(), &HashMap::new()).len(),
+            2
+        );
     }
 
     #[test]
