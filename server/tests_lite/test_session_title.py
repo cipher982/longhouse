@@ -89,6 +89,10 @@ class TestResolveTimelineTitle:
             first_user_message=None,
             project="zerg",
             git_branch="main",
+            provider="codex",
+            user_messages=1,
+            assistant_messages=0,
+            tool_calls=0,
         )
         base.update(overrides)
         return resolve_timeline_title(**base)
@@ -118,6 +122,18 @@ class TestResolveTimelineTitle:
     def test_structured_fallback_last(self):
         assert self._resolve() == "zerg · main"
 
+    def test_zero_content_shell_is_explicitly_empty(self):
+        assert self._resolve(user_messages=0) == "zerg · Empty session"
+
+    def test_empty_shell_falls_back_to_provider(self):
+        assert self._resolve(project=None, user_messages=0) == "Codex · Empty session"
+
+    def test_non_user_content_is_not_mislabeled_empty(self):
+        assert self._resolve(user_messages=0, assistant_messages=1) == "zerg · main"
+
+    def test_anchor_wins_over_stale_zero_counts(self):
+        assert self._resolve(anchor_title="Diagnose Session Titles", user_messages=0) == "Diagnose Session Titles"
+
     def test_never_freezes_garbage_via_anchor(self):
         # An anchor that sanitizes to nothing must fall through, not render blank.
         out = self._resolve(anchor_title='"""', summary_title="Real Title")
@@ -146,6 +162,14 @@ class TestTitleProvenance:
             user_messages=1,
             title_retry_at=object(),
         ) == ("degraded", "project")
+
+    def test_empty_shell_awaits_input_without_title_debt(self):
+        assert resolve_title_provenance(
+            anchor_title=None,
+            first_user_message=None,
+            user_messages=0,
+            title_retry_at=None,
+        ) == ("awaiting_input", "project")
 
 
 class TestFreezeAnchorTitle:

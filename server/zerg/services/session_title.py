@@ -94,6 +94,12 @@ def structured_fallback_title(project: str | None, git_branch: str | None = None
     return "Untitled session"
 
 
+def empty_session_title(project: str | None, provider: str | None) -> str:
+    """Explicit headline for a durable shell with no transcript content."""
+    context = str(project or "").strip() or str(provider or "Session").strip().title()
+    return f"{context} · Empty session"
+
+
 def resolve_title_provenance(
     *,
     anchor_title: str | None,
@@ -122,6 +128,10 @@ def resolve_timeline_title(
     first_user_message: str | None,
     project: str | None,
     git_branch: str | None = None,
+    provider: str | None = None,
+    user_messages: int | None = None,
+    assistant_messages: int | None = None,
+    tool_calls: int | None = None,
 ) -> str:
     """Resolve the stable headline a client should render. Always non-empty.
 
@@ -141,6 +151,10 @@ def resolve_timeline_title(
     from_message = sanitize_title(first_user_message)
     if from_message:
         return from_message
+
+    counts_are_known = user_messages is not None and assistant_messages is not None and tool_calls is not None
+    if counts_are_known and not any((user_messages, assistant_messages, tool_calls)):
+        return empty_session_title(project, provider)
 
     return structured_fallback_title(project, git_branch)
 

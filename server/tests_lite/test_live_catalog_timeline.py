@@ -200,6 +200,60 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
     assert card.head.capabilities.can_send_input is True
 
 
+def test_live_catalog_timeline_labels_zero_content_shell_as_empty(tmp_path):
+    engine = make_live_engine(f"sqlite:///{tmp_path / 'empty-shell.db'}")
+    initialize_catalog_schema(engine)
+    LiveSession = make_sessionmaker(engine)
+    now = datetime.now(timezone.utc)
+    session_id = uuid4()
+    with LiveSession() as db:
+        db.add(
+            LiveSessionCatalog(
+                session_id=str(session_id),
+                provider="codex",
+                environment="production",
+                project="longhouse",
+                started_at=now - timedelta(days=3),
+                last_activity_at=now,
+                user_messages=0,
+                assistant_messages=0,
+                tool_calls=0,
+                launch_actor="human_ui",
+                launch_surface="ios",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            LiveTimelineCard(
+                session_id=str(session_id),
+                provider="codex",
+                environment="production",
+                project="longhouse",
+                started_at=now - timedelta(days=3),
+                last_activity_at=now,
+                user_messages=0,
+                assistant_messages=0,
+                tool_calls=0,
+                archive_state="legacy_hot",
+                launch_actor="human_ui",
+                launch_surface="ios",
+                derived_state="current",
+                parser_revision="test",
+                updated_at=now,
+            )
+        )
+        db.commit()
+
+        response = project_catalog_timeline_snapshot(_snapshot(db, _params()))
+
+    assert response.total == 1
+    [card] = response.sessions
+    assert card.head.timeline_title == "longhouse · Empty session"
+    assert card.head.title_state == "awaiting_input"
+    assert card.head.title_source == "project"
+
+
 def test_storage_v2_untitled_session_uses_first_prompt_as_pending_fallback(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'storage-title.db'}")
     initialize_catalog_schema(engine)

@@ -48,6 +48,11 @@ describe("getSessionCardText", () => {
       "New Codex session in zerg",
     );
   });
+
+  it("renders the server-owned empty-session projection verbatim", () => {
+    const text = getSessionCardText(makeSession({ timeline_title: "zerg · Empty session" }));
+    expect(text.title).toBe("zerg · Empty session");
+  });
 });
 
 describe("getDriftTitle", () => {

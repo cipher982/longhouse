@@ -5864,3 +5864,28 @@ def test_remote_ai_title_replaces_local_prompt_fallback(monkeypatch, tmp_path: P
     assert rows[0]["timeline_title"] == "Repair OpenCode Session Naming"
     assert rows[0]["title_state"] == "ready"
     assert rows[0]["title_source"] == "ai"
+
+
+def test_remote_empty_title_replaces_ambiguous_local_fallback(monkeypatch, tmp_path: Path):
+    rows = [{"session_id": "session-empty", "timeline_title": "g55"}]
+    monkeypatch.setattr(
+        local_health_service,
+        "_fetch_managed_session_title",
+        lambda runtime_url, token, session_id: {
+            "timeline_title": "g55 · Empty session",
+            "summary_title": "g55 · Empty session",
+            "title_state": "awaiting_input",
+            "title_source": "project",
+        },
+    )
+
+    local_health_service._enrich_managed_session_titles(
+        tmp_path,
+        rows,
+        runtime_url="https://demo.longhouse.test",
+        token="test-token",
+    )
+
+    assert rows[0]["timeline_title"] == "g55 · Empty session"
+    assert rows[0]["title_state"] == "awaiting_input"
+    assert rows[0]["title_source"] == "project"

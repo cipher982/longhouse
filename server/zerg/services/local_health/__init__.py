@@ -382,13 +382,20 @@ def _fetch_managed_session_title(runtime_url: str, token: str, session_id: str) 
     )
     with urllib.request.urlopen(request, timeout=_MANAGED_SESSION_TITLE_FETCH_TIMEOUT_SECONDS) as response:
         payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, Mapping) or payload.get("title_source") != "ai" or payload.get("title_state") != "ready":
+    if not isinstance(payload, Mapping):
+        return {}
+    title_state = _normalize_optional_string(payload.get("title_state"))
+    title_source = _normalize_optional_string(payload.get("title_source"))
+    if (title_state, title_source) not in {("ready", "ai"), ("awaiting_input", "project")}:
+        return {}
+    timeline_title = _normalize_optional_string(payload.get("timeline_title"))
+    if timeline_title is None:
         return {}
     return {
-        "timeline_title": _normalize_optional_string(payload.get("timeline_title")),
-        "summary_title": _normalize_optional_string(payload.get("timeline_title")),
-        "title_state": "ready",
-        "title_source": "ai",
+        "timeline_title": timeline_title,
+        "summary_title": timeline_title,
+        "title_state": title_state,
+        "title_source": title_source,
     }
 
 
