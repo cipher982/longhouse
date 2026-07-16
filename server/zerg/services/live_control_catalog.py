@@ -96,7 +96,10 @@ def load_live_control_session_snapshot(session_id: UUID | str, *, owner_id: int 
     from zerg.services.catalog_read_gateway import session_snapshot
 
     try:
-        result = session_snapshot(str(session_id), owner_id=owner_id)
+        if owner_id is None:
+            result = session_snapshot(str(session_id))
+        else:
+            result = session_snapshot(str(session_id), owner_id=owner_id)
     except CatalogReadError:
         logger.warning("Catalog control snapshot failed for session %s", session_id, exc_info=True)
         return None
