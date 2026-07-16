@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+from dataclasses import replace
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -132,9 +133,16 @@ class KernelSessionCapabilities:
     can_tail_output: bool
     can_resume: bool
 
+    # Durable turn execution is independent of an active connection. Console
+    # uses these fields while Helm continues to use the connection grants above.
+    turn_state: str = "idle"
+    can_start_turn: bool = False
+    start_turn_blocked_by: Optional[str] = None
+    can_interrupt_active_turn: bool = False
+
     # When live_control_available is False, this gives the reason: e.g.
     # "no_run", "connection_released", "process_ended", "imported_only".
-    staleness_reason: Optional[str]
+    staleness_reason: Optional[str] = None
 
     # Stable identity for the acquired connection lease. Health renewals move
     # freshness clocks but must not manufacture a new lease generation.
@@ -174,6 +182,40 @@ class KernelSessionCapabilities:
     @property
     def home_label(self) -> Optional[str]:
         return "On this Mac" if (self.live_control_available or self.host_reattach_available) else None
+
+
+def project_console_turn_capabilities(
+    capabilities: KernelSessionCapabilities,
+    *,
+    closed: bool,
+    execution_target_available: bool,
+    turn_state: str | None,
+) -> KernelSessionCapabilities:
+    """Project Console's durable turn action without manufacturing a live lease."""
+
+    normalized_state = str(turn_state or "idle").strip().lower()
+    if normalized_state not in {"idle", "queued", "starting", "active", "draining"}:
+        normalized_state = "idle"
+    blocked_by = "session_closed" if closed else None
+    if blocked_by is None and not execution_target_available:
+        blocked_by = "execution_target_missing"
+    can_start = blocked_by is None
+    return replace(
+        capabilities,
+        control_label="console",
+        live_control_available=False,
+        host_reattach_available=False,
+        observe_only=False,
+        search_only=False,
+        can_send_input=can_start,
+        can_resume=False,
+        control_owned=True,
+        staleness_reason=blocked_by,
+        turn_state=normalized_state,
+        can_start_turn=can_start,
+        start_turn_blocked_by=blocked_by,
+        can_interrupt_active_turn=(normalized_state in {"starting", "active", "draining"} and capabilities.can_interrupt),
+    )
 
 
 def _connection_capability_count(conn: SessionConnection) -> int:
@@ -586,6 +628,7 @@ def project_capabilities_bulk(db: Session, *, session_ids: list) -> dict:
 
 __all__ = [
     "KernelSessionCapabilities",
+    "project_console_turn_capabilities",
     "project_capabilities_from_rows",
     "project_session_capabilities",
     "project_capabilities_bulk",

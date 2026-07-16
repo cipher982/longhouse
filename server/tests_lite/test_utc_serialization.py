@@ -84,6 +84,7 @@ def test_session_response_model():
                 "ownership": "unowned",
                 "connection": "not_applicable",
                 "actions": {
+                    "start_turn": {"state": "unavailable", "reason": "not_console"},
                     "send_input": {"state": "unavailable", "reason": "observe_only"},
                     "interrupt": {"state": "unavailable", "reason": "observe_only"},
                     "terminate": {"state": "unavailable", "reason": "observe_only"},

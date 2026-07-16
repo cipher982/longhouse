@@ -70,6 +70,10 @@ extension APISessionCapabilitiesResponse {
             composerPlaceholder: composerPlaceholder,
             composerDisabledReason: composerDisabledReason,
             sendDisabledReason: sendDisabledReason,
+            turnState: turnState,
+            canStartTurn: canStartTurn,
+            startTurnBlockedBy: startTurnBlockedBy,
+            canInterruptActiveTurn: canInterruptActiveTurn,
             attachImages: attachImages,
             stalenessReason: stalenessReason
         )

@@ -112,6 +112,8 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     assert first["turn"]["run_id"]
     assert second["turn"]["state"] == "queued"
     assert second["turn"]["run_id"] is None
+    facts = store.read_session(session_id=str(session_id), owner_id=1)["facts"]
+    assert facts["latest_console_turn"]["state"] == "starting"
     active = store.update_console_turn(
         data={
             "turn_id": first["turn"]["turn_id"],

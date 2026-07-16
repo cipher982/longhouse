@@ -420,6 +420,10 @@ struct SessionCapabilities: Codable, Sendable {
     let composerPlaceholder: String?
     let composerDisabledReason: String?
     let sendDisabledReason: String?
+    let turnState: String?
+    let canStartTurn: Bool?
+    let startTurnBlockedBy: String?
+    let canInterruptActiveTurn: Bool?
     let attachImages: Bool?
     let stalenessReason: String?
 }

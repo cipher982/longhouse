@@ -6898,6 +6898,7 @@ def _assemble_session_facts(
     control_lease_table = LiveControlLease.__table__
     live_preview_table = LiveSessionLivePreview.__table__
     alias_table = LiveSessionThreadAlias.__table__
+    console_turn_table = LiveConsoleTurn.__table__
     storage_table = StorageSession.__table__
     tombstone_table = LiveSessionTombstone.__table__
 
@@ -6972,6 +6973,21 @@ def _assemble_session_facts(
             .order_by(connection_table.c.acquired_at.asc(), connection_table.c.id.asc())
         ).mappings():
             connections_by_run.setdefault(str(row["run_id"]), []).append(row)
+
+    console_turn_by_session: dict[str, Any] = {}
+    turn_priority = {"queued": 1, "starting": 2, "active": 3, "draining": 4}
+    for row in connection.execute(
+        select(console_turn_table)
+        .where(
+            console_turn_table.c.session_id.in_(session_ids),
+            console_turn_table.c.state.in_(tuple(turn_priority)),
+        )
+        .order_by(console_turn_table.c.created_at.asc(), console_turn_table.c.id.asc())
+    ).mappings():
+        session_id = str(row["session_id"])
+        current = console_turn_by_session.get(session_id)
+        if current is None or turn_priority[str(row["state"])] > turn_priority[str(current["state"])]:
+            console_turn_by_session[session_id] = row
 
     control_leases_by_session: dict[str, list[Any]] = {}
     live_preview_by_session: dict[str, Any] = {}
@@ -7059,6 +7075,10 @@ def _assemble_session_facts(
                     _row_dto(row, fields=_CONNECTION_FIELDS, text_limits=_CONNECTION_TEXT_LIMITS)
                     for row in _bounded_connections(connections_by_run.get(run_id, []), observed_at=observed_at)
                 ],
+                "latest_console_turn": _row_dto(
+                    console_turn_by_session.get(session_id),
+                    fields=frozenset({"id", "session_id", "thread_id", "run_id", "state", "created_at", "updated_at"}),
+                ),
                 **(
                     {
                         "control_leases": [
@@ -7230,6 +7250,9 @@ _THREAD_FIELDS = frozenset(
         "id",
         "session_id",
         "provider",
+        "device_id",
+        "cwd",
+        "provider_config_json",
         "parent_thread_id",
         "parent_event_id",
         "branch_kind",

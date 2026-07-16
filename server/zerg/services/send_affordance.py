@@ -14,7 +14,7 @@ from typing import Literal
 if TYPE_CHECKING:
     from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 
-InputMode = Literal["live", "offline", "read_only"]
+InputMode = Literal["live", "console", "offline", "read_only"]
 InputIntent = Literal["auto", "steer", "queue", "none"]
 SendDisabledReason = Literal["session_closed", "control_offline", "input_not_supported", "read_only"]
 
@@ -67,6 +67,8 @@ def project_send_affordance(
     lifecycle: str | None = None,
     is_executing: bool = False,
     host_state: str | None = None,
+    can_start_turn: bool = False,
+    start_turn_blocked_by: str | None = None,
 ) -> SendAffordance:
     """Project the canonical typed-input affordance for one session.
 
@@ -75,6 +77,24 @@ def project_send_affordance(
     """
 
     provider_session = _provider_session_label(provider_label)
+
+    if capability_flags.control_label == "console":
+        if can_start_turn:
+            return SendAffordance(
+                input_mode="console",
+                default_input_intent="auto",
+                composer_enabled=True,
+                composer_placeholder="Message this coding agent",
+                composer_disabled_reason=None,
+                send_disabled_reason=None,
+            )
+        reason = start_turn_blocked_by or "read_only"
+        reason_copy = "This session is closed." if reason == "session_closed" else "Console execution is unavailable."
+        return _disabled(
+            input_mode="read_only",
+            reason_code="session_closed" if reason == "session_closed" else "input_not_supported",
+            reason_copy=reason_copy,
+        )
 
     if lifecycle == "closed":
         return _disabled(

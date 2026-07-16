@@ -4896,7 +4896,7 @@ export interface components {
         /** ConsoleTurnCreateResponse */
         ConsoleTurnCreateResponse: {
             /** Turn Id */
-            turn_id: number;
+            turn_id: number | string;
             /** Run Id */
             run_id?: string | null;
             /** State */
@@ -8170,6 +8170,30 @@ export interface components {
              */
             can_resume: boolean;
             /**
+             * Turn State
+             * @description Durable Console turn state; independent of provider process identity
+             * @default idle
+             * @enum {string}
+             */
+            turn_state: "idle" | "queued" | "starting" | "active" | "draining";
+            /**
+             * Can Start Turn
+             * @description True when Console can accept a normal message now
+             * @default false
+             */
+            can_start_turn: boolean;
+            /**
+             * Start Turn Blocked By
+             * @description Stable reason Console cannot accept a normal message
+             */
+            start_turn_blocked_by?: ("session_closed" | "machine_offline" | "adapter_unavailable" | "execution_target_missing") | null;
+            /**
+             * Can Interrupt Active Turn
+             * @description True when the active Console turn can be interrupted
+             * @default false
+             */
+            can_interrupt_active_turn: boolean;
+            /**
              * Attach Images
              * @description True when the session can accept image attachments on input (codex_app_server only)
              * @default false
@@ -8230,6 +8254,7 @@ export interface components {
         };
         /** SessionControlActions */
         SessionControlActions: {
+            start_turn: components["schemas"]["SessionActionAvailability"];
             send_input: components["schemas"]["SessionActionAvailability"];
             interrupt: components["schemas"]["SessionActionAvailability"];
             terminate: components["schemas"]["SessionActionAvailability"];

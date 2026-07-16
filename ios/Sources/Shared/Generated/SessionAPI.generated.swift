@@ -39,6 +39,10 @@ struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
     let canTerminate: Bool?
     let canTailOutput: Bool?
     let canResume: Bool?
+    let turnState: String?
+    let canStartTurn: Bool?
+    let startTurnBlockedBy: String?
+    let canInterruptActiveTurn: Bool?
     let attachImages: Bool?
     let canContinue: Bool?
     let continueTargets: [APISessionContinueTarget]?
@@ -199,6 +203,7 @@ struct APISessionActionAvailability: Codable, Hashable, Sendable {
 }
 
 struct APISessionControlActions: Codable, Hashable, Sendable {
+    let startTurn: APISessionActionAvailability
     let sendInput: APISessionActionAvailability
     let interrupt: APISessionActionAvailability
     let terminate: APISessionActionAvailability

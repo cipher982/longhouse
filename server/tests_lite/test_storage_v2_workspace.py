@@ -200,7 +200,10 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
     assert result is not None
     assert result["control_only"] is True
     assert result["session"]["origin_kind"] == "console"
-    assert result["session"]["capabilities"]["composer_enabled"] is True
+    assert result["session"]["capabilities"]["composer_enabled"] is True, tuple(
+        result["session"]["capabilities"].get(key)
+        for key in ("control_label", "can_start_turn", "start_turn_blocked_by", "can_send_input", "input_mode")
+    )
     assert result["session"]["capabilities"]["can_send_input"] is True
     assert result["session"]["capabilities"]["input_mode"] == "console"
     assert result["projection"]["items"] == []

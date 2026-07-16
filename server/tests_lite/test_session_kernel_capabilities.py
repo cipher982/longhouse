@@ -21,6 +21,7 @@ from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.agents.kernel_capabilities import project_console_turn_capabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
 from zerg.services.managed_provider_contracts import contract_for_provider
@@ -122,6 +123,36 @@ def test_thread_but_no_run(db):
     assert caps.thread_id is not None
     assert caps.run_id is None
     assert caps.staleness_reason == "no_run"
+
+
+@pytest.mark.parametrize(
+    ("closed", "target", "turn_state", "can_start", "blocked_by"),
+    [
+        (False, True, None, True, None),
+        (False, True, "queued", True, None),
+        (False, True, "active", True, None),
+        (True, True, None, False, "session_closed"),
+        (False, False, None, False, "execution_target_missing"),
+    ],
+)
+def test_console_turn_capability_truth_table(db, closed, target, turn_state, can_start, blocked_by):
+    session = _make_session(db)
+    db.commit()
+    base = project_session_capabilities(db, session_id=session.id)
+
+    caps = project_console_turn_capabilities(
+        base,
+        closed=closed,
+        execution_target_available=target,
+        turn_state=turn_state,
+    )
+
+    assert caps.control_label == "console"
+    assert caps.live_control_available is False
+    assert caps.turn_state == (turn_state or "idle")
+    assert caps.can_start_turn is can_start
+    assert caps.can_send_input is can_start
+    assert caps.start_turn_blocked_by == blocked_by
 
 
 def test_run_but_no_connection(db):

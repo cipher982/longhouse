@@ -19,6 +19,7 @@ from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveTimelineCard
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_capabilities_from_rows
+from zerg.services.agents.kernel_capabilities import project_console_turn_capabilities
 from zerg.services.catalog_facts import decode_catalog_datetime
 from zerg.services.catalog_facts import hydrate_catalog_row
 from zerg.services.catalog_read_gateway import session_snapshot
@@ -33,7 +34,6 @@ from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_DISPLAY_WINDOW
 from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_title import sanitize_title
-from zerg.services.session_views import SessionCapabilitiesResponse
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import build_compat_runtime_display_response
@@ -92,6 +92,14 @@ def project_catalog_session_facts(
         connections=connections,
         now=observed_at,
     )
+    if str(session.origin_kind or "").strip() == "console":
+        latest_console_turn = facts.get("latest_console_turn")
+        capabilities = project_console_turn_capabilities(
+            capabilities,
+            closed=session.closed_at is not None,
+            execution_target_available=bool(thread is not None and str(thread.device_id or "").strip() and str(thread.cwd or "").strip()),
+            turn_state=(latest_console_turn.get("state") if isinstance(latest_console_turn, dict) else None),
+        )
     return _response_from_catalog(
         session,
         card,
@@ -121,34 +129,6 @@ def _title_source(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
     title = sanitize_title(session.anchor_title or card.summary_title or session.summary_title, max_words=6)
     prompt = sanitize_title(card.first_user_message_preview or session.first_user_message_preview, max_words=6)
     return "prompt" if title and title == prompt else "ai"
-
-
-def _project_console_composer(
-    capabilities: SessionCapabilitiesResponse,
-    *,
-    session: LiveSessionCatalog,
-    closed: bool,
-) -> SessionCapabilitiesResponse:
-    if session.origin_kind != "console" or closed:
-        return capabilities
-    return capabilities.model_copy(
-        update={
-            "can_send_input": True,
-            "can_queue_next_input": True,
-            "composer_enabled": True,
-            "composer_placeholder": "Message this coding agent",
-            "composer_disabled_reason": None,
-            "send_disabled_reason": None,
-            "input_mode": "console",
-            "default_input_intent": "auto",
-            "display_label": "Send",
-            "display_detail": "Messages start or queue a turn on the selected machine.",
-            "display_tone": "success",
-            "control_label": "console",
-            "observe_only": False,
-            "search_only": False,
-        }
-    )
 
 
 def _pending_response_from_catalog(
@@ -193,11 +173,6 @@ def _pending_response_from_catalog(
         now=now,
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state)
-    capabilities = _project_console_composer(
-        capabilities,
-        session=session,
-        closed=session_state.disposition.state == "closed",
-    )
     launch_state = readiness.launch_state
     execution_lifetime = readiness.execution_lifetime
     return response.model_copy(
@@ -331,11 +306,6 @@ def _response_from_catalog(
         kernel_capabilities=capability_flags,
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state)
-    capabilities = _project_console_composer(
-        capabilities,
-        session=session,
-        closed=session_state.disposition.state == "closed",
-    )
     title = _title(session, card)
     return SessionResponse(
         id=str(session.session_id),

@@ -632,6 +632,10 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 composerPlaceholder: composerPlaceholder,
                 composerDisabledReason: nil,
                 sendDisabledReason: nil,
+                turnState: "idle",
+                canStartTurn: true,
+                startTurnBlockedBy: nil,
+                canInterruptActiveTurn: false,
                 attachImages: false,
                 stalenessReason: nil
             ),

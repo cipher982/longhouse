@@ -219,6 +219,8 @@ def build_session_capabilities_response(
         lifecycle=lifecycle,
         is_executing=_runtime_is_executing(runtime_display=runtime_display, runtime_facts=runtime_facts),
         host_state=availability_host_state,
+        can_start_turn=bool(kernel_capabilities.can_start_turn) if kernel_capabilities is not None else False,
+        start_turn_blocked_by=(kernel_capabilities.start_turn_blocked_by if kernel_capabilities is not None else None),
     )
     launch_state = launch_lifecycle.state if launch_lifecycle is not None else None
     launch_failed = launch_state in {"launch_failed", "launch_orphaned"}
@@ -256,6 +258,12 @@ def build_session_capabilities_response(
         can_terminate=(bool(kernel_capabilities.can_terminate) and control_available if kernel_capabilities is not None else False),
         can_tail_output=(kernel_capabilities.can_tail_output if kernel_capabilities is not None else False),
         can_resume=(bool(kernel_capabilities.can_resume) and not lifecycle_closed if kernel_capabilities is not None else False),
+        turn_state=(kernel_capabilities.turn_state if kernel_capabilities is not None else "idle"),
+        can_start_turn=(bool(kernel_capabilities.can_start_turn) and control_available if kernel_capabilities is not None else False),
+        start_turn_blocked_by=(kernel_capabilities.start_turn_blocked_by if kernel_capabilities is not None else None),
+        can_interrupt_active_turn=(
+            bool(kernel_capabilities.can_interrupt_active_turn) and control_available if kernel_capabilities is not None else False
+        ),
         # can_continue means "launch a fresh managed process from this
         # transcript" — a CLOSED-session operation by definition. Do NOT gate it
         # on lifecycle_closed; that defeated the whole resume feature (the button
@@ -534,24 +542,35 @@ def project_compat_capabilities_from_state(
     actions = session_state.control.actions
     access = session_state.presentation.access
     access_key = access.key if access is not None else None
-    send_available = actions.send_input.state == "available"
+    console = session_state.mode == "console"
+    send_available = (actions.start_turn if console else actions.send_input).state == "available"
+    if console and session_state.disposition.state == "closed":
+        send_available = False
     reattach_available = actions.reattach.state == "available"
     owned = session_state.control.ownership == "owned"
     compatibility_label = access.label if access is not None else "Read only"
     if access is None and session_state.presentation.primary is not None:
         if session_state.presentation.primary.key in {"starting", "launch_failed"}:
             compatibility_label = session_state.presentation.primary.label
+    if console and send_available:
+        compatibility_label = "Send"
     return capabilities.model_copy(
         update={
-            "live_control_available": send_available,
+            "live_control_available": False if console else send_available,
             "host_reattach_available": reattach_available,
             "reply_to_live_session_available": send_available,
+            "can_queue_next_input": send_available,
             "display_label": compatibility_label,
-            "display_tone": access.tone if access is not None else "neutral",
-            "input_mode": "live" if send_available else ("offline" if owned else "read_only"),
+            "display_detail": (
+                "Messages start or queue a turn on the selected machine." if console and send_available else capabilities.display_detail
+            ),
+            "display_tone": "success" if console and send_available else access.tone if access is not None else "neutral",
+            "input_mode": "console" if console and send_available else "live" if send_available else ("offline" if owned else "read_only"),
             "composer_enabled": send_available,
             "control_label": (
-                "live"
+                "console"
+                if console
+                else "live"
                 if access_key == "live_control"
                 else "reattach"
                 if access_key == "reattach"
@@ -562,6 +581,14 @@ def project_compat_capabilities_from_state(
             "observe_only": access_key == "observe_only",
             "search_only": access_key == "search_only",
             "can_send_input": send_available,
+            "can_start_turn": actions.start_turn.state == "available",
+            "start_turn_blocked_by": (
+                "session_closed"
+                if console and session_state.disposition.state == "closed"
+                else actions.start_turn.reason
+                if console and actions.start_turn.state != "available"
+                else capabilities.start_turn_blocked_by
+            ),
             "can_interrupt": actions.interrupt.state == "available",
             "can_terminate": actions.terminate.state == "available",
             "can_resume": actions.resume.state == "available" or reattach_available,
@@ -757,6 +784,15 @@ class SessionCapabilitiesResponse(BaseModel):
     can_terminate: bool = Field(False, description="Kernel: connection grants terminate capability and is currently live")
     can_tail_output: bool = Field(False, description="Kernel: connection grants output tailing capability")
     can_resume: bool = Field(False, description="Kernel: connection can be resumed (live or reattach)")
+    turn_state: Literal["idle", "queued", "starting", "active", "draining"] = Field(
+        "idle",
+        description="Durable Console turn state; independent of provider process identity",
+    )
+    can_start_turn: bool = Field(False, description="True when Console can accept a normal message now")
+    start_turn_blocked_by: Optional[Literal["session_closed", "machine_offline", "adapter_unavailable", "execution_target_missing"]] = (
+        Field(None, description="Stable reason Console cannot accept a normal message")
+    )
+    can_interrupt_active_turn: bool = Field(False, description="True when the active Console turn can be interrupted")
     attach_images: bool = Field(
         False,
         description="True when the session can accept image attachments on input (codex_app_server only)",

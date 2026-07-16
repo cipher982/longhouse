@@ -87,6 +87,7 @@ class SessionActionAvailability(_FrozenModel):
 
 
 class SessionControlActions(_FrozenModel):
+    start_turn: SessionActionAvailability
     send_input: SessionActionAvailability
     interrupt: SessionActionAvailability
     terminate: SessionActionAvailability
@@ -174,10 +175,11 @@ def _mode(
     capabilities: KernelSessionCapabilities,
 ) -> SessionMode:
     raw_surface = getattr(session, "launch_surface", None)
+    origin_kind = _clean(getattr(session, "origin_kind", None))
     raw_execution_home = getattr(session, "execution_home", None)
     surface = _clean(getattr(raw_surface, "value", raw_surface))
     execution_home = _clean(getattr(raw_execution_home, "value", raw_execution_home))
-    if execution_lifetime == "one_shot" or surface in {"web", "ios", "api"}:
+    if origin_kind == "console" or execution_lifetime == "one_shot" or surface in {"web", "ios", "api"}:
         return "console"
     has_owned_kernel_connection = bool(
         capabilities.connection_id is not None
@@ -350,7 +352,18 @@ def _control(
 
     fallback = _clean(capabilities.staleness_reason)
     reattach_available = bool(capabilities.host_reattach_available and not capabilities.live_control_available)
+    start_turn_blocked_by = capabilities.start_turn_blocked_by
+    if capabilities.can_start_turn and liveness.host.state in {"offline", "stale"}:
+        start_turn_blocked_by = "machine_offline"
     actions = SessionControlActions(
+        start_turn=(
+            SessionActionAvailability(state="available")
+            if capabilities.can_start_turn and start_turn_blocked_by is None
+            else SessionActionAvailability(
+                state="unavailable",
+                reason=start_turn_blocked_by or "not_console",
+            )
+        ),
         send_input=_operation(
             available=bool(capabilities.can_send_input and capabilities.live_control_available),
             ownership=ownership,
@@ -502,7 +515,7 @@ def _primary(
 
 
 def _access(*, control: SessionControlFacts, transcript: SessionTranscriptFacts) -> SessionPresentationLabel | None:
-    live_actions = (control.actions.send_input, control.actions.interrupt, control.actions.terminate)
+    live_actions = (control.actions.start_turn, control.actions.send_input, control.actions.interrupt, control.actions.terminate)
     if control.ownership == "owned" and any(action.state == "available" for action in live_actions):
         return SessionPresentationLabel(
             key="live_control",
