@@ -6925,6 +6925,7 @@ def _assemble_session_facts(
         for row in connection.execute(
             select(live_session_table.c.session_id, live_session_table.c.owner_id).where(live_session_table.c.session_id.in_(session_ids))
         ).mappings()
+        if row["owner_id"] is not None
     }
     for session_id, row in storage_rows.items():
         if row.get("owner_id") is not None:
