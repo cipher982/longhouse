@@ -7,11 +7,13 @@ from sqlalchemy.orm import Session
 
 import zerg.services.session_workspace as session_workspace_module
 import zerg.services.storage_v2_workspace as workspace_module
+import zerg.routers.session_chat as session_chat_module
 from zerg.catalogd.schema import create_catalog_engine, initialize_catalog_schema
 from zerg.catalogd.store import CatalogStore
 from zerg.models.live_store import LiveUser
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
+from zerg.services.live_control_catalog import load_live_control_session_snapshot
 
 
 class _Catalog:
@@ -183,6 +185,10 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
         "zerg.services.live_catalog_timeline.session_snapshot",
         lambda candidate, *, owner_id=None: store.read_session(session_id=candidate, owner_id=owner_id),
     )
+    monkeypatch.setattr(
+        "zerg.services.catalog_read_gateway.session_snapshot",
+        lambda candidate: store.read_session(session_id=candidate),
+    )
 
     result = await workspace_module.build_storage_v2_workspace(
         session_id=session_id,
@@ -199,6 +205,27 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
     assert result["session"]["capabilities"]["input_mode"] == "console"
     assert result["projection"]["items"] == []
     assert result["projection"]["total"] == 0
+
+    control_session = load_live_control_session_snapshot(session_id)
+    assert control_session is not None
+    assert control_session.origin_kind == "console"
+
+    dispatched = {}
+
+    async def enqueue_console(**kwargs):
+        dispatched.update(kwargs)
+        return SimpleNamespace(turn_id=uuid4(), state="active", error=None)
+
+    monkeypatch.setattr(session_chat_module, "enqueue_catalog_console_turn", enqueue_console)
+    response = await session_chat_module._create_catalog_session_input_response(
+        source_session=control_session,
+        owner_id=1,
+        body=session_chat_module.SessionInputRequest(text="first message", client_request_id="first-send"),
+        db=None,
+    )
+    assert response.outcome == "sent"
+    assert dispatched["session_id"] == session_id
+    assert dispatched["message"] == "first message"
 
     assert (
         await workspace_module.build_storage_v2_workspace(

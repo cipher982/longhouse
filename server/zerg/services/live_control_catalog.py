@@ -44,6 +44,7 @@ class LiveControlSession:
     loop_mode: str
     permission_mode: str
     primary_thread_id: UUID | None
+    origin_kind: str | None = None
     catalog_facts: dict | None = None
 
 
@@ -81,6 +82,7 @@ def load_live_control_session(db: Session, session_id: UUID | str) -> LiveContro
         ended_at=row.ended_at,
         closed_at=row.closed_at,
         close_reason=str(row.close_reason).strip() if row.close_reason else None,
+        origin_kind=str(row.origin_kind).strip() if row.origin_kind else None,
         loop_mode=str(row.loop_mode or "assist"),
         permission_mode=str(row.permission_mode or "bypass"),
         primary_thread_id=thread_id,
@@ -121,6 +123,7 @@ def load_live_control_session_snapshot(session_id: UUID | str) -> LiveControlSes
         ended_at=_datetime(catalog.get("ended_at")),
         closed_at=_datetime(catalog.get("closed_at")),
         close_reason=str(catalog["close_reason"]) if catalog.get("close_reason") else None,
+        origin_kind=str(catalog["origin_kind"]) if catalog.get("origin_kind") else None,
         loop_mode=str(catalog.get("loop_mode") or "assist"),
         permission_mode=str(catalog.get("permission_mode") or "bypass"),
         primary_thread_id=UUID(str(primary_thread_id)) if primary_thread_id else None,
