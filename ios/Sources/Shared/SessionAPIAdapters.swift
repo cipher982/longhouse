@@ -107,7 +107,7 @@ private extension APISessionStateFacts {
             activityValidUntil: activity.validUntil,
             controlOwnership: control.ownership,
             controlConnection: control.connection,
-            startTurn: control.actions.startTurn.sessionStateAction,
+            startTurn: control.actions.startTurn?.sessionStateAction,
             sendInput: control.actions.sendInput.sessionStateAction,
             interrupt: control.actions.interrupt.sessionStateAction,
             terminate: control.actions.terminate.sessionStateAction,

@@ -87,7 +87,9 @@ class SessionActionAvailability(_FrozenModel):
 
 
 class SessionControlActions(_FrozenModel):
-    start_turn: SessionActionAvailability
+    start_turn: SessionActionAvailability = Field(
+        default_factory=lambda: SessionActionAvailability(state="unavailable", reason="not_console")
+    )
     send_input: SessionActionAvailability
     interrupt: SessionActionAvailability
     terminate: SessionActionAvailability

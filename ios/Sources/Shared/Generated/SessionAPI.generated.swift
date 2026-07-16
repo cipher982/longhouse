@@ -203,7 +203,7 @@ struct APISessionActionAvailability: Codable, Hashable, Sendable {
 }
 
 struct APISessionControlActions: Codable, Hashable, Sendable {
-    let startTurn: APISessionActionAvailability
+    let startTurn: APISessionActionAvailability?
     let sendInput: APISessionActionAvailability
     let interrupt: APISessionActionAvailability
     let terminate: APISessionActionAvailability

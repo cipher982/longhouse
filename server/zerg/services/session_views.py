@@ -544,6 +544,14 @@ def project_compat_capabilities_from_state(
     send_available = (actions.start_turn if console else actions.send_input).state == "available"
     if console and session_state.disposition.state == "closed":
         send_available = False
+    start_turn_blocked_by = capabilities.start_turn_blocked_by
+    if console and actions.start_turn.state != "available":
+        candidate = actions.start_turn.reason
+        start_turn_blocked_by = (
+            candidate
+            if candidate in {"session_closed", "machine_offline", "adapter_unavailable", "execution_target_missing"}
+            else "adapter_unavailable"
+        )
     reattach_available = actions.reattach.state == "available"
     owned = session_state.control.ownership == "owned"
     compatibility_label = access.label if access is not None else "Read only"
@@ -581,11 +589,7 @@ def project_compat_capabilities_from_state(
             "can_send_input": send_available,
             "can_start_turn": actions.start_turn.state == "available",
             "start_turn_blocked_by": (
-                "session_closed"
-                if console and session_state.disposition.state == "closed"
-                else actions.start_turn.reason
-                if console and actions.start_turn.state != "available"
-                else capabilities.start_turn_blocked_by
+                "session_closed" if console and session_state.disposition.state == "closed" else start_turn_blocked_by
             ),
             "can_interrupt": actions.interrupt.state == "available",
             "can_terminate": actions.terminate.state == "available",

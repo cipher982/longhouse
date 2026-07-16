@@ -8254,7 +8254,7 @@ export interface components {
         };
         /** SessionControlActions */
         SessionControlActions: {
-            start_turn: components["schemas"]["SessionActionAvailability"];
+            start_turn?: components["schemas"]["SessionActionAvailability"];
             send_input: components["schemas"]["SessionActionAvailability"];
             interrupt: components["schemas"]["SessionActionAvailability"];
             terminate: components["schemas"]["SessionActionAvailability"];

@@ -14,6 +14,7 @@ from zerg.catalogd.client import CatalogRemoteError
 from zerg.catalogd.client import CatalogUnavailable
 from zerg.config import get_settings
 from zerg.routers.agents_storage_v2 import read_storage_v2_session_events_page
+from zerg.services.catalog_read_gateway import CatalogReadError
 from zerg.services.catalogd_supervisor import get_catalogd_client
 from zerg.services.live_catalog_timeline import read_live_catalog_session
 
@@ -172,11 +173,14 @@ async def build_storage_v2_workspace(
         if get_settings().testing:
             return None
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.")
-    session, _provider_alias, session_commit_seq = await asyncio.to_thread(
-        read_live_catalog_session,
-        session_id,
-        owner_id=owner_id,
-    )
+    try:
+        session, _provider_alias, session_commit_seq = await asyncio.to_thread(
+            read_live_catalog_session,
+            session_id,
+            owner_id=owner_id,
+        )
+    except CatalogReadError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
     if session is None:
         return None
     try:

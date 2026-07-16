@@ -14,6 +14,7 @@ from zerg.models.live_store import LiveUser
 from zerg.models.live_store import LiveSession
 from zerg.models.live_store import LiveSessionCatalog
 from zerg.services.live_control_catalog import load_live_control_session_snapshot
+from zerg.services.catalog_read_gateway import CatalogReadError
 
 
 class _Catalog:
@@ -109,6 +110,25 @@ async def test_storage_v2_workspace_returns_none_for_legacy_session(monkeypatch)
         )
         is None
     )
+
+
+@pytest.mark.asyncio
+async def test_storage_v2_workspace_maps_catalog_read_outage_to_503(monkeypatch):
+    monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: _Catalog())
+
+    def unavailable(*_args, **_kwargs):
+        raise CatalogReadError("catalog_unavailable", "catalog unavailable")
+
+    monkeypatch.setattr(workspace_module, "read_live_catalog_session", unavailable)
+    with pytest.raises(workspace_module.HTTPException) as exc_info:
+        await workspace_module.build_storage_v2_workspace(
+            session_id=uuid4(),
+            owner_id=42,
+            branch_mode="head",
+            limit=50,
+        )
+    assert exc_info.value.status_code == 503
+
 
 @pytest.mark.asyncio
 async def test_storage_v2_workspace_keeps_live_control_only_session_openable(monkeypatch):
