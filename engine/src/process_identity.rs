@@ -217,4 +217,14 @@ mod tests {
         let parsed = parse_lstart("Mon Apr 27 10:15:23 2026").unwrap();
         assert_eq!(parsed.date_naive().to_string(), "2026-04-27");
     }
+
+    #[test]
+    fn targeted_process_identity_matches_full_inventory() {
+        let pid = std::process::id();
+        let targeted = try_collect_process_fact(pid).expect("targeted process identity");
+        let inventory = try_collect_process_facts_by_pid().expect("full process inventory");
+        let full = inventory.get(&pid).expect("current process in inventory");
+
+        assert_eq!(targeted, *full);
+    }
 }
