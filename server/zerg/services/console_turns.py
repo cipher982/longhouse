@@ -104,7 +104,7 @@ def enqueue_console_turn(
     message: str,
     client_request_id: str,
 ) -> EnqueuedConsoleTurn:
-    """Atomically create or replay one durable input + queued turn."""
+    """Compatibility-only cold writer used when the live catalog is disabled."""
 
     normalized_message = str(message or "").strip()
     normalized_request_id = str(client_request_id or "").strip()
@@ -298,6 +298,7 @@ async def dispatch_next_console_turn(
     thread_id: UUID,
     registry=None,
 ) -> ConsoleTurnDispatch:
+    """Compatibility-only cold dispatcher used when the live catalog is disabled."""
     """Start the oldest queued turn through the selected machine adapter."""
 
     from zerg.services.machine_control_channel import get_machine_control_channel_registry

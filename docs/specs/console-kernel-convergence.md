@@ -84,44 +84,44 @@ Console behavior from `origin_kind`, process liveness, or raw provider support.
 
 ### Phase 1 — one Console write service
 
-- [ ] Route `POST /api/agents/sessions/{session_id}/turns` through
+- [x] Route `POST /api/agents/sessions/{session_id}/turns` through
       `enqueue_catalog_console_turn` when catalog mode is enabled.
-- [ ] Share response mapping and typed error mapping with the browser input
-      veneer.
-- [ ] Keep the cold writer only behind non-catalog mode for compatibility tests.
-- [ ] Prove create followed immediately by a machine-auth first turn without
+- [x] Use the shared typed catalog turn service from both auth veneers; each
+      veneer maps its own response model.
+- [x] Keep the cold writer only behind non-catalog mode for compatibility tests.
+- [x] Prove create followed immediately by a machine-auth first turn without
       archive materialization.
-- [ ] Prove owner isolation and idempotent replay at the service boundary.
+- [x] Prove owner isolation and idempotent replay at the service boundary.
 
 ### Phase 2 — mode and action truth
 
-- [ ] Make owner-scoped catalog session facts the routing authority.
-- [ ] Add the Console turn-action fields to the canonical kernel/API
+- [x] Make owner-scoped catalog session facts the routing authority.
+- [x] Add the Console turn-action fields to the canonical kernel/API
       capability projection.
-- [ ] Derive Console action availability from closed state, execution target,
+- [x] Derive Console action availability from closed state, execution target,
       current turn ownership and machine adapter reachability.
-- [ ] Delete `_project_console_composer` and derive presentation once.
-- [ ] Add a truth table covering idle, queued, active, closed, offline,
+- [x] Delete `_project_console_composer` and derive presentation once.
+- [x] Add a truth table covering idle, queued, active, closed, offline,
       missing-target and unsupported-adapter Console sessions.
 
 ### Phase 3 — one workspace shape
 
-- [ ] Read catalog identity/capabilities first for every storage-v2 workspace.
-- [ ] Attach archived events when storage exists; otherwise attach an empty
+- [x] Read catalog identity/capabilities first for every storage-v2 workspace.
+- [x] Attach archived events when storage exists; otherwise attach an empty
       event page with `control_only=true`.
-- [ ] Build the workspace envelope once so archive convergence cannot change
+- [x] Build the workspace envelope once so archive convergence cannot change
       session identity or action availability.
-- [ ] Prove the same session/capabilities before and after archive projection.
+- [x] Prove the same session/capabilities before and after archive projection.
 
 ### Phase 4 — freeze compatibility and shrink routing context
 
-- [ ] Mark cold Console enqueue/dispatch as non-catalog compatibility only and
+- [x] Mark cold Console enqueue/dispatch as non-catalog compatibility only and
       migrate production-route coverage to catalog tests.
-- [ ] Replace `LiveControlSession` as a mode-routing authority with an explicit,
+- [x] Replace `LiveControlSession` as a mode-routing authority with an explicit,
       required catalog mode read.
-- [ ] Shrink the dispatcher context only where that deletes duplicated builders;
+- [x] Shrink the dispatcher context only where that deletes duplicated builders;
       do not rewrite Helm control mechanics in this epic.
-- [ ] Add grep/contract gates preventing new production Console writes through
+- [x] Add contract tests preventing production Console writes through
       the cold store or post-projection capability promotion.
 
 ## Acceptance Gate
