@@ -138,7 +138,9 @@ final class MenuBarStatusController: NSObject {
         }
 
         button.image = MenuBarBrandIcon.image(attentionColor: statusItemAttentionColor())
-        let tooltip = statusItemAttentionLabel() ?? store.snapshot?.statusItemSummaryLabel ?? "Longhouse"
+        let tooltip = statusItemAttentionLabel()
+            ?? store.snapshot?.menuBarPresentation(relativeTo: Date()).headline
+            ?? "Longhouse"
         button.toolTip = tooltip
         button.setAccessibilityLabel(tooltip)
     }

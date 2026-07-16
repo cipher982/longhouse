@@ -228,19 +228,6 @@ public struct MenuBarPanelView: View {
         snapshot.menuBarPresentation(relativeTo: presentationDate)
     }
 
-    private var isHealthy: Bool {
-        snapshot.parsedSeverity == .green && snapshot.healthState.lowercased() == "healthy"
-    }
-
-    /// Yellow is usually a transient condition that Longhouse is already
-    /// watching or repairing. Keep that state calm and task-oriented; reserve
-    /// the diagnostic table and repair controls for states that need action.
-    private var usesCompactWatchingSurface: Bool {
-        snapshot.parsedSeverity == .yellow
-            && !snapshot.isSetupRequired
-            && !snapshot.isInstallLocationBlocked
-    }
-
     private var displayHeadline: String {
         presentation.headline
     }
@@ -297,39 +284,6 @@ public struct MenuBarPanelView: View {
                 subtleChip(title: restartChip, tint: .yellow)
             }
         }
-    }
-
-    private var headerMinimalSummary: some View {
-        HStack(spacing: 8) {
-            headerSummaryStatusPill(
-                title: snapshot.ambientStatusLabel.uppercased(),
-                color: snapshot.parsedSeverity.accentColor,
-                identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
-            )
-
-            headerSummaryLabel("Updated \(snapshot.snapshotAgeCompactLabel(relativeTo: presentationDate))")
-        }
-    }
-
-    private var headerTelemetryRailSummary: some View {
-        HeaderTelemetryRail(
-            statusTitle: snapshot.ambientStatusLabel.uppercased(),
-            statusColor: snapshot.parsedSeverity.accentColor,
-            updatedLabel: snapshot.snapshotAgeCompactLabel(relativeTo: presentationDate),
-            metrics: headerTelemetryItems,
-            statusIdentifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
-        )
-    }
-
-    private var headerSessionRibbonSummary: some View {
-        HeaderSessionRibbon(
-            statusTitle: snapshot.ambientStatusLabel.uppercased(),
-            statusColor: snapshot.parsedSeverity.accentColor,
-            updatedLabel: snapshot.snapshotAgeCompactLabel(relativeTo: presentationDate),
-            tokens: headerSessionTokens,
-            managedSummary: snapshot.managedSummaryLabel,
-            statusIdentifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
-        )
     }
 
     private var headerControlGroup: some View {
@@ -435,53 +389,6 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    private var healthySurface: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            PanelSection(title: "Right now") {
-                MissionReadoutGrid(readouts: primaryReadouts)
-
-                sectionDivider
-
-                Text(currentSupportLine)
-                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.78)
-            }
-
-            sectionDivider.padding(.horizontal, 4)
-
-            managedRuntimeSurface
-
-            if !unmanagedActivityEntries.isEmpty {
-                sectionDivider.padding(.horizontal, 4)
-
-                PanelSection(title: "Also on this Mac", trailing: snapshot.liveUnmanagedSummaryLabel) {
-                    UnmanagedActivityList(entries: unmanagedActivityEntries)
-
-                    sectionDivider
-
-                    HStack(alignment: .center, spacing: 8) {
-                        Text("Live now")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.secondary)
-                            .tracking(0.55)
-
-                        Spacer(minLength: 8)
-
-                        Text(snapshot.liveUnmanagedProviderMixLabel)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.82)
-                            .monospacedDigit()
-                    }
-                }
-            }
-        }
-    }
-
     private var managedRuntimeSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !needsUserManagedSessionEntries.isEmpty {
@@ -548,63 +455,6 @@ public struct MenuBarPanelView: View {
             .map { managedSessionEntry(for: $0) }
     }
 
-    private var primaryReadouts: [PanelReadout] {
-        [
-            PanelReadout(
-                label: "Last ship",
-                value: snapshot.lastShipCompactLabel(relativeTo: presentationDate),
-                detail: "Shipped",
-                tone: snapshot.parsedSeverity.accentColor
-            ),
-            PanelReadout(
-                label: "Recent",
-                value: snapshot.sessionsRecentLabel,
-                detail: snapshot.recentWindowCompactLabel,
-                tone: snapshot.providerCountsRecent.isEmpty ? .primary : snapshot.parsedSeverity.accentColor
-            ),
-            PanelReadout(
-                label: "Today",
-                value: snapshot.sessionsTodayLabel,
-                detail: "Archived"
-            ),
-            PanelReadout(
-                label: "Queue",
-                value: queueBoardValue,
-                detail: queueBoardDetail,
-                tone: queueBoardTone
-            ),
-        ]
-    }
-
-    private var currentSupportLine: String {
-        [
-            snapshot.launchValueLabel,
-            "Heartbeat \(snapshot.engineAgeLabel(relativeTo: presentationDate))",
-            "\(snapshot.diskFreeCompactLabel) free",
-        ]
-            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0 != "Unavailable" && $0 != "-" }
-            .joined(separator: " · ")
-    }
-
-    private var headerTelemetryItems: [HeaderRailMetric] {
-        [
-            HeaderRailMetric(label: "Ship", value: snapshot.lastShipCompactLabel(relativeTo: presentationDate), tint: snapshot.parsedSeverity.accentColor),
-            HeaderRailMetric(label: "Recent", value: snapshot.sessionsRecentLabel, tint: snapshot.providerCountsRecent.isEmpty ? .primary : snapshot.parsedSeverity.accentColor),
-            HeaderRailMetric(label: "Managed", value: "\(snapshot.currentManagedSessions.count)", tint: managedChipTint),
-            HeaderRailMetric(label: "Queue", value: queueBoardValue, tint: queueBoardTone),
-        ]
-    }
-
-    private var headerSessionTokens: [HeaderSessionToken] {
-        snapshot.currentManagedSessions.enumerated().map { index, session in
-            HeaderSessionToken(
-                id: "\(index)-\((session.provider ?? "unknown").lowercased())",
-                provider: session.provider ?? "unknown",
-                attention: session.menuBarAttentionKind
-            )
-        }
-    }
-
     /// Live provider CLIs Longhouse does not own on this Mac right now.
     /// This is explicit process truth, not recent transcript activity.
     private var unmanagedActivityEntries: [UnmanagedActivityEntry] {
@@ -619,24 +469,6 @@ public struct MenuBarPanelView: View {
                 age: snapshot.compactTimestampLabel(process.startedAt, relativeTo: presentationDate)
             )
         }
-    }
-
-    private var foregroundManagedSessionEntries: [ManagedSessionEntry] {
-        snapshot.currentManagedSessions
-            .filter { !$0.isConsoleManagedSession && !$0.needsManagedSessionAttention }
-            .map { managedSessionEntry(for: $0) }
-    }
-
-    private var consoleManagedSessionEntries: [ManagedSessionEntry] {
-        snapshot.currentManagedSessions
-            .filter { $0.isConsoleManagedSession }
-            .map { managedSessionEntry(for: $0) }
-    }
-
-    private var attentionManagedSessionEntries: [ManagedSessionEntry] {
-        snapshot.currentManagedSessions
-            .filter { $0.needsManagedSessionAttention }
-            .map { managedSessionEntry(for: $0) }
     }
 
     private func managedSessionEntry(for session: ManagedSessionSnapshot) -> ManagedSessionEntry {
@@ -671,19 +503,6 @@ public struct MenuBarPanelView: View {
                 detail: orphanBridgeDetail(bridge),
                 stopAction: orphanBridgeStopAction(for: bridge)
             )
-        }
-    }
-
-    private var attentionManagedBulkStopTargets: [ManagedStopTarget] {
-        attentionManagedSessionEntries.compactMap { entry -> ManagedStopTarget? in
-            guard entry.stopAction != nil,
-                  isIdleBulkStopCandidate(entry),
-                  let sessionID = entry.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !sessionID.isEmpty
-            else {
-                return nil
-            }
-            return ManagedStopTarget(sessionID: sessionID, provider: entry.provider)
         }
     }
 
@@ -761,23 +580,6 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    private func attentionManagedStopAllAction() -> (() -> Void)? {
-        let targets = attentionManagedBulkStopTargets
-        guard !targets.isEmpty else {
-            return nil
-        }
-
-        return {
-            setFeedback(
-                actionSink.handleStopManagedBridges(
-                    targets: targets,
-                    label: "managed sessions needing attention",
-                    snapshot: snapshot
-                )
-            )
-        }
-    }
-
     private func backgroundBridgeStopAllAction() -> (() -> Void)? {
         let targets = backgroundBridgeBulkStopTargets
         guard !targets.isEmpty else {
@@ -792,15 +594,6 @@ public struct MenuBarPanelView: View {
                     snapshot: snapshot
                 )
             )
-        }
-    }
-
-    private func isIdleBulkStopCandidate(_ entry: ManagedSessionEntry) -> Bool {
-        switch entry.attention {
-        case .idle, .detached:
-            return true
-        case .working, .needsYou, .blocked, .degraded, .unknown:
-            return false
         }
     }
 
@@ -921,197 +714,16 @@ public struct MenuBarPanelView: View {
         return parts.joined(separator: " · ")
     }
 
-    private var queueBoardValue: String {
-        let dead = Int(snapshot.spoolDeadLabel) ?? 0
-        let pending = (Int(snapshot.spoolPendingLabel) ?? 0) + snapshot.storagePendingCount
-        let blocked = snapshot.storageBlockedCount
-        let outbox = snapshot.outboxCount
-
-        if dead > 0 || blocked > 0 {
-            return "\(dead + blocked)"
-        }
-        let waiting = pending + outbox
-        if waiting > 0 {
-            return "\(waiting)"
-        }
-        return "Clear"
-    }
-
-    private var queueBoardDetail: String {
-        let dead = Int(snapshot.spoolDeadLabel) ?? 0
-        if snapshot.storageBlockedCount > 0 {
-            return "Source conflicts"
-        }
-        if dead > 0 {
-            return "Dead letters"
-        }
-        let pending = (Int(snapshot.spoolPendingLabel) ?? 0) + snapshot.storagePendingCount
-        if pending > 0 || snapshot.outboxCount > 0 {
-            return "Waiting"
-        }
-        return "Transport"
-    }
-
-    private var queueBoardTone: Color {
-        let dead = Int(snapshot.spoolDeadLabel) ?? 0
-        let pending = (Int(snapshot.spoolPendingLabel) ?? 0) + snapshot.storagePendingCount
-        if dead > 0 || snapshot.storageBlockedCount > 0 {
-            return .red
-        }
-        if pending > 0 || snapshot.outboxCount > 0 {
-            return pipelineColor
-        }
-        return .primary
-    }
-
-    private var blockerSection: some View {
-        PanelSection(title: "Blocking Signals") {
-            TelemetryTable(entries: [
-                PanelTelemetryEntry(
-                    label: "Service",
-                    value: snapshot.serviceStatusTitle,
-                    valueColor: snapshot.serviceStatusLabel == "running" ? snapshot.parsedSeverity.accentColor : .red,
-                    labelIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.title,
-                    valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.value
-                ),
-                PanelTelemetryEntry(label: "Last ship", value: snapshot.lastShipValueLabel(relativeTo: presentationDate)),
-                PanelTelemetryEntry(label: "Queue", value: snapshot.pipelineValueLabel, valueColor: pipelineColor),
-                PanelTelemetryEntry(
-                    label: "Launch",
-                    value: snapshot.launchValueLabel,
-                    labelIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.label,
-                    valueIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.value
-                ),
-            ])
-        }
-    }
-
-    private var watchingSection: some View {
-        PanelSection(title: "What’s happening") {
-            Text(snapshot.attentionSummaryLabel)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.primary)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Section.next.tag(0))
-
-            sectionDivider
-
-            HStack(spacing: 8) {
-                Label(snapshot.lastShipValueLabel(relativeTo: presentationDate), systemImage: "arrow.up.circle")
-                Spacer(minLength: 8)
-                Label(snapshot.pipelineValueLabel, systemImage: "tray")
-            }
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(Color.secondary)
-            .monospacedDigit()
-        }
-    }
-
     private var watchingActions: some View {
-        HStack(spacing: 8) {
-            Button {
-                perform(.openLonghouse)
-            } label: {
-                Label("Open Longhouse", systemImage: "arrow.up.forward.square")
-                    .frame(maxWidth: .infinity)
-            }
-            .modifier(SecondaryActionButtonStyle())
-            .controlSize(.regular)
-            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLonghouse)
-
-            Button {
-                perform(.openLogs)
-            } label: {
-                Label("Logs", systemImage: "doc.text.magnifyingglass")
-                    .frame(maxWidth: .infinity)
-            }
-            .modifier(SecondaryActionButtonStyle())
-            .controlSize(.regular)
-            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLogs)
+        Button {
+            perform(.openLogs)
+        } label: {
+            Label("Open Logs", systemImage: "doc.text.magnifyingglass")
+                .frame(maxWidth: .infinity)
         }
-    }
-
-    private var runbookSection: some View {
-        PanelSection(title: "Next") {
-            Text(snapshot.attentionSummaryLabel)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.primary)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Section.next.tag(0))
-
-            if !snapshot.reasons.isEmpty {
-                sectionDivider
-
-                AdaptiveTagGrid {
-                    ForEach(Array(snapshot.reasons.prefix(4).enumerated()), id: \.offset) { index, reason in
-                        Text(snapshotReason(reason))
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(snapshot.parsedSeverity.accentColor)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .background(
-                                Capsule(style: .continuous)
-                                    .fill(snapshot.parsedSeverity.accentColor.opacity(0.12))
-                            )
-                            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Section.reasons.tag(index))
-                    }
-                }
-            }
-        }
-    }
-
-    private var issueActions: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Button {
-                    perform(primaryIssueAction)
-                } label: {
-                    Label(primaryInstallActionTitle, systemImage: primaryInstallActionSymbol)
-                        .frame(maxWidth: .infinity)
-                }
-                .modifier(ProminentActionButtonStyle(tint: primaryInstallActionTint))
-                .controlSize(.large)
-                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.repair)
-                .accessibilityLabel(Text(primaryInstallActionTitle))
-
-                if !snapshot.isSetupRequired && !snapshot.isInstallLocationBlocked {
-                    Button {
-                        perform(.openLonghouse)
-                    } label: {
-                        Label("Open", systemImage: "arrow.up.forward.square")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .modifier(SecondaryActionButtonStyle())
-                    .controlSize(.large)
-                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLonghouse)
-                    .accessibilityLabel(Text("Open Longhouse"))
-                }
-            }
-
-            HStack(spacing: 8) {
-                Button {
-                    perform(.openLogs)
-                } label: {
-                    Label("Logs", systemImage: "doc.text.magnifyingglass")
-                        .frame(maxWidth: .infinity)
-                }
-                .modifier(SecondaryActionButtonStyle())
-                .controlSize(.regular)
-                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLogs)
-                .accessibilityLabel(Text("Logs"))
-
-                Button {
-                    perform(.copyDiagnostics)
-                } label: {
-                    Label("Copy JSON", systemImage: "doc.on.doc")
-                        .frame(maxWidth: .infinity)
-                }
-                .modifier(SecondaryActionButtonStyle())
-                .controlSize(.regular)
-                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.copyDiagnostics)
-                .accessibilityLabel(Text("Copy JSON"))
-            }
-        }
+        .modifier(SecondaryActionButtonStyle())
+        .controlSize(.regular)
+        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLogs)
     }
 
     private var healthyToolsMenu: some View {
@@ -1130,6 +742,9 @@ public struct MenuBarPanelView: View {
                 setFeedback(actionSink.handle(.copyDiagnostics, snapshot: snapshot))
             }
             .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.copyDiagnostics)
+
+            Text("Version \(snapshot.installedVersionLabel)")
+                .foregroundStyle(Color.secondary)
 
             Divider()
 
@@ -1182,48 +797,6 @@ public struct MenuBarPanelView: View {
             .foregroundStyle(Color.secondary)
             .frame(width: 26, height: 26)
             .contentShape(Rectangle())
-    }
-
-    private var pipelineColor: Color {
-        if snapshot.spoolDeadLabel != "0" {
-            return .red
-        }
-        if snapshot.spoolPendingLabel != "0" || snapshot.outboxCount > 0 {
-            return .orange
-        }
-        return snapshot.parsedSeverity == .green ? Color.primary : snapshot.parsedSeverity.accentColor
-    }
-
-    private var managedChipTint: Color {
-        if let severity = snapshot.managedAttentionSeverity {
-            return severity.accentColor
-        }
-        return Color.secondary
-    }
-
-    private var primaryInstallActionTitle: String {
-        if snapshot.isInstallLocationBlocked {
-            return "Quit"
-        }
-        return snapshot.isSetupRequired ? "Set Up" : "Repair"
-    }
-
-    private var primaryInstallActionSymbol: String {
-        if snapshot.isInstallLocationBlocked {
-            return "xmark.circle"
-        }
-        return snapshot.isSetupRequired ? "square.and.arrow.down" : "wrench.and.screwdriver"
-    }
-
-    private var primaryInstallActionTint: Color {
-        if snapshot.isInstallLocationBlocked {
-            return .gray
-        }
-        return snapshot.isSetupRequired ? .blue : .red
-    }
-
-    private var primaryIssueAction: HarnessAction {
-        snapshot.isInstallLocationBlocked ? .quitApp : .repairInstall
     }
 
     private func perform(_ action: HarnessAction) {

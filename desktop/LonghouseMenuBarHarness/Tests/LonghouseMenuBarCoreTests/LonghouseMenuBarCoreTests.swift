@@ -177,6 +177,77 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func youngImmutablePendingWorkStaysNormal() {
+        let snapshot = presentationSnapshot(sessions: [], storagePending: 2)
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.facts.first(where: { $0.id == "durable-upload" })?.value == "2 pending")
+    }
+
+    @Test
+    func transientOfflineRetryPreservesNormalHeadlineAndNamesTransportFact() {
+        let snapshot = presentationSnapshot(reasons: ["reported_offline"], sessions: [], isOffline: true)
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.facts.first(where: { $0.id == "transport" })?.value == "Offline")
+    }
+
+    @Test
+    func staleStatusPromotesUnknownInsteadOfRepair() {
+        let snapshot = presentationSnapshot(reasons: ["engine_status_stale"], sessions: [], engineFresh: false)
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .unavailable)
+        #expect(presentation.headline == "Current local status unavailable")
+    }
+
+    @Test
+    func stoppedAgentWithRetainedWorkPromotesRepair() {
+        let snapshot = presentationSnapshot(
+            reasons: ["service_stopped"], sessions: [], storagePending: 1,
+            serviceStatus: "stopped"
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .repair)
+        #expect(presentation.facts.first(where: { $0.id == "local-agent" })?.value == "Stopped")
+    }
+
+    @Test
+    func archiveDeadLettersAreInspectableNotRepair() {
+        let snapshot = presentationSnapshot(reasons: ["archive_dead_lettered"], sessions: [])
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .inspect)
+        #expect(presentation.headline == "Historical archive needs review")
+    }
+
+    @Test
+    func archivePendingWhileIdleDoesNotBadge() {
+        let snapshot = presentationSnapshot(
+            reasons: ["archive_backlog_pending"], sessions: [],
+            archive: ArchiveBacklogStatus(
+                state: "blocked", mode: "trickle", pendingRanges: 2,
+                pendingPaths: 2, pendingSessions: 2, pendingBytes: 4096,
+                deadRanges: 0, deadBytes: 0
+            )
+        )
+
+        let presentation = snapshot.menuBarPresentation(relativeTo: Date(timeIntervalSince1970: 0))
+
+        #expect(presentation.promotion == .normal)
+        #expect(presentation.backgroundActivity?.contains("2 ranges") == true)
+        #expect(!presentation.needsStatusItemBadge)
+    }
+
+    @Test
     func localRefreshPreservesRealtimeTitleProjection() {
         let titled = ManagedSessionSnapshot(
             sessionId: "session-1", provider: "codex", workspaceLabel: "zerg",
@@ -2321,28 +2392,32 @@ private func presentationSnapshot(
     reasons: [String] = [],
     sessions: [ManagedSessionSnapshot],
     archive: ArchiveBacklogStatus? = nil,
-    storageBlocked: Int = 0
+    storageBlocked: Int = 0,
+    storagePending: Int = 0,
+    isOffline: Bool = false,
+    engineFresh: Bool = true,
+    serviceStatus: String = "running"
 ) -> HealthSnapshot {
     HealthSnapshot(
         schemaVersion: 1, collectedAt: "1970-01-01T00:00:00Z",
         healthState: "healthy", severity: "green", headline: "Healthy",
         reasons: reasons, suggestedActions: [],
         service: ServiceSnapshot(
-            platform: "macos", status: "running", serviceName: "com.longhouse.shipper",
+            platform: "macos", status: serviceStatus, serviceName: "com.longhouse.shipper",
             serviceFile: nil, logPath: nil
         ),
         engineStatus: EngineStatusSnapshot(
-            path: nil, exists: true, fresh: true, ageSeconds: 1,
+            path: nil, exists: true, fresh: engineFresh, ageSeconds: engineFresh ? 1 : 600,
             payload: EngineStatusPayload(
                 version: "test", daemonPid: 1, lastShipAt: "1970-01-01T00:00:00Z",
                 spoolPendingCount: 0, spoolDeadCount: 0, archiveBacklog: archive,
                 storageV2Outbox: StorageV2OutboxStatus(
-                    pendingCount: 0, pendingBytes: 0, blockedSourceCount: storageBlocked,
+                    pendingCount: storagePending, pendingBytes: 0, blockedSourceCount: storageBlocked,
                     blockedBytes: 0, latestBlockKind: nil, latestBlockDetail: nil,
                     byteLimit: 1_073_741_824, error: nil
                 ),
                 parseErrorCount1H: 0, consecutiveShipFailures: 0, diskFreeBytes: nil,
-                isOffline: false, recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z"
+                isOffline: isOffline, recentDeadLetters: [], lastUpdated: "1970-01-01T00:00:00Z"
             ),
             error: nil
         ),
