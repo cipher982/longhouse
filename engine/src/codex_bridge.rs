@@ -17,7 +17,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
 
 use crate::codex_source::{
@@ -1752,29 +1752,12 @@ async fn stop_via_ipc(sock_path: &Path, terminal_reason: &str) -> Result<()> {
 #[cfg(unix)]
 fn parse_stop_ipc_response(response_buf: &[u8]) -> Result<()> {
     if response_buf.is_empty() || response_buf.iter().all(u8::is_ascii_whitespace) {
-        // A stop request can race with the bridge tearing its IPC server down.
-        // In that case the client sees a clean EOF instead of a JSON payload,
-        // but the bridge is already exiting as requested. Treat that as
-        // success so wrapper cleanup does not emit a fake error on normal
-        // shutdown.
-        return Ok(());
+        bail!("bridge IPC stop closed without acknowledgement");
     }
-
-    let response: Value = match serde_json::from_slice(response_buf) {
-        Ok(value) => value,
-        Err(err) => {
-            if !response_buf.ends_with(b"\n") {
-                // The bridge writes newline-terminated JSON responses. If the
-                // socket closes mid-response during shutdown, prefer a clean
-                // exit over surfacing a fake cleanup failure.
-                warn!(
-                    "codex-bridge stop IPC response ended without newline; treating shutdown race as success"
-                );
-                return Ok(());
-            }
-            return Err(err).context("parsing IPC response");
-        }
-    };
+    if !response_buf.ends_with(b"\n") {
+        bail!("bridge IPC stop acknowledgement was truncated");
+    }
+    let response: Value = serde_json::from_slice(response_buf).context("parsing IPC response")?;
 
     if response.get("ok").and_then(Value::as_bool) != Some(true) {
         let error = response
@@ -1825,11 +1808,10 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
             );
             return stop_via_ipc(&sock_path, &terminal_reason).await;
         }
-        eprintln!(
-            "bridge state file is missing for session {}; no recorded child process to stop",
+        bail!(
+            "managed Codex session {} has no bridge state or live IPC socket; stop was not acknowledged",
             config.session_id
         );
-        return Ok(());
     }
     if sock_path.exists() {
         return stop_via_ipc(&sock_path, &terminal_reason)
@@ -6893,13 +6875,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_stop_ipc_response_accepts_clean_eof() {
-        assert!(parse_stop_ipc_response(&[]).is_ok());
+    fn parse_stop_ipc_response_rejects_clean_eof() {
+        assert!(parse_stop_ipc_response(&[]).is_err());
     }
 
     #[test]
-    fn parse_stop_ipc_response_accepts_truncated_shutdown_reply() {
-        assert!(parse_stop_ipc_response(br#"{"ok":true"#).is_ok());
+    fn parse_stop_ipc_response_rejects_truncated_shutdown_reply() {
+        assert!(parse_stop_ipc_response(br#"{"ok":true"#).is_err());
     }
 
     #[test]
