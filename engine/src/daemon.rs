@@ -670,6 +670,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut in_flight = JoinSet::new();
     let mut discovery_tasks: JoinSet<DiscoveryTaskResult> = JoinSet::new();
     let mut managed_observation_scan_tasks: JoinSet<ManagedObservationScanResult> = JoinSet::new();
+    let mut opencode_title_refresh_tasks: JoinSet<Result<()>> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
     let startup_archive_mode =
         read_archive_repair_control().normalized_mode(config.archive_repair_mode);
@@ -756,6 +757,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut wake_gap_detector = WakeGapDetector::new();
     let mut pending_wake_reconciliation = false;
     let mut pending_full_reconciliation = false;
+    let mut pending_periodic_observation = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
@@ -1295,6 +1297,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             managed_reconciliation = heartbeat::ProjectionReconciliation::failed(
                                 result.reason,
                             );
+                            if pending_wake_reconciliation {
+                                if maybe_start_managed_observation_scan(
+                                    &mut managed_observation_scan_tasks,
+                                    "wake",
+                                    true,
+                                ) {
+                                    pending_wake_reconciliation = false;
+                                }
+                            } else if pending_full_reconciliation
+                                && maybe_start_managed_observation_scan(
+                                    &mut managed_observation_scan_tasks,
+                                    "full_reconciliation",
+                                    true,
+                                )
+                            {
+                                pending_full_reconciliation = false;
+                            }
                             continue;
                         }
                         refresh_managed_codex_transcript_paths(
@@ -1329,9 +1348,15 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             Instant::now(),
                             result.reason,
                         );
+                        maybe_start_opencode_title_refresh(
+                            &mut opencode_title_refresh_tasks,
+                            config.shipper_config.db_path.clone(),
+                            result.opencode_observations.clone(),
+                        );
                         let empty_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] = &[];
                         let unmanaged_binding_override =
                             last_unmanaged_session_bindings.as_deref().unwrap_or(empty_unmanaged_bindings);
+                        let projection_started = Instant::now();
                         let projection = build_local_status_projection(
                             &conn,
                             &tracker,
@@ -1350,6 +1375,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             config.archive_repair_mode,
                             &mut session_snapshot_state,
                         );
+                        let projection_elapsed_ms = projection_started.elapsed().as_millis() as u64;
+                        if projection_elapsed_ms > 50 {
+                            tracing::warn!(
+                                projection_elapsed_ms,
+                                "Local status projection exceeded event-loop budget"
+                            );
+                        }
                         managed_reconciliation = heartbeat::ProjectionReconciliation::idle();
                         heartbeat::write_status_file(
                             &projection,
@@ -1383,6 +1415,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 "full_reconciliation",
                                 chrono::Utc::now().to_rfc3339(),
                             );
+                        } else if pending_periodic_observation
+                            && maybe_start_managed_observation_scan(
+                                &mut managed_observation_scan_tasks,
+                                "periodic",
+                                false,
+                            )
+                        {
+                            pending_periodic_observation = false;
                         }
                         let signature = runtime_truth_signature(&payload);
                         if !runtime_truth_bootstrapped {
@@ -1417,6 +1457,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                     }
                     None => {}
+                }
+            }
+
+            opencode_title_refresh_result = opencode_title_refresh_tasks.join_next(), if !opencode_title_refresh_tasks.is_empty() => {
+                match opencode_title_refresh_result {
+                    Some(Ok(Ok(()))) | None => {}
+                    Some(Ok(Err(err))) => tracing::warn!(error = %err, "OpenCode title refresh failed"),
+                    Some(Err(err)) => tracing::warn!(error = %err, "OpenCode title refresh task failed"),
                 }
             }
 
@@ -1599,6 +1647,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         );
                     } else {
                         pending_wake_reconciliation = true;
+                        managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                            "wake",
+                            chrono::Utc::now().to_rfc3339(),
+                        );
                     }
                     maybe_start_unmanaged_binding_refresh(
                         &mut unmanaged_binding_refresh_tasks,
@@ -1613,6 +1665,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     heartbeat::write_status_file(
                         projection,
                         serde_json::to_value(control_channel_status.snapshot()).ok(),
+                        &managed_reconciliation,
+                        &status_path,
+                    );
+                } else {
+                    heartbeat::refresh_existing_status_pulse(
                         &managed_reconciliation,
                         &status_path,
                     );
@@ -1631,6 +1688,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     );
                 } else {
                     pending_full_reconciliation = true;
+                    managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                        "full_reconciliation",
+                        chrono::Utc::now().to_rfc3339(),
+                    );
                 }
             }
 
@@ -1640,10 +1701,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     "periodic",
                     false,
                 ) {
-                    managed_reconciliation = heartbeat::ProjectionReconciliation::running(
-                        "periodic",
-                        chrono::Utc::now().to_rfc3339(),
-                    );
+                    pending_periodic_observation = false;
+                } else {
+                    pending_periodic_observation = true;
                 }
             }
 
@@ -1745,7 +1805,6 @@ fn build_local_status_projection(
     payload.adaptive_backlog_limiter = limiter.map(|l| l.snapshot());
     payload.ship_scheduler = scheduler.map(PathScheduler::snapshot);
     apply_archive_repair_control(&mut payload, &archive_control, archive_repair_mode);
-    observe_active_opencode_titles(conn, opencode_observations);
     let now = chrono::Utc::now();
     payload.managed_sessions =
         heartbeat::leases_from_observations(conn, machine_id, observations, now);
@@ -1862,6 +1921,22 @@ fn observe_active_opencode_titles(
             );
         }
     }
+}
+
+fn maybe_start_opencode_title_refresh(
+    tasks: &mut JoinSet<Result<()>>,
+    db_path: Option<PathBuf>,
+    observations: Vec<managed_opencode_scan::OpenCodeServerObservation>,
+) {
+    if !tasks.is_empty() || observations.is_empty() {
+        return;
+    }
+    tasks.spawn_blocking(move || {
+        let db_path = crate::state::db::resolve_db_path(db_path.as_deref())?;
+        let conn = crate::state::db::open_connection(&db_path)?;
+        observe_active_opencode_titles(&conn, &observations);
+        Ok(())
+    });
 }
 
 fn record_flight_sample(
@@ -2162,7 +2237,7 @@ fn maybe_start_unmanaged_binding_refresh(
         let started = Instant::now();
         let result = open_db(db_path.as_deref())
             .map_err(|err| err.to_string())
-            .map(|conn| {
+            .and_then(|conn| {
                 heartbeat::collect_unmanaged_session_bindings_with_store(
                     &conn,
                     &machine_id,
@@ -2193,15 +2268,10 @@ fn maybe_start_managed_observation_scan(
         let process_inventory_valid = process_inventory.is_some();
         let process_facts = process_inventory.unwrap_or_default();
         let process_inventory_ms = process_started.elapsed().as_millis() as u64;
-        let process_commands = process_facts
-            .values()
-            .map(|fact| fact.command.clone())
-            .collect::<Vec<_>>();
-
         let codex_started = Instant::now();
         let codex_observations = managed_bridge_scan::default_codex_bridge_state_dir()
             .map(|state_dir| {
-                managed_bridge_scan::collect_observations_from(&state_dir, &process_commands)
+                managed_bridge_scan::collect_observations_from(&state_dir, &process_facts)
             })
             .unwrap_or_default();
         let codex_elapsed_ms = codex_started.elapsed().as_millis() as u64;
@@ -2236,7 +2306,14 @@ fn maybe_start_managed_observation_scan(
         let opencode_elapsed_ms = opencode_started.elapsed().as_millis() as u64;
 
         let cursor_started = Instant::now();
-        let cursor_observations = managed_cursor_helm_scan::collect_observations();
+        let cursor_observations = managed_cursor_helm_scan::default_cursor_helm_state_dir()
+            .map(|state_dir| {
+                managed_cursor_helm_scan::collect_observations_from_processes(
+                    &state_dir,
+                    &process_facts,
+                )
+            })
+            .unwrap_or_default();
         let cursor_elapsed_ms = cursor_started.elapsed().as_millis() as u64;
         ManagedObservationScanResult {
             reason,

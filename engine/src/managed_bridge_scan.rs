@@ -14,8 +14,10 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::path::Path;
 use std::path::PathBuf;
+use std::collections::HashMap;
 
 use crate::codex_bridge::BridgeStateFile;
+use crate::process_identity::{command_contains_basename, ProcessFact};
 
 /// Raw, per-bridge signals captured by a single scan pass.
 #[derive(Debug, Clone)]
@@ -54,6 +56,7 @@ pub fn default_codex_bridge_state_dir() -> Option<PathBuf> {
     crate::config::get_codex_bridge_state_dir().ok()
 }
 
+#[cfg(test)]
 pub fn codex_tui_process_attached(process_commands: &[String], ws_url: &str) -> bool {
     let normalized_ws = ws_url.trim();
     if normalized_ws.is_empty() {
@@ -105,7 +108,7 @@ pub fn bridge_lock_is_held(state_file: &Path) -> bool {
 /// Exposed for tests; production path uses `collect_observations`.
 pub fn collect_observations_from(
     state_dir: &Path,
-    process_commands: &[String],
+    process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<CodexBridgeObservation> {
     let mut out = Vec::new();
     let Ok(entries) = fs::read_dir(state_dir) else {
@@ -130,12 +133,18 @@ pub fn collect_observations_from(
         let has_tui_attachment = state
             .ws_url
             .as_deref()
-            .is_some_and(|ws| codex_tui_process_attached(process_commands, ws));
+            .is_some_and(|ws| {
+                process_facts.values().any(|fact| {
+                    fact.command.contains(ws) && fact.command.contains("--remote")
+                })
+            });
         let app_server_alive = state
             .app_server_pid
-            .and_then(|pid| i32::try_from(pid).ok())
-            .map(pid_alive)
-            .unwrap_or(false);
+            .and_then(|pid| process_facts.get(&pid))
+            .is_some_and(|fact| {
+                command_contains_basename(&fact.command, "codex")
+                    && fact.command.split_whitespace().any(|part| part == "app-server")
+            });
 
         out.push(CodexBridgeObservation {
             session_id,
@@ -201,7 +210,7 @@ mod tests {
         fs::write(tmp.path().join("broken.json"), b"not-json").unwrap();
         // wrong extension
         fs::write(tmp.path().join("note.txt"), b"{}").unwrap();
-        let obs = collect_observations_from(tmp.path(), &[]);
+        let obs = collect_observations_from(tmp.path(), &HashMap::new());
         assert!(obs.is_empty());
     }
 

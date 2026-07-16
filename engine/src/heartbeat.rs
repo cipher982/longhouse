@@ -1605,6 +1605,35 @@ pub fn write_status_file(
     }
 }
 
+/// Keep a prior coherent projection visibly alive while startup or wake
+/// reconciliation is still rebuilding its evidence. This intentionally
+/// changes only pulse/process metadata and reconciliation state; evidence and
+/// `generated_at` remain the last accepted snapshot.
+pub fn refresh_existing_status_pulse(
+    reconciliation: &ProjectionReconciliation,
+    status_path: &std::path::Path,
+) {
+    let Ok(bytes) = std::fs::read(status_path) else {
+        return;
+    };
+    let Ok(mut status) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return;
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    status["daemon_pid"] = serde_json::json!(std::process::id());
+    status["last_updated"] = serde_json::json!(now);
+    status["local_projection"]["engine_pulse_at"] = serde_json::json!(now);
+    status["local_projection"]["reconciliation"] =
+        serde_json::to_value(reconciliation).unwrap_or(serde_json::Value::Null);
+
+    if let Ok(json) = serde_json::to_string_pretty(&status) {
+        let tmp_path = status_path.with_extension("json.tmp");
+        if std::fs::write(&tmp_path, json).is_ok() {
+            let _ = std::fs::rename(&tmp_path, status_path);
+        }
+    }
+}
+
 fn inspect_current_exe() -> (Option<String>, Option<String>) {
     // Returns (binary_path, binary_mtime_iso8601). Both cheap filesystem
     // operations; OK to run per write. If either fails (e.g. the binary was
@@ -2901,7 +2930,7 @@ mod tests {
             &status_path,
         );
         let refreshed: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(status_path).unwrap()).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(&status_path).unwrap()).unwrap();
         assert_eq!(refreshed["local_projection"]["generated_at"], generated_at);
         assert_eq!(refreshed["recent_dead_letters"], stable_dead_letters);
         assert_eq!(
@@ -2912,6 +2941,16 @@ mod tests {
             refreshed["local_projection"]["reconciliation"]["reason"],
             "local_status"
         );
+
+        refresh_existing_status_pulse(
+            &ProjectionReconciliation::running("wake", "2026-07-16T12:01:00Z"),
+            &status_path,
+        );
+        let pulsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&status_path).unwrap()).unwrap();
+        assert_eq!(pulsed["local_projection"]["generated_at"], generated_at);
+        assert_eq!(pulsed["local_projection"]["reconciliation"]["reason"], "wake");
+        assert_eq!(pulsed["daemon_pid"], std::process::id());
     }
 
     #[test]

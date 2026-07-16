@@ -10,12 +10,13 @@
 
 use std::fs;
 use std::path::Path;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::cursor_helm_control::default_cursor_helm_state_dir;
-use crate::managed_bridge_scan::pid_alive;
+pub use crate::cursor_helm_control::default_cursor_helm_state_dir;
+use crate::process_identity::ProcessFact;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorHelmObservation {
@@ -53,14 +54,10 @@ struct CursorHelmStateFile {
     ready: Option<bool>,
 }
 
-pub fn collect_observations() -> Vec<CursorHelmObservation> {
-    let Some(state_dir) = default_cursor_helm_state_dir() else {
-        return Vec::new();
-    };
-    collect_observations_from(&state_dir)
-}
-
-pub fn collect_observations_from(state_dir: &Path) -> Vec<CursorHelmObservation> {
+pub(crate) fn collect_observations_from_processes(
+    state_dir: &Path,
+    process_facts: &HashMap<u32, ProcessFact>,
+) -> Vec<CursorHelmObservation> {
     let mut out = Vec::new();
     let Ok(entries) = fs::read_dir(state_dir) else {
         return out;
@@ -88,9 +85,11 @@ pub fn collect_observations_from(state_dir: &Path) -> Vec<CursorHelmObservation>
         };
         let launcher_alive = state
             .launcher_pid
-            .and_then(|pid| i32::try_from(pid).ok())
-            .map(pid_alive)
-            .unwrap_or(false);
+            .and_then(|pid| process_facts.get(&pid))
+            .is_some_and(|fact| {
+                fact.command.contains("cursor_helm")
+                    || (fact.command.contains("longhouse") && fact.command.contains("cursor"))
+            });
         let socket_present = socket_path.as_ref().map(|p| p.exists()).unwrap_or(false);
         let ready = state.ready.unwrap_or(false);
         let live = launcher_alive && socket_present && ready;
@@ -117,6 +116,20 @@ mod tests {
 
     fn tmp_dir() -> tempfile::TempDir {
         tempfile::TempDir::new().unwrap()
+    }
+
+    fn launcher_facts(pid: u32) -> HashMap<u32, ProcessFact> {
+        HashMap::from([(
+            pid,
+            ProcessFact {
+                pid,
+                tty: "ttys001".to_string(),
+                stat: "S+".to_string(),
+                lstart: String::new(),
+                command: "python -m zerg.cli longhouse cursor".to_string(),
+                start_time: None,
+            },
+        )])
     }
 
     fn write_state(dir: &Path, session_id: &str, socket: &Path, launcher_pid: Option<u32>) {
@@ -147,7 +160,7 @@ mod tests {
     #[test]
     fn empty_dir_yields_no_observations() {
         let dir = tmp_dir();
-        assert!(collect_observations_from(dir.path()).is_empty());
+        assert!(collect_observations_from_processes(dir.path(), &HashMap::new()).is_empty());
     }
 
     #[test]
@@ -159,7 +172,10 @@ mod tests {
         fs::File::create(&socket).unwrap();
         // use this process's pid as the "launcher" so pid_alive is true
         write_state(dir.path(), "sess-live", &socket, Some(std::process::id()));
-        let obs = collect_observations_from(dir.path());
+        let obs = collect_observations_from_processes(
+            dir.path(),
+            &launcher_facts(std::process::id()),
+        );
         let live = obs.iter().find(|o| o.session_id == "sess-live").unwrap();
         assert!(live.live);
     }
@@ -170,7 +186,7 @@ mod tests {
         let socket = dir.path().join("b.sock");
         fs::File::create(&socket).unwrap();
         write_state(dir.path(), "sess-dead-pid", &socket, Some(2_000_000));
-        let obs = collect_observations_from(dir.path());
+        let obs = collect_observations_from_processes(dir.path(), &HashMap::new());
         let dead = obs
             .iter()
             .find(|o| o.session_id == "sess-dead-pid")
@@ -188,7 +204,10 @@ mod tests {
             &socket,
             Some(std::process::id()),
         );
-        let obs = collect_observations_from(dir.path());
+        let obs = collect_observations_from_processes(
+            dir.path(),
+            &launcher_facts(std::process::id()),
+        );
         let no_sock = obs.iter().find(|o| o.session_id == "sess-no-sock").unwrap();
         assert!(!no_sock.live);
     }
@@ -205,7 +224,10 @@ mod tests {
             Some(std::process::id()),
             false,
         );
-        let obs = collect_observations_from(dir.path());
+        let obs = collect_observations_from_processes(
+            dir.path(),
+            &launcher_facts(std::process::id()),
+        );
         let pending = obs
             .iter()
             .find(|o| o.session_id == "sess-not-ready")
@@ -218,7 +240,7 @@ mod tests {
         let dir = tmp_dir();
         let value = json!({"socket_path": dir.path().join("x.sock").to_string_lossy()});
         fs::write(dir.path().join("nope.json"), value.to_string()).unwrap();
-        let obs = collect_observations_from(dir.path());
+        let obs = collect_observations_from_processes(dir.path(), &HashMap::new());
         assert!(obs.iter().all(|o| !o.session_id.is_empty()));
     }
 }

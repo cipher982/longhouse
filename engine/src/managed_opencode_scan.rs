@@ -71,6 +71,16 @@ struct OpenCodeServerStateFile {
     process_start_time: Option<String>,
 }
 
+struct OpenCodeCandidate {
+    state_file: PathBuf,
+    session_id: String,
+    provider_session_id: String,
+    server_url: Option<String>,
+    pid_alive: bool,
+    has_tui_attachment: bool,
+    state: OpenCodeServerStateFile,
+}
+
 pub fn default_opencode_server_state_dir() -> Option<PathBuf> {
     let provider_home = std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
@@ -82,9 +92,9 @@ pub(crate) fn collect_observations_from_processes(
     state_dir: &Path,
     process_facts: &HashMap<u32, ProcessFact>,
 ) -> Vec<OpenCodeServerObservation> {
-    let mut out = Vec::new();
+    let mut candidates = Vec::new();
     let Ok(entries) = fs::read_dir(state_dir) else {
-        return out;
+        return Vec::new();
     };
     for entry in entries.flatten() {
         let path = entry.path();
@@ -94,12 +104,18 @@ pub(crate) fn collect_observations_from_processes(
         let Ok(bytes) = fs::read(&path) else {
             continue;
         };
-        let Ok(state) = serde_json::from_slice::<OpenCodeServerStateFile>(&bytes) else {
+        let Ok(mut state) = serde_json::from_slice::<OpenCodeServerStateFile>(&bytes) else {
             continue;
         };
-        let session_id = state.session_id.unwrap_or_default().trim().to_string();
+        let session_id = state
+            .session_id
+            .take()
+            .unwrap_or_default()
+            .trim()
+            .to_string();
         let provider_session_id = state
             .provider_session_id
+            .take()
             .unwrap_or_default()
             .trim()
             .to_string();
@@ -115,33 +131,82 @@ pub(crate) fn collect_observations_from_processes(
                     )
             })
         });
-        let server_url = state.server_url.filter(|value| !value.trim().is_empty());
-        let server_alive = pid_alive
-            && opencode_health_ready(
-                server_url.as_deref(),
-                state.username.as_deref(),
-                state.password.as_deref(),
-            );
+        let server_url = state
+            .server_url
+            .take()
+            .filter(|value| !value.trim().is_empty());
         let has_tui_attachment =
             opencode_attach_foreground(server_url.as_deref(), &provider_session_id, process_facts);
-
-        out.push(OpenCodeServerObservation {
+        candidates.push(OpenCodeCandidate {
+            state_file: path,
             session_id,
             provider_session_id,
-            state_file: path,
-            cwd: state.cwd.filter(|value| !value.trim().is_empty()),
             server_url,
-            pid: state.pid,
-            started_at: state.started_at.unwrap_or_default(),
-            updated_at: state.updated_at.unwrap_or_default(),
-            server_alive,
+            pid_alive,
             has_tui_attachment,
-            launch_mode: state.launch_mode.unwrap_or_default().trim().to_string(),
-            owner_wrapper_pid: state.owner_wrapper_pid,
-            owner_wrapper_start_time: state.owner_wrapper_start_time.unwrap_or_default(),
-            process_start_time: state.process_start_time.unwrap_or_default(),
+            state,
         });
     }
+
+    // Health probes are independent localhost reads. Run viable candidates in
+    // parallel so one wedged server costs at most one timeout for the whole
+    // provider scan rather than N sequential timeouts.
+    let health = std::thread::scope(|scope| {
+        let handles = candidates
+            .iter()
+            .map(|candidate| {
+                candidate.pid_alive.then(|| {
+                    scope.spawn(move || {
+                        opencode_health_ready(
+                            candidate.server_url.as_deref(),
+                            candidate.state.username.as_deref(),
+                            candidate.state.password.as_deref(),
+                        )
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .map(|handle| handle.join().unwrap_or(false))
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>()
+    });
+
+    let mut out = candidates
+        .into_iter()
+        .zip(health)
+        .map(|(candidate, server_alive)| OpenCodeServerObservation {
+            session_id: candidate.session_id,
+            provider_session_id: candidate.provider_session_id,
+            state_file: candidate.state_file,
+            cwd: candidate
+                .state
+                .cwd
+                .filter(|value| !value.trim().is_empty()),
+            server_url: candidate.server_url,
+            pid: candidate.state.pid,
+            started_at: candidate.state.started_at.unwrap_or_default(),
+            updated_at: candidate.state.updated_at.unwrap_or_default(),
+            server_alive,
+            has_tui_attachment: candidate.has_tui_attachment,
+            launch_mode: candidate
+                .state
+                .launch_mode
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
+            owner_wrapper_pid: candidate.state.owner_wrapper_pid,
+            owner_wrapper_start_time: candidate
+                .state
+                .owner_wrapper_start_time
+                .unwrap_or_default(),
+            process_start_time: candidate.state.process_start_time.unwrap_or_default(),
+        })
+        .collect::<Vec<_>>();
     out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     out
 }
