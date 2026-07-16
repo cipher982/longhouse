@@ -519,6 +519,7 @@ struct SessionInputResponse: Codable, Sendable {
     let inputId: Int?
     let liveInputId: String?
     let clientRequestId: String?
+    let turn: ConsoleTurnReceipt?
     let intent: SessionInputIntent
     let queued: [QueuedInputSummary]
 
@@ -527,6 +528,7 @@ struct SessionInputResponse: Codable, Sendable {
         inputId: Int?,
         liveInputId: String? = nil,
         clientRequestId: String?,
+        turn: ConsoleTurnReceipt? = nil,
         intent: SessionInputIntent,
         queued: [QueuedInputSummary]
     ) {
@@ -534,6 +536,7 @@ struct SessionInputResponse: Codable, Sendable {
         self.inputId = inputId
         self.liveInputId = liveInputId
         self.clientRequestId = clientRequestId
+        self.turn = turn
         self.intent = intent
         self.queued = queued
     }
@@ -547,6 +550,12 @@ struct SessionInputResponse: Codable, Sendable {
             row.status == .failed && !(row.intent == .steer && row.lastError == "turn_ended")
         }.count
     }
+}
+
+struct ConsoleTurnReceipt: Codable, Hashable, Sendable {
+    let turnId: String
+    let runId: String?
+    let state: String
 }
 
 struct SessionPauseQuestionOption: Codable, Hashable, Sendable {

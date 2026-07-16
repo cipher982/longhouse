@@ -171,7 +171,7 @@ struct WebTranscriptView: UIViewRepresentable {
     ) -> [SubmittedInput] {
         inputs.filter { input in
             switch input.phase {
-            case .submitting, .sent:
+            case .submitting, .working, .sent:
                 return true
             case .queued:
                 return input.createdAt <= previewDate
@@ -567,6 +567,7 @@ struct WebTranscriptView: UIViewRepresentable {
     private nonisolated static func submittedStatus(_ phase: SubmittedInputPhase, lastError: String?) -> String {
         switch phase {
         case .submitting: return "Sending..."
+        case .working: return "Working..."
         case .sent: return "Sent"
         case .queued: return "Queued"
         case .couldNotConfirm: return "Could not confirm"
@@ -1185,6 +1186,22 @@ private extension WebTranscriptView {
       font-size: 12px;
       font-weight: 600;
       text-align: right;
+    }
+
+    .submitted.working .submitted-status::before {
+      content: "";
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      margin-right: 6px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: working-pulse 1.1s ease-in-out infinite;
+    }
+
+    @keyframes working-pulse {
+      0%, 100% { opacity: 0.35; transform: scale(0.8); }
+      50% { opacity: 1; transform: scale(1.15); }
     }
 
     .action {
@@ -1937,7 +1954,7 @@ private extension WebTranscriptView {
 
     function submitted(item) {
       return `
-        <div class="row message user submitted">
+        <div class="row message user submitted ${escapeHtml(item.status || '')}">
           <div>
             <div class="bubble">${escapeHtml(item.body || '')}</div>
             <div class="submitted-status">${escapeHtml(item.subtitle || '')}</div>

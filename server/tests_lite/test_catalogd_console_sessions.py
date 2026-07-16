@@ -16,6 +16,7 @@ from zerg.models.live_store import LiveSessionRun
 from zerg.models.live_store import LiveSessionThread
 from zerg.models.live_store import LiveUser
 from zerg.services.console_turns import CatalogConsoleTurn
+from zerg.services.session_runtime import RuntimeEventIngest
 
 
 def test_catalog_console_session_is_idle_identity_not_launch(tmp_path):
@@ -110,8 +111,10 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     )
     assert first["turn"]["state"] == "starting"
     assert first["turn"]["run_id"]
+    assert first["turn"]["client_request_id"] == "request-1"
     assert second["turn"]["state"] == "queued"
     assert second["turn"]["run_id"] is None
+    assert second["turn"]["client_request_id"] == "request-2"
     facts = store.read_session(session_id=str(session_id), owner_id=1)["facts"]
     assert facts["latest_console_turn"]["state"] == "starting"
     active = store.update_console_turn(
@@ -123,6 +126,24 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
         }
     )
     assert active["turn"]["state"] == "active"
+    provider_thread_id = "019f6b93-edf6-7bd0-a757-b5195a61abdd"
+    store.apply_session_runtime(
+        events=[
+            RuntimeEventIngest(
+                runtime_key=f"codex:{session_id}",
+                session_id=session_id,
+                thread_id=thread_id,
+                run_id=first["turn"]["run_id"],
+                provider="codex",
+                device_id="cinder",
+                source="codex_exec",
+                kind="binding_signal",
+                occurred_at=datetime.now(UTC),
+                dedupe_key=f"binding:{first['turn']['run_id']}",
+                payload={"provider_session_id": provider_thread_id},
+            )
+        ]
+    )
     settled = store.update_console_turn(
         data={
             "run_id": first["turn"]["run_id"],
@@ -134,6 +155,7 @@ def test_catalog_console_turns_claim_and_wake_fifo(tmp_path):
     assert settled["next_turn"]["turn_id"] == second["turn"]["turn_id"]
     assert settled["next_turn"]["state"] == "starting"
     assert settled["next_turn"]["run_id"]
+    assert settled["next_turn"]["resume_provider_thread_id"] == provider_thread_id
 
 
 @pytest.mark.asyncio

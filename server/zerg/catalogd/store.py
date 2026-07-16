@@ -99,7 +99,13 @@ def _json_launch_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _live_console_turn_dto(turn: LiveConsoleTurn, *, message: str | None = None, provider_config: str | None = None) -> dict[str, Any]:
+def _live_console_turn_dto(
+    turn: LiveConsoleTurn,
+    *,
+    message: str | None = None,
+    client_request_id: str | None = None,
+    provider_config: str | None = None,
+) -> dict[str, Any]:
     return {
         "turn_id": turn.id,
         "session_id": turn.session_id,
@@ -110,6 +116,7 @@ def _live_console_turn_dto(turn: LiveConsoleTurn, *, message: str | None = None,
         "device_id": turn.device_id,
         "cwd": turn.cwd,
         "message": message,
+        "client_request_id": client_request_id,
         "provider_config": json.loads(provider_config or "{}"),
         "resume_provider_thread_id": turn.resume_provider_thread_id,
         "error": turn.error,
@@ -1614,7 +1621,11 @@ class CatalogStore:
                 for event in events:
                     if event.runtime_key in updated_keys and event.kind in {"pause_request", "pause_resolution"}:
                         _apply_live_interaction_event(orm, event)
-                    if event.runtime_key in updated_keys and event.kind == "binding_signal":
+                    # Binding aliases are an idempotent graph side effect, not a
+                    # runtime-state mutation. A valid binding can leave the
+                    # reducer snapshot unchanged and still must be persisted so
+                    # the next Console turn can resume the provider thread.
+                    if event.kind == "binding_signal":
                         provider_session_id = str((event.payload or {}).get("provider_session_id") or "").strip()
                         if provider_session_id and event.session_id is not None:
                             catalog = orm.get(LiveSessionCatalog, str(event.session_id))
@@ -2507,6 +2518,7 @@ class CatalogStore:
                     replay_turn = _live_console_turn_dto(
                         turn,
                         message=existing_receipt.text,
+                        client_request_id=existing_receipt.client_request_id,
                         provider_config=thread.provider_config_json,
                     )
                     orm.rollback()
@@ -2585,6 +2597,7 @@ class CatalogStore:
                 result = _live_console_turn_dto(
                     turn,
                     message=receipt.text,
+                    client_request_id=receipt.client_request_id,
                     provider_config=thread.provider_config_json,
                 )
             except BaseException:
@@ -2635,9 +2648,20 @@ class CatalogStore:
                     if next_turn is not None:
                         next_receipt = orm.get(LiveSessionInputReceipt, next_turn.receipt_id)
                         thread = orm.get(LiveSessionThread, next_turn.thread_id)
+                        resume_alias = (
+                            orm.query(LiveSessionThreadAlias)
+                            .filter(
+                                LiveSessionThreadAlias.thread_id == next_turn.thread_id,
+                                LiveSessionThreadAlias.provider == next_turn.provider,
+                                LiveSessionThreadAlias.alias_kind == "provider_session_id",
+                            )
+                            .order_by(LiveSessionThreadAlias.last_seen_at.desc())
+                            .first()
+                        )
                         next_run_id = str(uuid4())
                         next_turn.run_id = next_run_id
                         next_turn.state = "starting"
+                        next_turn.resume_provider_thread_id = resume_alias.alias_value if resume_alias is not None else None
                         next_turn.updated_at = now
                         if next_receipt is not None:
                             next_receipt.status = "delivering"
@@ -2657,10 +2681,14 @@ class CatalogStore:
                         next_turn_result = _live_console_turn_dto(
                             next_turn,
                             message=next_receipt.text if next_receipt is not None else None,
+                            client_request_id=next_receipt.client_request_id if next_receipt is not None else None,
                             provider_config=thread.provider_config_json if thread is not None else None,
                         )
                 orm.commit()
-                result = _live_console_turn_dto(turn)
+                result = _live_console_turn_dto(
+                    turn,
+                    client_request_id=receipt.client_request_id if receipt is not None else None,
+                )
             except BaseException:
                 orm.rollback()
                 raise

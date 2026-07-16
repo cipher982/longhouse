@@ -75,6 +75,7 @@ class ClaimedConsoleTurn:
     device_id: str
     cwd: str
     message: str
+    client_request_id: str
     provider_config: dict[str, object]
     resume_provider_thread_id: str | None
 
@@ -235,6 +236,7 @@ def claim_next_console_turn(db: Session, *, thread_id: UUID) -> ClaimedConsoleTu
         device_id=device_id,
         cwd=cwd,
         message=str(input_row.body),
+        client_request_id=str(input_row.client_request_id or turn.request_id or ""),
         provider_config=dict(thread.provider_config_json or {}),
         resume_provider_thread_id=_provider_resume_identity(db, thread),
     )
@@ -329,6 +331,8 @@ async def dispatch_next_console_turn(
     payload: dict[str, object] = {
         "run_id": str(claimed.run_id),
         "thread_id": str(claimed.thread_id),
+        "turn_id": str(claimed.turn_id),
+        "client_request_id": claimed.client_request_id,
         "provider": claimed.provider,
         "cwd": claimed.cwd,
         "message": claimed.message,
@@ -431,6 +435,8 @@ async def enqueue_catalog_console_turn(
         payload = {
             "run_id": str(run_id),
             "thread_id": str(turn["thread_id"]),
+            "turn_id": str(turn_id),
+            "client_request_id": str(turn.get("client_request_id") or client_request_id),
             "provider": provider,
             "cwd": str(turn["cwd"]),
             "message": str(turn.get("message") or message),
@@ -521,6 +527,8 @@ async def dispatch_catalog_claimed_turn(
         payload = {
             "run_id": str(run_id),
             "thread_id": str(turn["thread_id"]),
+            "turn_id": str(turn_id),
+            "client_request_id": str(turn.get("client_request_id") or ""),
             "provider": provider,
             "cwd": str(turn["cwd"]),
             "message": str(turn.get("message") or ""),

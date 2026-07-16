@@ -426,6 +426,9 @@ extension APISessionInputResponse {
             inputId: inputId,
             liveInputId: liveInputId,
             clientRequestId: clientRequestId,
+            turn: turn.map {
+                ConsoleTurnReceipt(turnId: $0.turnId, runId: $0.runId, state: $0.state)
+            },
             intent: SessionInputIntent(rawValue: intent) ?? .auto,
             queued: (queued ?? []).map(\.queuedInputSummary)
         )
