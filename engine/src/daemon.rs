@@ -1698,29 +1698,32 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     offline.is_offline,
                 ).await;
                 if !managed_state_changes.is_empty() {
-                    let full_reconciliation = managed_state_changes_require_full_reconciliation(
+                    let requires_discovery = managed_state_changes_require_full_reconciliation(
                         &last_managed_observations,
                         &managed_state_changes,
                     );
-                    let reason = if full_reconciliation {
-                        "managed_state_discovery"
+                    if requires_discovery {
+                        // Invalidate any older managed/unmanaged pair before it can
+                        // publish the new managed child as Shadow ownership.
+                        projection_generation = projection_generation.saturating_add(1);
+                        if maybe_start_managed_observation_scan(
+                            &mut managed_observation_scan_tasks,
+                            "managed_state_discovery",
+                            true,
+                            &last_managed_observations,
+                        ) {
+                            managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                                "managed_state_discovery",
+                                chrono::Utc::now().to_rfc3339(),
+                            );
+                        } else {
+                            pending_full_reconciliation = true;
+                        }
                     } else {
-                        "managed_state_change"
-                    };
-                    if maybe_start_managed_observation_scan(
-                        &mut managed_observation_scan_tasks,
-                        reason,
-                        full_reconciliation,
-                        &last_managed_observations,
-                    ) {
-                        managed_reconciliation = heartbeat::ProjectionReconciliation::running(
-                            reason,
-                            chrono::Utc::now().to_rfc3339(),
+                        tracing::debug!(
+                            event_count = managed_state_changes.len(),
+                            "Known managed state changed; bounded periodic observation owns refresh"
                         );
-                    } else if full_reconciliation {
-                        pending_full_reconciliation = true;
-                    } else {
-                        pending_periodic_observation = true;
                     }
                 }
             }
