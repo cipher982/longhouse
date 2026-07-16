@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+use walkdir::WalkDir;
 
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
 const CODEX_EXEC_RUNTIME_SOURCE: &str = "codex_exec";
@@ -290,6 +291,9 @@ impl CodexExecRuntimeSink {
         // Inspect the decoded provider record before adding Longhouse's transport
         // envelope. Looking for thread_id on the envelope silently loses binding.
         let provider_thread_id = provider_thread_id_from_event(&event);
+        if let Some(provider_thread_id) = provider_thread_id.as_deref() {
+            self.persist_local_provider_binding(provider_thread_id);
+        }
         self.post_progress(
             seq,
             json!({"progress_kind": "codex_exec_jsonl", "seq": seq, "event": event}),
@@ -386,6 +390,30 @@ impl CodexExecRuntimeSink {
             }
         })])
         .await;
+    }
+
+    fn persist_local_provider_binding(&self, provider_thread_id: &str) {
+        let source_path = codex_rollout_path(provider_thread_id);
+        if let Some(db_path) = self.local_db_path.as_deref() {
+            if let Some(source_path) = source_path.as_deref() {
+                match crate::state::db::open_db(Some(db_path)) {
+                    Ok(conn) => {
+                        let binding = crate::state::session_binding::SessionBinding::new(&conn);
+                        if let Err(err) =
+                            binding.bind(&source_path.to_string_lossy(), &self.session_id, "codex")
+                        {
+                            eprintln!("[codex-exec] persist transcript binding failed: {err}");
+                        }
+                    }
+                    Err(err) => eprintln!("[codex-exec] open transcript binding DB failed: {err}"),
+                }
+            }
+        }
+        if let Ok(registry) = crate::turn_claims::default_registry() {
+            let source = source_path.as_ref().map(|path| path.to_string_lossy());
+            let _ =
+                registry.mark_provider_binding(&self.run_id, provider_thread_id, source.as_deref());
+        }
     }
 
     fn persist_local_phase(
@@ -485,6 +513,29 @@ fn provider_thread_id_from_event(event: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|_| event.get("type").and_then(Value::as_str) == Some("thread.started"))
         .map(str::to_string)
+}
+
+fn codex_rollout_path(provider_thread_id: &str) -> Option<PathBuf> {
+    let codex_home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))?;
+    find_codex_rollout_path(&codex_home.join("sessions"), provider_thread_id)
+}
+
+fn find_codex_rollout_path(
+    sessions_root: &std::path::Path,
+    provider_thread_id: &str,
+) -> Option<PathBuf> {
+    let suffix = format!("-{provider_thread_id}.jsonl");
+    WalkDir::new(sessions_root)
+        .min_depth(1)
+        .max_depth(5)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+        .find(|entry| {
+            entry.file_type().is_file() && entry.file_name().to_string_lossy().ends_with(&suffix)
+        })
+        .map(|entry| entry.into_path())
 }
 
 #[cfg(test)]
@@ -636,5 +687,20 @@ mod tests {
         assert_eq!(envelope["event"]["type"], "thread.started");
         assert!(envelope.get("thread_id").is_none());
         assert_eq!(provider_thread_id_from_event(&envelope), None);
+    }
+
+    #[test]
+    fn finds_codex_rollout_by_provider_thread_id() {
+        let temp = tempfile::tempdir().unwrap();
+        let thread_id = "019f6b93-edf6-7bd0-a757-b5195a61abdd";
+        let day = temp.path().join("2026/07/16");
+        std::fs::create_dir_all(&day).unwrap();
+        let rollout = day.join(format!("rollout-2026-07-16T11-38-04-{thread_id}.jsonl"));
+        std::fs::write(&rollout, "{}\n").unwrap();
+
+        assert_eq!(
+            find_codex_rollout_path(temp.path(), thread_id),
+            Some(rollout)
+        );
     }
 }

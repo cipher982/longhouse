@@ -24,6 +24,10 @@ pub struct TurnClaim {
     pub turn_id: Option<String>,
     #[serde(default)]
     pub client_request_id: Option<String>,
+    #[serde(default)]
+    pub provider_thread_id: Option<String>,
+    #[serde(default)]
+    pub source_path: Option<String>,
     pub provider: String,
     pub state: String,
     pub claimed_at: String,
@@ -72,6 +76,8 @@ impl TurnClaimRegistry {
             thread_id: thread_id.to_string(),
             turn_id: turn_id.map(str::to_string),
             client_request_id: client_request_id.map(str::to_string),
+            provider_thread_id: None,
+            source_path: None,
             provider: provider.to_string(),
             state: "claimed".to_string(),
             claimed_at: now.clone(),
@@ -109,6 +115,20 @@ impl TurnClaimRegistry {
         claim.process_start_time = process_start_time;
         claim.result = Some(result);
         claim.error = None;
+        claim.updated_at = Utc::now().to_rfc3339();
+        self.write(&claim)?;
+        Ok(claim)
+    }
+
+    pub fn mark_provider_binding(
+        &self,
+        run_id: &str,
+        provider_thread_id: &str,
+        source_path: Option<&str>,
+    ) -> Result<TurnClaim> {
+        let mut claim = self.read(run_id)?;
+        claim.provider_thread_id = Some(provider_thread_id.to_string());
+        claim.source_path = source_path.map(str::to_string);
         claim.updated_at = Utc::now().to_rfc3339();
         self.write(&claim)?;
         Ok(claim)
@@ -316,5 +336,34 @@ mod tests {
         let claim = reopened.read(&run_id).unwrap();
         assert_eq!(claim.state, "terminal");
         assert_eq!(claim.result.unwrap()["terminal_state"], "run_completed");
+    }
+
+    #[test]
+    fn provider_binding_survives_registry_recreation() {
+        let temp = tempfile::tempdir().unwrap();
+        let run_id = id(31);
+        let registry = TurnClaimRegistry::new(temp.path().to_path_buf());
+        registry
+            .claim(
+                &run_id,
+                &id(32),
+                &id(33),
+                Some(&id(34)),
+                Some("request-31"),
+                "codex",
+            )
+            .unwrap();
+        registry
+            .mark_provider_binding(&run_id, "provider-thread-31", Some("/tmp/rollout.jsonl"))
+            .unwrap();
+
+        let claim = TurnClaimRegistry::new(temp.path().to_path_buf())
+            .read(&run_id)
+            .unwrap();
+        assert_eq!(
+            claim.provider_thread_id.as_deref(),
+            Some("provider-thread-31")
+        );
+        assert_eq!(claim.source_path.as_deref(), Some("/tmp/rollout.jsonl"));
     }
 }
