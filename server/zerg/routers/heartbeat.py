@@ -620,35 +620,6 @@ def _has_final_managed_codex_terminal(db: Session, session_id: UUID) -> bool:
     )
 
 
-def _upsert_unmanaged_session_bindings(
-    db: Session,
-    bindings: list[UnmanagedSessionBindingIn],
-    *,
-    device_id: str,
-    received_at: datetime,
-) -> set[UUID]:
-    """Compatibility stub: the legacy ``UnmanagedSessionBinding`` table is gone.
-
-    The kernel writes ``SessionConnection`` rows for observe-only/log_tail
-    evidence; bare unmanaged binding ingest is a no-op until that path lands.
-    """
-
-    del db, bindings, device_id, received_at
-    return set()
-
-
-def _mark_missing_unmanaged_session_bindings_stale(
-    db: Session,
-    bindings: list[UnmanagedSessionBindingIn],
-    *,
-    device_id: str,
-) -> set[UUID]:
-    """Compatibility stub for the deleted ``UnmanagedSessionBinding`` table."""
-
-    del db, bindings, device_id
-    return set()
-
-
 def _runtime_events_for_missing_unbound_unmanaged_sessions(
     db: Session,
     bindings: list[UnmanagedSessionBindingIn],
@@ -984,27 +955,6 @@ async def ingest_heartbeat(
                     AgentHeartbeat.device_id == _device_id,
                     AgentHeartbeat.received_at < cutoff,
                 ).delete()
-                if _unmanaged_bindings:
-                    for session_id in _upsert_unmanaged_session_bindings(
-                        write_db,
-                        _unmanaged_bindings,
-                        device_id=_device_id,
-                        received_at=_now,
-                    ):
-                        publish_sessions.setdefault(
-                            session_id,
-                            (None, UNMANAGED_PROCESS_SNAPSHOT_SOURCE),
-                        )
-                if _unmanaged_bindings_present:
-                    for session_id in _mark_missing_unmanaged_session_bindings_stale(
-                        write_db,
-                        _unmanaged_bindings,
-                        device_id=_device_id,
-                    ):
-                        publish_sessions.setdefault(
-                            session_id,
-                            (None, UNMANAGED_PROCESS_SNAPSHOT_SOURCE),
-                        )
                 managed_snapshot_refreshed_ids: set[UUID] = set()
                 if managed_snapshot_skip:
                     managed_snapshot_refreshed_ids = refresh_managed_control_lease_health(
