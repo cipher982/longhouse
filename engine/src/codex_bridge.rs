@@ -6891,7 +6891,7 @@ mod tests {
 
     #[test]
     fn parse_stop_ipc_response_rejects_error_payload() {
-        let err = parse_stop_ipc_response(br#"{"ok":false,"error":"boom"}"#)
+        let err = parse_stop_ipc_response(b"{\"ok\":false,\"error\":\"boom\"}\n")
             .expect_err("error payload should fail");
         assert!(err.to_string().contains("daemon IPC error: boom"));
     }
