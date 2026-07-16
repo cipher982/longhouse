@@ -1832,20 +1832,19 @@ pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
         return Ok(());
     }
     if sock_path.exists() {
-        match stop_via_ipc(&sock_path, &terminal_reason).await {
-            Ok(()) => return Ok(()),
-            Err(err) => {
-                eprintln!(
-                    "bridge IPC stop failed for session {}; falling back to recorded child cleanup: {err:#}",
+        return stop_via_ipc(&sock_path, &terminal_reason)
+            .await
+            .with_context(|| {
+                format!(
+                    "bridge IPC stop failed for session {}; refusing destructive fallback cleanup",
                     config.session_id
-                );
-            }
-        }
+                )
+            });
     }
-    let state = read_state_file(&paths.state_file)?;
-    terminate_recorded_app_server(&state).await;
-    remove_bridge_state_sidecars(&paths.state_file);
-    Ok(())
+    bail!(
+        "managed Codex session {} has no live bridge control socket; refusing destructive fallback cleanup",
+        config.session_id
+    )
 }
 
 #[cfg(not(unix))]
@@ -4974,85 +4973,6 @@ async fn capture_owned_child_start_time(pid: u32) -> Option<String> {
     None
 }
 
-fn recorded_app_server_identity_matches(
-    state: &BridgeStateFile,
-    fact: &crate::process_identity::ProcessFact,
-) -> bool {
-    state.app_server_pid == Some(fact.pid)
-        && crate::process_identity::command_contains_basename(&fact.command, "codex")
-        && fact
-            .command
-            .split_whitespace()
-            .any(|part| part == "app-server")
-        && state
-            .app_server_process_start_time
-            .as_deref()
-            .filter(|recorded| !recorded.trim().is_empty())
-            .is_some_and(|recorded| {
-                crate::process_identity::lstart_matches_recorded(fact, recorded)
-            })
-}
-
-fn recorded_app_server_process(state: &BridgeStateFile) -> Option<(i32, Option<i32>)> {
-    let pid_u32 = state.app_server_pid?;
-    let fact = crate::process_identity::try_collect_process_fact(pid_u32)?;
-    if !recorded_app_server_identity_matches(state, &fact) {
-        return None;
-    }
-    let pid = i32::try_from(pid_u32).ok().filter(|pid| *pid > 0)?;
-    Some((pid, state.app_server_pgid.filter(|pgid| *pgid > 0)))
-}
-
-#[cfg(unix)]
-async fn terminate_recorded_app_server(state: &BridgeStateFile) {
-    let Some((pid, recorded_process_group_id)) = recorded_app_server_process(state) else {
-        return;
-    };
-    if let Some(process_group_id) = recorded_process_group_id {
-        let current_process_group_id = unsafe { libc::getpgid(pid) };
-        if current_process_group_id == process_group_id {
-            unsafe {
-                let _ = libc::killpg(process_group_id, libc::SIGTERM);
-            }
-            tokio::time::sleep(CHILD_SHUTDOWN_GRACE_PERIOD).await;
-            let identity_still_matches =
-                recorded_app_server_process(state).is_some_and(|(current_pid, current_group)| {
-                    current_pid == pid && current_group == Some(process_group_id)
-                });
-            if identity_still_matches && unsafe { libc::getpgid(pid) } == process_group_id {
-                unsafe {
-                    let _ = libc::killpg(process_group_id, libc::SIGKILL);
-                }
-            }
-            return;
-        }
-    }
-
-    unsafe {
-        let _ = libc::kill(pid, libc::SIGTERM);
-    }
-    tokio::time::sleep(CHILD_SHUTDOWN_GRACE_PERIOD).await;
-    let identity_still_matches =
-        recorded_app_server_process(state).is_some_and(|(current_pid, _)| current_pid == pid);
-    if identity_still_matches {
-        unsafe {
-            let _ = libc::kill(pid, libc::SIGKILL);
-        }
-    }
-}
-
-#[cfg(unix)]
-fn remove_bridge_state_sidecars(state_file: &Path) {
-    for suffix in ["json", "json.tmp", "lock", "sock"] {
-        let candidate = if suffix == "json.tmp" {
-            state_file.with_extension("json.tmp")
-        } else {
-            state_file.with_extension(suffix)
-        };
-        let _ = fs::remove_file(candidate);
-    }
-}
-
 async fn handle_bridge_followup(
     config: &BridgeRunConfig,
     client: &mut RpcClient,
@@ -5433,42 +5353,6 @@ mod tests {
     }
 
     #[test]
-    fn recorded_app_server_identity_rejects_pid_reuse_and_missing_epoch() {
-        let mut state: BridgeStateFile = serde_json::from_value(json!({
-            "session_id": "session-1",
-            "cwd": "/tmp",
-            "codex_bin": "codex",
-            "ws_url": null,
-            "thread_id": null,
-            "thread_path": null,
-            "pid": 41,
-            "app_server_pid": 42,
-            "app_server_process_start_time": "Tue Jun 30 00:00:00 2026",
-            "status": "ready",
-            "log_file": "/tmp/bridge.log",
-            "active_turn_id": null,
-            "last_turn_status": null,
-            "last_error": null,
-            "updated_at": "2026-06-30T00:00:00Z"
-        }))
-        .unwrap();
-        let mut fact = crate::process_identity::ProcessFact {
-            pid: 42,
-            tty: "??".to_string(),
-            stat: "S".to_string(),
-            lstart: "Tue Jun 30 00:00:00 2026".to_string(),
-            command: "codex app-server".to_string(),
-            start_time: None,
-        };
-
-        assert!(recorded_app_server_identity_matches(&state, &fact));
-        fact.lstart = "Wed Jul  1 00:00:00 2026".to_string();
-        assert!(!recorded_app_server_identity_matches(&state, &fact));
-        state.app_server_process_start_time = None;
-        assert!(!recorded_app_server_identity_matches(&state, &fact));
-    }
-
-    #[test]
     fn bridge_state_file_writes_schema_version() {
         let temp = tempfile::tempdir().unwrap();
         let state_file = temp.path().join("state.json");
@@ -5696,25 +5580,6 @@ mod tests {
             Some("/tmp/thread.jsonl"),
         )
         .unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn remove_bridge_state_sidecars_removes_json_tmp_lock_and_sock() {
-        let temp = tempfile::tempdir().unwrap();
-        let state_file = temp.path().join("session-1.json");
-        let tmp_file = temp.path().join("session-1.json.tmp");
-        let lock_file = temp.path().join("session-1.lock");
-        let sock_file = temp.path().join("session-1.sock");
-        for path in [&state_file, &tmp_file, &lock_file, &sock_file] {
-            fs::write(path, "x").unwrap();
-        }
-
-        remove_bridge_state_sidecars(&state_file);
-
-        for path in [&state_file, &tmp_file, &lock_file, &sock_file] {
-            assert!(!path.exists(), "expected {} to be removed", path.display());
-        }
     }
 
     fn make_test_run_config(temp: &tempfile::TempDir) -> BridgeRunConfig {
@@ -6875,6 +6740,29 @@ mod tests {
 
         assert!(error.contains("kills the provider execution"));
         assert!(error.contains("--force"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stop_without_live_ipc_fails_closed_and_preserves_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = "session-no-ipc";
+        let paths = resolve_bridge_paths(Some(temp.path()), session_id, None).unwrap();
+        fs::create_dir_all(paths.state_file.parent().unwrap()).unwrap();
+        fs::write(&paths.state_file, "stale-but-owned-elsewhere").unwrap();
+
+        let error = cmd_codex_bridge_stop(BridgeStopConfig {
+            session_id: session_id.to_string(),
+            state_root: Some(temp.path().to_path_buf()),
+            terminal_reason: None,
+            force: true,
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("refusing destructive fallback cleanup"));
+        assert!(paths.state_file.exists());
     }
 
     #[cfg(unix)]

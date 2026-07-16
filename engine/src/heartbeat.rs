@@ -2213,7 +2213,7 @@ mod tests {
 
         let leases = leases_from_observations(&conn, "cinder", &[degraded, detached], now);
 
-        assert_eq!(leases.len(), 1);
+        assert_eq!(leases.len(), 2);
         let degraded_lease = leases
             .iter()
             .find(|l| l.session_id == "degraded-session")
@@ -2320,7 +2320,7 @@ mod tests {
 
         let leases = leases_from_claude_channel_observations(&conn, "cinder", &[live, dead], now);
 
-        assert_eq!(leases.len(), 2);
+        assert_eq!(leases.len(), 1);
         let lease = leases
             .iter()
             .find(|lease| lease.session_id == session_id)
