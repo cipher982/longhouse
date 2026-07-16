@@ -419,6 +419,11 @@ struct SessionView: View {
                     TextField(detail.composerPlaceholder, text: $composerText, axis: .vertical)
                         .lineLimit(1...6)
                         .focused($composerFocused)
+                        // Coding prompts contain paths, symbols, and identifiers that
+                        // QuickType routinely rewrites. Keeping prediction out of this
+                        // field also avoids doing that system layout work while the
+                        // transcript WebView is settling around the keyboard.
+                        .autocorrectionDisabled(true)
                         .disabled(viewModel.isDrafting)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)

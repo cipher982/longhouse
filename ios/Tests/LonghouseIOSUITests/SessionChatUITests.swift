@@ -147,6 +147,10 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.tap()
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitForExistence(timeout: 3),
+            "Composer keyboard should appear promptly"
+        )
 
         XCTAssertTrue(liveUpdate.waitForExistence(timeout: 10))
         assertAnchoredAboveBottomChrome(liveUpdate, app: app)
@@ -161,6 +165,10 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         composer.tap()
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitForExistence(timeout: 3),
+            "Composer keyboard should appear promptly"
+        )
 
         XCTAssertTrue(finalChunk.waitForExistence(timeout: 10))
         assertAnchoredAboveBottomChrome(finalChunk, app: app)
