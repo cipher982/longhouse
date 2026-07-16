@@ -16,7 +16,9 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 pub use crate::cursor_helm_control::default_cursor_helm_state_dir;
-use crate::process_identity::ProcessFact;
+use crate::process_identity::{
+    parse_rfc3339, started_before_or_near_recorded, ProcessFact,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorHelmObservation {
@@ -83,12 +85,14 @@ pub(crate) fn collect_observations_from_processes(
         } else {
             Some(PathBuf::from(socket_str))
         };
+        let recorded_start = state.started_at.as_deref().and_then(parse_rfc3339);
         let launcher_alive = state
             .launcher_pid
             .and_then(|pid| process_facts.get(&pid))
             .is_some_and(|fact| {
-                fact.command.contains("cursor_helm")
-                    || (fact.command.contains("longhouse") && fact.command.contains("cursor"))
+                (fact.command.contains("cursor_helm")
+                    || (fact.command.contains("longhouse") && fact.command.contains("cursor")))
+                    && started_before_or_near_recorded(fact, recorded_start)
             });
         let socket_present = socket_path.as_ref().map(|p| p.exists()).unwrap_or(false);
         let ready = state.ready.unwrap_or(false);
@@ -112,6 +116,7 @@ pub(crate) fn collect_observations_from_processes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{DateTime, Utc};
     use serde_json::json;
 
     fn tmp_dir() -> tempfile::TempDir {
@@ -192,6 +197,23 @@ mod tests {
             .find(|o| o.session_id == "sess-dead-pid")
             .unwrap();
         assert!(!dead.live);
+    }
+
+    #[test]
+    fn recycled_launcher_pid_is_not_live() {
+        let dir = tmp_dir();
+        let socket = dir.path().join("reused.sock");
+        fs::File::create(&socket).unwrap();
+        write_state(dir.path(), "sess-reused", &socket, Some(4242));
+        let mut facts = launcher_facts(4242);
+        facts.get_mut(&4242).unwrap().start_time =
+            DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
+                .ok()
+                .map(|value| value.with_timezone(&Utc));
+
+        let observations = collect_observations_from_processes(dir.path(), &facts);
+
+        assert!(!observations[0].live);
     }
 
     #[test]

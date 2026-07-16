@@ -361,7 +361,49 @@ struct ManagedObservationScanResult {
     claude_elapsed_ms: u64,
     opencode_elapsed_ms: u64,
     cursor_elapsed_ms: u64,
+    retained_stale_rows: usize,
     elapsed_ms: u64,
+}
+
+#[derive(Clone, Default)]
+struct ManagedObservationSnapshot {
+    codex: Vec<managed_bridge_scan::CodexBridgeObservation>,
+    claude: Vec<managed_claude_scan::ClaudeChannelObservation>,
+    opencode: Vec<managed_opencode_scan::OpenCodeServerObservation>,
+    cursor: Vec<managed_cursor_helm_scan::CursorHelmObservation>,
+}
+
+struct ProjectionBuildInput {
+    db_path: PathBuf,
+    tracker: ConsecutiveErrorTracker,
+    parse_tracker: RecentIssueTracker,
+    ship_stats: RecentShipStatsTracker,
+    is_offline: bool,
+    last_ship_at: Option<String>,
+    machine_id: String,
+    managed: ManagedObservationSnapshot,
+    unmanaged: Vec<heartbeat::UnmanagedSessionBinding>,
+    limiter: crate::scheduler::LimiterSnapshot,
+    scheduler: crate::scheduler::SchedulerSnapshot,
+    archive_repair_mode: ArchiveRepairMode,
+    last_full_reconciled_at: Option<String>,
+    session_snapshot_state: SessionSnapshotState,
+}
+
+struct ProjectionBuildResult {
+    result: Result<(heartbeat::StatusFileProjection, SessionSnapshotState), String>,
+    elapsed_ms: u64,
+}
+
+impl ManagedObservationSnapshot {
+    fn from_result(result: &ManagedObservationScanResult) -> Self {
+        Self {
+            codex: result.codex_observations.clone(),
+            claude: result.claude_observations.clone(),
+            opencode: result.opencode_observations.clone(),
+            cursor: result.cursor_observations.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -529,7 +571,9 @@ fn archive_startup_replay_warmup_delay(
 /// Run the connect daemon. This function blocks until shutdown signal.
 pub async fn run(config: ConnectConfig) -> Result<()> {
     // 1. Open state DB
-    let conn = open_db(config.shipper_config.db_path.as_deref())?;
+    let projection_db_path =
+        crate::state::db::resolve_db_path(config.shipper_config.db_path.as_deref())?;
+    let conn = open_db(Some(&projection_db_path))?;
 
     // 2. Startup recovery
     let recovered = shipper::run_startup_recovery(&conn)?;
@@ -670,13 +714,20 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut in_flight = JoinSet::new();
     let mut discovery_tasks: JoinSet<DiscoveryTaskResult> = JoinSet::new();
     let mut managed_observation_scan_tasks: JoinSet<ManagedObservationScanResult> = JoinSet::new();
+    let mut last_managed_observations = ManagedObservationSnapshot::default();
     let mut opencode_title_refresh_tasks: JoinSet<Result<()>> = JoinSet::new();
+    let mut projection_build_tasks: JoinSet<ProjectionBuildResult> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
     let startup_archive_mode =
         read_archive_repair_control().normalized_mode(config.archive_repair_mode);
     let startup_archive_replay_delay =
         archive_startup_replay_warmup_delay(startup_archive_mode, rand::random::<f64>());
-    maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "startup", true);
+    maybe_start_managed_observation_scan(
+        &mut managed_observation_scan_tasks,
+        "startup",
+        true,
+        &last_managed_observations,
+    );
     if let Some(delay) = startup_archive_replay_delay {
         tracing::info!(
             mode = startup_archive_mode.as_str(),
@@ -758,6 +809,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut pending_wake_reconciliation = false;
     let mut pending_full_reconciliation = false;
     let mut pending_periodic_observation = false;
+    let mut projection_build_pending = false;
+    let mut last_full_reconciled_at: Option<String> = None;
+    let mut last_managed_scan_partial = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
@@ -1225,6 +1279,25 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 }
                                 last_unmanaged_session_bindings = Some(bindings);
                                 last_unmanaged_session_bindings_refreshed_at = Some(Instant::now());
+                                let input = ProjectionBuildInput {
+                                    db_path: projection_db_path.clone(),
+                                    tracker: tracker.clone(),
+                                    parse_tracker: parse_tracker.clone(),
+                                    ship_stats: ship_stats.clone(),
+                                    is_offline: offline.is_offline,
+                                    last_ship_at: last_ship_at.clone(),
+                                    machine_id: config.shipper_config.machine_name.clone(),
+                                    managed: last_managed_observations.clone(),
+                                    unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
+                                    limiter: adaptive_limiter.snapshot(),
+                                    scheduler: scheduler.snapshot(),
+                                    archive_repair_mode: config.archive_repair_mode,
+                                    last_full_reconciled_at: last_full_reconciled_at.clone(),
+                                    session_snapshot_state: session_snapshot_state.clone(),
+                                };
+                                if !maybe_start_projection_build(&mut projection_build_tasks, input) {
+                                    projection_build_pending = true;
+                                }
                             }
                             Err(err) => {
                                 tracing::warn!(
@@ -1260,6 +1333,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 claude_elapsed_ms = result.claude_elapsed_ms,
                                 opencode_elapsed_ms = result.opencode_elapsed_ms,
                                 cursor_elapsed_ms = result.cursor_elapsed_ms,
+                                retained_stale_rows = result.retained_stale_rows,
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan was slow"
                             );
@@ -1277,6 +1351,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 claude_elapsed_ms = result.claude_elapsed_ms,
                                 opencode_elapsed_ms = result.opencode_elapsed_ms,
                                 cursor_elapsed_ms = result.cursor_elapsed_ms,
+                                retained_stale_rows = result.retained_stale_rows,
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan completed"
                             );
@@ -1294,6 +1369,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     &mut managed_observation_scan_tasks,
                                     "wake",
                                     true,
+                                    &last_managed_observations,
                                 ) {
                                     pending_wake_reconciliation = false;
                                 }
@@ -1302,11 +1378,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     &mut managed_observation_scan_tasks,
                                     "full_reconciliation",
                                     true,
+                                    &last_managed_observations,
                                 )
                             {
                                 pending_full_reconciliation = false;
                             }
                             continue;
+                        }
+                        last_managed_observations =
+                            ManagedObservationSnapshot::from_result(&result);
+                        last_managed_scan_partial = result.retained_stale_rows > 0;
+                        if result.full_reconciliation {
+                            last_full_reconciled_at = Some(chrono::Utc::now().to_rfc3339());
                         }
                         refresh_managed_codex_transcript_paths(
                             &mut managed_codex_transcript_paths,
@@ -1352,49 +1435,34 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             config.shipper_config.db_path.clone(),
                             result.opencode_observations.clone(),
                         );
-                        let empty_unmanaged_bindings: &[heartbeat::UnmanagedSessionBinding] = &[];
-                        let unmanaged_binding_override =
-                            last_unmanaged_session_bindings.as_deref().unwrap_or(empty_unmanaged_bindings);
-                        let projection_started = Instant::now();
-                        let projection = build_local_status_projection(
-                            &conn,
-                            &tracker,
-                            &parse_tracker,
-                            &ship_stats,
-                            offline.is_offline,
-                            &last_ship_at,
-                            &config.shipper_config.machine_name,
-                            &result.codex_observations,
-                            &result.claude_observations,
-                            &result.opencode_observations,
-                            &result.cursor_observations,
-                            unmanaged_binding_override,
-                            Some(adaptive_limiter.as_ref()),
-                            Some(&scheduler),
-                            config.archive_repair_mode,
-                            &mut session_snapshot_state,
-                        );
-                        let projection_elapsed_ms = projection_started.elapsed().as_millis() as u64;
-                        if projection_elapsed_ms > 50 {
-                            tracing::warn!(
-                                projection_elapsed_ms,
-                                "Local status projection exceeded event-loop budget"
-                            );
+                        let projection_input = ProjectionBuildInput {
+                            db_path: projection_db_path.clone(),
+                            tracker: tracker.clone(),
+                            parse_tracker: parse_tracker.clone(),
+                            ship_stats: ship_stats.clone(),
+                            is_offline: offline.is_offline,
+                            last_ship_at: last_ship_at.clone(),
+                            machine_id: config.shipper_config.machine_name.clone(),
+                            managed: last_managed_observations.clone(),
+                            unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
+                            limiter: adaptive_limiter.snapshot(),
+                            scheduler: scheduler.snapshot(),
+                            archive_repair_mode: config.archive_repair_mode,
+                            last_full_reconciled_at: last_full_reconciled_at.clone(),
+                            session_snapshot_state: session_snapshot_state.clone(),
+                        };
+                        if !maybe_start_projection_build(
+                            &mut projection_build_tasks,
+                            projection_input,
+                        ) {
+                            projection_build_pending = true;
                         }
-                        managed_reconciliation = heartbeat::ProjectionReconciliation::idle();
-                        heartbeat::write_status_file(
-                            &projection,
-                            serde_json::to_value(control_channel_status.snapshot()).ok(),
-                            &managed_reconciliation,
-                            &status_path,
-                        );
-                        let payload = projection.payload.clone();
-                        last_status_projection = Some(projection);
                         if pending_wake_reconciliation
                             && maybe_start_managed_observation_scan(
                                 &mut managed_observation_scan_tasks,
                                 "wake",
                                 true,
+                                &last_managed_observations,
                             )
                         {
                             pending_wake_reconciliation = false;
@@ -1407,6 +1475,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 &mut managed_observation_scan_tasks,
                                 "full_reconciliation",
                                 true,
+                                &last_managed_observations,
                             )
                         {
                             pending_full_reconciliation = false;
@@ -1419,31 +1488,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 &mut managed_observation_scan_tasks,
                                 "periodic",
                                 false,
+                                &last_managed_observations,
                             )
                         {
                             pending_periodic_observation = false;
-                        }
-                        let signature = runtime_truth_signature(&payload);
-                        if !runtime_truth_bootstrapped {
-                            last_runtime_truth_signature = Some(signature);
-                            runtime_truth_bootstrapped = true;
-                            continue;
-                        }
-                        if !offline.is_offline && last_runtime_truth_signature.as_deref() != Some(signature.as_str()) {
-                            if heartbeat_post_tasks.is_empty() {
-                                spawn_heartbeat_post(
-                                    &mut heartbeat_post_tasks,
-                                    client.clone(),
-                                    payload,
-                                    signature,
-                                    "runtime_truth_change",
-                                );
-                            } else {
-                                last_runtime_truth_signature = None;
-                                tracing::debug!(
-                                    "Runtime truth snapshot changed while a heartbeat POST is still in flight"
-                                );
-                            }
                         }
                     }
                     Some(Err(err)) => {
@@ -1464,6 +1512,90 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Some(Ok(Ok(()))) | None => {}
                     Some(Ok(Err(err))) => tracing::warn!(error = %err, "OpenCode title refresh failed"),
                     Some(Err(err)) => tracing::warn!(error = %err, "OpenCode title refresh task failed"),
+                }
+            }
+
+            projection_build_result = projection_build_tasks.join_next(), if !projection_build_tasks.is_empty() => {
+                match projection_build_result {
+                    Some(Ok(result)) => match result.result {
+                        Ok((projection, next_snapshot_state)) => {
+                            if result.elapsed_ms > 50 {
+                                tracing::warn!(
+                                    projection_elapsed_ms = result.elapsed_ms,
+                                    "Local status projection exceeded background budget"
+                                );
+                            }
+                            session_snapshot_state = next_snapshot_state;
+                            if last_managed_scan_partial {
+                                managed_reconciliation =
+                                    heartbeat::ProjectionReconciliation::failed("provider_state_partial");
+                            } else if managed_observation_scan_tasks.is_empty()
+                                && !pending_wake_reconciliation
+                                && !pending_full_reconciliation
+                            {
+                                managed_reconciliation = heartbeat::ProjectionReconciliation::idle();
+                            }
+                            heartbeat::write_status_file(
+                                &projection,
+                                serde_json::to_value(control_channel_status.snapshot()).ok(),
+                                &managed_reconciliation,
+                                &status_path,
+                            );
+                            let payload = projection.payload.clone();
+                            last_status_projection = Some(projection);
+                            let signature = runtime_truth_signature(&payload);
+                            if !runtime_truth_bootstrapped {
+                                last_runtime_truth_signature = Some(signature);
+                                runtime_truth_bootstrapped = true;
+                            } else if !offline.is_offline
+                                && last_runtime_truth_signature.as_deref() != Some(signature.as_str())
+                            {
+                                if heartbeat_post_tasks.is_empty() {
+                                    spawn_heartbeat_post(
+                                        &mut heartbeat_post_tasks,
+                                        client.clone(),
+                                        payload,
+                                        signature,
+                                        "runtime_truth_change",
+                                    );
+                                } else {
+                                    last_runtime_truth_signature = None;
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(error = %error, "Local status projection build failed");
+                            managed_reconciliation =
+                                heartbeat::ProjectionReconciliation::failed("projection_build");
+                        }
+                    },
+                    Some(Err(error)) => {
+                        tracing::warn!(error = %error, "Local status projection task failed");
+                        managed_reconciliation =
+                            heartbeat::ProjectionReconciliation::failed("projection_build");
+                    }
+                    None => {}
+                }
+
+                if projection_build_pending {
+                    projection_build_pending = false;
+                    let input = ProjectionBuildInput {
+                        db_path: projection_db_path.clone(),
+                        tracker: tracker.clone(),
+                        parse_tracker: parse_tracker.clone(),
+                        ship_stats: ship_stats.clone(),
+                        is_offline: offline.is_offline,
+                        last_ship_at: last_ship_at.clone(),
+                        machine_id: config.shipper_config.machine_name.clone(),
+                        managed: last_managed_observations.clone(),
+                        unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
+                        limiter: adaptive_limiter.snapshot(),
+                        scheduler: scheduler.snapshot(),
+                        archive_repair_mode: config.archive_repair_mode,
+                        last_full_reconciled_at: last_full_reconciled_at.clone(),
+                        session_snapshot_state: session_snapshot_state.clone(),
+                    };
+                    let _ = maybe_start_projection_build(&mut projection_build_tasks, input);
                 }
             }
 
@@ -1639,6 +1771,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         &mut managed_observation_scan_tasks,
                         "wake",
                         true,
+                        &last_managed_observations,
                     ) {
                         managed_reconciliation = heartbeat::ProjectionReconciliation::running(
                             "wake",
@@ -1681,6 +1814,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut managed_observation_scan_tasks,
                     "full_reconciliation",
                     true,
+                    &last_managed_observations,
                 ) {
                     managed_reconciliation = heartbeat::ProjectionReconciliation::running(
                         "full_reconciliation",
@@ -1700,6 +1834,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &mut managed_observation_scan_tasks,
                     "periodic",
                     false,
+                    &last_managed_observations,
                 ) {
                     pending_periodic_observation = false;
                 } else {
@@ -1772,6 +1907,63 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     Ok(())
 }
 
+fn maybe_start_projection_build(
+    tasks: &mut JoinSet<ProjectionBuildResult>,
+    input: ProjectionBuildInput,
+) -> bool {
+    if !tasks.is_empty() {
+        return false;
+    }
+    tasks.spawn_blocking(move || {
+        let started = Instant::now();
+        let ProjectionBuildInput {
+            db_path,
+            tracker,
+            parse_tracker,
+            ship_stats,
+            is_offline,
+            last_ship_at,
+            machine_id,
+            managed,
+            unmanaged,
+            limiter,
+            scheduler,
+            archive_repair_mode,
+            last_full_reconciled_at,
+            mut session_snapshot_state,
+        } = input;
+        let result = crate::state::db::open_connection(&db_path)
+            .map_err(|error| error.to_string())
+            .map(|conn| {
+                let mut projection = build_local_status_projection(
+                    &conn,
+                    &tracker,
+                    &parse_tracker,
+                    &ship_stats,
+                    is_offline,
+                    &last_ship_at,
+                    &machine_id,
+                    &managed.codex,
+                    &managed.claude,
+                    &managed.opencode,
+                    &managed.cursor,
+                    &unmanaged,
+                    Some(limiter),
+                    Some(scheduler),
+                    archive_repair_mode,
+                    &mut session_snapshot_state,
+                );
+                projection.set_last_reconciled_at(last_full_reconciled_at);
+                (projection, session_snapshot_state)
+            });
+        ProjectionBuildResult {
+            result,
+            elapsed_ms: started.elapsed().as_millis() as u64,
+        }
+    });
+    true
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_local_status_projection(
     conn: &rusqlite::Connection,
@@ -1786,8 +1978,8 @@ fn build_local_status_projection(
     opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     cursor_observations: &[managed_cursor_helm_scan::CursorHelmObservation],
     unmanaged_session_bindings: &[heartbeat::UnmanagedSessionBinding],
-    limiter: Option<&crate::scheduler::AdaptiveLimiter>,
-    scheduler: Option<&PathScheduler>,
+    limiter_snapshot: Option<crate::scheduler::LimiterSnapshot>,
+    scheduler_snapshot: Option<crate::scheduler::SchedulerSnapshot>,
     archive_repair_mode: ArchiveRepairMode,
     session_snapshot_state: &mut SessionSnapshotState,
 ) -> heartbeat::StatusFileProjection {
@@ -1803,8 +1995,8 @@ fn build_local_status_projection(
     };
     let mut payload = heartbeat::HeartbeatPayload::build(&stats);
     let archive_control = read_archive_repair_control();
-    payload.adaptive_backlog_limiter = limiter.map(|l| l.snapshot());
-    payload.ship_scheduler = scheduler.map(PathScheduler::snapshot);
+    payload.adaptive_backlog_limiter = limiter_snapshot;
+    payload.ship_scheduler = scheduler_snapshot;
     apply_archive_repair_control(&mut payload, &archive_control, archive_repair_mode);
     let now = chrono::Utc::now();
     payload.managed_sessions =
@@ -1980,7 +2172,7 @@ fn runtime_truth_signature(payload: &heartbeat::HeartbeatPayload) -> String {
         .unwrap_or_else(|| heartbeat::session_snapshot_digest(payload))
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct SessionSnapshotState {
     last_digest: Option<String>,
     sequence: u64,
@@ -2298,11 +2490,13 @@ fn maybe_start_managed_observation_scan(
     scan_tasks: &mut JoinSet<ManagedObservationScanResult>,
     reason: &'static str,
     full_reconciliation: bool,
+    previous: &ManagedObservationSnapshot,
 ) -> bool {
     if !scan_tasks.is_empty() {
         return false;
     }
 
+    let previous = previous.clone();
     scan_tasks.spawn_blocking(move || {
         let started = Instant::now();
         let process_started = Instant::now();
@@ -2311,7 +2505,7 @@ fn maybe_start_managed_observation_scan(
         let process_facts = process_inventory.unwrap_or_default();
         let process_inventory_ms = process_started.elapsed().as_millis() as u64;
         let codex_started = Instant::now();
-        let codex_observations = managed_bridge_scan::default_codex_bridge_state_dir()
+        let mut codex_observations = managed_bridge_scan::default_codex_bridge_state_dir()
             .map(|state_dir| {
                 managed_bridge_scan::collect_observations_from(&state_dir, &process_facts)
             })
@@ -2319,7 +2513,7 @@ fn maybe_start_managed_observation_scan(
         let codex_elapsed_ms = codex_started.elapsed().as_millis() as u64;
 
         let claude_started = Instant::now();
-        let claude_observations = managed_claude_scan::default_claude_channel_state_dir()
+        let mut claude_observations = managed_claude_scan::default_claude_channel_state_dir()
             .map(|state_dir| {
                 managed_claude_scan::collect_observations_from_processes(
                     &state_dir,
@@ -2327,6 +2521,16 @@ fn maybe_start_managed_observation_scan(
                 )
             })
             .unwrap_or_default();
+        let retained_codex = retain_existing_observations(
+            &mut codex_observations,
+            &previous.codex,
+            |observation| &observation.state_file,
+        );
+        let retained_claude = retain_existing_observations(
+            &mut claude_observations,
+            &previous.claude,
+            |observation| &observation.state_file,
+        );
         if full_reconciliation {
             managed_claude_scan::reap_dead_state_files(
                 &claude_observations,
@@ -2337,7 +2541,7 @@ fn maybe_start_managed_observation_scan(
         let claude_elapsed_ms = claude_started.elapsed().as_millis() as u64;
 
         let opencode_started = Instant::now();
-        let opencode_observations = managed_opencode_scan::default_opencode_server_state_dir()
+        let mut opencode_observations = managed_opencode_scan::default_opencode_server_state_dir()
             .map(|state_dir| {
                 managed_opencode_scan::collect_observations_from_processes(
                     &state_dir,
@@ -2348,7 +2552,7 @@ fn maybe_start_managed_observation_scan(
         let opencode_elapsed_ms = opencode_started.elapsed().as_millis() as u64;
 
         let cursor_started = Instant::now();
-        let cursor_observations = managed_cursor_helm_scan::default_cursor_helm_state_dir()
+        let mut cursor_observations = managed_cursor_helm_scan::default_cursor_helm_state_dir()
             .map(|state_dir| {
                 managed_cursor_helm_scan::collect_observations_from_processes(
                     &state_dir,
@@ -2356,6 +2560,16 @@ fn maybe_start_managed_observation_scan(
                 )
             })
             .unwrap_or_default();
+        let retained_opencode = retain_existing_observations(
+            &mut opencode_observations,
+            &previous.opencode,
+            |observation| &observation.state_file,
+        );
+        let retained_cursor = retain_existing_observations(
+            &mut cursor_observations,
+            &previous.cursor,
+            |observation| &observation.state_file,
+        );
         let cursor_elapsed_ms = cursor_started.elapsed().as_millis() as u64;
         ManagedObservationScanResult {
             reason,
@@ -2370,10 +2584,32 @@ fn maybe_start_managed_observation_scan(
             claude_elapsed_ms,
             opencode_elapsed_ms,
             cursor_elapsed_ms,
+            retained_stale_rows: retained_codex
+                + retained_claude
+                + retained_opencode
+                + retained_cursor,
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });
     true
+}
+
+fn retain_existing_observations<T: Clone>(
+    current: &mut Vec<T>,
+    previous: &[T],
+    state_file: impl Fn(&T) -> &Path,
+) -> usize {
+    let current_paths = current
+        .iter()
+        .map(|observation| state_file(observation).to_path_buf())
+        .collect::<HashSet<_>>();
+    let retained = previous.iter().filter_map(|observation| {
+        let path = state_file(observation);
+        (path.exists() && !current_paths.contains(path)).then(|| observation.clone())
+    }).collect::<Vec<_>>();
+    let retained_count = retained.len();
+    current.extend(retained);
+    retained_count
 }
 
 #[cfg(unix)]
@@ -3796,6 +4032,30 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone)]
+    struct RetainedFixtureRow {
+        path: PathBuf,
+        value: u32,
+    }
+
+    #[test]
+    fn partial_scan_retains_prior_row_only_while_state_file_still_exists() {
+        let temp = tempfile::tempdir().unwrap();
+        let existing = temp.path().join("existing.json");
+        let removed = temp.path().join("removed.json");
+        std::fs::write(&existing, "{}").unwrap();
+        let previous = vec![
+            RetainedFixtureRow { path: existing, value: 1 },
+            RetainedFixtureRow { path: removed, value: 2 },
+        ];
+        let mut current = Vec::new();
+
+        retain_existing_observations(&mut current, &previous, |row| &row.path);
+
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].value, 1);
+    }
 
     #[test]
     fn wake_gap_detector_separates_suspend_gap_from_normal_timer_jitter() {

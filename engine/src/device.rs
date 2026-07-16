@@ -585,6 +585,20 @@ fn native_fast_health_from_parts(
     } else if exists && error.is_none() && effective_age_seconds.is_none() {
         reasons.push("engine_status_age_unknown".to_string());
     }
+    let reconciliation_state = local_projection
+        .and_then(|value| value.get("reconciliation"))
+        .and_then(Value::as_object)
+        .and_then(|value| value.get("state"))
+        .and_then(Value::as_str);
+    if evidence_age_seconds
+        .map(|age| age > ENGINE_FRESH_SECONDS)
+        .unwrap_or(false)
+    {
+        reasons.push("engine_evidence_stale".to_string());
+    }
+    if reconciliation_state == Some("failed") {
+        reasons.push("engine_reconciliation_failed".to_string());
+    }
     if is_offline == Some(true) {
         reasons.push("engine_offline".to_string());
     }
@@ -2867,8 +2881,9 @@ mod tests {
             None,
         );
 
-        assert_eq!(health.health_state, "healthy");
+        assert_eq!(health.health_state, "degraded");
         assert!(health.engine_status.fresh);
+        assert!(health.reasons.contains(&"engine_evidence_stale".to_string()));
         assert!(health.engine_status.age_seconds.unwrap_or_default() <= 1);
         assert_eq!(
             health
@@ -2879,6 +2894,30 @@ mod tests {
                 .and_then(Value::as_str),
             Some("reconciling")
         );
+    }
+
+    #[test]
+    fn native_fast_local_health_surfaces_failed_reconciliation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent").join("engine-status.json");
+        let now = chrono::Utc::now().to_rfc3339();
+        let health = native_fast_health_from_parts(
+            &path,
+            true,
+            Some(1),
+            Some(json!({
+                "local_projection": {
+                    "generated_at": now.clone(),
+                    "engine_pulse_at": now,
+                    "reconciliation": {"state": "failed", "reason": "process_inventory"}
+                }
+            })),
+            None,
+        );
+
+        assert_eq!(health.health_state, "degraded");
+        assert!(health.reasons.contains(&"engine_reconciliation_failed".to_string()));
+        assert!(health.engine_status.fresh);
     }
 
     #[test]

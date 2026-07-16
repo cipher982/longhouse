@@ -35,7 +35,11 @@ pub struct OpenCodeServerObservation {
     pub pid: Option<u32>,
     pub started_at: String,
     pub updated_at: String,
+    /// Identity-valid provider process ownership. This remains true across a
+    /// transient health-probe failure so managed ownership cannot fall into
+    /// Shadow classification.
     pub server_alive: bool,
+    pub health_ready: bool,
     /// True when a foreground `opencode attach` TUI is currently connected to
     /// this server/session. This is live UI presence, not launch history.
     pub has_tui_attachment: bool,
@@ -179,7 +183,7 @@ pub(crate) fn collect_observations_from_processes(
     let mut out = candidates
         .into_iter()
         .zip(health)
-        .map(|(candidate, server_alive)| OpenCodeServerObservation {
+        .map(|(candidate, health_ready)| OpenCodeServerObservation {
             session_id: candidate.session_id,
             provider_session_id: candidate.provider_session_id,
             state_file: candidate.state_file,
@@ -191,7 +195,8 @@ pub(crate) fn collect_observations_from_processes(
             pid: candidate.state.pid,
             started_at: candidate.state.started_at.unwrap_or_default(),
             updated_at: candidate.state.updated_at.unwrap_or_default(),
-            server_alive,
+            server_alive: candidate.pid_alive,
+            health_ready,
             has_tui_attachment: candidate.has_tui_attachment,
             launch_mode: candidate
                 .state
@@ -397,6 +402,7 @@ mod tests {
         assert_eq!(obs[0].cwd.as_deref(), Some("/Users/test/repo"));
         assert_eq!(obs[0].server_url.as_deref(), Some("http://127.0.0.1:12345"));
         assert!(!obs[0].server_alive);
+        assert!(!obs[0].health_ready);
         assert!(!obs[0].has_tui_attachment);
     }
 
@@ -432,6 +438,7 @@ mod tests {
 
         assert_eq!(observations.len(), 1);
         assert!(!observations[0].server_alive);
+        assert!(!observations[0].health_ready);
     }
 
     #[test]
@@ -464,6 +471,7 @@ mod tests {
 
         assert_eq!(obs.len(), 1);
         assert!(obs[0].server_alive);
+        assert!(obs[0].health_ready);
         assert!(!obs[0].has_tui_attachment);
         let request = request_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(request.contains("GET /global/health HTTP/1.1"));
@@ -474,7 +482,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_marks_alive_pid_dead_when_health_check_fails() {
+    fn scan_retains_process_ownership_when_health_check_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let bridge_password = bridge_test_password();
         fs::write(
@@ -501,7 +509,8 @@ mod tests {
         );
 
         assert_eq!(obs.len(), 1);
-        assert!(!obs[0].server_alive);
+        assert!(obs[0].server_alive);
+        assert!(!obs[0].health_ready);
     }
 
     #[test]

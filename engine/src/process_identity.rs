@@ -48,12 +48,14 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
     if !output.status.success() {
         return None;
     }
-    Some(
-        String::from_utf8_lossy(&output.stdout)
+    let facts = String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter_map(parse_process_fact)
-            .collect(),
-    )
+            .collect::<HashMap<_, _>>();
+    if !output.stdout.is_empty() && facts.is_empty() {
+        return None;
+    }
+    Some(facts)
 }
 
 /// Parse one `ps -axo pid=,tty=,stat=,lstart=,command=` line.

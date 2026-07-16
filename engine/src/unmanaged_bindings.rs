@@ -191,7 +191,7 @@ impl ProcessScanner for SystemScanner {
 
 fn run_ps() -> Result<Vec<ProcessInfo>, String> {
     let output = Command::new("ps")
-        .args(["-axo", "pid=,lstart=,command="])
+        .args(["-axo", "pid=,tty=,stat=,lstart=,command="])
         .output()
         .map_err(|err| format!("running ps for unmanaged inventory: {err}"))?;
     if !output.status.success() {
@@ -219,7 +219,7 @@ fn run_lsof(pid: u32) -> Result<Vec<PathBuf>, String> {
     Ok(parse_lsof(&text))
 }
 
-/// Parse `ps -axo pid=,lstart=,command=` output.
+/// Parse `ps -axo pid=,tty=,stat=,lstart=,command=` output.
 ///
 /// `lstart` is a fixed-width 24-char field like `Sun Apr 27 10:15:23 2026`.
 fn parse_ps(text: &str) -> Vec<ProcessInfo> {
@@ -632,8 +632,8 @@ mod tests {
         // Apr 27 2026 is a Monday. ps emits local weekday abbreviation; we
         // validate the format strictly via `%a`.
         let input = concat!(
-            " 1234 Mon Apr 27 10:15:23 2026 /usr/local/bin/codex --config /foo\n",
-            "   99 Mon Apr 27 10:00:00 2026 /bin/zsh -l\n",
+            " 1234 ttys001 S+ Mon Apr 27 10:15:23 2026 /usr/local/bin/codex --config /foo\n",
+            "   99 ??      Ss Mon Apr 27 10:00:00 2026 /bin/zsh -l\n",
         );
         let parsed = parse_ps(input);
         assert_eq!(parsed.len(), 2);

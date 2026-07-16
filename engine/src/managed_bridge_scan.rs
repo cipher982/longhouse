@@ -17,7 +17,9 @@ use std::path::PathBuf;
 use std::collections::HashMap;
 
 use crate::codex_bridge::BridgeStateFile;
-use crate::process_identity::{command_contains_basename, ProcessFact};
+use crate::process_identity::{
+    command_contains_basename, parse_rfc3339, started_before_or_near_recorded, ProcessFact,
+};
 
 /// Raw, per-bridge signals captured by a single scan pass.
 #[derive(Debug, Clone)]
@@ -144,6 +146,7 @@ pub fn collect_observations_from(
             .is_some_and(|fact| {
                 command_contains_basename(&fact.command, "codex")
                     && fact.command.split_whitespace().any(|part| part == "app-server")
+                    && started_before_or_near_recorded(fact, parse_rfc3339(&state.updated_at))
             });
 
         out.push(CodexBridgeObservation {
@@ -212,6 +215,51 @@ mod tests {
         fs::write(tmp.path().join("note.txt"), b"{}").unwrap();
         let obs = collect_observations_from(tmp.path(), &HashMap::new());
         assert!(obs.is_empty());
+    }
+
+    #[test]
+    fn recycled_app_server_pid_is_not_alive() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(
+            tmp.path().join("session.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "session_id": "managed-codex",
+                "cwd": "/tmp",
+                "codex_bin": "codex",
+                "ws_url": null,
+                "thread_id": "thread-1",
+                "thread_path": null,
+                "pid": 111,
+                "app_server_pid": 4242,
+                "app_server_pgid": 4242,
+                "status": "ready",
+                "log_file": "/tmp/codex.log",
+                "active_turn_id": null,
+                "last_turn_status": null,
+                "last_error": null,
+                "updated_at": "2026-06-30T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let mut fact = ProcessFact {
+            pid: 4242,
+            tty: "??".to_string(),
+            stat: "S".to_string(),
+            lstart: "Wed Jul  1 00:00:00 2026".to_string(),
+            command: "codex app-server".to_string(),
+            start_time: None,
+        };
+        fact.start_time = parse_rfc3339("2026-07-01T00:00:00Z");
+
+        let observations = collect_observations_from(
+            tmp.path(),
+            &HashMap::from([(4242, fact)]),
+        );
+
+        assert_eq!(observations.len(), 1);
+        assert!(!observations[0].app_server_alive);
     }
 
     #[test]

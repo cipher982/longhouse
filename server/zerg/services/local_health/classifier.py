@@ -35,6 +35,8 @@ class _HealthClassificationContext:
     engine_exists: bool
     engine_error: Any
     engine_age: Any
+    engine_evidence_age: Any
+    engine_reconciliation_state: str | None
     spool_pending: int
     archive_state: str
     archive_mode: str
@@ -533,6 +535,8 @@ def _health_classification_context(
         engine_exists=bool(engine_status.get("exists")),
         engine_error=engine_status.get("error"),
         engine_age=engine_status.get("age_seconds"),
+        engine_evidence_age=engine_status.get("evidence_age_seconds"),
+        engine_reconciliation_state=str((engine_status.get("reconciliation") or {}).get("state") or "").strip() or None,
         spool_pending=spool_pending,
         archive_state=archive_state,
         archive_mode=archive_mode,
@@ -602,6 +606,11 @@ def _collect_health_reasons(
         canonical_sessions_missing=context.canonical_sessions_missing,
         canonical_sessions_invalid=context.canonical_sessions_invalid,
     )
+    if context.engine_evidence_age is not None and context.engine_evidence_age > ENGINE_FRESH_SECONDS:
+        reasons.append("engine_evidence_stale")
+    if context.engine_reconciliation_state == "failed":
+        reasons.append("engine_reconciliation_failed")
+        _with_action(actions, f"Inspect logs: {context.engine_log_path}")
     _add_spool_pending_reason(
         reasons,
         spool_pending=context.spool_pending,
@@ -849,6 +858,8 @@ def _classify_health(
         canonical_sessions_missing=context.canonical_sessions_missing,
         canonical_sessions_invalid=context.canonical_sessions_invalid,
     )
+    if "engine_evidence_stale" in reasons or "engine_reconciliation_failed" in reasons:
+        degraded = True
 
     if broken:
         return ("broken", "red", _broken_health_headline(reasons), reasons, actions)

@@ -613,19 +613,20 @@ pub fn leases_from_opencode_server_observations(
             continue;
         }
         let overlay = phase_overlay.get(&obs.session_id);
+        let state = if obs.health_ready { "attached" } else { "degraded" };
         leases.push(ManagedSessionLease {
             session_id: obs.session_id.clone(),
             provider: "opencode".to_string(),
             machine_id: machine_id.trim().to_string(),
             sequence,
-            state: "attached".to_string(),
+            state: state.to_string(),
             phase: Some(
                 overlay
                     .and_then(|row| normalize_managed_phase(row.phase.as_deref()))
                     .unwrap_or_else(|| "idle".to_string()),
             ),
             tool_name: overlay.and_then(|row| row.tool_name.clone()),
-            bridge_status: Some("ready".to_string()),
+            bridge_status: Some(if obs.health_ready { "ready" } else { "health_unavailable" }.to_string()),
             thread_subscription_status: None,
             observed_at: overlay
                 .and_then(|row| row.observed_at.clone())
@@ -1497,6 +1498,7 @@ pub struct StatusFileProjection {
     phase_ledger: Vec<PhaseLedgerRow>,
     phase_ledger_status: PhaseLedgerStatus,
     generated_at: String,
+    last_reconciled_at: String,
 }
 
 pub fn build_status_file_projection(
@@ -1512,12 +1514,22 @@ pub fn build_status_file_projection(
         .into_iter()
         .map(status_dead_letter_from_entry)
         .collect();
+    let generated_at = chrono::Utc::now().to_rfc3339();
     StatusFileProjection {
         payload,
         recent_dead_letters,
         phase_ledger,
         phase_ledger_status,
-        generated_at: chrono::Utc::now().to_rfc3339(),
+        generated_at: generated_at.clone(),
+        last_reconciled_at: generated_at,
+    }
+}
+
+impl StatusFileProjection {
+    pub fn set_last_reconciled_at(&mut self, value: Option<String>) {
+        if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+            self.last_reconciled_at = value;
+        }
     }
 }
 
@@ -1608,7 +1620,7 @@ pub fn write_status_file(
             version: projection.payload.sessions_sequence,
             generated_at: &projection.generated_at,
             engine_pulse_at: &now,
-            last_reconciled_at: &projection.generated_at,
+            last_reconciled_at: &projection.last_reconciled_at,
             reconciliation,
         },
         build: BuildIdentity::current(),
@@ -2065,6 +2077,7 @@ mod tests {
             started_at: "2026-05-05T11:59:00Z".to_string(),
             updated_at: "2026-05-05T12:00:00Z".to_string(),
             server_alive: true,
+            health_ready: true,
             has_tui_attachment: false,
             launch_mode: launch_mode.to_string(),
             owner_wrapper_pid: Some(9000),
@@ -2087,6 +2100,25 @@ mod tests {
             observed_at: "2026-05-05T12:00:00Z".to_string(),
             lease_ttl_ms: 900_000,
         }
+    }
+
+    #[test]
+    fn opencode_health_failure_keeps_managed_degraded_lease() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let mut observation = test_opencode_observation("managed-opencode", "keep_server");
+        observation.health_ready = false;
+
+        let leases = leases_from_opencode_server_observations(
+            &conn,
+            "cinder",
+            &[observation],
+            chrono::Utc::now(),
+        );
+
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].state, "degraded");
+        assert_eq!(leases[0].bridge_status.as_deref(), Some("health_unavailable"));
     }
 
     #[test]
@@ -2758,6 +2790,7 @@ mod tests {
             started_at: "2026-05-05T11:59:00Z".to_string(),
             updated_at: "2026-05-05T12:00:00Z".to_string(),
             server_alive: true,
+            health_ready: true,
             has_tui_attachment: true,
             launch_mode: "attached_tui".to_string(),
             owner_wrapper_pid: Some(9000),
