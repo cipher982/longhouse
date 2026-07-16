@@ -102,6 +102,22 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertEqual(composer.value as? String, "Send a message to the live Codex session...")
     }
 
+    func testConsoleReplyReplacesOptimisticBubbleWithoutDuplicateWorkingRow() {
+        let app = launchChatFixture(name: "console-reconcile", eventCount: 0)
+        let composer = app.textFields["session-chat-composer"]
+        let sendButton = app.buttons["session-chat-send"]
+        let message = "console reconciliation probe"
+
+        XCTAssertTrue(composer.waitForExistence(timeout: 5))
+        composer.tap()
+        composer.typeText(message)
+        sendButton.tap()
+
+        XCTAssertTrue(app.staticTexts["Console fixture durable reply."].waitForExistence(timeout: 8))
+        XCTAssertEqual(app.staticTexts.matching(identifier: message).count, 1)
+        XCTAssertFalse(app.staticTexts["Working..."].exists)
+    }
+
     func testKeyboardFocusKeepsLatestTranscriptMessageVisible() {
         let app = launchChatFixture(eventCount: 40)
         let composer = app.textFields["session-chat-composer"]

@@ -271,7 +271,7 @@ private struct ChatUITestFixture: Sendable {
     }
 
     var usesRealtimeStream: Bool {
-        name.hasPrefix("assistant-stream")
+        name.hasPrefix("assistant-stream") || name == "console-reconcile"
     }
 }
 
@@ -355,13 +355,31 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             role: "user",
             content: text,
             timestamp: ISO8601DateFormatter().string(from: Date()),
-            inputOrigin: SessionInputOrigin(
-                authoredVia: .longhouse,
-                sessionInputId: inputID,
-                clientRequestId: clientRequestId
-            )
+            inputOrigin: fixtureName == "console-reconcile"
+                ? nil
+                : SessionInputOrigin(
+                    authoredVia: .longhouse,
+                    sessionInputId: inputID,
+                    clientRequestId: clientRequestId
+                )
         ))
         nextEventID += 1
+        if fixtureName == "console-reconcile" {
+            Task {
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                self.appendAssistantMessage("Console fixture durable reply.")
+                self.emitWorkspaceChanged()
+            }
+            return SessionInputResponse(
+                outcome: .sent,
+                inputId: nil,
+                liveInputId: nil,
+                clientRequestId: clientRequestId,
+                turn: ConsoleTurnReceipt(turnId: "fixture-turn", runId: "fixture-run", state: "active"),
+                intent: .auto,
+                queued: []
+            )
+        }
         return SessionInputResponse(
             outcome: .sent,
             inputId: inputID,
