@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -16,8 +17,7 @@ from zerg.services.provisional_events import build_provisional_cursor
 from zerg.services.provisional_events import build_provisional_key
 from zerg.utils.time import normalize_utc
 
-LIVE_PREVIEW_SOURCE = "codex_bridge_live"
-LIVE_PREVIEW_PROGRESS_KIND = "bridge_live_transcript_delta"
+LIVE_PREVIEW_SOURCES = {"codex_bridge_live", "codex_console_live"}
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,12 @@ class LivePreviewCandidate:
     preview_observed_at: datetime
     source: str
     last_observation_id: str
+    preview_role: str = "assistant"
+    tool_name: str | None = None
+    tool_input_json: dict | None = None
+    tool_output_text: str | None = None
+    tool_call_id: str | None = None
+    tool_call_state: str | None = None
 
 
 def live_preview_candidate_from_runtime_event(
@@ -45,18 +51,22 @@ def live_preview_candidate_from_runtime_event(
     if (event.provider or "").strip().lower() != "codex":
         return None
     source = (event.source or "").strip()
-    if source.lower() != LIVE_PREVIEW_SOURCE:
+    if source.lower() not in LIVE_PREVIEW_SOURCES:
         return None
     if event.kind != "progress_signal":
         return None
-    if payload.get("progress_kind") != LIVE_PREVIEW_PROGRESS_KIND:
+    progress_kind = payload.get("progress_kind")
+    if progress_kind not in {"bridge_live_transcript_delta", "console_live_tool_item"}:
         return None
 
-    preview_text = str(payload.get("live_text") or "").strip()
+    is_tool = progress_kind == "console_live_tool_item"
+    command = str(payload.get("command") or "").strip()
+    output = str(payload.get("output") or "")
+    preview_text = (output.strip() or command) if is_tool else str(payload.get("live_text") or "").strip()
     if not preview_text:
         return None
 
-    thread_id = _optional_str(payload.get("thread_id"))
+    thread_id = _optional_str(payload.get("thread_id") or event.thread_id)
     turn_id = _optional_str(payload.get("turn_id"))
     item_id = _optional_str(payload.get("item_id"))
     turn_key = build_provisional_key(
@@ -74,10 +84,16 @@ def live_preview_candidate_from_runtime_event(
         seq=seq,
         preview_text=preview_text,
         provisional_cursor=build_provisional_cursor(key=turn_key, seq=seq),
-        provisional_complete=bool(payload.get("turn_completed")),
+        provisional_complete=bool(payload.get("turn_completed") or payload.get("completed")),
         preview_observed_at=observed_at,
         source=source,
         last_observation_id=observation_id,
+        preview_role="assistant",
+        tool_name="exec" if is_tool else None,
+        tool_input_json={"command": command} if is_tool else None,
+        tool_output_text=output if is_tool and output else None,
+        tool_call_id=item_id if is_tool else None,
+        tool_call_state=(_tool_call_state(payload.get("status"), completed=bool(payload.get("completed"))) if is_tool else None),
     )
 
 
@@ -118,6 +134,12 @@ def _upsert_live_preview_row(
                 turn_key=candidate.turn_key,
                 seq=candidate.seq,
                 preview_text=candidate.preview_text,
+                preview_role=candidate.preview_role,
+                tool_name=candidate.tool_name,
+                tool_input_json=(json.dumps(candidate.tool_input_json) if candidate.tool_input_json is not None else None),
+                tool_output_text=candidate.tool_output_text,
+                tool_call_id=candidate.tool_call_id,
+                tool_call_state=candidate.tool_call_state,
                 provisional_cursor=candidate.provisional_cursor,
                 provisional_complete=1 if candidate.provisional_complete else 0,
                 event_origin=EVENT_ORIGIN_LIVE_PROVISIONAL,
@@ -133,6 +155,12 @@ def _upsert_live_preview_row(
     existing.turn_key = candidate.turn_key
     existing.seq = candidate.seq
     existing.preview_text = candidate.preview_text
+    existing.preview_role = candidate.preview_role
+    existing.tool_name = candidate.tool_name
+    existing.tool_input_json = json.dumps(candidate.tool_input_json) if candidate.tool_input_json is not None else None
+    existing.tool_output_text = candidate.tool_output_text
+    existing.tool_call_id = candidate.tool_call_id
+    existing.tool_call_state = candidate.tool_call_state
     existing.provisional_cursor = candidate.provisional_cursor
     existing.provisional_complete = 1 if candidate.provisional_complete else 0
     existing.event_origin = EVENT_ORIGIN_LIVE_PROVISIONAL
@@ -212,6 +240,12 @@ def preview_map_from_rows(rows) -> dict[str, TranscriptPreview]:
             timestamp=timestamp,
             provisional_cursor=row.provisional_cursor,
             provisional_complete=bool(row.provisional_complete),
+            role=row.preview_role or "assistant",
+            tool_name=row.tool_name,
+            tool_input_json=json.loads(row.tool_input_json) if row.tool_input_json else None,
+            tool_output_text=row.tool_output_text,
+            tool_call_id=row.tool_call_id,
+            tool_call_state=row.tool_call_state,
         )
     return previews
 
@@ -252,3 +286,10 @@ def _coerce_seq(value: Any) -> int | None:
         return int(str(value))
     except (TypeError, ValueError):
         return None
+
+
+def _tool_call_state(value: Any, *, completed: bool) -> str:
+    status = str(value or "").strip().lower()
+    if completed or status in {"completed", "failed", "cancelled"}:
+        return "completed"
+    return "running"

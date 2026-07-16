@@ -88,6 +88,34 @@ final class SharedProjectionFixtureTests: XCTestCase {
         }
     }
 
+    func testLiveToolPreviewPreservesTerminalMetadata() {
+        let preview = SessionTranscriptPreview(
+            eventId: 7,
+            text: "/tmp/project",
+            role: "assistant",
+            toolName: "exec",
+            toolInputJSON: ["command": .string("pwd")],
+            toolOutputText: "/tmp/project\n",
+            toolCallId: "exec-1",
+            toolCallState: .completed,
+            eventOrigin: "live_provisional",
+            timestamp: "2026-07-16T18:00:00Z",
+            isProvisional: true,
+            isComplete: true,
+            contentCursor: "codex_console_live:exec-1:2",
+            isStale: false,
+            staleReason: nil
+        )
+
+        let event = TranscriptPreviewProjection.visibleEvents(durableEvents: [], preview: preview).first
+
+        XCTAssertEqual(event?.toolName, "exec")
+        XCTAssertEqual(event?.toolInputJSON?["command"], .string("pwd"))
+        XCTAssertEqual(event?.toolOutputText, "/tmp/project\n")
+        XCTAssertEqual(event?.toolCallId, "exec-1")
+        XCTAssertEqual(event?.toolCallState, .completed)
+    }
+
     private func loadFixture(_ name: String) throws -> Fixture {
         let fileURL = URL(fileURLWithPath: #filePath)
         let fixtureURL = fileURL

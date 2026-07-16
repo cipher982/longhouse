@@ -195,6 +195,12 @@ extension APISessionTranscriptPreviewResponse {
         SessionTranscriptPreview(
             eventId: eventId,
             text: text,
+            role: role,
+            toolName: toolName,
+            toolInputJSON: toolInputJson,
+            toolOutputText: toolOutputText,
+            toolCallId: toolCallId,
+            toolCallState: toolCallState.flatMap(ToolCallState.init(rawValue:)),
             eventOrigin: eventOrigin,
             timestamp: timestamp,
             isProvisional: isProvisional,

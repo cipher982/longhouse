@@ -623,9 +623,9 @@ def _is_bridge_transcript_event(event: RuntimeEventIngest) -> bool:
     payload = event.payload or {}
     return (
         (event.provider or "").strip().lower() == "codex"
-        and (event.source or "").strip().lower() == "codex_bridge_live"
+        and (event.source or "").strip().lower() in {"codex_bridge_live", "codex_console_live"}
         and event.kind == "progress_signal"
-        and payload.get("progress_kind") == "bridge_live_transcript_delta"
+        and payload.get("progress_kind") in {"bridge_live_transcript_delta", "console_live_tool_item"}
     )
 
 

@@ -298,6 +298,12 @@ struct APISessionStateFacts: Codable, Hashable, Sendable {
 struct APISessionTranscriptPreviewResponse: Codable, Hashable, Sendable {
     let eventId: Int
     let text: String
+    let role: String?
+    let toolName: String?
+    let toolInputJson: [String: JSONValue]?
+    let toolOutputText: String?
+    let toolCallId: String?
+    let toolCallState: String?
     let eventOrigin: String
     let timestamp: String?
     let isProvisional: Bool

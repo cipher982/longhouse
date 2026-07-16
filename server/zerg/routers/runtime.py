@@ -618,9 +618,9 @@ def _is_bridge_live_transcript_event(event) -> bool:
     payload = event.payload or {}
     return (
         (event.provider or "").strip().lower() == "codex"
-        and (event.source or "").strip().lower() == "codex_bridge_live"
+        and (event.source or "").strip().lower() in {"codex_bridge_live", "codex_console_live"}
         and event.kind == "progress_signal"
-        and payload.get("progress_kind") == "bridge_live_transcript_delta"
+        and payload.get("progress_kind") in {"bridge_live_transcript_delta", "console_live_tool_item"}
     )
 
 
@@ -665,7 +665,10 @@ def _publish_live_transcript_previews(events, *, now: datetime) -> None:
 
 def _live_transcript_preview_payload(event, *, now: datetime) -> dict | None:
     payload = event.payload or {}
-    text = str(payload.get("live_text") or "").strip()
+    is_tool = payload.get("progress_kind") == "console_live_tool_item"
+    command = str(payload.get("command") or "").strip()
+    output = str(payload.get("output") or "")
+    text = (output.strip() or command) if is_tool else str(payload.get("live_text") or "").strip()
     if not text or event.session_id is None:
         return None
 
@@ -676,17 +679,29 @@ def _live_transcript_preview_payload(event, *, now: datetime) -> dict | None:
     else:
         observed_at = observed_at.astimezone(timezone.utc)
 
-    thread_id = str(payload.get("thread_id") or "unknown-thread").strip() or "unknown-thread"
+    thread_id = str(payload.get("thread_id") or event.thread_id or "unknown-thread").strip() or "unknown-thread"
     turn_id = str(payload.get("turn_id") or "unknown-turn").strip() or "unknown-turn"
     cursor_seq = str(seq) if seq is not None else "unknown-seq"
     return {
         "event_id": seq or 0,
         "text": text,
+        "role": "assistant",
+        "tool_name": "exec" if is_tool else None,
+        "tool_input_json": {"command": command} if is_tool else None,
+        "tool_output_text": output if is_tool and output else None,
+        "tool_call_id": str(payload.get("item_id") or "") or None,
+        "tool_call_state": (
+            "completed"
+            if is_tool and (payload.get("completed") or str(payload.get("status") or "").lower() in {"completed", "failed", "cancelled"})
+            else "running"
+            if is_tool
+            else None
+        ),
         "event_origin": "live_provisional",
         "timestamp": observed_at.isoformat().replace("+00:00", "Z"),
         "is_provisional": True,
-        "is_complete": bool(payload.get("turn_completed")),
-        "content_cursor": f"codex_bridge_live:{event.session_id}:{thread_id}:{turn_id}:{cursor_seq}",
+        "is_complete": bool(payload.get("turn_completed") or payload.get("completed")),
+        "content_cursor": f"{event.source}:{event.session_id}:{thread_id}:{turn_id}:{cursor_seq}",
         "is_stale": False,
         "stale_reason": None,
     }

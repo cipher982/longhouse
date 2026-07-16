@@ -705,6 +705,12 @@ struct SessionRuntimeDisplay: Codable, Hashable, Sendable {
 struct SessionTranscriptPreview: Codable, Hashable, Sendable {
     let eventId: Int
     let text: String
+    let role: String?
+    let toolName: String?
+    let toolInputJSON: [String: JSONValue]?
+    let toolOutputText: String?
+    let toolCallId: String?
+    let toolCallState: ToolCallState?
     let eventOrigin: String
     let timestamp: String?
     let isProvisional: Bool
@@ -720,13 +726,13 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
     var syntheticEvent: SessionEvent {
         SessionEvent(
             id: "synthetic:preview:\(eventId)",
-            role: "assistant",
+            role: role ?? "assistant",
             contentText: text,
-            toolName: nil,
-            toolInputJSON: nil,
-            toolOutputText: nil,
-            toolCallId: nil,
-            toolCallState: nil,
+            toolName: toolName,
+            toolInputJSON: toolInputJSON,
+            toolOutputText: toolOutputText,
+            toolCallId: toolCallId,
+            toolCallState: toolCallState,
             timestamp: timestamp ?? "",
             inActiveContext: true,
             isHeadBranch: true,

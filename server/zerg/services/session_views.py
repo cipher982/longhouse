@@ -874,6 +874,12 @@ class SessionRuntimeDisplayResponse(BaseModel):
 class SessionTranscriptPreviewResponse(UTCBaseModel):
     event_id: int = Field(..., description="AgentEvent id for this preview row")
     text: str = Field(..., description="Transcript preview text from the event ledger")
+    role: str = Field("assistant", description="Transcript role for the provisional item")
+    tool_name: Optional[str] = None
+    tool_input_json: Optional[dict[str, Any]] = None
+    tool_output_text: Optional[str] = None
+    tool_call_id: Optional[str] = None
+    tool_call_state: Optional[Literal["running", "completed", "dropped"]] = None
     event_origin: str = Field(..., description="Event origin: durable|live_provisional")
     timestamp: Optional[datetime] = Field(None, description="Event timestamp used for transcript ordering")
     is_provisional: bool = Field(..., description="True when the preview is from an active provisional event")
@@ -1940,6 +1946,12 @@ def build_session_transcript_preview_response(
     return SessionTranscriptPreviewResponse(
         event_id=preview.event_id,
         text=preview.text,
+        role=preview.role,
+        tool_name=preview.tool_name,
+        tool_input_json=preview.tool_input_json,
+        tool_output_text=preview.tool_output_text,
+        tool_call_id=preview.tool_call_id,
+        tool_call_state=preview.tool_call_state,
         event_origin=preview.event_origin,
         timestamp=preview.timestamp,
         is_provisional=preview.event_origin == "live_provisional",
