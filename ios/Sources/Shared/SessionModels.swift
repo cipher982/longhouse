@@ -823,7 +823,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var canSendLive: Bool {
         if isClosed { return false }
-        return stateFacts.sendInput.isAvailable
+        return capabilities.composerEnabled == true || stateFacts.sendInput.isAvailable
     }
 
     /// The archive is still converging with a live/catalog session. This is a
@@ -887,12 +887,12 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         if stateFacts.launchState == "pending" || stateFacts.launchState == "dispatched" {
             return "Launching"
         }
+        if canSendLive { return "Send" }
         if let label = stateFacts.access?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             if label.caseInsensitiveCompare("Live control") == .orderedSame { return "Send" }
             if label.caseInsensitiveCompare("Search only") == .orderedSame { return "Read only" }
             return label
         }
-        if canSendLive { return "Send" }
         if isControlOffline { return "Control offline" }
         return "Read only"
     }

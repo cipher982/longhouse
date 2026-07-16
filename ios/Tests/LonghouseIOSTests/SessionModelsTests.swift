@@ -1130,6 +1130,18 @@ struct SessionModelsTests {
         #expect(detail.runtimeCapabilityTone == "neutral")
         #expect(detail.runtimeHeadline == "Activity unknown")
         #expect(detail.controlHealthMessage == "Read-only imported session.")
+
+        let consolePayload = String(decoding: json, as: UTF8.self)
+            .replacingOccurrences(of: #""input_mode": "read_only""#, with: #""input_mode": "console""#)
+            .replacingOccurrences(of: #""composer_enabled": false"#, with: #""composer_enabled": true"#)
+        let console = try JSONDecoder.snakeCase.decodeSessionFixture(
+            SessionDetail.self,
+            from: Data(consolePayload.utf8)
+        )
+        #expect(console.canSendLive)
+        #expect(!console.isReadOnly)
+        #expect(console.runtimeCapabilityLabel == "Send")
+        #expect(console.controlHealthMessage == nil)
     }
 
     @Test

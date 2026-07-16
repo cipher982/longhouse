@@ -33,6 +33,7 @@ from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_DISPLAY_WINDOW
 from zerg.services.session_state_contract import build_session_state_facts
 from zerg.services.session_title import sanitize_title
+from zerg.services.session_views import SessionCapabilitiesResponse
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import build_compat_runtime_display_response
@@ -122,6 +123,34 @@ def _title_source(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
     return "prompt" if title and title == prompt else "ai"
 
 
+def _project_console_composer(
+    capabilities: SessionCapabilitiesResponse,
+    *,
+    session: LiveSessionCatalog,
+    ended_at: datetime | None,
+) -> SessionCapabilitiesResponse:
+    if session.origin_kind != "console" or ended_at is not None:
+        return capabilities
+    return capabilities.model_copy(
+        update={
+            "can_send_input": True,
+            "can_queue_next_input": True,
+            "composer_enabled": True,
+            "composer_placeholder": "Message this coding agent",
+            "composer_disabled_reason": None,
+            "send_disabled_reason": None,
+            "input_mode": "console",
+            "default_input_intent": "auto",
+            "display_label": "Send",
+            "display_detail": "Messages start or queue a turn on the selected machine.",
+            "display_tone": "success",
+            "control_label": "console",
+            "observe_only": False,
+            "search_only": False,
+        }
+    )
+
+
 def _pending_response_from_catalog(
     session: LiveSessionCatalog,
     card: LiveTimelineCard,
@@ -164,6 +193,7 @@ def _pending_response_from_catalog(
         now=now,
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state)
+    capabilities = _project_console_composer(capabilities, session=session, ended_at=ended_at)
     launch_state = readiness.launch_state
     execution_lifetime = readiness.execution_lifetime
     return response.model_copy(
@@ -297,6 +327,7 @@ def _response_from_catalog(
         kernel_capabilities=capability_flags,
     )
     capabilities = project_compat_capabilities_from_state(capabilities, session_state)
+    capabilities = _project_console_composer(capabilities, session=session, ended_at=ended_at)
     title = _title(session, card)
     return SessionResponse(
         id=str(session.session_id),
