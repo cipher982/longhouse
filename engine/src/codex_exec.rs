@@ -5,6 +5,9 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::io::Write as _;
+
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Serialize;
@@ -501,6 +504,9 @@ async fn run_app_server_turn(
                 if status != "completed" {
                     anyhow::bail!("Codex turn ended with status {status}");
                 }
+                if let Some(path) = thread_path.as_deref() {
+                    sink.wake_transcript_shipper(path, &completed_turn_id, "turn_completed");
+                }
                 break;
             }
         }
@@ -852,6 +858,68 @@ impl CodexExecRuntimeSink {
         .await;
     }
 
+    #[cfg(unix)]
+    fn wake_transcript_shipper(
+        &self,
+        source_path: &str,
+        provider_turn_id: &str,
+        wake_reason: &str,
+    ) {
+        let socket_path = self
+            .local_db_path
+            .as_deref()
+            .and_then(std::path::Path::parent)
+            .map(|parent| parent.join("transcript-wake.sock"))
+            .or_else(|| crate::config::get_agent_transcript_wake_socket_path().ok());
+        let Some(socket_path) = socket_path else {
+            return;
+        };
+        if !socket_path.exists() {
+            return;
+        }
+        let payload = transcript_wake_payload(
+            self,
+            source_path,
+            provider_turn_id,
+            wake_reason,
+            std::fs::metadata(source_path).ok().map(|metadata| metadata.len()),
+        );
+        let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&socket_path) else {
+            eprintln!(
+                "[codex-exec] transcript wake connect failed socket={} session={} run={}",
+                socket_path.display(),
+                self.session_id,
+                self.run_id
+            );
+            return;
+        };
+        let _ = stream.set_write_timeout(Some(Duration::from_millis(50)));
+        if let Err(err) = stream.write_all(payload.to_string().as_bytes()) {
+            eprintln!(
+                "[codex-exec] transcript wake write failed session={} run={} error={err}",
+                self.session_id, self.run_id
+            );
+        } else {
+            eprintln!(
+                "[codex-exec] latency stage=durable_wake_sent session={} run={} turn={} provider_turn={} path={}",
+                self.session_id,
+                self.run_id,
+                self.turn_id.as_deref().unwrap_or("unknown"),
+                provider_turn_id,
+                source_path
+            );
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn wake_transcript_shipper(
+        &self,
+        _source_path: &str,
+        _provider_turn_id: &str,
+        _wake_reason: &str,
+    ) {
+    }
+
     async fn post_progress(
         &self,
         seq: u64,
@@ -1063,6 +1131,28 @@ impl CodexExecRuntimeSink {
     }
 }
 
+fn transcript_wake_payload(
+    sink: &CodexExecRuntimeSink,
+    source_path: &str,
+    provider_turn_id: &str,
+    wake_reason: &str,
+    file_len_hint: Option<u64>,
+) -> Value {
+    json!({
+        "provider": "codex",
+        "path": source_path,
+        "phase": "idle",
+        "session_id": sink.session_id,
+        "run_id": sink.run_id,
+        "turn_id": sink.turn_id,
+        "provider_turn_id": provider_turn_id,
+        "client_request_id": sink.client_request_id,
+        "wake_reason": wake_reason,
+        "observed_at_ms": Utc::now().timestamp_millis(),
+        "file_len_hint": file_len_hint,
+    })
+}
+
 fn codex_rollout_path(provider_thread_id: &str) -> Option<PathBuf> {
     let codex_home = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
@@ -1092,7 +1182,7 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpListener;
+    use tokio::net::{TcpListener, UnixListener};
     use tokio::sync::mpsc;
 
     fn config() -> CodexExecRunConfig {
@@ -1115,6 +1205,72 @@ mod tests {
             machine_name: "cinder".to_string(),
             local_db_path: None,
         }
+    }
+
+    fn runtime_sink(local_db_path: Option<PathBuf>) -> CodexExecRuntimeSink {
+        let config = config();
+        CodexExecRuntimeSink {
+            session_id: config.session_id,
+            run_id: config.run_id,
+            thread_id: config.thread_id,
+            turn_id: config.turn_id,
+            client_request_id: config.client_request_id,
+            api_url: config.api_url,
+            api_token: config.api_token,
+            machine_name: config.machine_name,
+            cwd: config.cwd.to_string_lossy().to_string(),
+            local_db_path,
+            http: reqwest::Client::new(),
+        }
+    }
+
+    #[test]
+    fn completion_wake_carries_full_turn_correlation() {
+        let sink = runtime_sink(None);
+        let payload = transcript_wake_payload(
+            &sink,
+            "/tmp/rollout.jsonl",
+            "provider-turn-7",
+            "turn_completed",
+            Some(321),
+        );
+
+        assert_eq!(payload["session_id"], sink.session_id);
+        assert_eq!(payload["run_id"], sink.run_id);
+        assert_eq!(payload["turn_id"], sink.turn_id.unwrap());
+        assert_eq!(payload["client_request_id"], sink.client_request_id.unwrap());
+        assert_eq!(payload["provider_turn_id"], "provider-turn-7");
+        assert_eq!(payload["wake_reason"], "turn_completed");
+        assert_eq!(payload["file_len_hint"], 321);
+    }
+
+    #[tokio::test]
+    async fn completion_wake_uses_agent_socket_next_to_local_db() {
+        let temp = tempfile::tempdir().unwrap();
+        let agent_dir = temp.path().join("agent");
+        fs::create_dir_all(&agent_dir).unwrap();
+        let socket_path = agent_dir.join("transcript-wake.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let rollout = temp.path().join("rollout.jsonl");
+        fs::write(&rollout, b"provider evidence").unwrap();
+        let sink = runtime_sink(Some(agent_dir.join("longhouse-shipper.db")));
+
+        sink.wake_transcript_shipper(
+            rollout.to_str().unwrap(),
+            "provider-turn-8",
+            "turn_completed",
+        );
+
+        let (mut stream, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).await.unwrap();
+        let payload: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(payload["run_id"], sink.run_id);
+        assert_eq!(payload["provider_turn_id"], "provider-turn-8");
+        assert_eq!(payload["file_len_hint"], 17);
     }
 
     #[test]
