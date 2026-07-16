@@ -190,6 +190,8 @@ def project_console_turn_capabilities(
     closed: bool,
     execution_target_available: bool,
     turn_state: str | None,
+    machine_online: bool = True,
+    adapter_available: bool = True,
 ) -> KernelSessionCapabilities:
     """Project Console's durable turn action without manufacturing a live lease."""
 
@@ -199,6 +201,10 @@ def project_console_turn_capabilities(
     blocked_by = "session_closed" if closed else None
     if blocked_by is None and not execution_target_available:
         blocked_by = "execution_target_missing"
+    if blocked_by is None and not machine_online:
+        blocked_by = "machine_offline"
+    if blocked_by is None and not adapter_available:
+        blocked_by = "adapter_unavailable"
     can_start = blocked_by is None
     return replace(
         capabilities,

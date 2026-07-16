@@ -198,6 +198,13 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
         "zerg.services.catalog_read_gateway.session_snapshot",
         lambda candidate, *, owner_id=None: store.read_session(session_id=candidate, owner_id=owner_id),
     )
+    monkeypatch.setattr(
+        "zerg.services.live_catalog_timeline.get_machine_control_channel_registry",
+        lambda: SimpleNamespace(
+            is_online=lambda **_kwargs: True,
+            supports=lambda **_kwargs: True,
+        ),
+    )
 
     result = await workspace_module.build_storage_v2_workspace(
         session_id=session_id,

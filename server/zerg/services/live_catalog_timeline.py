@@ -26,6 +26,7 @@ from zerg.services.catalog_read_gateway import session_snapshot
 from zerg.services.catalog_read_gateway import timeline_snapshot
 from zerg.services.live_launch_readiness import LiveLaunchReadinessView
 from zerg.services.live_launch_readiness import project_live_launch_readiness
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.session_pause_requests import pending_interaction_from_live_runtime
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
@@ -94,11 +95,25 @@ def project_catalog_session_facts(
     )
     if str(session.origin_kind or "").strip() == "console":
         latest_console_turn = facts.get("latest_console_turn")
+        owner_id = facts.get("owner_id")
+        device_id = str(thread.device_id or "").strip() if thread is not None else ""
+        registry = get_machine_control_channel_registry()
+        machine_online = bool(owner_id is not None and device_id and registry.is_online(owner_id=int(owner_id), device_id=device_id))
+        adapter_available = bool(
+            machine_online
+            and registry.supports(
+                owner_id=int(owner_id),
+                device_id=device_id,
+                capability=f"{session.provider}.turn_start",
+            )
+        )
         capabilities = project_console_turn_capabilities(
             capabilities,
             closed=session.closed_at is not None,
             execution_target_available=bool(thread is not None and str(thread.device_id or "").strip() and str(thread.cwd or "").strip()),
             turn_state=(latest_console_turn.get("state") if isinstance(latest_console_turn, dict) else None),
+            machine_online=machine_online,
+            adapter_available=adapter_available,
         )
     return _response_from_catalog(
         session,

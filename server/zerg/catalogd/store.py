@@ -6900,6 +6900,7 @@ def _assemble_session_facts(
     alias_table = LiveSessionThreadAlias.__table__
     console_turn_table = LiveConsoleTurn.__table__
     storage_table = StorageSession.__table__
+    live_session_table = LiveSession.__table__
     tombstone_table = LiveSessionTombstone.__table__
 
     catalogs = {
@@ -6919,6 +6920,29 @@ def _assemble_session_facts(
             )
         ).mappings()
     }
+    owner_by_session = {
+        str(row["session_id"]): int(row["owner_id"])
+        for row in connection.execute(
+            select(live_session_table.c.session_id, live_session_table.c.owner_id).where(live_session_table.c.session_id.in_(session_ids))
+        ).mappings()
+    }
+    for session_id, row in storage_rows.items():
+        if row.get("owner_id") is not None:
+            owner_by_session.setdefault(session_id, int(row["owner_id"]))
+    missing_console_owner_ids = [
+        session_id for session_id, row in catalogs.items() if session_id not in owner_by_session and row.get("origin_kind") == "console"
+    ]
+    if missing_console_owner_ids:
+        outbox_table = LiveArchiveOutbox.__table__
+        keys = [f"console_session_create.v1:{session_id}" for session_id in missing_console_owner_ids]
+        for row in connection.execute(
+            select(
+                outbox_table.c.idempotency_key,
+                func.json_extract(outbox_table.c.payload_json, "$.session.owner_id").label("owner_id"),
+            ).where(outbox_table.c.idempotency_key.in_(keys))
+        ).mappings():
+            if row["owner_id"] is not None:
+                owner_by_session[str(row["idempotency_key"]).rsplit(":", 1)[-1]] = int(row["owner_id"])
     for session_id, row in storage_rows.items():
         catalogs[session_id] = _storage_catalog_compat_row(row)
         cards[session_id] = _storage_card_compat_row(row)
@@ -7061,6 +7085,7 @@ def _assemble_session_facts(
         run_id = str(latest_run["id"]) if latest_run is not None else None
         result.append(
             {
+                "owner_id": owner_by_session.get(session_id),
                 "catalog": _row_dto(catalog, fields=_CATALOG_FIELDS, text_limits=_CATALOG_TEXT_LIMITS),
                 "card": _row_dto(card, fields=_CARD_FIELDS, text_limits=_CARD_TEXT_LIMITS),
                 "runtime": _runtime_dto(runtime_by_session.get(session_id), compact=compact),

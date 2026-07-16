@@ -126,16 +126,18 @@ def test_thread_but_no_run(db):
 
 
 @pytest.mark.parametrize(
-    ("closed", "target", "turn_state", "can_start", "blocked_by"),
+    ("closed", "target", "online", "adapter", "turn_state", "can_start", "blocked_by"),
     [
-        (False, True, None, True, None),
-        (False, True, "queued", True, None),
-        (False, True, "active", True, None),
-        (True, True, None, False, "session_closed"),
-        (False, False, None, False, "execution_target_missing"),
+        (False, True, True, True, None, True, None),
+        (False, True, True, True, "queued", True, None),
+        (False, True, True, True, "active", True, None),
+        (True, True, True, True, None, False, "session_closed"),
+        (False, False, True, True, None, False, "execution_target_missing"),
+        (False, True, False, False, None, False, "machine_offline"),
+        (False, True, True, False, None, False, "adapter_unavailable"),
     ],
 )
-def test_console_turn_capability_truth_table(db, closed, target, turn_state, can_start, blocked_by):
+def test_console_turn_capability_truth_table(db, closed, target, online, adapter, turn_state, can_start, blocked_by):
     session = _make_session(db)
     db.commit()
     base = project_session_capabilities(db, session_id=session.id)
@@ -145,6 +147,8 @@ def test_console_turn_capability_truth_table(db, closed, target, turn_state, can
         closed=closed,
         execution_target_available=target,
         turn_state=turn_state,
+        machine_online=online,
+        adapter_available=adapter,
     )
 
     assert caps.control_label == "console"
