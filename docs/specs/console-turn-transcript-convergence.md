@@ -136,8 +136,9 @@ binding, event identity, phase, or terminal detection from the adapter.
 ### Live lane
 
 The turn adapter forwards raw provider JSON events as they arrive. For Codex,
-`codex exec --json` records are retained as raw evidence and minimally decoded
-into provisional transcript events:
+a bounded `codex app-server --listen stdio://` process runs one turn, drains,
+and exits. Its JSON-RPC notifications are retained as raw live evidence and
+minimally decoded into provisional transcript events:
 
 - user message;
 - assistant commentary/final text;
@@ -145,6 +146,11 @@ into provisional transcript events:
 - tool result;
 - provider thread binding;
 - turn/process state.
+
+The later durable rollout JSONL remains canonical. `thread/read` is a resume
+and diagnostic surface, not transcript identity: its item ids are not stable
+with either app-server live ids or rollout call ids, and it can omit tool
+items.
 
 The live lane drives first-paint progress and transcript updates. It does not
 wait for a filesystem scan.
@@ -165,6 +171,11 @@ order:
 3. provider thread id + provider sequence where supplied;
 4. within one exactly bound run, `(run_id, role, ordinal_within_run)` when
    neither lane provides a shared provider event id.
+
+Codex app-server `item.id` and rollout `call_id` are different namespaces.
+They must not be compared directly. Until an explicit adapter mapping exists,
+Codex tool convergence uses the fourth, run-scoped ordinal key and preserves
+both raw identities as evidence.
 
 The fourth key is positional identity within a run that executes exactly one
 turn; it is not content matching. The reducer records the ordinal for both
@@ -348,7 +359,7 @@ diagnostic conflict and preserves the catalog fact.
 ### 3. Complete provider event projection
 
 - Parse Codex custom tool call/result records.
-- Project `codex exec --json` output into the live transcript lane.
+- Project bounded Codex app-server notifications into the live transcript lane.
 - Reconcile live rows with durable rollout rows by stable provider evidence.
 - Preserve unknown raw provider records for replay.
 

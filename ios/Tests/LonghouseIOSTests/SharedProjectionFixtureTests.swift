@@ -88,6 +88,40 @@ final class SharedProjectionFixtureTests: XCTestCase {
         }
     }
 
+    func testLiveToolPreviewPreservesTerminalMetadata() {
+        let preview = SessionTranscriptPreview(
+            eventId: 7,
+            text: "/tmp/project",
+            role: "assistant",
+            toolName: "exec",
+            toolInputJSON: ["command": .string("pwd")],
+            toolOutputText: "/tmp/project\n",
+            toolCallId: "exec-1",
+            toolCallState: .completed,
+            eventOrigin: "live_provisional",
+            timestamp: "2026-07-16T18:00:00Z",
+            isProvisional: true,
+            isComplete: true,
+            contentCursor: "codex_console_live:exec-1:2",
+            isStale: false,
+            staleReason: nil
+        )
+
+        let events = TranscriptPreviewProjection.visibleEvents(durableEvents: [], preview: preview)
+        let items = TimelineBuilder.build(events: events)
+
+        XCTAssertEqual(events.count, 2)
+        guard case .tool(let call, let result, let pairing) = items.first else {
+            return XCTFail("expected one paired live tool row")
+        }
+        XCTAssertEqual(call.toolName, "exec")
+        XCTAssertEqual(call.toolInputJSON?["command"], .string("pwd"))
+        XCTAssertEqual(result?.toolOutputText, "/tmp/project\n")
+        XCTAssertEqual(call.toolCallId, "exec-1")
+        XCTAssertEqual(call.toolCallState, .completed)
+        XCTAssertEqual(pairing, .id)
+    }
+
     private func loadFixture(_ name: String) throws -> Fixture {
         let fileURL = URL(fileURLWithPath: #filePath)
         let fixtureURL = fileURL

@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -10,12 +10,200 @@ use chrono::Utc;
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncWriteExt, Lines};
 use tokio::process::Command;
+use tokio::process::{Child, ChildStdin, ChildStdout};
 use walkdir::WalkDir;
 
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
-const CODEX_EXEC_RUNTIME_SOURCE: &str = "codex_exec";
+const CODEX_EXEC_RUNTIME_SOURCE: &str = "codex_app_server";
 const STDERR_TAIL_LINES: usize = 40;
+const APP_SERVER_TURN_TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+struct AppServerRpc {
+    stdin: ChildStdin,
+    lines: Lines<BufReader<ChildStdout>>,
+    next_id: u64,
+    seq: u64,
+}
+
+#[derive(Default)]
+struct AppServerProjection {
+    item_text: BTreeMap<String, String>,
+    item_seq: BTreeMap<String, u64>,
+    tool_command: BTreeMap<String, String>,
+    tool_output: BTreeMap<String, String>,
+    tool_seq: BTreeMap<String, u64>,
+    transcript_seq: u64,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ProjectedAppServerEvent {
+    Phase {
+        phase: &'static str,
+        tool_name: Option<String>,
+    },
+    AssistantItem {
+        item_id: String,
+        item_seq: u64,
+        seq: u64,
+        delta: String,
+        text: String,
+        completed: bool,
+    },
+    ToolItem {
+        item_id: String,
+        command: String,
+        output: String,
+        status: String,
+        seq: u64,
+        completed: bool,
+    },
+}
+
+impl AppServerProjection {
+    fn apply(&mut self, event: &Value) -> Vec<ProjectedAppServerEvent> {
+        let method = event.get("method").and_then(Value::as_str).unwrap_or("");
+        let params = event.get("params").unwrap_or(&Value::Null);
+        match method {
+            "item/agentMessage/delta" => {
+                let Some(item_id) = params.get("itemId").and_then(Value::as_str) else {
+                    return Vec::new();
+                };
+                let Some(delta) = params.get("delta").and_then(Value::as_str) else {
+                    return Vec::new();
+                };
+                let text = self.item_text.entry(item_id.to_string()).or_default();
+                text.push_str(delta);
+                let text = text.clone();
+                let item_seq = self.item_seq.entry(item_id.to_string()).or_default();
+                *item_seq += 1;
+                self.transcript_seq += 1;
+                vec![ProjectedAppServerEvent::AssistantItem {
+                    item_id: item_id.to_string(),
+                    item_seq: *item_seq,
+                    seq: self.transcript_seq,
+                    delta: delta.to_string(),
+                    text,
+                    completed: false,
+                }]
+            }
+            "item/started"
+                if json_string(params, &["item", "type"]).as_deref()
+                    == Some("commandExecution") =>
+            {
+                let item_id = json_string(params, &["item", "id"])
+                    .unwrap_or_else(|| "unknown-tool".to_string());
+                let command = json_string(params, &["item", "command"]).unwrap_or_default();
+                self.tool_command.insert(item_id.clone(), command.clone());
+                self.tool_seq.insert(item_id.clone(), 1);
+                vec![
+                    ProjectedAppServerEvent::Phase {
+                        phase: "tool",
+                        tool_name: Some(command.clone()),
+                    },
+                    ProjectedAppServerEvent::ToolItem {
+                        item_id,
+                        command,
+                        output: String::new(),
+                        status: "inProgress".to_string(),
+                        seq: 1,
+                        completed: false,
+                    },
+                ]
+            }
+            "item/commandExecution/outputDelta" => {
+                let Some(item_id) = params.get("itemId").and_then(Value::as_str) else {
+                    return Vec::new();
+                };
+                let delta = params.get("delta").and_then(Value::as_str).unwrap_or("");
+                let output = self.tool_output.entry(item_id.to_string()).or_default();
+                output.push_str(delta);
+                let seq = self.tool_seq.entry(item_id.to_string()).or_default();
+                *seq += 1;
+                vec![ProjectedAppServerEvent::ToolItem {
+                    item_id: item_id.to_string(),
+                    command: self.tool_command.get(item_id).cloned().unwrap_or_default(),
+                    output: output.clone(),
+                    status: "inProgress".to_string(),
+                    seq: *seq,
+                    completed: false,
+                }]
+            }
+            "item/completed"
+                if json_string(params, &["item", "type"]).as_deref()
+                    == Some("commandExecution") =>
+            {
+                let item_id = json_string(params, &["item", "id"])
+                    .unwrap_or_else(|| "unknown-tool".to_string());
+                let command = json_string(params, &["item", "command"])
+                    .or_else(|| self.tool_command.get(&item_id).cloned())
+                    .unwrap_or_default();
+                let output = json_string(params, &["item", "aggregatedOutput"])
+                    .or_else(|| self.tool_output.get(&item_id).cloned())
+                    .unwrap_or_default();
+                let status = json_string(params, &["item", "status"])
+                    .unwrap_or_else(|| "completed".to_string());
+                let seq = self.tool_seq.entry(item_id.clone()).or_default();
+                *seq += 1;
+                vec![ProjectedAppServerEvent::ToolItem {
+                    item_id,
+                    command,
+                    output,
+                    status,
+                    seq: *seq,
+                    completed: true,
+                }]
+            }
+            "item/completed"
+                if matches!(
+                    json_string(params, &["item", "type"]).as_deref(),
+                    Some("agentMessage" | "assistantMessage")
+                ) =>
+            {
+                let Some(item_id) = json_string(params, &["item", "id"]).or_else(|| {
+                    params
+                        .get("itemId")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                }) else {
+                    return Vec::new();
+                };
+                let text = self
+                    .item_text
+                    .get(&item_id)
+                    .cloned()
+                    .or_else(|| json_string(params, &["item", "text"]))
+                    .or_else(|| {
+                        params
+                            .get("item")?
+                            .get("content")?
+                            .as_array()?
+                            .iter()
+                            .find_map(|part| part.get("text").and_then(Value::as_str))
+                            .map(str::to_string)
+                    });
+                let Some(text) = text else { return Vec::new() };
+                let item_seq = self.item_seq.entry(item_id.clone()).or_default();
+                *item_seq += 1;
+                self.transcript_seq += 1;
+                vec![ProjectedAppServerEvent::AssistantItem {
+                    item_id,
+                    item_seq: *item_seq,
+                    seq: self.transcript_seq,
+                    delta: String::new(),
+                    text,
+                    completed: true,
+                }]
+            }
+            "turn/started" => vec![ProjectedAppServerEvent::Phase {
+                phase: "thinking",
+                tool_name: None,
+            }],
+            _ => Vec::new(),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct CodexExecRunConfig {
@@ -63,8 +251,6 @@ struct CodexExecRuntimeSink {
 
 pub fn codex_exec_args(config: &CodexExecRunConfig) -> Vec<OsString> {
     let mut args = vec![
-        OsString::from("exec"),
-        OsString::from("--json"),
         OsString::from("-c"),
         OsString::from(CODEX_DISABLE_UPDATE_CHECK_CONFIG),
     ];
@@ -79,14 +265,9 @@ pub fn codex_exec_args(config: &CodexExecRunConfig) -> Vec<OsString> {
         args.push(OsString::from("-s"));
         args.push(OsString::from(sandbox));
     }
-    args.push(OsString::from("-C"));
-    args.push(config.cwd.as_os_str().to_os_string());
-    args.push(OsString::from("--skip-git-repo-check"));
-    if let Some(thread_id) = normalized_optional(&config.resume_thread_id) {
-        args.push(OsString::from("resume"));
-        args.push(OsString::from(thread_id));
-    }
-    args.push(OsString::from(config.prompt.clone()));
+    args.push(OsString::from("app-server"));
+    args.push(OsString::from("--listen"));
+    args.push(OsString::from("stdio://"));
     args
 }
 
@@ -107,7 +288,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         .args(&args)
         .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
         .current_dir(&config.cwd)
-        .stdin(Stdio::null())
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -134,6 +315,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         .spawn()
         .with_context(|| format!("spawning `{}` exec", config.codex_bin))?;
     let pid = child.id();
+    let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     let sink = CodexExecRuntimeSink {
@@ -153,48 +335,65 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     let monitor_sink = sink.clone();
     let monitor_tail = stderr_tail.clone();
 
+    let prompt = config.prompt.clone();
+    let cwd = config.cwd.clone();
+    let approval_policy = config.approval_policy.clone();
+    let sandbox = config.sandbox.clone();
+    let resume_thread_id = config.resume_thread_id.clone();
     tokio::spawn(async move {
-        monitor_sink.post_phase("thinking", None).await;
-        let stdout_task = stdout.map(|stream| {
-            let sink = monitor_sink.clone();
-            tokio::spawn(async move {
-                read_stdout_jsonl(stream, sink).await;
-            })
-        });
         let stderr_task = stderr.map(|stream| {
             tokio::spawn(async move {
                 read_stderr_tail(stream, monitor_tail).await;
             })
         });
-        let status = child.wait().await;
-        if let Some(task) = stdout_task {
-            let _ = task.await;
+        let mut run_result = match (stdin, stdout) {
+            (Some(stdin), Some(stdout)) => {
+                run_app_server_turn(
+                    &mut child,
+                    stdin,
+                    stdout,
+                    &monitor_sink,
+                    &prompt,
+                    &cwd,
+                    approval_policy.as_deref(),
+                    sandbox.as_deref(),
+                    resume_thread_id.as_deref(),
+                )
+                .await
+            }
+            _ => Err(anyhow::anyhow!("Codex app-server stdio was unavailable")),
+        };
+        if run_result.is_err() {
+            if let Err(kill_error) = stop_failed_child(&mut child).await {
+                let original = run_result.unwrap_err();
+                run_result = Err(original.context(format!(
+                    "also failed to stop Codex app-server: {kill_error}"
+                )));
+            }
         }
         if let Some(task) = stderr_task {
             let _ = task.await;
         }
-        match status {
-            Ok(status) => {
-                let exit_code = status.code();
-                let terminal_state = if exit_code == Some(0) {
-                    "run_completed"
-                } else {
-                    "run_failed"
-                };
-                monitor_sink
-                    .post_terminal(
-                        terminal_state,
-                        exit_code,
-                        stderr_tail_snapshot(&stderr_tail),
-                    )
-                    .await;
-            }
-            Err(err) => {
-                monitor_sink
-                    .post_terminal("run_failed", None, Some(format!("wait failed: {err}")))
-                    .await;
-            }
-        }
+        let (terminal_state, exit_code, detail) = match run_result {
+            Ok(exit_code) if exit_code == Some(0) => (
+                "run_completed",
+                exit_code,
+                stderr_tail_snapshot(&stderr_tail),
+            ),
+            Ok(exit_code) => (
+                "run_failed",
+                exit_code,
+                Some(format!("Codex app-server exited with code {exit_code:?}")),
+            ),
+            Err(err) => (
+                "run_failed",
+                child.try_wait().ok().flatten().and_then(|s| s.code()),
+                Some(err.to_string()),
+            ),
+        };
+        monitor_sink
+            .post_terminal(terminal_state, exit_code, detail)
+            .await;
     });
 
     Ok(CodexExecRunSummary {
@@ -205,27 +404,215 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     })
 }
 
-async fn read_stdout_jsonl(stream: tokio::process::ChildStdout, sink: CodexExecRuntimeSink) {
-    let mut lines = BufReader::new(stream).lines();
-    let mut seq = 0u64;
-    while let Ok(Some(line)) = lines.next_line().await {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+async fn run_app_server_turn(
+    child: &mut Child,
+    stdin: ChildStdin,
+    stdout: ChildStdout,
+    sink: &CodexExecRuntimeSink,
+    prompt: &str,
+    cwd: &std::path::Path,
+    approval_policy: Option<&str>,
+    sandbox: Option<&str>,
+    resume_thread_id: Option<&str>,
+) -> Result<Option<i32>> {
+    let mut rpc = AppServerRpc {
+        stdin,
+        lines: BufReader::new(stdout).lines(),
+        next_id: 1,
+        seq: 0,
+    };
+    let mut projection = AppServerProjection::default();
+
+    rpc.request(
+        "initialize",
+        json!({
+            "clientInfo": {
+                "name": "longhouse_console",
+                "title": "Longhouse Console",
+                "version": env!("CARGO_PKG_VERSION"),
+            },
+            "capabilities": { "experimentalApi": true },
+        }),
+        sink,
+        &mut projection,
+    )
+    .await?;
+    rpc.notify("initialized", json!({})).await?;
+
+    let method = if resume_thread_id.is_some() {
+        "thread/resume"
+    } else {
+        "thread/start"
+    };
+    let mut thread_params = json!({
+        "cwd": cwd.to_string_lossy(),
+        "approvalPolicy": approval_policy,
+        "sandbox": sandbox,
+    });
+    if let Some(thread_id) = resume_thread_id {
+        thread_params["threadId"] = Value::String(thread_id.to_string());
+    }
+    let thread_response = rpc
+        .request(method, thread_params, sink, &mut projection)
+        .await?;
+    let provider_thread_id = json_string(&thread_response, &["thread", "id"])
+        .context("Codex app-server thread response omitted thread.id")?;
+    let thread_path = json_string(&thread_response, &["thread", "path"]);
+    sink.post_provider_binding(&provider_thread_id, thread_path.as_deref())
+        .await;
+
+    let turn_response = rpc
+        .request(
+            "turn/start",
+            json!({
+                "threadId": provider_thread_id,
+                "input": [{"type": "text", "text": prompt}],
+            }),
+            sink,
+            &mut projection,
+        )
+        .await?;
+    let expected_turn_id = json_string(&turn_response, &["turn", "id"])
+        .context("Codex app-server turn/start omitted turn.id")?;
+    sink.post_phase("thinking", None).await;
+    sink.post_live_user_item(prompt).await;
+
+    tokio::time::timeout(APP_SERVER_TURN_TIMEOUT, async {
+        loop {
+            let value = rpc.next_value().await?;
+            if value.get("id").is_some() && value.get("method").is_some() {
+                rpc.respond_to_server_request(&value).await?;
+                continue;
+            }
+            rpc.seq += 1;
+            sink.post_app_server_event(rpc.seq, &value, &mut projection)
+                .await;
+            if value.get("method").and_then(Value::as_str) == Some("turn/completed") {
+                let completed_turn_id = json_string(&value, &["params", "turn", "id"]);
+                let completed_turn_id = completed_turn_id
+                    .context("Codex turn/completed omitted params.turn.id")?;
+                if completed_turn_id != expected_turn_id {
+                    anyhow::bail!(
+                        "Codex completed unexpected turn {completed_turn_id}; expected {expected_turn_id}"
+                    );
+                }
+                let status = json_string(&value, &["params", "turn", "status"])
+                    .unwrap_or_else(|| "completed".to_string());
+                if status != "completed" {
+                    anyhow::bail!("Codex turn ended with status {status}");
+                }
+                break;
+            }
         }
-        seq += 1;
-        match serde_json::from_str::<Value>(trimmed) {
-            Ok(event) => sink.post_provider_event(seq, event).await,
-            Err(_) => {
-                sink.post_progress(
-                    seq,
-                    json!({"progress_kind": "codex_exec_stdout", "seq": seq, "line": trimmed}),
-                    None,
-                )
-                .await
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .context("Codex app-server turn timed out")??;
+
+    rpc.stdin.shutdown().await?;
+    drop(rpc);
+    let status = match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+        Ok(status) => status?,
+        Err(_) => {
+            child.kill().await?;
+            let status = child.wait().await?;
+            anyhow::bail!(
+                "Codex app-server did not exit after turn completion; killed with status {status}"
+            );
+        }
+    };
+    Ok(status.code())
+}
+
+async fn stop_failed_child(child: &mut Child) -> Result<()> {
+    if child.try_wait()?.is_none() {
+        child.kill().await?;
+    }
+    let _ = child.wait().await?;
+    Ok(())
+}
+
+impl AppServerRpc {
+    async fn write(&mut self, value: &Value) -> Result<()> {
+        self.stdin
+            .write_all(format!("{}\n", serde_json::to_string(value)?).as_bytes())
+            .await?;
+        self.stdin.flush().await?;
+        Ok(())
+    }
+
+    async fn notify(&mut self, method: &str, params: Value) -> Result<()> {
+        self.write(&json!({"method": method, "params": params}))
+            .await
+    }
+
+    async fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+        sink: &CodexExecRuntimeSink,
+        projection: &mut AppServerProjection,
+    ) -> Result<Value> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.write(&json!({"id": id, "method": method, "params": params}))
+            .await?;
+        loop {
+            let value = self.next_value().await?;
+            if value.get("id").and_then(Value::as_u64) == Some(id) && value.get("method").is_none()
+            {
+                if let Some(error) = value.get("error") {
+                    anyhow::bail!("{method} failed: {error}");
+                }
+                return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+            }
+            if value.get("id").is_some() && value.get("method").is_some() {
+                self.respond_to_server_request(&value).await?;
+            } else {
+                self.seq += 1;
+                sink.post_app_server_event(self.seq, &value, projection)
+                    .await;
             }
         }
     }
+
+    async fn next_value(&mut self) -> Result<Value> {
+        loop {
+            let line = self
+                .lines
+                .next_line()
+                .await?
+                .context("Codex app-server closed stdout")?;
+            if !line.trim().is_empty() {
+                return serde_json::from_str(&line)
+                    .with_context(|| format!("invalid Codex app-server JSON: {line}"));
+            }
+        }
+    }
+
+    async fn respond_to_server_request(&mut self, request: &Value) -> Result<()> {
+        let id = request.get("id").cloned().unwrap_or(Value::Null);
+        let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+        let result = match method {
+            "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+                json!({"decision": "decline"})
+            }
+            "item/permissions/requestApproval" => json!({"scope": "turn", "permissions": {}}),
+            "item/tool/requestUserInput" => json!({"answers": {}}),
+            "mcpServer/elicitation/request" => json!({"action": "decline", "content": null}),
+            "applyPatchApproval" | "execCommandApproval" => json!({"decision": "Denied"}),
+            _ => anyhow::bail!("unsupported Codex app-server request: {method}"),
+        };
+        self.write(&json!({"id": id, "result": result})).await
+    }
+}
+
+fn json_string(value: &Value, path: &[&str]) -> Option<String> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current.as_str().map(str::to_string)
 }
 
 async fn read_stderr_tail(stream: tokio::process::ChildStderr, tail: Arc<Mutex<VecDeque<String>>>) {
@@ -263,6 +650,11 @@ fn normalized_optional(value: &Option<String>) -> Option<String> {
 impl CodexExecRuntimeSink {
     async fn post_phase(&self, phase: &str, tool_name: Option<String>) {
         let observed_at = Utc::now();
+        let phase_identity = if phase == "tool" {
+            format!("tool:{}", uuid::Uuid::new_v4())
+        } else {
+            phase.to_string()
+        };
         self.persist_local_phase(phase, tool_name.clone(), observed_at);
         self.post_events(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
@@ -276,7 +668,7 @@ impl CodexExecRuntimeSink {
             "phase": phase,
             "tool_name": tool_name,
             "occurred_at": observed_at.to_rfc3339(),
-            "dedupe_key": format!("codex-exec:{}:{}:phase:{}", self.session_id, self.run_id, phase),
+            "dedupe_key": format!("codex-app-server:{}:{}:phase:{}", self.session_id, self.run_id, phase_identity),
             "payload": {
                 "managed_transport": CODEX_EXEC_RUNTIME_SOURCE,
                 "execution_lifetime": "one_shot",
@@ -287,18 +679,176 @@ impl CodexExecRuntimeSink {
         .await;
     }
 
-    async fn post_provider_event(&self, seq: u64, event: Value) {
-        // Inspect the decoded provider record before adding Longhouse's transport
-        // envelope. Looking for thread_id on the envelope silently loses binding.
-        let provider_thread_id = provider_thread_id_from_event(&event);
-        if let Some(provider_thread_id) = provider_thread_id.as_deref() {
-            self.persist_local_provider_binding(provider_thread_id);
-        }
+    async fn post_live_user_item(&self, text: &str) {
+        self.post_events(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "thread_id": self.thread_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": "codex_console_live",
+            "kind": "progress_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("console:user:{}", self.run_id),
+            "payload": {
+                "progress_kind": "console_live_user_item",
+                "managed_transport": "codex_app_server",
+                "execution_lifetime": "one_shot",
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
+                "text": text,
+                "input_origin": {
+                    "authored_via": "longhouse",
+                    "client_request_id": self.client_request_id,
+                    "turn_id": self.turn_id,
+                    "run_id": self.run_id,
+                },
+            }
+        })])
+        .await;
+    }
+
+    async fn post_app_server_event(
+        &self,
+        seq: u64,
+        event: &Value,
+        projection: &mut AppServerProjection,
+    ) {
         self.post_progress(
             seq,
-            json!({"progress_kind": "codex_exec_jsonl", "seq": seq, "event": event}),
-            provider_thread_id,
+            json!({"progress_kind": "codex_app_server_jsonrpc", "seq": seq, "event": event}),
+            None,
         )
+        .await;
+
+        for projected in projection.apply(event) {
+            match projected {
+                ProjectedAppServerEvent::Phase { phase, tool_name } => {
+                    self.post_phase(phase, tool_name).await;
+                }
+                ProjectedAppServerEvent::AssistantItem {
+                    item_id,
+                    item_seq,
+                    seq,
+                    delta,
+                    text,
+                    completed,
+                } => {
+                    self.post_live_transcript(&item_id, item_seq, seq, &delta, &text, completed)
+                        .await;
+                }
+                ProjectedAppServerEvent::ToolItem {
+                    item_id,
+                    command,
+                    output,
+                    status,
+                    seq,
+                    completed,
+                } => {
+                    self.post_live_tool_item(&item_id, &command, &output, &status, seq, completed)
+                        .await;
+                }
+            }
+        }
+    }
+
+    async fn post_live_tool_item(
+        &self,
+        item_id: &str,
+        command: &str,
+        output: &str,
+        status: &str,
+        seq: u64,
+        completed: bool,
+    ) {
+        self.post_events(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "thread_id": self.thread_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": "codex_console_live",
+            "kind": "progress_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("console:tool:{}:{}:{}", self.run_id, item_id, seq),
+            "payload": {
+                "progress_kind": "console_live_tool_item",
+                "managed_transport": "codex_app_server",
+                "execution_lifetime": "one_shot",
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
+                "item_id": item_id,
+                "command": command,
+                "output": output,
+                "status": status,
+                "seq": seq,
+                "completed": completed,
+            }
+        })])
+        .await;
+    }
+
+    async fn post_live_transcript(
+        &self,
+        item_id: &str,
+        item_seq: u64,
+        seq: u64,
+        delta: &str,
+        live_text: &str,
+        item_completed: bool,
+    ) {
+        self.post_events(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "thread_id": self.thread_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": "codex_bridge_live",
+            "kind": "progress_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("console:live:{}:{}:{}", self.run_id, item_id, item_seq),
+            "payload": {
+                "progress_kind": "bridge_live_transcript_delta",
+                "managed_transport": "codex_app_server",
+                "execution_lifetime": "one_shot",
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
+                "item_id": item_id,
+                "seq": seq,
+                "item_seq": item_seq,
+                "delta": delta,
+                "live_text": live_text,
+                "item_completed": item_completed,
+                "turn_completed": false,
+            }
+        })])
+        .await;
+    }
+
+    async fn post_provider_binding(&self, provider_thread_id: &str, source_path: Option<&str>) {
+        self.persist_local_provider_binding(provider_thread_id, source_path);
+        self.post_events(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "thread_id": self.thread_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": CODEX_EXEC_RUNTIME_SOURCE,
+            "kind": "binding_signal",
+            "occurred_at": Utc::now().to_rfc3339(),
+            "dedupe_key": format!("codex-app-server:{}:{}:binding", self.session_id, self.run_id),
+            "payload": {
+                "provider_session_id": provider_thread_id,
+                "provider_thread_id": provider_thread_id,
+                "source_path": source_path,
+                "turn_id": self.turn_id,
+                "client_request_id": self.client_request_id,
+            }
+        })])
         .await;
     }
 
@@ -392,8 +942,14 @@ impl CodexExecRuntimeSink {
         .await;
     }
 
-    fn persist_local_provider_binding(&self, provider_thread_id: &str) {
-        let source_path = codex_rollout_path(provider_thread_id);
+    fn persist_local_provider_binding(
+        &self,
+        provider_thread_id: &str,
+        known_source_path: Option<&str>,
+    ) {
+        let source_path = known_source_path
+            .map(PathBuf::from)
+            .or_else(|| codex_rollout_path(provider_thread_id));
         if let Some(db_path) = self.local_db_path.as_deref() {
             if let Some(source_path) = source_path.as_deref() {
                 match crate::state::db::open_db(Some(db_path)) {
@@ -507,14 +1063,6 @@ impl CodexExecRuntimeSink {
     }
 }
 
-fn provider_thread_id_from_event(event: &Value) -> Option<String> {
-    event
-        .get("thread_id")
-        .and_then(Value::as_str)
-        .filter(|_| event.get("type").and_then(Value::as_str) == Some("thread.started"))
-        .map(str::to_string)
-}
-
 fn codex_rollout_path(provider_thread_id: &str) -> Option<PathBuf> {
     let codex_home = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
@@ -541,6 +1089,11 @@ fn find_codex_rollout_path(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::sync::mpsc;
 
     fn config() -> CodexExecRunConfig {
         CodexExecRunConfig {
@@ -565,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn codex_exec_args_are_noninteractive_and_bounded() {
+    fn codex_app_server_args_are_noninteractive_and_bounded() {
         let args = codex_exec_args(&config())
             .into_iter()
             .map(|value| value.to_string_lossy().to_string())
@@ -574,24 +1127,21 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "exec",
-                "--json",
                 "-c",
                 "check_for_update_on_startup=false",
                 "-c",
                 "approval_policy=\"never\"",
                 "-s",
                 "workspace-write",
-                "-C",
-                "/tmp/project",
-                "--skip-git-repo-check",
-                "Do one bounded turn",
+                "app-server",
+                "--listen",
+                "stdio://",
             ]
         );
     }
 
     #[test]
-    fn codex_exec_args_resume_previous_thread_and_still_exit() {
+    fn codex_app_server_resume_is_rpc_state_not_process_argv() {
         let mut config = config();
         config.resume_thread_id = Some("33333333-3333-4333-8333-333333333333".to_string());
         config.prompt = "Continue with one bounded follow-up".to_string();
@@ -604,20 +1154,15 @@ mod tests {
         assert_eq!(
             args,
             vec![
-                "exec",
-                "--json",
                 "-c",
                 "check_for_update_on_startup=false",
                 "-c",
                 "approval_policy=\"never\"",
                 "-s",
                 "workspace-write",
-                "-C",
-                "/tmp/project",
-                "--skip-git-repo-check",
-                "resume",
-                "33333333-3333-4333-8333-333333333333",
-                "Continue with one bounded follow-up",
+                "app-server",
+                "--listen",
+                "stdio://",
             ]
         );
     }
@@ -652,8 +1197,8 @@ mod tests {
     }
 
     #[test]
-    fn progress_payload_marks_codex_exec_transport() {
-        let payload = json!({"progress_kind": "codex_exec_jsonl"});
+    fn progress_payload_marks_codex_app_server_transport() {
+        let payload = json!({"progress_kind": "codex_app_server_jsonrpc"});
         let mut obj = payload.as_object().unwrap().clone();
         obj.insert(
             "managed_transport".to_string(),
@@ -663,30 +1208,238 @@ mod tests {
             "execution_lifetime".to_string(),
             Value::String("one_shot".to_string()),
         );
-        assert_eq!(obj["managed_transport"], "codex_exec");
+        assert_eq!(obj["managed_transport"], "codex_app_server");
         assert_eq!(obj["execution_lifetime"], "one_shot");
     }
 
     #[test]
-    fn decoded_thread_started_record_exposes_provider_binding() {
-        let event = json!({
-            "type": "thread.started",
-            "thread_id": "019f6b93-edf6-7bd0-a757-b5195a61abdd"
-        });
-        let provider_thread_id = provider_thread_id_from_event(&event);
+    fn real_app_server_shapes_keep_message_boundaries_and_failed_tools() {
+        let mut projection = AppServerProjection::default();
+        let events = [
+            json!({"method":"item/agentMessage/delta","params":{"itemId":"msg_a","delta":"First"}}),
+            json!({"method":"item/completed","params":{"item":{"id":"msg_a","type":"agentMessage"}}}),
+            json!({"method":"item/agentMessage/delta","params":{"itemId":"msg_b","delta":"Second"}}),
+            json!({"method":"item/completed","params":{"item":{"id":"msg_c","type":"assistantMessage","text":"Completed without delta"}}}),
+            json!({"method":"item/started","params":{"item":{"id":"exec_a","type":"commandExecution","command":"printf ok","status":"inProgress"}}}),
+            json!({"method":"item/completed","params":{"item":{"id":"exec_a","type":"commandExecution","command":"printf ok","aggregatedOutput":"parse error\n","status":"failed","exitCode":1}}}),
+        ];
+        let projected = events
+            .iter()
+            .flat_map(|event| projection.apply(event))
+            .collect::<Vec<_>>();
 
-        assert_eq!(
-            provider_thread_id,
-            Some("019f6b93-edf6-7bd0-a757-b5195a61abdd".to_string())
+        assert!(projected.contains(&ProjectedAppServerEvent::AssistantItem {
+            item_id: "msg_a".to_string(),
+            item_seq: 2,
+            seq: 2,
+            delta: String::new(),
+            text: "First".to_string(),
+            completed: true,
+        }));
+        assert!(projected.contains(&ProjectedAppServerEvent::AssistantItem {
+            item_id: "msg_b".to_string(),
+            item_seq: 1,
+            seq: 3,
+            delta: "Second".to_string(),
+            text: "Second".to_string(),
+            completed: false,
+        }));
+        assert!(projected.contains(&ProjectedAppServerEvent::ToolItem {
+            item_id: "exec_a".to_string(),
+            command: "printf ok".to_string(),
+            output: "parse error\n".to_string(),
+            status: "failed".to_string(),
+            seq: 2,
+            completed: true,
+        }));
+        assert!(projected.contains(&ProjectedAppServerEvent::AssistantItem {
+            item_id: "msg_c".to_string(),
+            item_seq: 1,
+            seq: 4,
+            delta: String::new(),
+            text: "Completed without delta".to_string(),
+            completed: true,
+        }));
+    }
+
+    #[tokio::test]
+    async fn bounded_app_server_turn_streams_binding_text_tool_and_terminal() {
+        let temp = tempfile::tempdir().unwrap();
+        let fake_codex = temp.path().join("codex");
+        fs::write(
+            &fake_codex,
+            r#"#!/usr/bin/env python3
+import json, sys
+def emit(value):
+    print(json.dumps(value), flush=True)
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        emit({"id": msg["id"], "result": {"userAgent": "fake/1"}})
+    elif method == "initialized":
+        pass
+    elif method == "thread/resume":
+        if msg.get("params", {}).get("threadId") != "provider-thread":
+            sys.exit(8)
+        emit({"id": msg["id"], "result": {"thread": {"id": "provider-thread", "path": "/tmp/rollout-provider-thread.jsonl"}}})
+    elif method == "turn/start":
+        emit({"id": msg["id"], "result": {"turn": {"id": "provider-turn", "status": "inProgress"}}})
+        emit({"method": "turn/started", "params": {"turn": {"id": "provider-turn", "status": "inProgress"}}})
+        emit({"method": "item/agentMessage/delta", "params": {"itemId": "msg-1", "delta": "Working now"}})
+        emit({"method": "item/completed", "params": {"item": {"id": "msg-1", "type": "agentMessage"}}})
+        emit({"method": "item/started", "params": {"item": {"id": "exec-1", "type": "commandExecution", "command": "pwd", "status": "inProgress"}}})
+        emit({"method": "item/completed", "params": {"item": {"id": "exec-1", "type": "commandExecution", "command": "pwd", "aggregatedOutput": "/tmp\n", "status": "completed", "exitCode": 0}}})
+        emit({"method": "turn/completed", "params": {"turn": {"id": "provider-turn", "status": "completed"}}})
+"#,
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&fake_codex).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&fake_codex, permissions).unwrap();
+
+        let (api_url, mut received) = spawn_runtime_capture_server().await;
+        let mut run_config = config();
+        run_config.cwd = temp.path().join("workspace");
+        fs::create_dir_all(&run_config.cwd).unwrap();
+        run_config.codex_bin = fake_codex.display().to_string();
+        run_config.api_url = api_url;
+        run_config.resume_thread_id = Some("provider-thread".to_string());
+        let summary = start_codex_exec_once(run_config).await.unwrap();
+
+        let mut events = Vec::new();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while let Some(batch) = received.recv().await {
+                events.extend(batch);
+                if events.iter().any(|event: &Value| {
+                    event.get("kind").and_then(Value::as_str) == Some("terminal_signal")
+                }) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+
+        assert!(summary.pid.is_some());
+        assert!(events.iter().any(|event| {
+            event.get("kind").and_then(Value::as_str) == Some("binding_signal")
+                && json_string(event, &["payload", "provider_thread_id"]).as_deref()
+                    == Some("provider-thread")
+        }));
+        assert!(events.iter().any(|event| {
+            json_string(event, &["payload", "progress_kind"]).as_deref()
+                == Some("console_live_user_item")
+                && json_string(event, &["payload", "input_origin", "authored_via"]).as_deref()
+                    == Some("longhouse")
+        }));
+        assert!(events.iter().any(|event| {
+            json_string(event, &["payload", "progress_kind"]).as_deref()
+                == Some("bridge_live_transcript_delta")
+                && json_string(event, &["payload", "live_text"]).as_deref() == Some("Working now")
+        }));
+        assert!(events.iter().any(|event| {
+            json_string(event, &["payload", "progress_kind"]).as_deref()
+                == Some("console_live_tool_item")
+                && json_string(event, &["payload", "output"]).as_deref() == Some("/tmp\n")
+        }));
+        assert!(events.iter().any(|event| {
+            event.get("kind").and_then(Value::as_str) == Some("terminal_signal")
+                && json_string(event, &["payload", "terminal_state"]).as_deref()
+                    == Some("run_completed")
+        }));
+    }
+
+    #[tokio::test]
+    #[ignore = "calls the installed Codex provider; run explicitly as an external contract canary"]
+    async fn installed_codex_completes_through_production_console_adapter() {
+        let (api_url, mut received) = spawn_runtime_capture_server().await;
+        let mut run_config = config();
+        run_config.cwd = std::env::current_dir().unwrap();
+        run_config.api_url = api_url;
+        run_config.codex_bin =
+            std::env::var("LONGHOUSE_TEST_CODEX_BIN").unwrap_or_else(|_| "codex".to_string());
+        run_config.prompt = "Reply with exactly PRODUCTION_ADAPTER_CANARY_OK.".to_string();
+        let summary = start_codex_exec_once(run_config).await.unwrap();
+
+        let mut saw_text = false;
+        let mut saw_terminal = false;
+        tokio::time::timeout(Duration::from_secs(120), async {
+            while let Some(batch) = received.recv().await {
+                for event in batch {
+                    saw_text |= json_string(&event, &["payload", "live_text"])
+                        .is_some_and(|text| text.contains("PRODUCTION_ADAPTER_CANARY_OK"));
+                    saw_terminal |= event.get("kind").and_then(Value::as_str)
+                        == Some("terminal_signal")
+                        && json_string(&event, &["payload", "terminal_state"]).as_deref()
+                            == Some("run_completed");
+                }
+                if saw_text && saw_terminal {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(summary.pid.is_some());
+        assert!(saw_text, "installed Codex emitted no live assistant text");
+        assert!(
+            saw_terminal,
+            "installed Codex turn did not settle successfully"
         );
-        let envelope = json!({
-            "progress_kind": "codex_exec_jsonl",
-            "seq": 1,
-            "event": event,
+    }
+
+    async fn spawn_runtime_capture_server() -> (String, mpsc::UnboundedReceiver<Vec<Value>>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let mut bytes = Vec::new();
+                let body = loop {
+                    let mut chunk = [0u8; 4096];
+                    let read = stream.read(&mut chunk).await.unwrap();
+                    if read == 0 {
+                        break Vec::new();
+                    }
+                    bytes.extend_from_slice(&chunk[..read]);
+                    let Some(header_end) =
+                        bytes.windows(4).position(|window| window == b"\r\n\r\n")
+                    else {
+                        continue;
+                    };
+                    let head = String::from_utf8_lossy(&bytes[..header_end]);
+                    let content_length = head
+                        .lines()
+                        .find_map(|line| {
+                            let (name, value) = line.split_once(':')?;
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    let body_start = header_end + 4;
+                    if bytes.len() >= body_start + content_length {
+                        break bytes[body_start..body_start + content_length].to_vec();
+                    }
+                };
+                if let Ok(value) = serde_json::from_slice::<Value>(&body) {
+                    let events = value
+                        .get("events")
+                        .and_then(Value::as_array)
+                        .cloned()
+                        .unwrap_or_default();
+                    let _ = tx.send(events);
+                }
+                stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                    .await
+                    .unwrap();
+            }
         });
-        assert_eq!(envelope["event"]["type"], "thread.started");
-        assert!(envelope.get("thread_id").is_none());
-        assert_eq!(provider_thread_id_from_event(&envelope), None);
+        (format!("http://{address}"), rx)
     }
 
     #[test]

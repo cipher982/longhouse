@@ -131,6 +131,12 @@ export interface SessionShareResolveResponse {
 export interface SessionTranscriptPreview {
   event_id: number;
   text: string;
+  role?: string;
+  tool_name?: string | null;
+  tool_input_json?: Record<string, unknown> | null;
+  tool_output_text?: string | null;
+  tool_call_id?: string | null;
+  tool_call_state?: "running" | "completed" | "dropped" | null;
   event_origin: string;
   timestamp?: string | null;
   is_provisional: boolean;

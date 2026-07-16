@@ -916,7 +916,7 @@ async fn execute_command(
                 "session_id": summary.session_id,
                 "run_id": summary.run_id,
                 "provider": "codex",
-                "transport": "codex_exec",
+                "transport": "codex_app_server",
                 "pid": summary.pid,
                 "argv": summary.argv,
             }))
@@ -1517,7 +1517,7 @@ async fn execute_turn_start(
                     "thread_id": thread_id,
                     "run_id": summary.run_id,
                     "provider": "codex",
-                    "transport": "codex_exec",
+                    "transport": "codex_app_server",
                     "pid": summary.pid,
                     "argv": summary.argv,
                 })

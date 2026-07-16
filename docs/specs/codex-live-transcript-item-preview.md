@@ -102,7 +102,7 @@ iOS TimelineBuilder renders all items with the same row model
 Codex already provides the identity we need:
 
 ```text
-item/started              item.id, item.type = assistantMessage
+item/started              item.id, item.type = agentMessage
 item/agentMessage/delta   itemId, delta
 item/completed            item.id
 ```
@@ -167,6 +167,10 @@ needs to represent the current item that has not caught up durably yet.
 - A turn completion snapshot should not overwrite a clean current-item preview
   with a whole-turn cumulative blob.
 - Out-of-order or duplicate live observations must keep the newest item seq.
+- A command that completes too quickly to emit an output-delta notification
+  must still render from `item/completed.item.aggregatedOutput`.
+- A failed command is a failed tool item even when the enclosing turn later
+  completes successfully.
 
 ## Non-Goals
 

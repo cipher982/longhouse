@@ -233,26 +233,44 @@ export function projectionItemsWithTranscriptPreview(
     return projectionItems;
   }
 
-  return [
-    ...projectionItems,
-    {
+  const syntheticId = preview.tool_name
+    ? -Math.max(2, Math.abs(preview.event_id) * 2)
+    : -Math.abs(preview.event_id);
+  const callItem: AgentSessionProjectionItem = {
       kind: "event",
       session_id: session.id,
       timestamp: previewTimestamp,
       event: {
-        id: -Math.abs(preview.event_id),
-        role: "assistant",
-        content_text: previewText,
-        tool_name: null,
-        tool_input_json: null,
+        id: syntheticId,
+        role: preview.role || "assistant",
+        content_text: preview.tool_name ? null : previewText,
+        tool_name: preview.tool_name || null,
+        tool_input_json: preview.tool_input_json || null,
         tool_output_text: null,
-        tool_call_id: null,
+        tool_call_id: preview.tool_call_id || null,
+        tool_call_state: preview.tool_call_state || null,
         timestamp: previewTimestamp,
         in_active_context: true,
         is_head_branch: true,
       },
+    };
+  if (!preview.tool_name || !preview.tool_output_text || preview.tool_call_state === "running") {
+    return [...projectionItems, callItem];
+  }
+  const resultItem: AgentSessionProjectionItem = {
+    kind: "event",
+    session_id: session.id,
+    timestamp: previewTimestamp,
+    event: {
+      ...callItem.event!,
+      id: syntheticId - 1,
+      role: "tool",
+      content_text: null,
+      tool_input_json: null,
+      tool_output_text: preview.tool_output_text,
     },
-  ];
+  };
+  return [...projectionItems, callItem, resultItem];
 }
 
 export function isToolInteractionDropped(interaction: ToolInteraction): boolean {

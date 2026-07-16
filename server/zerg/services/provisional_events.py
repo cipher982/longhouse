@@ -32,6 +32,12 @@ class TranscriptPreview:
     timestamp: datetime
     provisional_cursor: str | None
     provisional_complete: bool
+    role: str = "assistant"
+    tool_name: str | None = None
+    tool_input_json: dict | None = None
+    tool_output_text: str | None = None
+    tool_call_id: str | None = None
+    tool_call_state: str | None = None
 
 
 def visible_transcript_event_predicate():

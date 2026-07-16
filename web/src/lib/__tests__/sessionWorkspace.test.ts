@@ -187,6 +187,44 @@ describe("projectionItemsWithTranscriptPreview", () => {
     });
   });
 
+  it("preserves live Console tool metadata in the synthetic event", () => {
+    const session = makeSession({
+      transcript_preview: {
+        event_id: 7,
+        text: "/tmp/project",
+        role: "assistant",
+        tool_name: "exec",
+        tool_input_json: { command: "pwd" },
+        tool_output_text: "/tmp/project\n",
+        tool_call_id: "exec-1",
+        tool_call_state: "completed",
+        event_origin: "live_provisional",
+        timestamp: "2026-07-16T18:00:00Z",
+        is_provisional: true,
+        is_complete: true,
+        content_cursor: "codex_console_live:exec-1:2",
+        is_stale: false,
+        stale_reason: null,
+      },
+    });
+
+    const projected = projectionItemsWithTranscriptPreview([], session);
+
+    expect(projected).toHaveLength(2);
+    expect(projected[0]?.event).toMatchObject({
+      role: "assistant",
+      tool_name: "exec",
+      tool_input_json: { command: "pwd" },
+      tool_call_id: "exec-1",
+      tool_call_state: "completed",
+    });
+    expect(projected[1]?.event).toMatchObject({
+      role: "tool",
+      tool_output_text: "/tmp/project\n",
+      tool_call_id: "exec-1",
+    });
+  });
+
   it("skips previews already superseded by durable transcript events", () => {
     const session = makeSession({
       transcript_preview: {

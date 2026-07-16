@@ -9479,6 +9479,24 @@ export interface components {
              */
             text: string;
             /**
+             * Role
+             * @description Transcript role for the provisional item
+             * @default assistant
+             */
+            role: string;
+            /** Tool Name */
+            tool_name?: string | null;
+            /** Tool Input Json */
+            tool_input_json?: {
+                [key: string]: unknown;
+            } | null;
+            /** Tool Output Text */
+            tool_output_text?: string | null;
+            /** Tool Call Id */
+            tool_call_id?: string | null;
+            /** Tool Call State */
+            tool_call_state?: ("running" | "completed" | "dropped") | null;
+            /**
              * Event Origin
              * @description Event origin: durable|live_provisional
              */

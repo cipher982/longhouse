@@ -1,0 +1,29 @@
+{
+  "events": [
+    {
+      "runtime_key": "codex:11111111-1111-4111-8111-111111111111",
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "thread_id": "22222222-2222-4222-8222-222222222222",
+      "run_id": "33333333-3333-4333-8333-333333333333",
+      "provider": "codex",
+      "device_id": "cinder",
+      "source": "codex_console_live",
+      "kind": "progress_signal",
+      "occurred_at": "2026-07-16T18:00:00Z",
+      "dedupe_key": "console:tool:run-1:exec-1:2",
+      "payload": {
+        "progress_kind": "console_live_tool_item",
+        "managed_transport": "codex_app_server",
+        "execution_lifetime": "one_shot",
+        "turn_id": "44444444-4444-4444-8444-444444444444",
+        "client_request_id": "ios-request-1",
+        "item_id": "exec-1",
+        "command": "pwd",
+        "output": "/tmp/project\n",
+        "status": "completed",
+        "seq": 2,
+        "completed": true
+      }
+    }
+  ]
+}

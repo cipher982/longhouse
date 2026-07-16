@@ -606,12 +606,6 @@ struct WebTranscriptView: UIViewRepresentable {
             super.init()
             NotificationCenter.default.addObserver(
                 self,
-                selector: #selector(keyboardFrameWillChange(_:)),
-                name: UIResponder.keyboardWillChangeFrameNotification,
-                object: nil
-            )
-            NotificationCenter.default.addObserver(
-                self,
                 selector: #selector(keyboardFrameDidChange(_:)),
                 name: UIResponder.keyboardDidChangeFrameNotification,
                 object: nil
@@ -731,13 +725,11 @@ struct WebTranscriptView: UIViewRepresentable {
             shouldStickToBottom = distanceFromBottom < 96
         }
 
-        @objc private func keyboardFrameWillChange(_ notification: Notification) {
-            let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval
-            repinToBottomIfSticky(reason: "keyboard_will_change", followUpDelay: duration)
-        }
-
         @objc private func keyboardFrameDidChange(_ notification: Notification) {
-            repinToBottomIfSticky(reason: "keyboard_did_change", followUpDelay: 0.05)
+            // GeometryReader's safe-area update already pushes the final bottom
+            // inset. Re-pin once after UIKit settles instead of issuing JS during
+            // both will-change and did-change phases.
+            repinToBottomIfSticky(reason: "keyboard_did_change")
         }
 
         private func repinToBottomIfSticky(reason: String, followUpDelay: TimeInterval? = nil) {

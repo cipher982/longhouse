@@ -119,6 +119,48 @@ def test_runtime_ingest_materializes_latest_live_preview_projection(tmp_path):
     assert preview.provisional_complete is False
 
 
+def test_console_tool_event_materializes_truthful_live_tool_preview(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "console_tool_preview.db")
+    now = datetime(2026, 7, 16, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1))
+        event = RuntimeEventIngest(
+            runtime_key=f"codex:{session.id}",
+            session_id=session.id,
+            thread_id=None,
+            run_id=None,
+            provider="codex",
+            device_id="cinder",
+            source="codex_console_live",
+            kind="progress_signal",
+            occurred_at=now,
+            dedupe_key="console:tool:run-1:exec-1:2",
+            payload={
+                "progress_kind": "console_live_tool_item",
+                "turn_id": "turn-1",
+                "item_id": "exec-1",
+                "seq": 2,
+                "command": "pwd",
+                "output": "/tmp/project\n",
+                "status": "completed",
+                "completed": True,
+            },
+        )
+        result = ingest_runtime_events(db, [event])
+        db.commit()
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert result.accepted == 1
+    assert preview.text == "/tmp/project"
+    assert preview.tool_name == "exec"
+    assert preview.tool_input_json == {"command": "pwd"}
+    assert preview.tool_output_text == "/tmp/project\n"
+    assert preview.tool_call_id == "exec-1"
+    assert preview.tool_call_state == "completed"
+    assert preview.provisional_complete is True
+
+
 def test_projection_keeps_higher_seq_for_same_turn(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "same_turn_ordering.db")
     now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
