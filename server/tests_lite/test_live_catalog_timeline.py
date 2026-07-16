@@ -200,7 +200,7 @@ def test_live_catalog_timeline_lists_card_and_runtime_without_archive(tmp_path):
     assert card.head.capabilities.can_send_input is True
 
 
-def test_storage_v2_untitled_session_uses_first_prompt_as_ready_title(tmp_path):
+def test_storage_v2_untitled_session_uses_first_prompt_as_pending_fallback(tmp_path):
     engine = make_live_engine(f"sqlite:///{tmp_path / 'storage-title.db'}")
     initialize_catalog_schema(engine)
     LiveSession = make_sessionmaker(engine)
@@ -236,8 +236,8 @@ def test_storage_v2_untitled_session_uses_first_prompt_as_ready_title(tmp_path):
     [card] = response.sessions
     assert card.head.timeline_title == "Repair storage titles without an AI…"
     assert card.head.summary_title == "Repair storage titles without an AI…"
-    assert card.head.anchor_title == "Repair storage titles without an AI…"
-    assert card.head.title_state == "ready"
+    assert card.head.anchor_title is None
+    assert card.head.title_state == "pending"
     assert card.head.title_source == "prompt"
 
 

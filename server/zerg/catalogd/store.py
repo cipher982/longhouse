@@ -4878,6 +4878,12 @@ class CatalogStore:
                 "created": True,
                 "exact_replay": False,
                 "receipt": _raw_object_receipt(row),
+                "title_generation_required": bool(
+                    render_manifest is not None
+                    and render_manifest["user_messages"] > 0
+                    and int((existing_session or {}).get("user_messages") or 0) == 0
+                    and not (existing_session or {}).get("anchor_title")
+                ),
             }
 
     def read_source_epoch_manifest(
@@ -5094,6 +5100,115 @@ class CatalogStore:
                 "session": _storage_session_dto(row) if row is not None and deleted is None else None,
                 "commit_seq": str(_current_commit_seq(connection)),
                 "observed_at": observed_at.isoformat(),
+            }
+
+    def list_storage_title_candidates(self, *, limit: int) -> dict[str, Any]:
+        table = StorageSession.__table__
+        observed_at = datetime.now(UTC)
+        with _read_snapshot(self.engine) as connection:
+            rows = (
+                connection.execute(
+                    select(table)
+                    .where(
+                        table.c.user_messages > 0,
+                        or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""),
+                        or_(table.c.title_retry_at.is_(None), table.c.title_retry_at <= observed_at),
+                        table.c.environment.notin_(("test", "e2e")),
+                    )
+                    .order_by(table.c.last_activity_at.desc(), table.c.session_id)
+                    .limit(limit)
+                )
+                .mappings()
+                .all()
+            )
+        return {
+            "sessions": [
+                {
+                    "session_id": str(row["session_id"]),
+                    "first_user_message": row["first_user_message_preview"],
+                    "provider": str(row["provider"]),
+                    "project": row["project"],
+                    "git_branch": row["git_branch"],
+                    "attempt_count": int(row["title_attempt_count"] or 0),
+                }
+                for row in rows
+                if str(row["first_user_message_preview"] or "").strip()
+            ],
+            "observed_at": observed_at.isoformat(),
+        }
+
+    def complete_storage_title(self, *, session_id: UUID, title: str, completed_at: datetime) -> dict[str, Any]:
+        table = StorageSession.__table__
+        catalog = LiveSessionCatalog.__table__
+        card = LiveTimelineCard.__table__
+        session_key = str(session_id)
+        with _write_transaction(self.engine) as connection:
+            existing = connection.execute(select(table.c.anchor_title).where(table.c.session_id == session_key)).scalar_one_or_none()
+            if existing:
+                return {"changed": False, "title": str(existing), "commit_seq": str(_current_commit_seq(connection))}
+            commit_seq = _advance_commit_seq(connection, completed_at)
+            changed = connection.execute(
+                update(table)
+                .where(table.c.session_id == session_key, or_(table.c.anchor_title.is_(None), table.c.anchor_title == ""))
+                .values(
+                    anchor_title=title,
+                    summary_title=title,
+                    title_last_attempt_at=completed_at,
+                    title_retry_at=None,
+                    title_last_error=None,
+                    commit_seq=commit_seq,
+                    updated_at=completed_at,
+                )
+            ).rowcount
+            if changed:
+                connection.execute(
+                    update(catalog)
+                    .where(catalog.c.session_id == session_key)
+                    .values(
+                        anchor_title=title,
+                        summary_title=title,
+                        title_retry_at=None,
+                        title_last_error=None,
+                        updated_at=completed_at,
+                    )
+                )
+                connection.execute(update(card).where(card.c.session_id == session_key).values(summary_title=title))
+            return {"changed": bool(changed), "title": title, "commit_seq": str(commit_seq)}
+
+    def fail_storage_title(self, *, session_id: UUID, reason: str, failed_at: datetime) -> dict[str, Any]:
+        table = StorageSession.__table__
+        session_key = str(session_id)
+        with _write_transaction(self.engine) as connection:
+            row = connection.execute(
+                select(table.c.anchor_title, table.c.title_attempt_count).where(table.c.session_id == session_key)
+            ).first()
+            if row is None or row.anchor_title:
+                return {"changed": False, "commit_seq": str(_current_commit_seq(connection))}
+            attempts = int(row.title_attempt_count or 0) + 1
+            retry_at = failed_at + timedelta(seconds=min(30, 2 ** min(attempts, 5)))
+            commit_seq = _advance_commit_seq(connection, failed_at)
+            connection.execute(
+                update(table)
+                .where(table.c.session_id == session_key)
+                .values(
+                    title_attempt_count=attempts,
+                    title_last_attempt_at=failed_at,
+                    title_retry_at=retry_at,
+                    title_last_error=reason[:128],
+                    commit_seq=commit_seq,
+                    updated_at=failed_at,
+                )
+            )
+            connection.execute(
+                update(LiveSessionCatalog.__table__)
+                .where(LiveSessionCatalog.__table__.c.session_id == session_key)
+                .values(title_retry_at=retry_at, title_last_error=reason[:128], updated_at=failed_at)
+            )
+            return {
+                "changed": True,
+                "attempt_count": attempts,
+                "retry_at": retry_at.isoformat(),
+                "commit_seq": str(commit_seq),
             }
 
     def list_storage_sessions(
@@ -6776,7 +6891,7 @@ class CatalogStore:
 
 
 def _storage_catalog_compat_row(row) -> dict[str, Any]:
-    title = str(row["summary_title"] or "").strip() or sanitize_title(row["first_user_message_preview"], max_words=6)
+    ai_title = str(row["anchor_title"] or "").strip()
     return {
         "session_id": str(row["session_id"]),
         "provider": str(row["provider"]),
@@ -6796,8 +6911,10 @@ def _storage_catalog_compat_row(row) -> dict[str, Any]:
         "assistant_messages": int(row["assistant_messages"]),
         "tool_calls": int(row["tool_calls"]),
         "summary": None,
-        "summary_title": title,
-        "anchor_title": title,
+        "summary_title": row["summary_title"],
+        "anchor_title": ai_title or None,
+        "title_retry_at": row["title_retry_at"],
+        "title_last_error": row["title_last_error"],
         "first_user_message_preview": row["first_user_message_preview"],
         "transcript_revision": int(row["transcript_revision"]),
         "summary_revision": 0,
@@ -6912,7 +7029,7 @@ def _refresh_legacy_migration_run(connection, run_id: str, commit_seq: int, obse
 
 
 def _storage_card_compat_row(row) -> dict[str, Any]:
-    title = str(row["summary_title"] or "").strip() or sanitize_title(row["first_user_message_preview"], max_words=6)
+    title = str(row["anchor_title"] or "").strip() or sanitize_title(row["first_user_message_preview"], max_words=6)
     return {
         "session_id": str(row["session_id"]),
         "last_activity_at": row["last_activity_at"],
@@ -7208,6 +7325,7 @@ _CATALOG_TEXT_LIMITS = {
     "summary": 768,
     "summary_title": 255,
     "anchor_title": 255,
+    "title_last_error": 128,
     "first_user_message_preview": 384,
 }
 _CARD_TEXT_LIMITS = {
@@ -7241,6 +7359,8 @@ _CATALOG_FIELDS = frozenset(
         "summary",
         "summary_title",
         "anchor_title",
+        "title_retry_at",
+        "title_last_error",
         "first_user_message_preview",
         "transcript_revision",
         "summary_revision",
@@ -7818,6 +7938,11 @@ def _storage_session_dto(row) -> dict[str, Any]:
         "assistant_messages": int(row["assistant_messages"]),
         "tool_calls": int(row["tool_calls"]),
         "summary_title": row["summary_title"],
+        "anchor_title": row["anchor_title"],
+        "title_attempt_count": int(row["title_attempt_count"] or 0),
+        "title_last_attempt_at": _encode_datetime(row["title_last_attempt_at"]),
+        "title_retry_at": _encode_datetime(row["title_retry_at"]),
+        "title_last_error": row["title_last_error"],
         "first_user_message_preview": row["first_user_message_preview"],
         "last_visible_text_preview": row["last_visible_text_preview"],
         "transcript_revision": str(row["transcript_revision"]),

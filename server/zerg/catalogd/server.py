@@ -349,6 +349,12 @@ class CatalogDaemon:
             return await self._raw_objects_exist_batch(request)
         if request.method == "storage.session.read.v2":
             return await self._read_storage_session(request)
+        if request.method == "storage.session.title.candidates.v2":
+            return await self._list_storage_title_candidates(request)
+        if request.method == "storage.session.title.complete.v2":
+            return await self._complete_storage_title(request)
+        if request.method == "storage.session.title.fail.v2":
+            return await self._fail_storage_title(request)
         if request.method == "storage.session.delete.v2":
             return await self._delete_storage_session(request)
         if request.method == "storage.session.timeline.list.v2":
@@ -1049,7 +1055,12 @@ class CatalogDaemon:
         if result.get("idempotency_conflict"):
             return self._error(request, "conflict", "message_key was reused with different content")
         if reason := result.get("invalid"):
-            return self._error(request, "invalid_request", "cannot send a session message to the same session", details={"reason": reason})
+            return self._error(
+                request,
+                "invalid_request",
+                "cannot send a session message to the same session",
+                details={"reason": reason},
+            )
         if missing := result.get("not_found"):
             return self._error(request, "not_found", f"{missing} session not found for owner")
         return CatalogRpcResponse(id=request.id, result=result)
@@ -1974,6 +1985,39 @@ class CatalogDaemon:
             return self._error(request, "invalid_request", str(exc))
         assert self._store is not None
         result = await self._run_store(self._store.read_storage_session, session_id=session_id)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _list_storage_title_candidates(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"limit"} or type(request.params["limit"]) is not int or not 1 <= request.params["limit"] <= 100:
+            return self._error(request, "invalid_request", "title candidates require limit from 1 through 100")
+        assert self._store is not None
+        result = await self._run_store(self._store.list_storage_title_candidates, limit=request.params["limit"])
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _complete_storage_title(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "title", "completed_at"}:
+            return self._error(request, "invalid_request", "title completion has invalid parameters")
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+            title = _bounded_text(request.params["title"], "title", 255)
+            completed_at = _parse_datetime(request.params["completed_at"], "completed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.complete_storage_title, session_id=session_id, title=title, completed_at=completed_at)
+        return CatalogRpcResponse(id=request.id, result=result)
+
+    async def _fail_storage_title(self, request: CatalogRpcRequest) -> CatalogRpcResponse:
+        if set(request.params) != {"session_id", "reason", "failed_at"}:
+            return self._error(request, "invalid_request", "title failure has invalid parameters")
+        try:
+            session_id = _canonical_uuid(request.params["session_id"], "session_id")
+            reason = _bounded_text(request.params["reason"], "reason", 128)
+            failed_at = _parse_datetime(request.params["failed_at"], "failed_at")
+        except ValueError as exc:
+            return self._error(request, "invalid_request", str(exc))
+        assert self._store is not None
+        result = await self._run_store(self._store.fail_storage_title, session_id=session_id, reason=reason, failed_at=failed_at)
         return CatalogRpcResponse(id=request.id, result=result)
 
     async def _delete_storage_session(self, request: CatalogRpcRequest) -> CatalogRpcResponse:

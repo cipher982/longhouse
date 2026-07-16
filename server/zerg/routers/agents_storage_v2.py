@@ -887,6 +887,22 @@ async def _commit_admitted_envelope(
             },
             timeout_seconds=2.0,
         )
+        if (
+            committed.get("title_generation_required") is True
+            and render_manifest is not None
+            and str(render_manifest.get("first_user_message_preview") or "").strip()
+        ):
+            from zerg.services.storage_session_titles import schedule_storage_session_title
+
+            schedule_storage_session_title(
+                {
+                    "session_id": str(spec.session_id),
+                    "first_user_message": render_manifest["first_user_message_preview"],
+                    "provider": spec.provider,
+                    "project": parsed["session_facts"].get("project"),
+                    "git_branch": parsed["session_facts"].get("git_branch"),
+                }
+            )
         return _validated_receipt(committed.get("receipt"))
     except CatalogRemoteError as exc:
         _raise_catalog_error(exc)

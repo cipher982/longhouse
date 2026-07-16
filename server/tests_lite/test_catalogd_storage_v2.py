@@ -297,7 +297,7 @@ async def test_console_provenance_survives_first_archived_provider_transcript(da
 
 
 @pytest.mark.asyncio
-async def test_storage_title_is_immediate_sanitized_and_write_once(daemon_paths):
+async def test_storage_title_fallback_is_immediate_and_ai_completion_is_write_once(daemon_paths):
     database_path, socket_path = daemon_paths
     now = datetime.now(UTC).replace(microsecond=0)
     epoch = uuid4()
@@ -309,12 +309,24 @@ async def test_storage_title_is_immediate_sanitized_and_write_once(daemon_paths)
     try:
         first = _raw_params(epoch=epoch, session_id=session_id, start=0, end=6, records=(b"first\n",), sealed_at=now)
         first_manifest = _render_manifest(generation_id)
-        first_manifest["first_user_message_preview"] = "[Image #1]\n\nWhy is OpenCode stuck on naming sessions and how do we fix it?"
+        first_manifest["first_user_message_preview"] = (
+            "[Image #1]\n\nWhy is OpenCode stuck on naming sessions and how do we fix it?"
+        )
         first.update(render_state="ready", render_manifest=first_manifest)
         await client.call("storage.raw_object.commit.v2", first)
 
         stored = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
         assert stored["session"]["summary_title"] == "Why is OpenCode stuck on naming…"
+        assert stored["session"]["anchor_title"] is None
+
+        candidates = await client.call("storage.session.title.candidates.v2", {"limit": 10})
+        assert [row["session_id"] for row in candidates["sessions"]] == [str(session_id)]
+
+        completed = await client.call(
+            "storage.session.title.complete.v2",
+            {"session_id": str(session_id), "title": "Repair OpenCode Session Naming", "completed_at": now.isoformat()},
+        )
+        assert completed["changed"] is True
 
         second = _raw_params(epoch=epoch, session_id=session_id, start=6, end=13, records=(b"second\n",), sealed_at=now)
         second_manifest = _render_manifest(generation_id, seed=b"second-render", position=6)
@@ -323,7 +335,16 @@ async def test_storage_title_is_immediate_sanitized_and_write_once(daemon_paths)
         await client.call("storage.raw_object.commit.v2", second)
 
         stored = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
-        assert stored["session"]["summary_title"] == "Why is OpenCode stuck on naming…"
+        assert stored["session"]["anchor_title"] == "Repair OpenCode Session Naming"
+        assert stored["session"]["summary_title"] == "Repair OpenCode Session Naming"
+
+        replay = await client.call(
+            "storage.session.title.complete.v2",
+            {"session_id": str(session_id), "title": "Wrong Later Title", "completed_at": now.isoformat()},
+        )
+        assert replay["changed"] is False
+        stored = await client.call("storage.session.read.v2", {"session_id": str(session_id)})
+        assert stored["session"]["anchor_title"] == "Repair OpenCode Session Naming"
     finally:
         await client.close()
         await daemon.close()

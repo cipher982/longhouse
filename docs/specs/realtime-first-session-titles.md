@@ -1,69 +1,89 @@
-# Immediate Session Titles
+# Near-Instant AI Session Titles
 
 Status: Accepted
-Last updated: 2026-07-13
+Last updated: 2026-07-16
 
 ## Decision
 
-The first durable, meaningful user message is the session title source.
-Longhouse sanitizes it to a short headline and freezes that value immediately.
+Every eligible human-started session gets a short, stable, AI-generated title.
+The first durable user message starts generation immediately. Until the model
+returns, clients render a sanitized prompt-derived fallback so the row is never
+blank or blocked on “Naming session…”.
 
-Session naming is a synchronous projection, not an AI enrichment job. It must
-not depend on a model call, background queue, retry state, summary completion,
-or client-side inference.
+The fallback is presentation only. It must never be persisted or reported as a
+completed AI title.
+
+## Measured model lane and SLA
+
+The `session_title` use case uses OpenRouter's
+`google/gemini-3.1-flash-lite:nitro`. A live 2026-07-16 benchmark over seven
+representative prompts and two rounds completed 14/14 calls with a 463 ms
+median and 723 ms p90.
+
+Targets are measured from the first durable user-message commit:
+
+- prompt fallback visible in the same response/commit;
+- AI title ready p50 under 750 ms;
+- AI title ready p90 under 1.5 s;
+- no eligible title debt older than 30 s without a recorded retry reason.
+
+Provider latency is not allowed to delay transcript ingest or control traffic.
 
 ## Contract
 
-When a durable user message exists:
-
 ```text
-first durable user message
-  -> sanitize to a short headline
-  -> persist if the session title is empty
-  -> expose the same timeline_title to every client
+first durable meaningful user message
+  -> commit prompt preview immediately
+  -> expose sanitized prompt fallback with title_state=pending
+  -> call the session_title model outside the catalog transaction
+  -> compare-and-set anchor_title once
+  -> publish session/timeline invalidation
+  -> expose title_state=ready, title_source=ai
 ```
 
-The write is idempotent and write-once. Later messages and transcript summaries
-must not rename the session.
+Failures record a durable retry obligation. A process restart, missed in-memory
+task, timeout, or provider outage must converge without another transcript
+event.
 
-Before the first user message, the API may return workspace/provider context.
-That is an empty-session label, not a naming workflow.
+## Ownership
 
-## Storage ownership
+Catalogd/storage-v2 owns title state because it owns the durable first user
+message. `anchor_title` is the write-once AI title. `summary_title` remains a
+compatibility/search field and cannot satisfy the title obligation.
 
-Catalogd/storage-v2 owns the durable title because it owns the durable user
-message. The title is written in the same catalog transaction that publishes
-the first rendered user message.
-
-During the storage-v2 compatibility period, `summary_title` carries this stable
-title value. It must be treated as write-once. A later schema cleanup may rename
-the column to `title`; that rename is not required for the product behavior.
-
-Existing storage rows with no persisted title resolve the same deterministic
-title from `first_user_message_preview` at read time. This repairs display
-immediately without a broad startup rewrite.
+The Runtime Host owns model calls and retries; catalogd exposes bounded claim,
+completion, and failure operations. The Machine Agent may cache the immediate
+prompt fallback, but it cannot label that fallback `ready`.
 
 ## Client behavior
 
-`timeline_title` is the server-resolved display string. Web, iOS, widgets, CLI,
-and macOS render it directly.
+All clients render the server-resolved `timeline_title`:
 
-Clients must not replace a non-empty `timeline_title` with “Naming session…”,
-workspace context, summary text, or local title-state logic.
+- `pending` or `generating`: prompt fallback;
+- `ready`: AI `anchor_title`;
+- `degraded`: prompt fallback while durable retry remains active;
+- `awaiting_input`: project/provider context before user intent exists.
+
+Clients must not replace a usable fallback with “Naming session…”, and must not
+infer `ready` from a non-empty prompt-derived string.
 
 ## Invariants
 
-- Title availability adds no network or model round trip beyond durable ingest.
-- Assistant output, tool output, and later user messages cannot become the title.
-- A title never changes implicitly after it first appears.
-- One sanitization function defines title text for every provider.
-- Model availability has no effect on session naming.
-- All title-bearing clients render the same `timeline_title`.
+- AI judgment produces the title; deterministic code handles transport,
+  sanitization, timeout, compare-and-set, retries, and display fallback.
+- Only the first durable non-warmup user message is model input.
+- Assistant/tool output and later prompts cannot rename the session.
+- The model call runs outside catalogd and outside ingest transactions.
+- `anchor_title IS NULL` on an eligible session is title debt.
+- Test, e2e, provider-proof, and autonomous no-user sessions are exempt.
+- Web, iOS, widgets, CLI, and macOS agree on title text and provenance.
 
 ## Acceptance tests
 
-- The first durable user message produces a title in the same storage commit.
-- Image markers, fences, URLs, and whitespace are sanitized consistently.
-- A later render object cannot replace an existing title.
-- An existing untitled storage row resolves from its first-user preview.
-- A non-ready legacy enrichment state cannot hide a non-empty `timeline_title`.
+- First-user commit schedules generation without delaying its receipt.
+- Prompt fallback is immediate but reports `pending`/`prompt`.
+- Successful generation compare-and-sets `anchor_title` and reports
+  `ready`/`ai`.
+- Later ingest cannot overwrite the AI title.
+- Failure records retry state and the repair loop later converges.
+- Storage-v2, iOS, and menu bar never treat prompt truncation as an AI title.

@@ -16,8 +16,13 @@ import re
 import shlex
 import shutil
 import sqlite3
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Iterator
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -73,6 +78,7 @@ from ._shared import _normalize_optional_int
 from ._shared import _normalize_optional_string
 from ._shared import _parse_rfc3339
 from ._shared import _provider_cli_reference
+from ._shared import _read_trimmed_file
 from ._shared import _resolve_provider_cli_candidate
 from ._shared import _to_rfc3339
 from ._shared import _utc_now
@@ -364,6 +370,66 @@ def _merge_managed_sessions(
     return managed_summary, sessions, bridge_orphans
 
 
+_MANAGED_SESSION_TITLE_FETCH_LIMIT = 8
+_MANAGED_SESSION_TITLE_FETCH_TIMEOUT_SECONDS = 0.8
+
+
+def _fetch_managed_session_title(runtime_url: str, token: str, session_id: str) -> dict[str, str | None]:
+    url = urllib.parse.urljoin(runtime_url.rstrip("/") + "/", f"api/agents/sessions/{urllib.parse.quote(session_id)}")
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "User-Agent": "LonghouseLocalHealth/1.0", "X-Agents-Token": token},
+    )
+    with urllib.request.urlopen(request, timeout=_MANAGED_SESSION_TITLE_FETCH_TIMEOUT_SECONDS) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if not isinstance(payload, Mapping) or payload.get("title_source") != "ai" or payload.get("title_state") != "ready":
+        return {}
+    return {
+        "timeline_title": _normalize_optional_string(payload.get("timeline_title")),
+        "summary_title": _normalize_optional_string(payload.get("timeline_title")),
+        "title_state": "ready",
+        "title_source": "ai",
+    }
+
+
+def _enrich_managed_session_titles(
+    base_dir: Path,
+    managed_sessions: list[dict[str, Any]],
+    *,
+    runtime_url: str | None = None,
+    token: str | None = None,
+) -> None:
+    if not managed_sessions:
+        return
+    if runtime_url is None:
+        try:
+            _path, machine_state, _error = read_machine_state(base_dir)
+        except Exception:
+            return
+        runtime_url = machine_state.runtime_url if machine_state else None
+    runtime_url = _normalize_optional_string(runtime_url)
+    if token is None:
+        token = _read_trimmed_file(get_machine_token_path(base_dir))
+    token = _normalize_optional_string(token)
+    if runtime_url is None or token is None:
+        return
+    by_id = {
+        session_id: row
+        for row in managed_sessions[:_MANAGED_SESSION_TITLE_FETCH_LIMIT]
+        for session_id in [_normalize_optional_string(row.get("session_id"))]
+        if session_id is not None
+    }
+    with ThreadPoolExecutor(max_workers=max(1, len(by_id))) as executor:
+        futures = {executor.submit(_fetch_managed_session_title, runtime_url, token, session_id): session_id for session_id in by_id}
+        for future in as_completed(futures):
+            try:
+                overlay = future.result()
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+                continue
+            if overlay:
+                by_id[futures[future]].update(overlay)
+
+
 def _collect_managed_session_sources(
     base_dir: Path,
     *,
@@ -437,6 +503,8 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         phase_overlay=phase_overlay,
         fast=fast,
     )
+    if not fast:
+        _enrich_managed_session_titles(resolved_base_dir, managed_sessions)
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
     archive_repair = collect_archive_backlog(resolved_base_dir, engine_status_payload=engine_status.get("payload"))

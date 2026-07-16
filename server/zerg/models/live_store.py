@@ -293,6 +293,8 @@ class LiveSessionCatalog(LiveBase):
     summary = Column(Text, nullable=True)
     summary_title = Column(String(255), nullable=True)
     anchor_title = Column(String(255), nullable=True)
+    title_retry_at = Column(DateTime(timezone=True), nullable=True)
+    title_last_error = Column(String(128), nullable=True)
     first_user_message_preview = Column(Text, nullable=True)
     last_visible_text_preview = Column(Text, nullable=True)
     last_user_message_preview = Column(Text, nullable=True)

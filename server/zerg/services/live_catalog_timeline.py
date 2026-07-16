@@ -141,9 +141,17 @@ def _title(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
 
 
 def _title_source(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
-    title = sanitize_title(session.anchor_title or card.summary_title or session.summary_title, max_words=6)
-    prompt = sanitize_title(card.first_user_message_preview or session.first_user_message_preview, max_words=6)
-    return "prompt" if title and title == prompt else "ai"
+    return "ai" if sanitize_title(session.anchor_title, max_words=6) else "prompt"
+
+
+def _title_state(session: LiveSessionCatalog, card: LiveTimelineCard) -> str:
+    if sanitize_title(session.anchor_title, max_words=6):
+        return "ready"
+    if session.title_retry_at is not None:
+        return "degraded"
+    if card.first_user_message_preview or session.first_user_message_preview:
+        return "pending"
+    return "awaiting_input"
 
 
 def _pending_response_from_catalog(
@@ -222,8 +230,10 @@ def _pending_response_from_catalog(
             "summary_title": card.summary_title or session.summary_title,
             "anchor_title": session.anchor_title,
             "timeline_title": title,
-            "title_state": "ready" if session.anchor_title or card.summary_title else "degraded",
-            "title_source": _title_source(session, card) if session.anchor_title or card.summary_title else "project",
+            "title_state": _title_state(session, card),
+            "title_source": _title_source(session, card)
+            if card.first_user_message_preview or session.first_user_message_preview
+            else "project",
             "summary_status": "ready" if session.summary else "unavailable",
             "first_user_message": card.first_user_message_preview or session.first_user_message_preview,
             "thread_root_session_id": str(session.session_id),
@@ -357,8 +367,8 @@ def _response_from_catalog(
         summary_title=card.summary_title or session.summary_title,
         anchor_title=session.anchor_title,
         timeline_title=title,
-        title_state="ready" if session.anchor_title or card.summary_title else "degraded",
-        title_source=_title_source(session, card) if session.anchor_title or card.summary_title else "project",
+        title_state=_title_state(session, card),
+        title_source=_title_source(session, card) if card.first_user_message_preview or session.first_user_message_preview else "project",
         summary_status="ready" if session.summary else "unavailable",
         first_user_message=card.first_user_message_preview or session.first_user_message_preview,
         thread_root_session_id=str(session.session_id),

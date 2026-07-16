@@ -200,7 +200,7 @@ pub fn apply_local_titles(conn: &rusqlite::Connection, sessions: &mut [ResolvedL
         };
         session.timeline_title = Some(title.title);
         session.first_user_message = Some(title.first_user_message);
-        session.title_state = Some("ready".to_string());
+        session.title_state = Some("pending".to_string());
         session.title_source = Some("prompt".to_string());
     }
 }

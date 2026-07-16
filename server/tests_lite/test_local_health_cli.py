@@ -5831,3 +5831,36 @@ def test_validate_keeps_live_opencode_server():
     process_rows = [{"pid": 4242, "status": "S", "command": "opencode serve --hostname 127.0.0.1 --port 0"}]
     validated = local_health_service._validate_resolved_engine_managed_sessions([row], process_rows=process_rows)
     assert validated[0]["reason_codes"] == []
+
+
+def test_remote_ai_title_replaces_local_prompt_fallback(monkeypatch, tmp_path: Path):
+    rows = [
+        {
+            "session_id": "session-title",
+            "timeline_title": "why is the opencode stuck on…",
+            "title_state": "pending",
+            "title_source": "prompt",
+        }
+    ]
+
+    monkeypatch.setattr(
+        local_health_service,
+        "_fetch_managed_session_title",
+        lambda runtime_url, token, session_id: {
+            "timeline_title": "Repair OpenCode Session Naming",
+            "summary_title": "Repair OpenCode Session Naming",
+            "title_state": "ready",
+            "title_source": "ai",
+        },
+    )
+
+    local_health_service._enrich_managed_session_titles(
+        tmp_path,
+        rows,
+        runtime_url="https://demo.longhouse.test",
+        token="test-token",
+    )
+
+    assert rows[0]["timeline_title"] == "Repair OpenCode Session Naming"
+    assert rows[0]["title_state"] == "ready"
+    assert rows[0]["title_source"] == "ai"

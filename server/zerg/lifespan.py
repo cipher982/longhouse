@@ -405,6 +405,16 @@ async def lifespan(app: FastAPI):
                 failed.append(f"summary_reconciler ({e})")
                 logger.exception("Failed to start summary_reconciler")
 
+            if live_catalog_enabled():
+                try:
+                    from zerg.services.storage_session_titles import run_storage_title_reconciler
+
+                    asyncio.create_task(run_storage_title_reconciler())
+                    started.append("storage_title_reconciler")
+                except Exception as e:  # noqa: BLE001
+                    failed.append(f"storage_title_reconciler ({e})")
+                    logger.exception("Failed to start storage_title_reconciler")
+
             # Archive ingest can skip expensive derived projections on the hot
             # shipping path; this reconciler catches those sessions up later.
             try:
