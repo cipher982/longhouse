@@ -88,6 +88,7 @@ final class LocalStatusMonitor: @unchecked Sendable {
         if let localProjection = payload["local_projection"] as? [String: Any] {
             var projectionSemantic: [String: Any] = [:]
             projectionSemantic["version"] = localProjection["version"]
+            projectionSemantic["engine_pulse_at"] = localProjection["engine_pulse_at"]
             projectionSemantic["reconciliation"] = localProjection["reconciliation"]
             semantic["local_projection"] = projectionSemantic
         }

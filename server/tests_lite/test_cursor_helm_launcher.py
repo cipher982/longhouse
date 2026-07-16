@@ -35,6 +35,7 @@ def _state_dir_for(monkeypatch, tmp_path) -> "object":
 
 def test_state_file_round_trip(monkeypatch, tmp_path):
     _state_dir_for(monkeypatch, tmp_path)
+    monkeypatch.setattr(cursor_helm, "_process_start_time", lambda pid: f"start-{pid}")
     session_id = "11111111-1111-4111-8111-111111111111"
     sock = cursor_helm._socket_path(session_id)
     cursor_helm._write_state(
@@ -54,6 +55,8 @@ def test_state_file_round_trip(monkeypatch, tmp_path):
     assert state["socket_path"] == str(sock)
     assert state["launcher_pid"] == os.getpid()
     assert state["cursor_pid"] == 123
+    assert state["launcher_process_start_time"] == f"start-{os.getpid()}"
+    assert state["cursor_process_start_time"] == "start-123"
     assert state["ready"] is True
     assert state["registration"] == "registered"
 

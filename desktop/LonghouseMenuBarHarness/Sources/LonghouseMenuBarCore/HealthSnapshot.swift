@@ -155,7 +155,14 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             payload: projection.engine ?? engineStatus?.payload,
             error: nil
         )
-        return replacingManagedSessions(sessions, replacementEngineStatus: updatedEngine)
+        let pulse = projection.engine?.localProjection?.enginePulseAt
+            ?? projection.engine?.lastUpdated
+            ?? collectedAt
+        return replacingManagedSessions(
+            sessions,
+            replacementEngineStatus: updatedEngine,
+            replacementCollectedAt: pulse
+        )
     }
 
     func preservingSessionTitles(from previous: HealthSnapshot?) -> HealthSnapshot {
@@ -176,10 +183,11 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     private func replacingManagedSessions(
         _ sessions: [ManagedSessionSnapshot]?,
-        replacementEngineStatus: EngineStatusSnapshot? = nil
+        replacementEngineStatus: EngineStatusSnapshot? = nil,
+        replacementCollectedAt: String? = nil
     ) -> HealthSnapshot {
         HealthSnapshot(
-            schemaVersion: schemaVersion, collectedAt: collectedAt, healthState: healthState,
+            schemaVersion: schemaVersion, collectedAt: replacementCollectedAt ?? collectedAt, healthState: healthState,
             severity: severity, headline: headline, reasons: reasons, suggestedActions: suggestedActions,
             attention: attention, service: service, engineStatus: replacementEngineStatus ?? engineStatus, outbox: outbox,
             activitySummary: activitySummary, managedSummary: managedSummary, managedSessions: sessions,

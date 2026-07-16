@@ -60,14 +60,31 @@ const TRANSCRIPT_MTIME_WINDOW: chrono::Duration = chrono::Duration::hours(24);
 /// hook writes the provider pid + session id locally; this function validates
 /// that the same pid/start-time is still alive before emitting the normal
 /// heartbeat binding shape.
-pub fn collect_unmanaged_session_bindings_with_store(
+pub(crate) fn collect_unmanaged_session_bindings_with_process_inventory(
     conn: &rusqlite::Connection,
     machine_id: &str,
     now: DateTime<Utc>,
     excluded_managed_pids: &HashSet<u32>,
+    processes: Vec<ProcessInfo>,
 ) -> Result<Vec<UnmanagedSessionBinding>, String> {
-    let scanner = SystemScanner;
-    let processes = scanner.list_processes()?;
+    collect_unmanaged_session_bindings_from_processes(
+        conn,
+        machine_id,
+        now,
+        excluded_managed_pids,
+        processes,
+        &SystemScanner,
+    )
+}
+
+fn collect_unmanaged_session_bindings_from_processes(
+    conn: &rusqlite::Connection,
+    machine_id: &str,
+    now: DateTime<Utc>,
+    excluded_managed_pids: &HashSet<u32>,
+    processes: Vec<ProcessInfo>,
+    scanner: &dyn ProcessScanner,
+) -> Result<Vec<UnmanagedSessionBinding>, String> {
     let provider_processes = unresolved_unmanaged_processes(processes, excluded_managed_pids);
     let store = UnmanagedProcessBindingStore::new(conn);
     if let Err(err) = store.prune_older_than(now - chrono::Duration::days(30)) {
@@ -138,7 +155,7 @@ pub fn collect_unmanaged_session_bindings_with_store(
     let fd_bindings = collect_from_transcripts_with_processes(
         machine_id,
         &transcripts,
-        &scanner,
+        scanner,
         now,
         &unresolved_processes,
     )?;
@@ -171,6 +188,7 @@ pub struct ProcessInfo {
 
 /// Injectable source of process + fd truth. Implemented by
 /// [`SystemScanner`] in production; tests substitute fixtures.
+#[allow(dead_code)]
 pub trait ProcessScanner {
     fn list_processes(&self) -> Result<Vec<ProcessInfo>, String>;
     fn list_open_files(&self, pid: u32) -> Result<Vec<PathBuf>, String>;

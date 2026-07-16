@@ -37,6 +37,27 @@ pub fn collect_process_facts_by_pid() -> HashMap<u32, ProcessFact> {
     try_collect_process_facts_by_pid().unwrap_or_default()
 }
 
+/// Read one process identity without depending on a successful whole-system
+/// inventory. This is used when persisting or validating an owned child PID.
+pub fn try_collect_process_fact(pid: u32) -> Option<ProcessFact> {
+    let output = Command::new("ps")
+        .args([
+            "-p",
+            &pid.to_string(),
+            "-o",
+            "pid=,tty=,stat=,lstart=,command=",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let (parsed_pid, fact) = parse_process_fact(lines.next()?)?;
+    (lines.next().is_none() && parsed_pid == pid).then_some(fact)
+}
+
 /// Collect one coherent process inventory, distinguishing a valid empty scan
 /// from a failed `ps` invocation. Callers reconciling durable state must retain
 /// their last observation when this returns `None`.
@@ -54,7 +75,10 @@ pub fn try_collect_process_facts_by_pid() -> Option<HashMap<u32, ProcessFact>> {
         .lines()
         .filter_map(parse_process_fact)
         .collect::<HashMap<_, _>>();
-    if facts.len() != line_count || !facts.contains_key(&std::process::id()) {
+    if facts.len() != line_count
+        || facts.values().any(|fact| fact.start_time.is_none())
+        || !facts.contains_key(&std::process::id())
+    {
         return None;
     }
     Some(facts)

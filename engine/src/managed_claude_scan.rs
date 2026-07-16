@@ -5,14 +5,9 @@
 //! session-scoped channel token, so this module deliberately emits only pid,
 //! cwd, and readiness metadata.
 //!
-//! These state files are written write-once by the `longhouse claude-channel
-//! serve` bridge and are only deleted by that same process on graceful
-//! shutdown. Interactive sessions routinely die ungracefully (laptop sleep,
-//! closed terminal, SIGKILL), so the files are orphaned by design more often
-//! than not. The engine is the only always-on observer, so it owns liveness
-//! truth: it validates process *identity* (not just PID existence) against the
-//! recorded `started_at`, and reaps orphan files whose process is gone or whose
-//! PID has been recycled. State files are untrusted hints, never authority.
+//! The engine validates process *identity* (not just PID existence) against
+//! the recorded `started_at`. State files are untrusted hints, never authority;
+//! only their owning bridge removes them, avoiding races with atomic rewrites.
 
 use std::collections::HashMap;
 use std::fs;
@@ -24,16 +19,11 @@ use chrono::DateTime;
 use chrono::Utc;
 use serde::Deserialize;
 
+#[cfg(test)]
+use crate::process_identity::collect_process_facts_by_pid;
 use crate::process_identity::{
     command_contains_basename, parse_rfc3339, started_before_or_near_recorded, ProcessFact,
 };
-#[cfg(test)]
-use crate::process_identity::collect_process_facts_by_pid;
-
-/// Grace period before reaping a state file whose process is gone. Protects a
-/// just-launched session from being reaped if it is momentarily missing from
-/// the process snapshot.
-const REAP_GRACE_SECS: i64 = 300;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClaudeChannelObservation {
@@ -144,43 +134,6 @@ pub(crate) fn collect_observations_from_processes(
     }
     out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
     out
-}
-
-/// Delete state files whose Claude process is gone or whose PID was recycled.
-///
-/// Cleanup is the engine's responsibility because the bridge only deletes its
-/// own file on graceful shutdown, which ungraceful deaths skip. Returns the
-/// number of files reaped.
-pub(crate) fn reap_dead_state_files(
-    observations: &[ClaudeChannelObservation],
-    process_scan_valid: bool,
-    now: DateTime<Utc>,
-) -> usize {
-    if !process_scan_valid {
-        return 0;
-    }
-    let mut reaped = 0;
-    for obs in observations {
-        if obs.claude_alive {
-            continue;
-        }
-        // A dead-but-very-recent session may simply be missing from a stale
-        // process snapshot; leave it alone until the grace window passes.
-        if let Some(started) = parse_rfc3339(&obs.started_at) {
-            if (now - started).num_seconds() < REAP_GRACE_SECS {
-                continue;
-            }
-        }
-        if fs::remove_file(&obs.state_file).is_ok() {
-            reaped += 1;
-            eprintln!(
-                "managed_claude_scan: reaped orphan state file for dead session {} ({})",
-                obs.session_id,
-                obs.state_file.display()
-            );
-        }
-    }
-    reaped
 }
 
 /// True only if the PID currently runs Claude *and* it is the same process the
@@ -466,90 +419,6 @@ mod tests {
             !observations[0].claude_alive,
             "a PID that started after started_at must be treated as reused"
         );
-    }
-
-    #[test]
-    fn reaper_deletes_orphan_state_file_for_dead_session() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("ghost.json");
-        fs::write(
-            &path,
-            r#"{
-                  "session_id": "ghost",
-                  "claude_pid": 36943,
-                  "ready": true,
-                  "started_at": "2026-04-07T19:38:09Z",
-                  "updated_at": "2026-04-07T19:38:09Z"
-                }"#,
-        )
-        .unwrap();
-        // PID recycled into a different claude process much later → not alive.
-        let process_facts = HashMap::from([(
-            36943,
-            fact(
-                "/Users/test/.local/bin/longhouse claude",
-                Some("2026-05-28T20:40:28Z"),
-            ),
-        )]);
-
-        let observations = collect_observations_from_processes(tmp.path(), &process_facts);
-        let now = parse_rfc3339("2026-05-29T00:00:00Z").unwrap();
-        let reaped = reap_dead_state_files(&observations, true, now);
-
-        assert_eq!(reaped, 1);
-        assert!(!path.exists(), "orphan state file should be deleted");
-    }
-
-    #[test]
-    fn reaper_keeps_live_session_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("live.json");
-        fs::write(
-            &path,
-            r#"{
-                  "session_id": "live",
-                  "claude_pid": 101,
-                  "ready": true,
-                  "started_at": "2026-05-28T20:03:48Z",
-                  "updated_at": "2026-05-28T20:03:50Z"
-                }"#,
-        )
-        .unwrap();
-        let process_facts =
-            HashMap::from([(101, fact("claude --resume", Some("2026-05-28T20:03:47Z")))]);
-
-        let observations = collect_observations_from_processes(tmp.path(), &process_facts);
-        let now = parse_rfc3339("2026-05-29T00:00:00Z").unwrap();
-        let reaped = reap_dead_state_files(&observations, true, now);
-
-        assert_eq!(reaped, 0);
-        assert!(path.exists(), "live session file must survive");
-    }
-
-    #[test]
-    fn reaper_keeps_recent_dead_session_within_grace() {
-        let tmp = tempfile::tempdir().unwrap();
-        let path = tmp.path().join("recent.json");
-        fs::write(
-            &path,
-            r#"{
-                  "session_id": "recent",
-                  "claude_pid": 999999,
-                  "ready": true,
-                  "started_at": "2026-05-29T00:00:00Z",
-                  "updated_at": "2026-05-29T00:00:00Z"
-                }"#,
-        )
-        .unwrap();
-        // No matching process → dead, but started seconds ago.
-        let observations = collect_observations_from_processes(tmp.path(), &HashMap::new());
-        let now = parse_rfc3339("2026-05-29T00:00:30Z").unwrap();
-
-        // Process scan empty → never reap regardless.
-        assert_eq!(reap_dead_state_files(&observations, false, now), 0);
-        // Even with a valid scan, the grace window protects it.
-        assert_eq!(reap_dead_state_files(&observations, true, now), 0);
-        assert!(path.exists());
     }
 
     #[test]

@@ -35,6 +35,7 @@ import shutil
 import signal
 import socket
 import struct
+import subprocess
 import sys
 import termios
 import threading
@@ -134,6 +135,20 @@ def _socket_path(session_id: str) -> Path:
     return _state_dir() / f"{session_id}.sock"
 
 
+def _process_start_time(pid: int) -> str | None:
+    if pid <= 0:
+        return None
+    try:
+        value = subprocess.check_output(
+            ["ps", "-p", str(pid), "-o", "lstart="],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return value or None
+
+
 def _write_state(
     session_id: str,
     *,
@@ -148,20 +163,37 @@ def _write_state(
     state_dir.mkdir(parents=True, exist_ok=True)
     started_at = _now_iso()
     existing_path = _state_file_path(session_id)
+    existing: dict = {}
     try:
-        existing = json.loads(existing_path.read_text())
+        loaded = json.loads(existing_path.read_text())
+        existing = loaded if isinstance(loaded, dict) else {}
         if isinstance(existing.get("started_at"), str) and existing["started_at"].strip():
             started_at = existing["started_at"]
     except (OSError, ValueError, TypeError):
-        pass
+        existing = {}
+    launcher_pid = os.getpid()
+    launcher_process_start_time = (
+        existing.get("launcher_process_start_time") if existing.get("launcher_pid") == launcher_pid else None
+    ) or _process_start_time(launcher_pid)
+    if not launcher_process_start_time:
+        raise RuntimeError("could not capture Cursor Helm launcher process identity")
+    cursor_process_start_time = None
+    if cursor_pid > 0:
+        cursor_process_start_time = (
+            existing.get("cursor_process_start_time") if existing.get("cursor_pid") == cursor_pid else None
+        ) or _process_start_time(cursor_pid)
+        if not cursor_process_start_time:
+            raise RuntimeError("could not capture cursor-agent process identity")
     payload = {
         "schema_version": 1,
         "session_id": session_id,
         "provider": _PROVIDER,
         "control_plane": _CONTROL_PLANE,
         "socket_path": str(socket_path),
-        "launcher_pid": os.getpid(),
+        "launcher_pid": launcher_pid,
+        "launcher_process_start_time": launcher_process_start_time,
         "cursor_pid": cursor_pid,
+        "cursor_process_start_time": cursor_process_start_time,
         "cwd": str(cwd),
         "ready": ready,
         "registration": registration,

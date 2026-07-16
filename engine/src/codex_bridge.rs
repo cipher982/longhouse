@@ -939,11 +939,19 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     acquire_bridge_lock(&bridge_lock_path(&config.state_file))?;
 
     let mut client = spawn_app_server_client(&config).await?;
-    let app_server_process_start_time = client.child_pid.and_then(|pid| {
-        crate::process_identity::collect_process_facts_by_pid()
-            .get(&pid)
-            .map(|fact| fact.lstart.clone())
-    });
+    let app_server_process_start_time = match client.child_pid {
+        Some(pid) => match capture_owned_child_start_time(pid).await {
+            Some(start_time) => Some(start_time),
+            None => {
+                shutdown_child(&mut client).await?;
+                bail!("could not capture Codex app-server process identity");
+            }
+        },
+        None => {
+            shutdown_child(&mut client).await?;
+            bail!("Codex app-server did not expose a child pid");
+        }
+    };
     let ws_url = client.ws_url.clone();
     let mut starting_state = initial_state.clone();
     starting_state.ws_url = Some(ws_url.clone());
@@ -4953,23 +4961,65 @@ async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
     Ok(())
 }
 
+async fn capture_owned_child_start_time(pid: u32) -> Option<String> {
+    for _ in 0..5 {
+        if let Some(fact) = crate::process_identity::try_collect_process_fact(pid) {
+            let start = fact.lstart.trim();
+            if !start.is_empty() {
+                return Some(start.to_string());
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    None
+}
+
+fn recorded_app_server_identity_matches(
+    state: &BridgeStateFile,
+    fact: &crate::process_identity::ProcessFact,
+) -> bool {
+    state.app_server_pid == Some(fact.pid)
+        && crate::process_identity::command_contains_basename(&fact.command, "codex")
+        && fact
+            .command
+            .split_whitespace()
+            .any(|part| part == "app-server")
+        && state
+            .app_server_process_start_time
+            .as_deref()
+            .filter(|recorded| !recorded.trim().is_empty())
+            .is_some_and(|recorded| {
+                crate::process_identity::lstart_matches_recorded(fact, recorded)
+            })
+}
+
+fn recorded_app_server_process(state: &BridgeStateFile) -> Option<(i32, Option<i32>)> {
+    let pid_u32 = state.app_server_pid?;
+    let fact = crate::process_identity::try_collect_process_fact(pid_u32)?;
+    if !recorded_app_server_identity_matches(state, &fact) {
+        return None;
+    }
+    let pid = i32::try_from(pid_u32).ok().filter(|pid| *pid > 0)?;
+    Some((pid, state.app_server_pgid.filter(|pgid| *pgid > 0)))
+}
+
 #[cfg(unix)]
 async fn terminate_recorded_app_server(state: &BridgeStateFile) {
-    let recorded_pid = state
-        .app_server_pid
-        .and_then(|pid| i32::try_from(pid).ok())
-        .filter(|pid| *pid > 0);
-    if let (Some(pid), Some(process_group_id)) =
-        (recorded_pid, state.app_server_pgid.filter(|pgid| *pgid > 0))
-    {
+    let Some((pid, recorded_process_group_id)) = recorded_app_server_process(state) else {
+        return;
+    };
+    if let Some(process_group_id) = recorded_process_group_id {
         let current_process_group_id = unsafe { libc::getpgid(pid) };
         if current_process_group_id == process_group_id {
             unsafe {
                 let _ = libc::killpg(process_group_id, libc::SIGTERM);
             }
             tokio::time::sleep(CHILD_SHUTDOWN_GRACE_PERIOD).await;
-            let process_group_still_alive = unsafe { libc::killpg(process_group_id, 0) == 0 };
-            if process_group_still_alive {
+            let identity_still_matches =
+                recorded_app_server_process(state).is_some_and(|(current_pid, current_group)| {
+                    current_pid == pid && current_group == Some(process_group_id)
+                });
+            if identity_still_matches && unsafe { libc::getpgid(pid) } == process_group_id {
                 unsafe {
                     let _ = libc::killpg(process_group_id, libc::SIGKILL);
                 }
@@ -4978,15 +5028,13 @@ async fn terminate_recorded_app_server(state: &BridgeStateFile) {
         }
     }
 
-    let Some(pid) = recorded_pid else {
-        return;
-    };
     unsafe {
         let _ = libc::kill(pid, libc::SIGTERM);
     }
     tokio::time::sleep(CHILD_SHUTDOWN_GRACE_PERIOD).await;
-    let process_still_alive = unsafe { libc::kill(pid, 0) == 0 };
-    if process_still_alive {
+    let identity_still_matches =
+        recorded_app_server_process(state).is_some_and(|(current_pid, _)| current_pid == pid);
+    if identity_still_matches {
         unsafe {
             let _ = libc::kill(pid, libc::SIGKILL);
         }
@@ -5382,6 +5430,42 @@ mod tests {
         assert_eq!(state.app_server_pid, None);
         assert_eq!(state.app_server_pgid, None);
         assert_eq!(state.app_server_ws_url, None);
+    }
+
+    #[test]
+    fn recorded_app_server_identity_rejects_pid_reuse_and_missing_epoch() {
+        let mut state: BridgeStateFile = serde_json::from_value(json!({
+            "session_id": "session-1",
+            "cwd": "/tmp",
+            "codex_bin": "codex",
+            "ws_url": null,
+            "thread_id": null,
+            "thread_path": null,
+            "pid": 41,
+            "app_server_pid": 42,
+            "app_server_process_start_time": "Tue Jun 30 00:00:00 2026",
+            "status": "ready",
+            "log_file": "/tmp/bridge.log",
+            "active_turn_id": null,
+            "last_turn_status": null,
+            "last_error": null,
+            "updated_at": "2026-06-30T00:00:00Z"
+        }))
+        .unwrap();
+        let mut fact = crate::process_identity::ProcessFact {
+            pid: 42,
+            tty: "??".to_string(),
+            stat: "S".to_string(),
+            lstart: "Tue Jun 30 00:00:00 2026".to_string(),
+            command: "codex app-server".to_string(),
+            start_time: None,
+        };
+
+        assert!(recorded_app_server_identity_matches(&state, &fact));
+        fact.lstart = "Wed Jul  1 00:00:00 2026".to_string();
+        assert!(!recorded_app_server_identity_matches(&state, &fact));
+        state.app_server_process_start_time = None;
+        assert!(!recorded_app_server_identity_matches(&state, &fact));
     }
 
     #[test]

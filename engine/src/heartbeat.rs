@@ -259,8 +259,6 @@ pub struct ResolvedEvidence {
     pub join_keys: Vec<String>,
 }
 
-pub use crate::unmanaged_bindings::collect_unmanaged_session_bindings_with_store;
-
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
 pub struct ManagedSessionLease {
     pub session_id: String,
@@ -547,10 +545,11 @@ pub fn leases_from_claude_channel_observations(
     let mut leases = Vec::with_capacity(observations.len());
 
     for obs in observations {
+        if !obs.claude_alive {
+            continue;
+        }
         let overlay = phase_overlay.get(&obs.session_id);
-        let lease_state = if !obs.claude_alive {
-            "detached"
-        } else if obs.ready && obs.bridge_alive {
+        let lease_state = if obs.ready && obs.bridge_alive {
             "attached"
         } else {
             "degraded"
@@ -571,9 +570,7 @@ pub fn leases_from_claude_channel_observations(
                 _ => None,
             },
             tool_name: overlay.and_then(|row| row.tool_name.clone()),
-            bridge_status: Some(if !obs.claude_alive {
-                "process_gone_pending_confirmation".to_string()
-            } else if obs.ready && obs.bridge_alive {
+            bridge_status: Some(if obs.ready && obs.bridge_alive {
                 "ready".to_string()
             } else if obs.bridge_alive {
                 "not_ready".to_string()
@@ -2216,7 +2213,7 @@ mod tests {
 
         let leases = leases_from_observations(&conn, "cinder", &[degraded, detached], now);
 
-        assert_eq!(leases.len(), 2);
+        assert_eq!(leases.len(), 1);
         let degraded_lease = leases
             .iter()
             .find(|l| l.session_id == "degraded-session")
@@ -2334,15 +2331,6 @@ mod tests {
         assert_eq!(lease.phase.as_deref(), Some("needs_user"));
         assert_eq!(lease.bridge_status.as_deref(), Some("ready"));
         assert_eq!(lease.lease_ttl_ms, 900_000);
-        let pending = leases
-            .iter()
-            .find(|lease| lease.session_id == "19b68f98-1e31-458e-b78a-6dfd062ead75")
-            .unwrap();
-        assert_eq!(pending.state, "detached");
-        assert_eq!(
-            pending.bridge_status.as_deref(),
-            Some("process_gone_pending_confirmation")
-        );
     }
 
     fn test_binding(

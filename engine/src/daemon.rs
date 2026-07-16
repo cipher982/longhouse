@@ -18,7 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::Result;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::json;
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -44,6 +44,7 @@ use crate::state::db::open_db;
 use crate::state::db_pool::ConnectionPool;
 use crate::state::file_state::FileState;
 use crate::state::spool::Spool;
+use crate::unmanaged_bindings;
 use crate::watcher::{SessionWatcher, WatcherEvent};
 
 /// Configuration for the connect daemon.
@@ -140,10 +141,6 @@ const MANAGED_WAKE_FSEVENT_DEFER_WINDOW: Duration = Duration::from_secs(30);
 const MANAGED_WAKE_FSEVENT_FALLBACK_DELAY: Duration = Duration::from_secs(5);
 const MAX_TRANSCRIPT_WAKE_TRACKED_PATHS: usize = 4096;
 const OFFLINE_CONNECT_FAILURE_THRESHOLD: u32 = 3;
-const CLAUDE_TERMINAL_EVENT_TIMEOUT: Duration = Duration::from_secs(2);
-const CLAUDE_TERMINAL_EVENT_SOURCE: &str = "claude_channel_scan";
-const CLAUDE_TERMINAL_EVENT_STALE_SECS: i64 = 10 * 60;
-const CLAUDE_TERMINAL_EVENT_BATCH_LIMIT: usize = 128;
 // Stable telemetry strings for the retry/archive lane. Keep the wire names
 // for historical engine-status/log readers, but keep code names explicit.
 const FAILED_SHIPMENT_RETRY_CONTEXT: &str = "spool_replay";
@@ -295,30 +292,12 @@ struct OutboxCollectResult {
     elapsed_ms: u64,
 }
 
-#[derive(Debug, Clone)]
-struct ClaudeLiveChannelSession {
-    session_id: String,
-    provider_session_id: Option<String>,
-    claude_pid: Option<u32>,
-}
-
-#[derive(Debug, Clone)]
-struct ClaudeTerminalSignal {
-    dedupe_key: String,
-    observed_at: chrono::DateTime<chrono::Utc>,
-    event: Value,
-}
-
-struct ClaudeTerminalPostResult {
-    dedupe_keys: Vec<String>,
-    result: Result<(), String>,
-    join_elapsed_ms: u64,
-    task_elapsed_ms: u64,
-}
-
 struct UnmanagedBindingRefreshResult {
+    generation: u64,
     reason: &'static str,
     full_reconciliation_candidate: bool,
+    managed: ManagedObservationSnapshot,
+    managed_scan_partial: bool,
     result: Result<Vec<heartbeat::UnmanagedSessionBinding>, String>,
     elapsed_ms: u64,
 }
@@ -353,6 +332,7 @@ struct ManagedObservationScanResult {
     reason: &'static str,
     full_reconciliation: bool,
     process_inventory_valid: bool,
+    process_inventory: Vec<unmanaged_bindings::ProcessInfo>,
     codex_observations: Vec<managed_bridge_scan::CodexBridgeObservation>,
     claude_observations: Vec<managed_claude_scan::ClaudeChannelObservation>,
     opencode_observations: Vec<managed_opencode_scan::OpenCodeServerObservation>,
@@ -376,6 +356,7 @@ struct ManagedObservationSnapshot {
 
 struct ProjectionBuildInput {
     generation: u64,
+    managed_scan_partial: bool,
     db_path: PathBuf,
     tracker: ConsecutiveErrorTracker,
     parse_tracker: RecentIssueTracker,
@@ -394,6 +375,7 @@ struct ProjectionBuildInput {
 
 struct ProjectionBuildResult {
     generation: u64,
+    managed_scan_partial: bool,
     result: Result<(heartbeat::StatusFileProjection, SessionSnapshotState), String>,
     elapsed_ms: u64,
 }
@@ -813,22 +795,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut projection_build_pending = false;
     let mut projection_generation = 0_u64;
     let mut last_full_reconciled_at: Option<String> = None;
-    let mut last_managed_scan_partial = false;
+    let mut last_projected_managed_observations = ManagedObservationSnapshot::default();
+    let mut last_projected_managed_scan_partial = false;
     let mut last_unmanaged_session_bindings: Option<Vec<heartbeat::UnmanagedSessionBinding>> = None;
     let mut last_unmanaged_session_bindings_refreshed_at: Option<Instant> = None;
     let mut latest_transcript_wake_observed: HashMap<PathBuf, i64> = HashMap::new();
     let mut managed_codex_transcript_paths: HashSet<PathBuf> = HashSet::new();
-    let mut managed_process_pids: HashSet<u32> = HashSet::new();
     let mut outbox_collect_tasks: JoinSet<OutboxCollectResult> = JoinSet::new();
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
     let mut machine_presence_post_tasks: JoinSet<MachinePresencePostResult> = JoinSet::new();
-    let mut claude_terminal_post_tasks: JoinSet<ClaudeTerminalPostResult> = JoinSet::new();
     let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
         JoinSet::new();
-    let mut live_claude_channels: HashMap<String, ClaudeLiveChannelSession> = HashMap::new();
-    let mut pending_claude_terminal_signals: HashMap<String, ClaudeTerminalSignal> = HashMap::new();
 
     let outbox_dir = config::get_agent_outbox_dir()?;
     let runtime_events_outbox_dir = config::get_agent_runtime_events_outbox_dir()?;
@@ -1225,44 +1204,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            claude_terminal_post_result = claude_terminal_post_tasks.join_next(), if !claude_terminal_post_tasks.is_empty() => {
-                match claude_terminal_post_result {
-                    Some(Ok(result)) => {
-                        let local_join_delay_ms =
-                            result.join_elapsed_ms.saturating_sub(result.task_elapsed_ms);
-                        if result.task_elapsed_ms > 1_000 || local_join_delay_ms > 1_000 {
-                            tracing::warn!(
-                                task_elapsed_ms = result.task_elapsed_ms,
-                                join_elapsed_ms = result.join_elapsed_ms,
-                                local_join_delay_ms,
-                                "Managed Claude terminal signal POST was slow"
-                            );
-                        }
-                        match result.result {
-                            Ok(()) => {
-                                for key in result.dedupe_keys {
-                                    pending_claude_terminal_signals.remove(&key);
-                                }
-                            }
-                            Err(err) => {
-                                tracing::debug!(
-                                    "Managed Claude terminal signal POST failed: {}",
-                                    err
-                                );
-                            }
-                        }
-                    }
-                    Some(Err(err)) => {
-                        tracing::warn!("Managed Claude terminal signal task failed: {}", err);
-                    }
-                    None => {}
-                }
-            }
-
             unmanaged_binding_refresh_result = unmanaged_binding_refresh_tasks.join_next(), if !unmanaged_binding_refresh_tasks.is_empty() => {
                 match unmanaged_binding_refresh_result {
                     Some(Ok(result)) => {
-                        match result.result {
+                        let stale = result.generation != projection_generation;
+                        if stale {
+                            tracing::debug!(
+                                generation = result.generation,
+                                latest_generation = projection_generation,
+                                "Discarded stale unmanaged reconciliation result"
+                            );
+                        }
+                        if !stale { match result.result {
                             Ok(bindings) => {
                                 if result.elapsed_ms > 1_000 {
                                     tracing::warn!(
@@ -1279,14 +1232,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                         "Unmanaged binding refresh completed"
                                     );
                                 }
+                                last_projected_managed_observations = result.managed;
+                                last_projected_managed_scan_partial = result.managed_scan_partial;
                                 last_unmanaged_session_bindings = Some(bindings);
                                 last_unmanaged_session_bindings_refreshed_at = Some(Instant::now());
                                 if result.full_reconciliation_candidate {
                                     last_full_reconciled_at = Some(chrono::Utc::now().to_rfc3339());
                                 }
-                                projection_generation = projection_generation.saturating_add(1);
                                 let input = ProjectionBuildInput {
                                     generation: projection_generation,
+                                    managed_scan_partial: last_projected_managed_scan_partial,
                                     db_path: projection_db_path.clone(),
                                     tracker: tracker.clone(),
                                     parse_tracker: parse_tracker.clone(),
@@ -1294,7 +1249,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     is_offline: offline.is_offline,
                                     last_ship_at: last_ship_at.clone(),
                                     machine_id: config.shipper_config.machine_name.clone(),
-                                    managed: last_managed_observations.clone(),
+                                    managed: last_projected_managed_observations.clone(),
                                     unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
                                     limiter: adaptive_limiter.snapshot(),
                                     scheduler: scheduler.snapshot(),
@@ -1317,7 +1272,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     err
                                 );
                             }
-                        }
+                        }}
                     }
                     Some(Err(err)) => {
                         projection_generation = projection_generation.saturating_add(1);
@@ -1326,6 +1281,37 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         tracing::warn!("Unmanaged binding refresh task failed: {}", err);
                     }
                     None => {}
+                }
+                if unmanaged_binding_refresh_tasks.is_empty()
+                    && managed_observation_scan_tasks.is_empty()
+                {
+                    if pending_wake_reconciliation
+                        && maybe_start_managed_observation_scan(
+                            &mut managed_observation_scan_tasks,
+                            "wake",
+                            true,
+                            &last_managed_observations,
+                        )
+                    {
+                        pending_wake_reconciliation = false;
+                        managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                            "wake",
+                            chrono::Utc::now().to_rfc3339(),
+                        );
+                    } else if pending_full_reconciliation
+                        && maybe_start_managed_observation_scan(
+                            &mut managed_observation_scan_tasks,
+                            "full_reconciliation",
+                            true,
+                            &last_managed_observations,
+                        )
+                    {
+                        pending_full_reconciliation = false;
+                        managed_reconciliation = heartbeat::ProjectionReconciliation::running(
+                            "full_reconciliation",
+                            chrono::Utc::now().to_rfc3339(),
+                        );
+                    }
                 }
             }
 
@@ -1401,23 +1387,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         }
                         last_managed_observations =
                             ManagedObservationSnapshot::from_result(&result);
-                        last_managed_scan_partial = result.retained_stale_rows > 0;
+                        let managed_scan_partial = result.retained_stale_rows > 0;
                         refresh_managed_codex_transcript_paths(
                             &mut managed_codex_transcript_paths,
                             &result.codex_observations,
-                        );
-                        reconcile_claude_terminal_signals(
-                            &mut live_claude_channels,
-                            &mut pending_claude_terminal_signals,
-                            &config.shipper_config.machine_name,
-                            &result.claude_observations,
-                            chrono::Utc::now(),
-                        );
-                        maybe_spawn_claude_terminal_post(
-                            &mut claude_terminal_post_tasks,
-                            client.clone(),
-                            &pending_claude_terminal_signals,
-                            offline.is_offline,
                         );
                         pump_ready_local_work(
                             &mut scheduler,
@@ -1426,52 +1399,47 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &mut deferred_retries,
                             offline.is_offline,
                         );
-                        managed_process_pids = managed_process_pids_from_observations(
+                        let managed_process_pids = managed_process_pids_from_observations(
                             &result.codex_observations,
                             &result.claude_observations,
                             &result.opencode_observations,
                             &result.cursor_observations,
                         );
-                        maybe_start_unmanaged_binding_refresh(
+                        let paired_generation = projection_generation.saturating_add(1);
+                        let paired_refresh_started = maybe_start_unmanaged_binding_refresh(
                             &mut unmanaged_binding_refresh_tasks,
                             config.shipper_config.db_path.clone(),
                             config.shipper_config.machine_name.clone(),
-                            last_unmanaged_session_bindings_refreshed_at,
+                            if result.full_reconciliation {
+                                None
+                            } else {
+                                last_unmanaged_session_bindings_refreshed_at
+                            },
                             managed_process_pids.clone(),
+                            result.process_inventory.clone(),
                             Instant::now(),
                             result.reason,
+                            paired_generation,
+                            last_managed_observations.clone(),
+                            managed_scan_partial,
                             result.full_reconciliation && result.retained_stale_rows == 0,
                         );
+                        if paired_refresh_started {
+                            projection_generation = paired_generation;
+                        } else if result.full_reconciliation {
+                            if result.reason == "wake" {
+                                pending_wake_reconciliation = true;
+                            } else {
+                                pending_full_reconciliation = true;
+                            }
+                        }
                         maybe_start_opencode_title_refresh(
                             &mut opencode_title_refresh_tasks,
                             config.shipper_config.db_path.clone(),
                             result.opencode_observations.clone(),
                         );
-                        projection_generation = projection_generation.saturating_add(1);
-                        let projection_input = ProjectionBuildInput {
-                            generation: projection_generation,
-                            db_path: projection_db_path.clone(),
-                            tracker: tracker.clone(),
-                            parse_tracker: parse_tracker.clone(),
-                            ship_stats: ship_stats.clone(),
-                            is_offline: offline.is_offline,
-                            last_ship_at: last_ship_at.clone(),
-                            machine_id: config.shipper_config.machine_name.clone(),
-                            managed: last_managed_observations.clone(),
-                            unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
-                            limiter: adaptive_limiter.snapshot(),
-                            scheduler: scheduler.snapshot(),
-                            archive_repair_mode: config.archive_repair_mode,
-                            last_full_reconciled_at: last_full_reconciled_at.clone(),
-                            session_snapshot_state: session_snapshot_state.clone(),
-                        };
-                        if !maybe_start_projection_build(
-                            &mut projection_build_tasks,
-                            projection_input,
-                        ) {
-                            projection_build_pending = true;
-                        }
                         if pending_wake_reconciliation
+                            && unmanaged_binding_refresh_tasks.is_empty()
                             && maybe_start_managed_observation_scan(
                                 &mut managed_observation_scan_tasks,
                                 "wake",
@@ -1485,6 +1453,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 chrono::Utc::now().to_rfc3339(),
                             );
                         } else if pending_full_reconciliation
+                            && unmanaged_binding_refresh_tasks.is_empty()
                             && maybe_start_managed_observation_scan(
                                 &mut managed_observation_scan_tasks,
                                 "full_reconciliation",
@@ -1542,7 +1511,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     "Local status projection exceeded background budget"
                                 );
                             }
-                            session_snapshot_state = next_snapshot_state;
                             if !is_current {
                                 tracing::debug!(
                                     generation = result.generation,
@@ -1550,10 +1518,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                     "Discarded stale local status projection"
                                 );
                             } else {
-                            if last_managed_scan_partial {
+                            session_snapshot_state = next_snapshot_state;
+                            if result.managed_scan_partial {
                                 managed_reconciliation =
                                     heartbeat::ProjectionReconciliation::failed("provider_state_partial");
                             } else if managed_observation_scan_tasks.is_empty()
+                                && unmanaged_binding_refresh_tasks.is_empty()
                                 && !pending_wake_reconciliation
                                 && !pending_full_reconciliation
                             {
@@ -1611,6 +1581,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     projection_build_pending = false;
                     let input = ProjectionBuildInput {
                         generation: projection_generation,
+                        managed_scan_partial: last_projected_managed_scan_partial,
                         db_path: projection_db_path.clone(),
                         tracker: tracker.clone(),
                         parse_tracker: parse_tracker.clone(),
@@ -1618,7 +1589,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         is_offline: offline.is_offline,
                         last_ship_at: last_ship_at.clone(),
                         machine_id: config.shipper_config.machine_name.clone(),
-                        managed: last_managed_observations.clone(),
+                        managed: last_projected_managed_observations.clone(),
                         unmanaged: last_unmanaged_session_bindings.clone().unwrap_or_default(),
                         limiter: adaptive_limiter.snapshot(),
                         scheduler: scheduler.snapshot(),
@@ -1815,16 +1786,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             chrono::Utc::now().to_rfc3339(),
                         );
                     }
-                    maybe_start_unmanaged_binding_refresh(
-                        &mut unmanaged_binding_refresh_tasks,
-                        config.shipper_config.db_path.clone(),
-                        config.shipper_config.machine_name.clone(),
-                        None,
-                        managed_process_pids.clone(),
-                        Instant::now(),
-                        "wake",
-                        false,
-                    );
                 }
                 if let Some(projection) = last_status_projection.as_ref() {
                     heartbeat::write_status_file(
@@ -1889,16 +1850,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Periodic server heartbeat
             _ = heartbeat_timer.tick() => {
-                maybe_start_unmanaged_binding_refresh(
-                    &mut unmanaged_binding_refresh_tasks,
-                    config.shipper_config.db_path.clone(),
-                    config.shipper_config.machine_name.clone(),
-                    last_unmanaged_session_bindings_refreshed_at,
-                    managed_process_pids.clone(),
-                    Instant::now(),
-                    "heartbeat",
-                    false,
-                );
                 if let Some(projection) = last_status_projection.as_ref() {
                     heartbeat::write_status_file(
                         projection,
@@ -1951,6 +1902,7 @@ fn maybe_start_projection_build(
         let started = Instant::now();
         let ProjectionBuildInput {
             generation,
+            managed_scan_partial,
             db_path,
             tracker,
             parse_tracker,
@@ -1992,6 +1944,7 @@ fn maybe_start_projection_build(
             });
         ProjectionBuildResult {
             generation,
+            managed_scan_partial,
             result,
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
@@ -2447,17 +2400,21 @@ fn maybe_start_unmanaged_binding_refresh(
     machine_id: String,
     last_refreshed_at: Option<Instant>,
     excluded_managed_pids: HashSet<u32>,
+    process_inventory: Vec<unmanaged_bindings::ProcessInfo>,
     now: Instant,
     reason: &'static str,
+    generation: u64,
+    managed: ManagedObservationSnapshot,
+    managed_scan_partial: bool,
     full_reconciliation_candidate: bool,
-) {
+) -> bool {
     if !refresh_tasks.is_empty() {
-        return;
+        return false;
     }
     if last_refreshed_at.is_some_and(|refreshed_at| {
         now.duration_since(refreshed_at) < UNMANAGED_BINDING_REFRESH_INTERVAL
     }) {
-        return;
+        return false;
     }
 
     refresh_tasks.spawn_blocking(move || {
@@ -2465,20 +2422,25 @@ fn maybe_start_unmanaged_binding_refresh(
         let result = open_db(db_path.as_deref())
             .map_err(|err| err.to_string())
             .and_then(|conn| {
-                heartbeat::collect_unmanaged_session_bindings_with_store(
+                unmanaged_bindings::collect_unmanaged_session_bindings_with_process_inventory(
                     &conn,
                     &machine_id,
                     chrono::Utc::now(),
                     &excluded_managed_pids,
+                    process_inventory,
                 )
             });
         UnmanagedBindingRefreshResult {
+            generation,
             reason,
             full_reconciliation_candidate,
+            managed,
+            managed_scan_partial,
             result,
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });
+    true
 }
 
 fn managed_process_pids_from_observations(
@@ -2535,6 +2497,17 @@ fn maybe_start_managed_observation_scan(
         let process_inventory = crate::process_identity::try_collect_process_facts_by_pid();
         let process_inventory_valid = process_inventory.is_some();
         let process_facts = process_inventory.unwrap_or_default();
+        let unmanaged_process_inventory = process_facts
+            .values()
+            .filter_map(|fact| {
+                Some(unmanaged_bindings::ProcessInfo {
+                    pid: fact.pid,
+                    start_time: fact.start_time?,
+                    start_time_key: fact.lstart.clone(),
+                    command: fact.command.clone(),
+                })
+            })
+            .collect();
         let process_inventory_ms = process_started.elapsed().as_millis() as u64;
         let codex_started = Instant::now();
         let mut codex_observations = managed_bridge_scan::default_codex_bridge_state_dir()
@@ -2559,18 +2532,6 @@ fn maybe_start_managed_observation_scan(
             &previous.claude,
             |observation| &observation.state_file,
         );
-        if full_reconciliation {
-            let reap_candidates = claude_observations
-                .iter()
-                .filter(|observation| !retained_claude.contains(&observation.state_file))
-                .cloned()
-                .collect::<Vec<_>>();
-            managed_claude_scan::reap_dead_state_files(
-                &reap_candidates,
-                process_inventory_valid,
-                chrono::Utc::now(),
-            );
-        }
         let claude_elapsed_ms = claude_started.elapsed().as_millis() as u64;
 
         let opencode_started = Instant::now();
@@ -2608,6 +2569,7 @@ fn maybe_start_managed_observation_scan(
             reason,
             full_reconciliation,
             process_inventory_valid,
+            process_inventory: unmanaged_process_inventory,
             codex_observations,
             claude_observations,
             opencode_observations,
@@ -2743,200 +2705,6 @@ fn spawn_machine_presence_post(
             task_elapsed_ms: task_started.elapsed().as_millis() as u64,
         }
     });
-}
-
-fn reconcile_claude_terminal_signals(
-    live_channels: &mut HashMap<String, ClaudeLiveChannelSession>,
-    pending_signals: &mut HashMap<String, ClaudeTerminalSignal>,
-    machine_name: &str,
-    observations: &[managed_claude_scan::ClaudeChannelObservation],
-    observed_at: chrono::DateTime<chrono::Utc>,
-) {
-    prune_stale_claude_terminal_signals(pending_signals, observed_at);
-    let mut observed_session_ids = HashSet::new();
-
-    for obs in observations {
-        observed_session_ids.insert(obs.session_id.clone());
-        if obs.claude_alive {
-            pending_signals.retain(|_, signal| {
-                signal.event.get("session_id").and_then(Value::as_str)
-                    != Some(obs.session_id.as_str())
-            });
-            live_channels.insert(
-                obs.session_id.clone(),
-                ClaudeLiveChannelSession {
-                    session_id: obs.session_id.clone(),
-                    provider_session_id: obs.provider_session_id.clone(),
-                    claude_pid: obs.claude_pid,
-                },
-            );
-        }
-    }
-
-    let disappeared: Vec<ClaudeLiveChannelSession> = live_channels
-        .iter()
-        .filter(|(session_id, _)| !observed_session_ids.contains(*session_id))
-        .map(|(_, seen)| seen.clone())
-        .collect();
-    for seen in disappeared {
-        live_channels.remove(&seen.session_id);
-        let provider_session_id = seen
-            .provider_session_id
-            .clone()
-            .unwrap_or_else(|| seen.session_id.clone());
-        let dedupe_key =
-            claude_terminal_dedupe_key(&seen.session_id, seen.claude_pid, "channel_state_gone");
-        pending_signals
-            .entry(dedupe_key.clone())
-            .or_insert_with(|| ClaudeTerminalSignal {
-                dedupe_key: dedupe_key.clone(),
-                observed_at,
-                event: claude_terminal_event(
-                    machine_name,
-                    &seen.session_id,
-                    &provider_session_id,
-                    "process_gone",
-                    "channel_state_gone",
-                    seen.claude_pid,
-                    "channel_state_gone",
-                    observed_at,
-                    &dedupe_key,
-                ),
-            });
-    }
-}
-
-fn prune_stale_claude_terminal_signals(
-    pending_signals: &mut HashMap<String, ClaudeTerminalSignal>,
-    now: chrono::DateTime<chrono::Utc>,
-) {
-    pending_signals.retain(|_, signal| {
-        now.signed_duration_since(signal.observed_at).num_seconds()
-            <= CLAUDE_TERMINAL_EVENT_STALE_SECS
-    });
-}
-
-fn claude_terminal_dedupe_key(session_id: &str, pid: Option<u32>, reason: &str) -> String {
-    format!(
-        "claude-channel-scan:terminal:{session_id}:{}:{reason}",
-        pid.map(|value| value.to_string())
-            .unwrap_or_else(|| "unknown".to_string())
-    )
-}
-
-fn claude_terminal_event(
-    machine_name: &str,
-    session_id: &str,
-    provider_session_id: &str,
-    terminal_state: &str,
-    terminal_reason: &str,
-    claude_pid: Option<u32>,
-    close_observation: &str,
-    observed_at: chrono::DateTime<chrono::Utc>,
-    dedupe_key: &str,
-) -> Value {
-    json!({
-        "runtime_key": format!("claude:{provider_session_id}"),
-        "session_id": session_id,
-        "provider": "claude",
-        "device_id": machine_name,
-        "source": CLAUDE_TERMINAL_EVENT_SOURCE,
-        "kind": "terminal_signal",
-        "phase": Value::Null,
-        "tool_name": Value::Null,
-        "occurred_at": observed_at.to_rfc3339(),
-        "dedupe_key": dedupe_key,
-        "payload": {
-            "terminal_state": terminal_state,
-            "terminal_reason": terminal_reason,
-            "terminal_source": CLAUDE_TERMINAL_EVENT_SOURCE,
-            "provider_session_id": provider_session_id,
-            "claude_pid": claude_pid,
-            "close_observation": close_observation,
-        },
-    })
-}
-
-fn maybe_spawn_claude_terminal_post(
-    tasks: &mut JoinSet<ClaudeTerminalPostResult>,
-    client: ShipperClient,
-    pending_signals: &HashMap<String, ClaudeTerminalSignal>,
-    offline: bool,
-) {
-    if offline || !tasks.is_empty() || pending_signals.is_empty() {
-        return;
-    }
-    let signals = pending_claude_terminal_batch(pending_signals);
-    tasks.spawn_local(async move {
-        let join_started = Instant::now();
-        let signal_count = signals.len();
-        let post_task = tokio::spawn(async move {
-            let task_started = Instant::now();
-            let result = post_claude_terminal_signals(client, signals).await;
-            (result, task_started.elapsed().as_millis() as u64)
-        });
-        match post_task.await {
-            Ok((mut result, task_elapsed_ms)) => {
-                result.join_elapsed_ms = join_started.elapsed().as_millis() as u64;
-                result.task_elapsed_ms = task_elapsed_ms;
-                result
-            }
-            Err(err) => {
-                let elapsed_ms = join_started.elapsed().as_millis() as u64;
-                tracing::warn!(
-                    signal_count,
-                    "Managed Claude terminal signal POST worker task failed: {}",
-                    err
-                );
-                ClaudeTerminalPostResult {
-                    dedupe_keys: Vec::new(),
-                    result: Err(format!(
-                        "managed Claude terminal POST worker task failed: {err}"
-                    )),
-                    join_elapsed_ms: elapsed_ms,
-                    task_elapsed_ms: elapsed_ms,
-                }
-            }
-        }
-    });
-}
-
-fn pending_claude_terminal_batch(
-    pending_signals: &HashMap<String, ClaudeTerminalSignal>,
-) -> Vec<ClaudeTerminalSignal> {
-    pending_signals
-        .values()
-        .take(CLAUDE_TERMINAL_EVENT_BATCH_LIMIT)
-        .cloned()
-        .collect()
-}
-
-async fn post_claude_terminal_signals(
-    client: ShipperClient,
-    signals: Vec<ClaudeTerminalSignal>,
-) -> ClaudeTerminalPostResult {
-    let dedupe_keys: Vec<String> = signals
-        .iter()
-        .map(|signal| signal.dedupe_key.clone())
-        .collect();
-    let events: Vec<Value> = signals.into_iter().map(|signal| signal.event).collect();
-    let result = match serde_json::to_vec(&json!({ "events": events })) {
-        Ok(body) => client
-            .post_json_with_timeout(
-                "/api/agents/runtime/events/batch",
-                body,
-                Some(CLAUDE_TERMINAL_EVENT_TIMEOUT),
-            )
-            .await
-            .map_err(|err| err.to_string()),
-        Err(err) => Err(err.to_string()),
-    };
-    ClaudeTerminalPostResult {
-        dedupe_keys,
-        result,
-        join_elapsed_ms: 0,
-        task_elapsed_ms: 0,
-    }
 }
 
 fn queue_failed_shipment_retry_paths(
@@ -4499,182 +4267,6 @@ mod tests {
         assert_ne!(
             runtime_truth_signature(&first),
             runtime_truth_signature(&second)
-        );
-    }
-
-    #[test]
-    fn test_claude_terminal_signal_waits_for_channel_state_removal() {
-        let mut live = HashMap::new();
-        let mut pending = HashMap::new();
-        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-12T20:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let live_obs = managed_claude_scan::ClaudeChannelObservation {
-            session_id: "session-123".to_string(),
-            provider_session_id: Some("provider-123".to_string()),
-            state_file: PathBuf::from("/tmp/session-123.json"),
-            cwd: Some("/Users/test/git/acme".to_string()),
-            claude_pid: Some(123),
-            bridge_pid: Some(456),
-            ready: true,
-            started_at: "2026-05-12T19:59:59Z".to_string(),
-            updated_at: "2026-05-12T19:59:59Z".to_string(),
-            claude_alive: true,
-            bridge_alive: true,
-            claude_foreground_tui: true,
-        };
-        let dead_obs = managed_claude_scan::ClaudeChannelObservation {
-            claude_alive: false,
-            bridge_alive: false,
-            updated_at: "2026-05-12T20:00:00Z".to_string(),
-            ..live_obs.clone()
-        };
-
-        reconcile_claude_terminal_signals(
-            &mut live,
-            &mut pending,
-            "cinder",
-            &[live_obs.clone()],
-            observed_at,
-        );
-        assert!(pending.is_empty());
-
-        reconcile_claude_terminal_signals(
-            &mut live,
-            &mut pending,
-            "cinder",
-            &[dead_obs],
-            observed_at,
-        );
-
-        assert!(pending.is_empty());
-        assert!(live.contains_key("session-123"));
-
-        reconcile_claude_terminal_signals(&mut live, &mut pending, "cinder", &[], observed_at);
-        assert_eq!(pending.len(), 1);
-        assert!(live.is_empty());
-    }
-
-    #[test]
-    fn test_claude_terminal_signal_generated_when_channel_state_disappears() {
-        let mut live = HashMap::new();
-        let mut pending = HashMap::new();
-        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-12T20:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let live_obs = managed_claude_scan::ClaudeChannelObservation {
-            session_id: "session-123".to_string(),
-            provider_session_id: Some("provider-123".to_string()),
-            state_file: PathBuf::from("/tmp/session-123.json"),
-            cwd: Some("/Users/test/git/acme".to_string()),
-            claude_pid: Some(123),
-            bridge_pid: Some(456),
-            ready: true,
-            started_at: "2026-05-12T19:59:59Z".to_string(),
-            updated_at: "2026-05-12T19:59:59Z".to_string(),
-            claude_alive: true,
-            bridge_alive: true,
-            claude_foreground_tui: true,
-        };
-
-        reconcile_claude_terminal_signals(
-            &mut live,
-            &mut pending,
-            "cinder",
-            &[live_obs.clone()],
-            observed_at,
-        );
-        reconcile_claude_terminal_signals(&mut live, &mut pending, "cinder", &[], observed_at);
-
-        assert_eq!(pending.len(), 1);
-        let signal = pending.values().next().unwrap();
-        assert_eq!(
-            signal.event["payload"]["close_observation"],
-            "channel_state_gone"
-        );
-        assert_eq!(signal.event["payload"]["terminal_state"], "process_gone");
-        assert!(live.is_empty());
-
-        reconcile_claude_terminal_signals(
-            &mut live,
-            &mut pending,
-            "cinder",
-            &[live_obs],
-            observed_at,
-        );
-        assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn test_dead_channel_file_without_live_cache_is_not_terminal_authority() {
-        let mut live = HashMap::new();
-        let mut pending = HashMap::new();
-        let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-12T20:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let dead_obs = managed_claude_scan::ClaudeChannelObservation {
-            session_id: "session-123".to_string(),
-            provider_session_id: Some("provider-123".to_string()),
-            state_file: PathBuf::from("/tmp/session-123.json"),
-            cwd: Some("/Users/test/git/acme".to_string()),
-            claude_pid: Some(123),
-            bridge_pid: Some(456),
-            ready: true,
-            started_at: "2026-05-12T20:00:00Z".to_string(),
-            updated_at: "2026-05-12T20:00:00Z".to_string(),
-            claude_alive: false,
-            bridge_alive: false,
-            claude_foreground_tui: false,
-        };
-
-        reconcile_claude_terminal_signals(
-            &mut live,
-            &mut pending,
-            "cinder",
-            &[dead_obs],
-            observed_at,
-        );
-
-        assert!(pending.is_empty());
-        assert!(live.is_empty());
-    }
-
-    #[test]
-    fn test_claude_terminal_signals_are_pruned_and_batched() {
-        let now = chrono::DateTime::parse_from_rfc3339("2026-05-12T20:00:00Z")
-            .unwrap()
-            .with_timezone(&chrono::Utc);
-        let fresh_at = now - chrono::Duration::seconds(30);
-        let stale_at = now - chrono::Duration::seconds(CLAUDE_TERMINAL_EVENT_STALE_SECS + 1);
-        let mut pending = HashMap::new();
-
-        pending.insert(
-            "stale".to_string(),
-            ClaudeTerminalSignal {
-                dedupe_key: "stale".to_string(),
-                observed_at: stale_at,
-                event: json!({"dedupe_key": "stale"}),
-            },
-        );
-        for index in 0..(CLAUDE_TERMINAL_EVENT_BATCH_LIMIT + 5) {
-            let key = format!("fresh-{index}");
-            pending.insert(
-                key.clone(),
-                ClaudeTerminalSignal {
-                    dedupe_key: key,
-                    observed_at: fresh_at,
-                    event: json!({"index": index}),
-                },
-            );
-        }
-
-        prune_stale_claude_terminal_signals(&mut pending, now);
-
-        assert!(!pending.contains_key("stale"));
-        assert_eq!(pending.len(), CLAUDE_TERMINAL_EVENT_BATCH_LIMIT + 5);
-        assert_eq!(
-            pending_claude_terminal_batch(&pending).len(),
-            CLAUDE_TERMINAL_EVENT_BATCH_LIMIT
         );
     }
 

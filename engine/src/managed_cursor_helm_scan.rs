@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 pub use crate::cursor_helm_control::default_cursor_helm_state_dir;
-use crate::process_identity::{parse_rfc3339, started_before_or_near_recorded, ProcessFact};
+use crate::process_identity::{lstart_matches_recorded, ProcessFact};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CursorHelmObservation {
@@ -41,7 +41,11 @@ struct CursorHelmStateFile {
     #[serde(default)]
     launcher_pid: Option<u32>,
     #[serde(default)]
+    launcher_process_start_time: Option<String>,
+    #[serde(default)]
     cursor_pid: Option<u32>,
+    #[serde(default)]
+    cursor_process_start_time: Option<String>,
     #[serde(default)]
     cwd: Option<String>,
     #[serde(default)]
@@ -83,19 +87,26 @@ pub(crate) fn collect_observations_from_processes(
         } else {
             Some(PathBuf::from(socket_str))
         };
-        let recorded_start = state.started_at.as_deref().and_then(parse_rfc3339);
         let launcher_alive = state
             .launcher_pid
             .and_then(|pid| process_facts.get(&pid))
             .is_some_and(|fact| {
                 (fact.command.contains("cursor_helm")
                     || (fact.command.contains("longhouse") && fact.command.contains("cursor")))
-                    && started_before_or_near_recorded(fact, recorded_start)
+                    && state
+                        .launcher_process_start_time
+                        .as_deref()
+                        .filter(|recorded| !recorded.trim().is_empty())
+                        .is_some_and(|recorded| lstart_matches_recorded(fact, recorded))
             });
         let cursor_pid = state.cursor_pid.filter(|pid| {
             process_facts.get(pid).is_some_and(|fact| {
                 fact.command.contains("cursor-agent")
-                    && started_before_or_near_recorded(fact, recorded_start)
+                    && state
+                        .cursor_process_start_time
+                        .as_deref()
+                        .filter(|recorded| !recorded.trim().is_empty())
+                        .is_some_and(|recorded| lstart_matches_recorded(fact, recorded))
             })
         });
         let socket_present = socket_path.as_ref().map(|p| p.exists()).unwrap_or(false);
@@ -120,7 +131,6 @@ pub(crate) fn collect_observations_from_processes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, Utc};
     use serde_json::json;
 
     fn tmp_dir() -> tempfile::TempDir {
@@ -135,7 +145,7 @@ mod tests {
                     pid,
                     tty: "ttys001".to_string(),
                     stat: "S+".to_string(),
-                    lstart: String::new(),
+                    lstart: "Tue Jun 30 00:00:00 2026".to_string(),
                     command: "python -m zerg.cli longhouse cursor".to_string(),
                     start_time: None,
                 },
@@ -146,7 +156,7 @@ mod tests {
                     pid: 99999,
                     tty: "ttys001".to_string(),
                     stat: "S+".to_string(),
-                    lstart: String::new(),
+                    lstart: "Tue Jun 30 00:00:01 2026".to_string(),
                     command: "/usr/local/bin/cursor-agent".to_string(),
                     start_time: None,
                 },
@@ -168,7 +178,9 @@ mod tests {
         let mut value = json!({
             "session_id": session_id,
             "socket_path": socket.to_string_lossy(),
+            "launcher_process_start_time": "Tue Jun 30 00:00:00 2026",
             "cursor_pid": 99999,
+            "cursor_process_start_time": "Tue Jun 30 00:00:01 2026",
             "ready": ready,
             "started_at": "2026-06-30T00:00:00Z",
             "updated_at": "2026-06-30T00:00:00Z",
@@ -221,14 +233,26 @@ mod tests {
         fs::File::create(&socket).unwrap();
         write_state(dir.path(), "sess-reused", &socket, Some(4242));
         let mut facts = launcher_facts(4242);
-        facts.get_mut(&4242).unwrap().start_time =
-            DateTime::parse_from_rfc3339("2026-07-01T00:00:00Z")
-                .ok()
-                .map(|value| value.with_timezone(&Utc));
+        facts.get_mut(&4242).unwrap().lstart = "Wed Jul  1 00:00:00 2026".to_string();
 
         let observations = collect_observations_from_processes(dir.path(), &facts);
 
         assert!(!observations[0].live);
+    }
+
+    #[test]
+    fn recycled_cursor_child_pid_is_not_live() {
+        let dir = tmp_dir();
+        let socket = dir.path().join("reused-child.sock");
+        fs::File::create(&socket).unwrap();
+        write_state(dir.path(), "sess-reused-child", &socket, Some(4242));
+        let mut facts = launcher_facts(4242);
+        facts.get_mut(&99999).unwrap().lstart = "Wed Jul  1 00:00:00 2026".to_string();
+
+        let observations = collect_observations_from_processes(dir.path(), &facts);
+
+        assert!(!observations[0].live);
+        assert!(observations[0].cursor_pid.is_none());
     }
 
     #[test]
