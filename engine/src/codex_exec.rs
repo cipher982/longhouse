@@ -249,7 +249,8 @@ struct CodexExecRuntimeSink {
     machine_name: String,
     cwd: String,
     local_db_path: Option<PathBuf>,
-    event_tx: mpsc::UnboundedSender<Vec<Value>>,
+    event_tx: mpsc::Sender<Vec<Value>>,
+    critical_event_tx: mpsc::UnboundedSender<Vec<Value>>,
     queued_events: Arc<AtomicUsize>,
 }
 
@@ -322,7 +323,8 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (event_tx, event_rx) = mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY);
+    let (critical_event_tx, critical_event_rx) = mpsc::unbounded_channel();
     let queued_events = Arc::new(AtomicUsize::new(0));
     let sink = CodexExecRuntimeSink {
         session_id: config.session_id.clone(),
@@ -334,6 +336,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         cwd: config.cwd.to_string_lossy().to_string(),
         local_db_path: config.local_db_path.clone(),
         event_tx,
+        critical_event_tx,
         queued_events: queued_events.clone(),
     };
     let event_pump = tokio::spawn(run_runtime_event_pump(
@@ -342,6 +345,7 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         config.session_id.clone(),
         config.run_id.clone(),
         event_rx,
+        critical_event_rx,
         queued_events,
     ));
     let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(STDERR_TAIL_LINES)));
@@ -407,9 +411,19 @@ pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexEx
         monitor_sink
             .post_terminal(terminal_state, exit_code, detail)
             .await;
+        let terminal_session_id = monitor_sink.session_id.clone();
+        let terminal_run_id = monitor_sink.run_id.clone();
         drop(monitor_sink);
-        if let Err(err) = event_pump.await {
-            eprintln!("[codex-exec] runtime event pump join failed: {err}");
+        let mut event_pump = event_pump;
+        match tokio::time::timeout(Duration::from_secs(6), &mut event_pump).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => eprintln!("[codex-exec] runtime event pump join failed: {err}"),
+            Err(_) => {
+                event_pump.abort();
+                eprintln!(
+                    "[codex-exec] runtime event pump drain timed out session={terminal_session_id} run={terminal_run_id}"
+                );
+            }
         }
     });
 
@@ -474,7 +488,8 @@ async fn run_app_server_turn(
         .await?;
     let provider_thread_id = json_string(&thread_response, &["thread", "id"])
         .context("Codex app-server thread response omitted thread.id")?;
-    let thread_path = json_string(&thread_response, &["thread", "path"]);
+    let thread_path = json_string(&thread_response, &["thread", "path"])
+        .or_else(|| codex_rollout_path(&provider_thread_id).map(|path| path.display().to_string()));
     sink.post_provider_binding(&provider_thread_id, thread_path.as_deref())
         .await;
 
@@ -519,7 +534,13 @@ async fn run_app_server_turn(
                     anyhow::bail!("Codex turn ended with status {status}");
                 }
                 if let Some(path) = thread_path.as_deref() {
-                    sink.wake_transcript_shipper(path, &completed_turn_id, "turn_completed");
+                    sink.wake_transcript_shipper(path, &completed_turn_id, "turn_completed")
+                        .await;
+                } else {
+                    eprintln!(
+                        "[codex-exec] latency stage=durable_wake_miss session={} run={} provider_turn={} reason=path_missing",
+                        sink.session_id, sink.run_id, completed_turn_id
+                    );
                 }
                 break;
             }
@@ -873,7 +894,7 @@ impl CodexExecRuntimeSink {
     }
 
     #[cfg(unix)]
-    fn wake_transcript_shipper(
+    async fn wake_transcript_shipper(
         &self,
         source_path: &str,
         provider_turn_id: &str,
@@ -886,9 +907,19 @@ impl CodexExecRuntimeSink {
             .map(|parent| parent.join("transcript-wake.sock"))
             .or_else(|| crate::config::get_agent_transcript_wake_socket_path().ok());
         let Some(socket_path) = socket_path else {
+            eprintln!(
+                "[codex-exec] latency stage=durable_wake_miss session={} run={} reason=socket_unresolved",
+                self.session_id, self.run_id
+            );
             return;
         };
         if !socket_path.exists() {
+            eprintln!(
+                "[codex-exec] latency stage=durable_wake_miss session={} run={} reason=socket_missing socket={}",
+                self.session_id,
+                self.run_id,
+                socket_path.display()
+            );
             return;
         }
         let payload = transcript_wake_payload(
@@ -898,35 +929,39 @@ impl CodexExecRuntimeSink {
             wake_reason,
             std::fs::metadata(source_path).ok().map(|metadata| metadata.len()),
         );
-        let Ok(mut stream) = std::os::unix::net::UnixStream::connect(&socket_path) else {
-            eprintln!(
-                "[codex-exec] transcript wake connect failed socket={} session={} run={}",
-                socket_path.display(),
-                self.session_id,
-                self.run_id
-            );
-            return;
-        };
-        let _ = stream.set_write_timeout(Some(Duration::from_millis(50)));
-        if let Err(err) = stream.write_all(payload.to_string().as_bytes()) {
-            eprintln!(
-                "[codex-exec] transcript wake write failed session={} run={} error={err}",
-                self.session_id, self.run_id
-            );
-        } else {
-            eprintln!(
+        let bytes = payload.to_string().into_bytes();
+        let socket_display = socket_path.display().to_string();
+        let write = tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            let mut stream = std::os::unix::net::UnixStream::connect(socket_path)?;
+            stream.set_write_timeout(Some(Duration::from_millis(50)))?;
+            stream.write_all(&bytes)
+        });
+        match tokio::time::timeout(Duration::from_millis(75), write).await {
+            Ok(Ok(Ok(()))) => eprintln!(
                 "[codex-exec] latency stage=durable_wake_sent session={} run={} turn={} provider_turn={} path={}",
                 self.session_id,
                 self.run_id,
                 self.turn_id.as_deref().unwrap_or("unknown"),
                 provider_turn_id,
                 source_path
-            );
+            ),
+            Ok(Ok(Err(err))) => eprintln!(
+                "[codex-exec] latency stage=durable_wake_miss session={} run={} reason=connect_or_write_failed socket={} error={err}",
+                self.session_id, self.run_id, socket_display
+            ),
+            Ok(Err(err)) => eprintln!(
+                "[codex-exec] latency stage=durable_wake_miss session={} run={} reason=join_failed error={err}",
+                self.session_id, self.run_id
+            ),
+            Err(_) => eprintln!(
+                "[codex-exec] latency stage=durable_wake_miss session={} run={} reason=timeout socket={}",
+                self.session_id, self.run_id, socket_display
+            ),
         }
     }
 
     #[cfg(not(unix))]
-    fn wake_transcript_shipper(
+    async fn wake_transcript_shipper(
         &self,
         _source_path: &str,
         _provider_turn_id: &str,
@@ -1107,25 +1142,66 @@ impl CodexExecRuntimeSink {
     async fn post_events(&self, events: Vec<Value>) {
         let count = events.len();
         self.queued_events.fetch_add(count, Ordering::Relaxed);
-        if self.event_tx.send(events).is_err() {
-            self.queued_events.fetch_sub(count, Ordering::Relaxed);
-            eprintln!(
-                "[codex-exec] runtime event pump closed session={} run={} dropped_events={count}",
-                self.session_id, self.run_id
-            );
+        if events_are_critical(&events) {
+            if self.critical_event_tx.send(events).is_err() {
+                self.queued_events.fetch_sub(count, Ordering::Relaxed);
+                eprintln!(
+                    "[codex-exec] runtime critical event pump closed session={} run={} dropped_events={count}",
+                    self.session_id, self.run_id
+                );
+            }
+            return;
+        }
+        match self.event_tx.try_send(events) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                let remaining = self
+                    .queued_events
+                    .fetch_sub(count, Ordering::Relaxed)
+                    .saturating_sub(count);
+                eprintln!(
+                    "[codex-exec] latency stage=runtime_queue_drop session={} run={} dropped_events={count} queued={remaining} reason=bounded_queue_full",
+                    self.session_id, self.run_id
+                );
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                self.queued_events.fetch_sub(count, Ordering::Relaxed);
+                eprintln!(
+                    "[codex-exec] runtime event pump closed session={} run={} dropped_events={count}",
+                    self.session_id, self.run_id
+                );
+            }
         }
     }
 }
 
 const EVENT_PUMP_COALESCE_WINDOW: Duration = Duration::from_millis(8);
 const EVENT_PUMP_MAX_BATCH: usize = 128;
+const EVENT_PUMP_QUEUE_CAPACITY: usize = 256;
+
+fn events_are_critical(events: &[Value]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event.get("kind").and_then(Value::as_str),
+            Some("terminal_signal" | "binding_signal")
+        ) || matches!(
+            json_string(event, &["payload", "progress_kind"]).as_deref(),
+            Some("console_live_tool_item")
+        ) || event
+            .get("payload")
+            .and_then(|payload| payload.get("item_completed"))
+            .and_then(Value::as_bool)
+            == Some(true)
+    })
+}
 
 async fn run_runtime_event_pump(
     api_url: String,
     api_token: String,
     session_id: String,
     run_id: String,
-    mut receiver: mpsc::UnboundedReceiver<Vec<Value>>,
+    mut receiver: mpsc::Receiver<Vec<Value>>,
+    mut critical_receiver: mpsc::UnboundedReceiver<Vec<Value>>,
     queued_events: Arc<AtomicUsize>,
 ) {
     let http = reqwest::Client::new();
@@ -1133,21 +1209,35 @@ async fn run_runtime_event_pump(
         "{}/api/agents/runtime/events/batch",
         api_url.trim_end_matches('/')
     );
-    while let Some(first) = receiver.recv().await {
+    loop {
+        let first = tokio::select! {
+            biased;
+            event = critical_receiver.recv(), if !critical_receiver.is_closed() => event,
+            event = receiver.recv(), if !receiver.is_closed() => event,
+            else => None,
+        };
+        let Some(first) = first else {
+            if receiver.is_closed() && critical_receiver.is_closed() {
+                break;
+            }
+            continue;
+        };
         let queued_at = std::time::Instant::now();
         let mut events = first;
-        tokio::time::sleep(EVENT_PUMP_COALESCE_WINDOW).await;
+        if receiver.is_empty() && critical_receiver.is_empty() {
+            tokio::time::sleep(EVENT_PUMP_COALESCE_WINDOW).await;
+        }
         while events.len() < EVENT_PUMP_MAX_BATCH {
-            let Ok(mut next) = receiver.try_recv() else {
+            if let Ok(mut next) = critical_receiver.try_recv() {
+                events.append(&mut next);
+            } else if let Ok(mut next) = receiver.try_recv() {
+                events.append(&mut next);
+            } else {
                 break;
-            };
-            events.append(&mut next);
+            }
         }
         let event_count = events.len();
         let payload = json!({ "events": events });
-        let remaining = queued_events
-            .fetch_sub(event_count, Ordering::Relaxed)
-            .saturating_sub(event_count);
         let mut delivered = false;
         for attempt in 0..3 {
             let started = std::time::Instant::now();
@@ -1160,6 +1250,9 @@ async fn run_runtime_event_pump(
                 .await;
             match response {
                 Ok(response) if response.status().is_success() => {
+                    let remaining = queued_events
+                        .fetch_sub(event_count, Ordering::Relaxed)
+                        .saturating_sub(event_count);
                     eprintln!(
                         "[codex-exec] latency stage=runtime_batch_ack session={session_id} run={run_id} events={event_count} queue_ms={} http_ms={} remaining={remaining}",
                         queued_at.elapsed().as_millis(),
@@ -1168,21 +1261,33 @@ async fn run_runtime_event_pump(
                     delivered = true;
                     break;
                 }
-                Ok(response) => eprintln!(
-                    "[codex-exec] runtime event post failed session={session_id} run={run_id} status={} attempt={} events={event_count}",
-                    response.status(),
-                    attempt + 1
-                ),
+                Ok(response) => {
+                    let retryable = response.status().is_server_error()
+                        || response.status().as_u16() == 429;
+                    eprintln!(
+                        "[codex-exec] runtime event post failed session={session_id} run={run_id} status={} attempt={} events={event_count} retryable={retryable}",
+                        response.status(),
+                        attempt + 1
+                    );
+                    if !retryable {
+                        break;
+                    }
+                }
                 Err(err) => eprintln!(
                     "[codex-exec] runtime event post failed session={session_id} run={run_id} attempt={} events={event_count} error={err}",
                     attempt + 1
                 ),
             }
-            tokio::time::sleep(Duration::from_millis(100 * (attempt + 1))).await;
+            if attempt < 2 {
+                tokio::time::sleep(Duration::from_millis(100 * (attempt + 1))).await;
+            }
         }
         if !delivered {
+            let remaining = queued_events
+                .fetch_sub(event_count, Ordering::Relaxed)
+                .saturating_sub(event_count);
             eprintln!(
-                "[codex-exec] runtime event batch dropped after retries session={session_id} run={run_id} events={event_count}"
+                "[codex-exec] runtime event batch dropped after retries session={session_id} run={run_id} events={event_count} remaining={remaining}"
             );
         }
     }
@@ -1275,7 +1380,8 @@ mod tests {
             machine_name: config.machine_name,
             cwd: config.cwd.to_string_lossy().to_string(),
             local_db_path,
-            event_tx: mpsc::unbounded_channel().0,
+            event_tx: mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY).0,
+            critical_event_tx: mpsc::unbounded_channel().0,
             queued_events: Arc::new(AtomicUsize::new(0)),
         }
     }
@@ -1315,7 +1421,8 @@ mod tests {
             rollout.to_str().unwrap(),
             "provider-turn-8",
             "turn_completed",
-        );
+        )
+        .await;
 
         let (mut stream, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept())
             .await
@@ -1332,7 +1439,8 @@ mod tests {
     #[tokio::test]
     async fn runtime_event_pump_coalesces_adjacent_provider_events() {
         let (api_url, mut received) = spawn_runtime_capture_server().await;
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY);
+        let (critical_tx, critical_rx) = mpsc::unbounded_channel();
         let queued = Arc::new(AtomicUsize::new(2));
         let pump = tokio::spawn(run_runtime_event_pump(
             api_url,
@@ -1340,12 +1448,14 @@ mod tests {
             "session-1".to_string(),
             "run-1".to_string(),
             rx,
+            critical_rx,
             queued.clone(),
         ));
 
-        tx.send(vec![json!({"seq": 1})]).unwrap();
-        tx.send(vec![json!({"seq": 2})]).unwrap();
+        tx.try_send(vec![json!({"seq": 1})]).unwrap();
+        tx.try_send(vec![json!({"seq": 2})]).unwrap();
         drop(tx);
+        drop(critical_tx);
 
         let batch = tokio::time::timeout(Duration::from_secs(1), received.recv())
             .await
@@ -1360,7 +1470,7 @@ mod tests {
 
     #[tokio::test]
     async fn provider_event_enqueue_never_waits_for_runtime_host() {
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(EVENT_PUMP_QUEUE_CAPACITY);
         let sink = CodexExecRuntimeSink {
             event_tx: tx,
             queued_events: Arc::new(AtomicUsize::new(0)),
@@ -1374,6 +1484,29 @@ mod tests {
         .await
         .expect("provider reader must only enqueue, never perform HTTP");
         assert_eq!(sink.queued_events.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn bounded_preview_queue_preserves_critical_terminal_lane() {
+        let (event_tx, _event_rx) = mpsc::channel(1);
+        let (critical_event_tx, mut critical_event_rx) = mpsc::unbounded_channel();
+        let sink = CodexExecRuntimeSink {
+            event_tx,
+            critical_event_tx,
+            queued_events: Arc::new(AtomicUsize::new(0)),
+            ..runtime_sink(None)
+        };
+
+        sink.post_events(vec![json!({"kind": "progress_signal"})])
+            .await;
+        sink.post_events(vec![json!({"kind": "progress_signal"})])
+            .await;
+        sink.post_events(vec![json!({"kind": "terminal_signal"})])
+            .await;
+
+        let critical = critical_event_rx.recv().await.unwrap();
+        assert_eq!(critical[0]["kind"], "terminal_signal");
+        assert_eq!(sink.queued_events.load(Ordering::Relaxed), 2);
     }
 
     #[test]
