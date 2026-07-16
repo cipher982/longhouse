@@ -174,13 +174,22 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
         db.query(LiveSession).filter(LiveSession.session_id == str(session_id)).delete()
         db.commit()
 
-    class ArchiveNotMaterialized:
+    class ArchiveProjection:
+        ready = False
+
         async def call(self, method, params):
             assert method == "storage.session.read.v2"
             assert params == {"session_id": str(session_id)}
+            if self.ready:
+                return {
+                    "found": True,
+                    "commit_seq": "2",
+                    "session": {"owner_id": "1", "updated_at": datetime.now(UTC).isoformat()},
+                }
             return {"found": False, "deleted": False}
 
-    monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: ArchiveNotMaterialized())
+    archive = ArchiveProjection()
+    monkeypatch.setattr(workspace_module, "get_catalogd_client", lambda: archive)
     monkeypatch.setattr(
         "zerg.services.live_catalog_timeline.session_snapshot",
         lambda candidate, *, owner_id=None: store.read_session(session_id=candidate, owner_id=owner_id),
@@ -208,6 +217,38 @@ async def test_empty_console_session_is_openable_before_archive_outbox_drains(mo
     assert result["session"]["capabilities"]["input_mode"] == "console"
     assert result["projection"]["items"] == []
     assert result["projection"]["total"] == 0
+
+    async def archived_page(**_kwargs):
+        return {
+            "events": [
+                {
+                    "event_id": "event-1",
+                    "cursor": "cursor-1",
+                    "role": "assistant",
+                    "content_text": "ready",
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "branch_kind": "root",
+                }
+            ],
+            "total": 1,
+            "generation_id": "generation-1",
+            "next_cursor": None,
+            "has_more": False,
+        }
+
+    archive.ready = True
+    monkeypatch.setattr(workspace_module, "read_storage_v2_session_events_page", archived_page)
+    converged = await workspace_module.build_storage_v2_workspace(
+        session_id=session_id,
+        owner_id=1,
+        branch_mode="head",
+        limit=50,
+    )
+    assert converged is not None
+    assert converged["control_only"] is False
+    assert converged["session"]["id"] == result["session"]["id"]
+    assert converged["session"]["capabilities"] == result["session"]["capabilities"]
+    assert len(converged["projection"]["items"]) == 1
 
     control_session = load_live_control_session_snapshot(session_id)
     assert control_session is not None

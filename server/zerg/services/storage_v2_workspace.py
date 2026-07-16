@@ -69,6 +69,84 @@ def _event_projection(
     }
 
 
+def _workspace_envelope(
+    *,
+    session_id: UUID,
+    session,
+    session_commit_seq: str,
+    branch_mode: str,
+    anchor: str,
+    cursor: str | None,
+    storage: dict[str, object] | None,
+    page: dict[str, object] | None,
+) -> dict[str, object]:
+    """Build one workspace shape; archive readiness only controls its event page."""
+
+    control_only = storage is None
+    events = page.get("events") if page is not None else []
+    if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The render projection is invalid.")
+    completed_tool_call_ids = {str(event["tool_call_id"]) for event in events if event.get("role") == "tool" and event.get("tool_call_id")}
+    items = [
+        _event_projection(
+            event,
+            session_id=session_id,
+            closed=session.runtime_display.lifecycle == "closed",
+            completed_tool_call_ids=completed_tool_call_ids,
+        )
+        for event in events
+    ]
+    total = int(page.get("total") or 0) if page is not None else 0
+    latest_event_id = str(events[-1]["event_id"]) if events else None
+    fingerprint_payload = {
+        "session_commit_seq": session_commit_seq,
+        "storage_commit_seq": storage.get("commit_seq") if storage is not None else None,
+        "control_only": control_only,
+        "generation_id": page.get("generation_id") if page is not None else None,
+        "latest_event_id": latest_event_id,
+        "next_cursor": page.get("next_cursor") if page is not None else None,
+    }
+    fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    session_json = session.model_dump(mode="json")
+    storage_session = storage.get("session") if storage is not None else None
+    return {
+        "session": session_json,
+        "thread": {
+            "root_session_id": str(session_id),
+            "head_session_id": str(session_id),
+            "sessions": [session_json],
+        },
+        "projection": {
+            "root_session_id": str(session_id),
+            "focus_session_id": str(session_id),
+            "head_session_id": str(session_id),
+            "path_session_ids": [str(session_id)],
+            "items": items,
+            "total": total,
+            "page_offset": (max(0, total - len(items)) if anchor == "tail" and cursor is None else 0),
+            "branch_mode": branch_mode,
+            "abandoned_events": 0,
+            "generation_id": page.get("generation_id") if page is not None else None,
+            "next_cursor": page.get("next_cursor") if page is not None else None,
+            "has_more": page.get("has_more") is True if page is not None else False,
+        },
+        "workspace_revision": {
+            "latest_event_id": latest_event_id,
+            "latest_session_updated_at": storage_session.get("updated_at") if isinstance(storage_session, dict) else None,
+            "latest_runtime_signal_at": None,
+            "runtime_version_sum": 0,
+            "pause_request_count": 0,
+            "pause_request_fingerprint": None,
+            "managed_control_count": 1 if session.capabilities.live_control_available or session.capabilities.can_start_turn else 0,
+            "managed_control_fingerprint": None,
+            "live_preview_updated_at": None,
+            "thread_session_count": 1,
+            "fingerprint": fingerprint,
+        },
+        "control_only": control_only,
+    }
+
+
 async def build_storage_v2_workspace(
     *,
     session_id: UUID,
@@ -94,141 +172,43 @@ async def build_storage_v2_workspace(
         if get_settings().testing:
             return None
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.")
-    try:
-        storage = await catalogd.call("storage.session.read.v2", {"session_id": str(session_id)})
-    except (CatalogRemoteError, CatalogUnavailable) as exc:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
-    if storage.get("found") is not True:
-        session, _provider_alias, session_commit_seq = await asyncio.to_thread(
-            read_live_catalog_session,
-            session_id,
-            owner_id=owner_id,
-        )
-        if session is None or not (getattr(session, "origin_kind", None) == "console" or session.capabilities.live_control_available):
-            return None
-        session_json = session.model_dump(mode="json")
-        fingerprint_payload = {
-            "session_commit_seq": session_commit_seq,
-            "storage_commit_seq": None,
-            "control_only": True,
-        }
-        fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        projection = {
-            "root_session_id": str(session_id),
-            "focus_session_id": str(session_id),
-            "head_session_id": str(session_id),
-            "path_session_ids": [str(session_id)],
-            "items": [],
-            "total": 0,
-            "page_offset": 0,
-            "branch_mode": branch_mode,
-            "abandoned_events": 0,
-            "generation_id": None,
-            "next_cursor": None,
-            "has_more": False,
-        }
-        return {
-            "session": session_json,
-            "thread": {
-                "root_session_id": str(session_id),
-                "head_session_id": str(session_id),
-                "sessions": [session_json],
-            },
-            "projection": projection,
-            "workspace_revision": {
-                "latest_event_id": None,
-                "latest_session_updated_at": None,
-                "latest_runtime_signal_at": None,
-                "runtime_version_sum": 0,
-                "pause_request_count": 0,
-                "pause_request_fingerprint": None,
-                "managed_control_count": 1,
-                "managed_control_fingerprint": None,
-                "live_preview_updated_at": None,
-                "thread_session_count": 1,
-                "fingerprint": fingerprint,
-            },
-            "control_only": True,
-        }
-    storage_session = storage.get("session")
-    if not isinstance(storage_session, dict) or str(storage_session.get("owner_id")) != str(owner_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
-
     session, _provider_alias, session_commit_seq = await asyncio.to_thread(
         read_live_catalog_session,
         session_id,
         owner_id=owner_id,
     )
     if session is None:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session projection is unavailable.")
-    page = await read_storage_v2_session_events_page(
-        session_id=session_id,
-        owner_id=str(owner_id),
-        cursor=cursor,
-        anchor=anchor,
-        limit=limit,
-    )
-    events = page.get("events")
-    if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The render projection is invalid.")
-    closed = session.runtime_display.lifecycle == "closed"
-    completed_tool_call_ids = {str(event["tool_call_id"]) for event in events if event.get("role") == "tool" and event.get("tool_call_id")}
-    items = [
-        _event_projection(
-            event,
+        return None
+    try:
+        storage_result = await catalogd.call("storage.session.read.v2", {"session_id": str(session_id)})
+    except (CatalogRemoteError, CatalogUnavailable) as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="The session catalog is unavailable.") from exc
+    storage = storage_result if storage_result.get("found") is True else None
+    if storage is None:
+        if not (getattr(session, "origin_kind", None) == "console" or session.capabilities.live_control_available):
+            return None
+        page = None
+    else:
+        storage_session = storage.get("session")
+        if not isinstance(storage_session, dict) or str(storage_session.get("owner_id")) != str(owner_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session {session_id} not found")
+        page = await read_storage_v2_session_events_page(
             session_id=session_id,
-            closed=closed,
-            completed_tool_call_ids=completed_tool_call_ids,
+            owner_id=str(owner_id),
+            cursor=cursor,
+            anchor=anchor,
+            limit=limit,
         )
-        for event in events
-    ]
-    session_json = session.model_dump(mode="json")
-    latest_event_id = str(events[-1]["event_id"]) if events else None
-    fingerprint_payload = {
-        "session_commit_seq": session_commit_seq,
-        "storage_commit_seq": storage.get("commit_seq"),
-        "generation_id": page.get("generation_id"),
-        "latest_event_id": latest_event_id,
-        "next_cursor": page.get("next_cursor"),
-    }
-    fingerprint = hashlib.sha256(json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    projection = {
-        "root_session_id": str(session_id),
-        "focus_session_id": str(session_id),
-        "head_session_id": str(session_id),
-        "path_session_ids": [str(session_id)],
-        "items": items,
-        "total": int(page.get("total") or 0),
-        "page_offset": (max(0, int(page.get("total") or 0) - len(items)) if anchor == "tail" and cursor is None else 0),
-        "branch_mode": branch_mode,
-        "abandoned_events": 0,
-        "generation_id": page.get("generation_id"),
-        "next_cursor": page.get("next_cursor"),
-        "has_more": page.get("has_more") is True,
-    }
-    return {
-        "session": session_json,
-        "thread": {
-            "root_session_id": str(session_id),
-            "head_session_id": str(session_id),
-            "sessions": [session_json],
-        },
-        "projection": projection,
-        "workspace_revision": {
-            "latest_event_id": latest_event_id,
-            "latest_session_updated_at": storage_session.get("updated_at"),
-            "latest_runtime_signal_at": None,
-            "runtime_version_sum": 0,
-            "pause_request_count": 0,
-            "pause_request_fingerprint": None,
-            "managed_control_count": 1 if session.capabilities.live_control_available else 0,
-            "managed_control_fingerprint": None,
-            "live_preview_updated_at": None,
-            "thread_session_count": 1,
-            "fingerprint": fingerprint,
-        },
-        "control_only": False,
-    }
+    return _workspace_envelope(
+        session_id=session_id,
+        session=session,
+        session_commit_seq=session_commit_seq,
+        branch_mode=branch_mode,
+        anchor=anchor,
+        cursor=cursor,
+        storage=storage,
+        page=page,
+    )
 
 
 __all__ = ["build_storage_v2_workspace"]
