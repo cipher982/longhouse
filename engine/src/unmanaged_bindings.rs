@@ -29,7 +29,7 @@
 //! Kept behind a `ProcessScanner` trait so tests can inject fixtures
 //! without shelling out.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
@@ -64,23 +64,25 @@ pub fn collect_unmanaged_session_bindings_with_store(
     conn: &rusqlite::Connection,
     machine_id: &str,
     now: DateTime<Utc>,
-) -> Vec<UnmanagedSessionBinding> {
-    let mut out = collect_with_scanner(machine_id, &SystemScanner, now);
+) -> Result<Vec<UnmanagedSessionBinding>, String> {
+    let scanner = SystemScanner;
+    let processes = scanner.list_processes()?;
+    let provider_processes = processes
+        .into_iter()
+        .filter(|process| is_provider_process(&process.command).is_some())
+        .collect::<Vec<_>>();
     let store = UnmanagedProcessBindingStore::new(conn);
     if let Err(err) = store.prune_older_than(now - chrono::Duration::days(30)) {
         tracing::warn!("pruning unmanaged process binding state failed: {err}");
     }
-    let hook_rows = match store.load_all() {
-        Ok(rows) => rows,
-        Err(err) => {
-            tracing::warn!("reading unmanaged process binding state failed: {err}");
-            return out;
-        }
-    };
-    let processes = run_ps();
+    let hook_rows = store
+        .load_all()
+        .map_err(|err| format!("reading unmanaged process binding state failed: {err}"))?;
+    let mut out = Vec::new();
+    let mut hook_resolved_pids = HashSet::new();
 
     for row in hook_rows {
-        let Some(process) = processes.iter().find(|proc| proc.pid == row.pid) else {
+        let Some(process) = provider_processes.iter().find(|proc| proc.pid == row.pid) else {
             continue;
         };
         if process.start_time_key != row.process_start_time_key {
@@ -123,9 +125,29 @@ pub fn collect_unmanaged_session_bindings_with_store(
         };
 
         upsert_newer_binding(&mut out, binding);
+        hook_resolved_pids.insert(process.pid);
     }
 
-    out
+    let unresolved_processes = provider_processes
+        .into_iter()
+        .filter(|process| !hook_resolved_pids.contains(&process.pid))
+        .collect::<Vec<_>>();
+    if unresolved_processes.is_empty() {
+        return Ok(out);
+    }
+
+    let transcripts = discover_recent_transcripts(now);
+    let fd_bindings = collect_from_transcripts_with_processes(
+        machine_id,
+        &transcripts,
+        &scanner,
+        now,
+        &unresolved_processes,
+    )?;
+    for binding in fd_bindings {
+        upsert_newer_binding(&mut out, binding);
+    }
+    Ok(out)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -139,48 +161,50 @@ pub struct ProcessInfo {
 /// Injectable source of process + fd truth. Implemented by
 /// [`SystemScanner`] in production; tests substitute fixtures.
 pub trait ProcessScanner {
-    fn list_processes(&self) -> Vec<ProcessInfo>;
-    fn list_open_files(&self, pid: u32) -> Vec<PathBuf>;
+    fn list_processes(&self) -> Result<Vec<ProcessInfo>, String>;
+    fn list_open_files(&self, pid: u32) -> Result<Vec<PathBuf>, String>;
 }
 
 struct SystemScanner;
 
 impl ProcessScanner for SystemScanner {
-    fn list_processes(&self) -> Vec<ProcessInfo> {
+    fn list_processes(&self) -> Result<Vec<ProcessInfo>, String> {
         run_ps()
     }
 
-    fn list_open_files(&self, pid: u32) -> Vec<PathBuf> {
+    fn list_open_files(&self, pid: u32) -> Result<Vec<PathBuf>, String> {
         run_lsof(pid)
     }
 }
 
-fn run_ps() -> Vec<ProcessInfo> {
-    let Ok(output) = Command::new("ps")
+fn run_ps() -> Result<Vec<ProcessInfo>, String> {
+    let output = Command::new("ps")
         .args(["-axo", "pid=,lstart=,command="])
         .output()
-    else {
-        return Vec::new();
-    };
+        .map_err(|err| format!("running ps for unmanaged inventory: {err}"))?;
     if !output.status.success() {
-        return Vec::new();
+        return Err(format!(
+            "ps for unmanaged inventory exited with {}",
+            output.status
+        ));
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    parse_ps(&text)
+    Ok(parse_ps(&text))
 }
 
-fn run_lsof(pid: u32) -> Vec<PathBuf> {
-    let Ok(output) = Command::new("lsof")
+fn run_lsof(pid: u32) -> Result<Vec<PathBuf>, String> {
+    let output = Command::new("lsof")
         .args(["-F", "n", "-p", &pid.to_string()])
         .output()
-    else {
-        return Vec::new();
-    };
+        .map_err(|err| format!("running lsof for unmanaged pid {pid}: {err}"))?;
     if !output.status.success() {
-        return Vec::new();
+        return Err(format!(
+            "lsof for unmanaged pid {pid} exited with {}",
+            output.status
+        ));
     }
     let text = String::from_utf8_lossy(&output.stdout);
-    parse_lsof(&text)
+    Ok(parse_lsof(&text))
 }
 
 /// Parse `ps -axo pid=,lstart=,command=` output.
@@ -259,6 +283,7 @@ fn is_provider_process(command: &str) -> Option<&'static str> {
 
 pub fn process_info_for_pid(pid: u32, provider: &str) -> Option<ProcessInfo> {
     run_ps()
+        .ok()?
         .into_iter()
         .find(|proc| proc.pid == pid && is_provider_process(&proc.command) == Some(provider))
 }
@@ -382,11 +407,26 @@ fn canonicalize(path: &Path) -> PathBuf {
 
 /// Core logic, pure over (provider discovery + scanner + clock). Tests
 /// inject all three.
+#[cfg(test)]
 pub fn collect_with_scanner(
     machine_id: &str,
     scanner: &dyn ProcessScanner,
     now: DateTime<Utc>,
-) -> Vec<UnmanagedSessionBinding> {
+) -> Result<Vec<UnmanagedSessionBinding>, String> {
+    let processes = scanner
+        .list_processes()?
+        .into_iter()
+        .filter(|process| is_provider_process(&process.command).is_some())
+        .collect::<Vec<_>>();
+    if processes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let transcripts = discover_recent_transcripts(now);
+    collect_from_transcripts_with_processes(machine_id, &transcripts, scanner, now, &processes)
+}
+
+fn discover_recent_transcripts(now: DateTime<Utc>) -> Vec<(PathBuf, &'static str)> {
     let providers = discovery::get_providers();
     let mut transcripts: Vec<(PathBuf, &'static str)> = Vec::new();
     for (path, provider_name) in discovery::discover_all_files(&providers) {
@@ -403,19 +443,35 @@ pub fn collect_with_scanner(
         }
     }
 
-    collect_from_transcripts(machine_id, &transcripts, scanner, now)
+    transcripts
 }
 
 /// Same as [`collect_with_scanner`] but takes the already-discovered
 /// transcripts. Keeps the integration surface small for tests.
+#[cfg(test)]
 pub fn collect_from_transcripts(
     machine_id: &str,
     transcripts: &[(PathBuf, &'static str)],
     scanner: &dyn ProcessScanner,
     now: DateTime<Utc>,
-) -> Vec<UnmanagedSessionBinding> {
+) -> Result<Vec<UnmanagedSessionBinding>, String> {
+    let processes = scanner
+        .list_processes()?
+        .into_iter()
+        .filter(|process| is_provider_process(&process.command).is_some())
+        .collect::<Vec<_>>();
+    collect_from_transcripts_with_processes(machine_id, transcripts, scanner, now, &processes)
+}
+
+fn collect_from_transcripts_with_processes(
+    machine_id: &str,
+    transcripts: &[(PathBuf, &'static str)],
+    scanner: &dyn ProcessScanner,
+    now: DateTime<Utc>,
+    processes: &[ProcessInfo],
+) -> Result<Vec<UnmanagedSessionBinding>, String> {
     if transcripts.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // Pre-index transcripts by canonicalized path for fast fd lookup.
@@ -428,21 +484,18 @@ pub fn collect_from_transcripts(
         }
     }
 
-    let mut processes = scanner.list_processes();
-    // Filter + tag provider from argv[0].
-    processes.retain(|proc| is_provider_process(&proc.command).is_some());
     if processes.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     // If two processes claim the same transcript, prefer the newer one.
     let mut best_by_transcript: HashMap<PathBuf, (ProcessInfo, &'static str)> = HashMap::new();
 
-    for proc in &processes {
+    for proc in processes {
         let Some(provider) = is_provider_process(&proc.command) else {
             continue;
         };
-        for open_path in scanner.list_open_files(proc.pid) {
+        for open_path in scanner.list_open_files(proc.pid)? {
             let canon = canonicalize(&open_path);
             let matched_transcript = transcript_index
                 .get(&canon)
@@ -507,7 +560,7 @@ pub fn collect_from_transcripts(
         }
     }
 
-    bindings
+    Ok(bindings)
 }
 
 #[cfg(unix)]
@@ -543,16 +596,31 @@ mod tests {
     }
 
     impl ProcessScanner for FakeScanner {
-        fn list_processes(&self) -> Vec<ProcessInfo> {
-            self.processes.clone()
+        fn list_processes(&self) -> Result<Vec<ProcessInfo>, String> {
+            Ok(self.processes.clone())
         }
 
-        fn list_open_files(&self, pid: u32) -> Vec<PathBuf> {
-            self.open_files
+        fn list_open_files(&self, pid: u32) -> Result<Vec<PathBuf>, String> {
+            Ok(self
+                .open_files
                 .borrow()
                 .get(&pid)
                 .cloned()
-                .unwrap_or_default()
+                .unwrap_or_default())
+        }
+    }
+
+    struct FailingLsofScanner {
+        process: ProcessInfo,
+    }
+
+    impl ProcessScanner for FailingLsofScanner {
+        fn list_processes(&self) -> Result<Vec<ProcessInfo>, String> {
+            Ok(vec![self.process.clone()])
+        }
+
+        fn list_open_files(&self, _pid: u32) -> Result<Vec<PathBuf>, String> {
+            Err("fixture lsof failure".to_string())
         }
     }
 
@@ -591,6 +659,26 @@ mod tests {
         assert_eq!(paths.len(), 2);
         assert!(paths[0].ends_with("abc.jsonl"));
         assert!(paths[1].ends_with(".zshrc"));
+    }
+
+    #[test]
+    fn scanner_failure_is_non_authoritative_instead_of_empty_truth() {
+        let now = t("2026-04-27T12:00:00Z");
+        let tmp = tempfile::tempdir().unwrap();
+        let transcript = tmp.path().join("abc.jsonl");
+        std::fs::write(&transcript, "{}\n").unwrap();
+        let scanner = FailingLsofScanner {
+            process: proc_info(1234, "2026-04-27T10:00:00Z", "/usr/local/bin/codex"),
+        };
+
+        let result = collect_from_transcripts(
+            "mac",
+            &[(transcript, "codex")],
+            &scanner,
+            now,
+        );
+
+        assert_eq!(result.unwrap_err(), "fixture lsof failure");
     }
 
     #[test]
@@ -709,7 +797,7 @@ mod tests {
         };
 
         let transcripts = vec![(transcript.clone(), "codex")];
-        let bindings = collect_from_transcripts("mac", &transcripts, &scanner, now);
+        let bindings = collect_from_transcripts("mac", &transcripts, &scanner, now).unwrap();
 
         assert_eq!(bindings.len(), 1);
         let b = &bindings[0];
@@ -746,7 +834,8 @@ mod tests {
         };
 
         let bindings =
-            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now);
+            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now)
+                .unwrap();
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].provider, "codex");
@@ -775,7 +864,8 @@ mod tests {
         };
 
         let bindings =
-            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now);
+            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now)
+                .unwrap();
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].provider, "codex");
@@ -806,7 +896,8 @@ mod tests {
         };
 
         let bindings =
-            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now);
+            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now)
+                .unwrap();
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(
@@ -835,7 +926,8 @@ mod tests {
         };
 
         let bindings =
-            collect_from_transcripts("mac", &[(transcript.clone(), "claude")], &scanner, now);
+            collect_from_transcripts("mac", &[(transcript.clone(), "claude")], &scanner, now)
+                .unwrap();
 
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].provider, "claude");
@@ -866,7 +958,8 @@ mod tests {
         };
 
         let bindings =
-            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now);
+            collect_from_transcripts("mac", &[(transcript.clone(), "codex")], &scanner, now)
+                .unwrap();
         assert_eq!(bindings.len(), 1);
         assert_eq!(bindings[0].pid, Some(newer.pid));
     }
@@ -887,7 +980,8 @@ mod tests {
             open_files: RefCell::new(HashMap::new()),
         };
 
-        let bindings = collect_from_transcripts("mac", &[(transcript, "codex")], &scanner, now);
+        let bindings =
+            collect_from_transcripts("mac", &[(transcript, "codex")], &scanner, now).unwrap();
         assert!(bindings.is_empty());
     }
 
